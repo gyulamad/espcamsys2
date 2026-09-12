@@ -1,0 +1,8 @@
+# Real configs — contain passwords / API keys / internal IPs.
+# Copy the matching example.* file to create these locally.
+config.php
+config.js
+config.h
+
+# Node
+node_modules/

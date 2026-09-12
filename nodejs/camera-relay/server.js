@@ -1,9 +1,10 @@
 const express = require('express');
 const { EventEmitter } = require('events');
+const config = require('./config'); // gitignored — see example.config.js
 
 const app = express();
-const PORT = process.env.PORT || 8080;
-const API_KEY = process.env.CAM_KEY || 'change-me'; // must match ESP32 sketch
+const PORT = process.env.PORT || config.port;
+const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in each camera's sketch
 
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));

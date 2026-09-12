@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 $count = count($cameras);
 $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);

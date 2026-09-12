@@ -1,8 +1,9 @@
 <?php
 // stream.php — MJPEG proxy for ESP32-CAM
 // Usage: stream.php?cam=cam1
-// The cam parameter must match an 'id' in cameras.php
+// The cam parameter must match an 'id' in config.php
 
+require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 
 $requested = $_GET['cam'] ?? '';
@@ -21,11 +22,11 @@ if (!$camera) {
     exit('Camera not found');
 }
 
-// The stream path — ESP32-CAM default is /stream
-// If your firmware uses a different path (e.g. /?action=stream), change here
-$streamUrl = rtrim($camera['url'], '/') . '/stream';
+// All cameras push frames to the server.js relay; fetch the live MJPEG
+// stream for this camera's id from there.
+$streamUrl = rtrim($camera['url'], '/') . '/stream/' . rawurlencode($camera['id']);
 
-// Open the stream from the ESP32
+// Open the stream from the relay
 $ctx = stream_context_create([
     'http' => [
         'timeout'        => 10,

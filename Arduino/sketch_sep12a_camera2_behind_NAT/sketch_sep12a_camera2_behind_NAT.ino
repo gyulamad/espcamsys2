@@ -2,15 +2,13 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-// ===== USER CONFIG — edit these per camera =====
-const char* WIFI_SSID     = "apucikaext1";
-const char* WIFI_PASSWORD = "apucika1";
-const char* SERVER_HOST   = "192.168.4.9";   // your Pi's IP or hostname
-const int   SERVER_PORT   = 8080;
-const char* CAMERA_ID     = "cam1";           // MUST be unique per camera
-const char* API_KEY       = "PY6d58szPKQcheHSXnftxOyZl96Uoxs5J9fBqXRx";      // must match CAM_KEY on the server
+// Wi-Fi credentials, relay host, camera id and API key live in config.h,
+// a file in this same sketch folder that is gitignored (never committed).
+// Copy example.config.h to config.h and fill in your real values:
+//   cp example.config.h config.h
+#include "config.h"
+
 const unsigned long PUSH_INTERVAL_MS = 300;   // ~3 fps; lower = smoother, more bandwidth
-// =================================================
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
