@@ -8,8 +8,6 @@
 //   cp example.config.h config.h
 #include "config.h"
 
-const unsigned long PUSH_INTERVAL_MS = 300;   // ~3 fps; lower = smoother, more bandwidth
-
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1

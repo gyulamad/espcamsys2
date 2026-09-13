@@ -10,3 +10,5 @@ const char* SERVER_HOST   = "192.168.4.9";     // your Pi's IP or hostname
 const int   SERVER_PORT   = 8080;
 const char* CAMERA_ID     = "cam1";            // MUST be unique per camera — must match its id in config.php
 const char* API_KEY       = "change-me";       // must match camKey in server's config.js
+
+const unsigned long PUSH_INTERVAL_MS = 300;   // ~3 fps; lower = smoother, more bandwidth
