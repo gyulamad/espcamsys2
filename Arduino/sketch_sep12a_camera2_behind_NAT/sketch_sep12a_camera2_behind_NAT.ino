@@ -1,12 +1,19 @@
 #include "esp_camera.h"
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <HTTPClient.h>
 
-// Wi-Fi credentials, relay host, camera id and API key live in config.h,
-// a file in this same sketch folder that is gitignored (never committed).
-// Copy example.config.h to config.h and fill in your real values:
+// Wi-Fi networks (one per extender), relay host, camera id and API key live
+// in config.h, a file in this same sketch folder that is gitignored (never
+// committed). Copy example.config.h to config.h and fill in your real values:
 //   cp example.config.h config.h
 #include "config.h"
+
+WiFiMulti wifiMulti;
+WiFiClient wifiClient;   // reused across loop() calls — avoids a fresh TCP
+                         // handshake (and its round trips through the
+                         // extender) for every single frame
+HTTPClient http;
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
@@ -28,6 +35,16 @@
 
 void setup() {
   Serial.begin(115200);
+  delay(200); // give the serial monitor a moment to attach
+
+  // Print identity FIRST, before camera/WiFi init even runs — so this is
+  // visible even if init fails, and you can confirm which physical board
+  // this is before re-flashing it.
+  Serial.println();
+  Serial.println("========================================");
+  Serial.printf("  CAMERA_ID: %s\n", CAMERA_ID);
+  Serial.println("========================================");
+  Serial.println();
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -67,19 +84,38 @@ void setup() {
     return;
   }
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
+                          // big source of added latency on ESP32 WiFi
+
+  for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
+    wifiMulti.addAP(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password);
+  }
+
   Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(400);
+  while (wifiMulti.run() != WL_CONNECTED) {
+    delay(250);
     Serial.print(".");
   }
-  Serial.println("\nConnected, IP: " + WiFi.localIP().toString());
+  Serial.println("\n[" + String(CAMERA_ID) + "] Connected to " + WiFi.SSID() +
+                  ", IP: " + WiFi.localIP().toString() +
+                  ", RSSI: " + WiFi.RSSI());
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.reconnect();
-    delay(1000);
+  // Periodic identity reminder — so opening the Serial Monitor at any point
+  // (not just right at boot) still tells you which camera this is.
+  static unsigned long lastIdentityPrint = 0;
+  if (millis() - lastIdentityPrint > 10000) {
+    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus\n",
+                  CAMERA_ID, WiFi.RSSI(), millis() / 1000);
+    lastIdentityPrint = millis();
+  }
+
+  // Cheap when already connected — only scans/reconnects if the link dropped,
+  // and will fail over to a different extender if the current one is gone.
+  if (wifiMulti.run() != WL_CONNECTED) {
+    delay(500);
     return;
   }
 
@@ -90,17 +126,27 @@ void loop() {
     return;
   }
 
-  HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/upload/" + CAMERA_ID + "?key=" + API_KEY;
-  http.begin(url);
+  String path = String("/upload/") + CAMERA_ID + "?key=" + API_KEY;
+  http.begin(wifiClient, SERVER_HOST, SERVER_PORT, path);
+  http.setReuse(true);   // keep this TCP connection open for the next frame
+                          // instead of a fresh handshake every 300ms
   http.addHeader("Content-Type", "image/jpeg");
+
+  unsigned long t0 = millis();
   int code = http.POST(fb->buf, fb->len);
+  unsigned long pushMs = millis() - t0;
+
   if (code != 200) {
-    Serial.printf("Push failed, HTTP code: %d\n", code);
+    Serial.printf("Push failed, HTTP code: %d (%lums)\n", code, pushMs);
+    http.end();   // something went wrong at the transport level — drop the
+                  // connection so the next loop starts clean rather than
+                  // reusing a possibly broken socket
   }
-  http.end();
 
   esp_camera_fb_return(fb);
-  delay(PUSH_INTERVAL_MS);
+
+  // Gap scales with how long the last push actually took: fast/idle link ->
+  // short gap -> max fps; congested link -> pushMs grows -> gap grows with
+  // it -> backs off automatically instead of adding to the jam.
+  delay((unsigned long)(pushMs * PUSH_INTERVAL_MUL));
 }

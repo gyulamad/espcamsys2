@@ -1,14 +1,27 @@
 // example.config.h — template. Copy this file to config.h, in this same
 // sketch folder, and fill in your real values. config.h is gitignored, so
-// your Wi-Fi password and API key never get committed.
+// your Wi-Fi passwords and API key never get committed.
 //
 //   cp example.config.h config.h
 
-const char* WIFI_SSID     = "your-wifi-ssid";
-const char* WIFI_PASSWORD = "your-wifi-password";
+struct WifiNetwork { const char* ssid; const char* password; };
+
+// List every extender's network here. The camera connects to whichever has
+// the strongest signal and automatically fails over if one drops — so you
+// don't need to know in advance which extender a given camera is "closest" to.
+WifiNetwork WIFI_NETWORKS[] = {
+  { "extender-1-ssid", "extender-1-password" },
+  { "extender-2-ssid", "extender-2-password" },
+  { "extender-3-ssid", "extender-3-password" },
+};
+const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
+
 const char* SERVER_HOST   = "192.168.4.9";     // your Pi's IP or hostname
 const int   SERVER_PORT   = 8080;
-const char* CAMERA_ID     = "cam1";            // MUST be unique per camera — must match its id in config.php
+const char* CAMERA_ID     = "cam2";            // MUST be unique per camera — must match its id in config.php
 const char* API_KEY       = "change-me";       // must match camKey in server's config.js
 
-const unsigned long PUSH_INTERVAL_MS = 300;   // ~3 fps; lower = smoother, more bandwidth
+const float PUSH_INTERVAL_MUL = 1.5;   // gap after each push = last push time * this multiplier —
+                                        // self-adapts: fast/idle link -> small gap -> max fps;
+                                        // congested link -> pushMs grows -> gap grows with it,
+                                        // backing off automatically instead of adding to the jam
