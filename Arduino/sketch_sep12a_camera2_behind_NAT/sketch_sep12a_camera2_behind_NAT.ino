@@ -1,7 +1,6 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WiFiMulti.h>
-#include <HTTPClient.h>
 
 // Wi-Fi networks (one per extender), relay host, camera id and API key live
 // in config.h, a file in this same sketch folder that is gitignored (never
@@ -10,10 +9,11 @@
 #include "config.h"
 
 WiFiMulti wifiMulti;
-WiFiClient wifiClient;   // reused across loop() calls — avoids a fresh TCP
-                         // handshake (and its round trips through the
-                         // extender) for every single frame
-HTTPClient http;
+WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
+                         // port, held open for the sketch's whole runtime —
+                         // frames are written straight to it with no
+                         // per-frame HTTP request/response round trip
+bool pushAuthed = false;
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
@@ -32,6 +32,23 @@ HTTPClient http;
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+
+// Opens the persistent push connection if it isn't already open, sending
+// the one-time auth line. Cheap to call every loop when already connected —
+// just checks the socket state, no reconnect attempt unless it's actually down.
+bool ensurePushConnection() {
+  if (pushClient.connected()) return true;
+
+  pushAuthed = false;
+  pushClient.stop();
+  if (!pushClient.connect(SERVER_HOST, PUSH_PORT)) {
+    return false;
+  }
+  pushClient.setNoDelay(true);
+  pushClient.print(String(CAMERA_ID) + "\t" + API_KEY + "\n");
+  pushAuthed = true;
+  return true;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -126,21 +143,26 @@ void loop() {
     return;
   }
 
-  String path = String("/upload/") + CAMERA_ID + "?key=" + API_KEY;
-  http.begin(wifiClient, SERVER_HOST, SERVER_PORT, path);
-  http.setReuse(true);   // keep this TCP connection open for the next frame
-                          // instead of a fresh handshake every 300ms
-  http.addHeader("Content-Type", "image/jpeg");
+  if (!ensurePushConnection()) {
+    Serial.println("Push connect failed, will retry");
+    esp_camera_fb_return(fb);
+    delay(500);
+    return;
+  }
+
+  uint32_t len = fb->len;
+  uint8_t lenPrefix[4] = {
+    (uint8_t)(len >> 24), (uint8_t)(len >> 16), (uint8_t)(len >> 8), (uint8_t)len
+  };
 
   unsigned long t0 = millis();
-  int code = http.POST(fb->buf, fb->len);
+  size_t written = pushClient.write(lenPrefix, 4);
+  written += pushClient.write(fb->buf, fb->len);
   unsigned long pushMs = millis() - t0;
 
-  if (code != 200) {
-    Serial.printf("Push failed, HTTP code: %d (%lums)\n", code, pushMs);
-    http.end();   // something went wrong at the transport level — drop the
-                  // connection so the next loop starts clean rather than
-                  // reusing a possibly broken socket
+  if (written != 4 + len || !pushClient.connected()) {
+    Serial.println("Push write failed — dropping connection, will reconnect next loop");
+    pushClient.stop();
   }
 
   esp_camera_fb_return(fb);

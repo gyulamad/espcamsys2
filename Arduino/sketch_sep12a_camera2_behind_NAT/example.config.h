@@ -17,7 +17,7 @@ WifiNetwork WIFI_NETWORKS[] = {
 const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
 
 const char* SERVER_HOST   = "192.168.4.9";     // your Pi's IP or hostname
-const int   SERVER_PORT   = 8080;
+const int   PUSH_PORT     = 8081;              // relay's raw push port — must match pushPort in server's config.js
 const char* CAMERA_ID     = "cam2";            // MUST be unique per camera — must match its id in config.php
 const char* API_KEY       = "change-me";       // must match camKey in server's config.js
 

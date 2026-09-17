@@ -5,6 +5,7 @@
 //   cp example.config.js config.js
 
 module.exports = {
-  port: 8080,
+  port: 8080,       // HTTP: /stream, /snapshot, /status (and legacy /upload)
+  pushPort: 8081,   // raw TCP: cameras push frames here continuously (see sketch)
   camKey: 'change-me', // must match API_KEY in each camera's sketch
 };
