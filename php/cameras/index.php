@@ -95,7 +95,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
 
   #clock { font-family: var(--mono); font-size: .85rem; color: var(--muted); letter-spacing: .1em; }
 
-  .controls { display: flex; align-items: center; gap: 8px; }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
   .btn {
     font-family: var(--mono); font-size: .7rem;
@@ -105,6 +105,20 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     cursor: pointer; letter-spacing: .06em; transition: all .2s;
   }
   .btn:hover, .btn.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 8px rgba(0,229,255,.2); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.recording {
+    border-color: var(--accent2); color: var(--accent2);
+    box-shadow: 0 0 8px rgba(255,79,94,.3);
+    animation: blink 1.4s ease-in-out infinite;
+  }
+
+  .record-controls { display: flex; align-items: center; gap: 6px; }
+  .record-controls input[type=number] {
+    width: 60px; font-family: var(--mono); font-size: .7rem;
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius); padding: 6px 8px;
+  }
+  .record-controls span.unit { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
 
   /* ── Main grid ── */
   main { flex: 1; padding: 24px 32px; }
@@ -146,7 +160,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   .cam-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 14px; border-bottom: 1px solid var(--border);
-    background: rgba(0,0,0,.2); gap: 10px;
+    background: rgba(0,0,0,.2); gap: 10px; flex-wrap: wrap;
   }
 
   .cam-title {
@@ -155,7 +169,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     letter-spacing: .05em; text-transform: uppercase; color: var(--text);
   }
 
-  .cam-actions { display: flex; gap: 6px; align-items: center; }
+  .cam-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
   .cam-btn {
     font-family: var(--mono); font-size: .65rem;
@@ -176,6 +190,15 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     animation: blink 1.4s ease-in-out infinite; flex-shrink: 0;
   }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+  /* Recording-in-progress pill, separate from the LIVE/ERROR status pill */
+  .rec-pill {
+    font-family: var(--mono); font-size: .62rem;
+    padding: 2px 7px; border-radius: 20px;
+    border: 1px solid #4d1a1a; color: var(--accent2);
+    white-space: nowrap; display: none;
+  }
+  .rec-pill.active { display: inline-block; animation: blink 1.4s ease-in-out infinite; }
 
   /* ── Stream image ── */
   .cam-stream-wrap {
@@ -239,6 +262,20 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   .status-pill.error      { color: var(--accent2); border-color: #4d1a1a; }
   .status-pill.hidden     { color: var(--muted); }
 
+  /* Recordings list panel */
+  .files-panel {
+    display: none; flex-direction: column; gap: 4px;
+    padding: 8px 14px; border-top: 1px solid var(--border);
+    background: rgba(0,0,0,.25);
+    font-family: var(--mono); font-size: .62rem; color: var(--muted);
+    max-height: 160px; overflow-y: auto;
+  }
+  .files-panel.open { display: flex; }
+  .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .files-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .files-size { flex-shrink: 0; }
+  .files-empty { color: var(--muted); padding: 4px 0; }
+
   /* ── Footer ── */
   footer {
     padding: 12px 32px; border-top: 1px solid var(--border);
@@ -277,6 +314,13 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     <button class="btn active" id="btn-grid" onclick="setLayout('grid')">⊞ GRID</button>
     <button class="btn"        id="btn-list" onclick="setLayout('list')">☰ LIST</button>
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
+    <span class="record-controls">
+      <input type="number" id="record-seconds" min="1" max="3600" value="60" title="Recording length in seconds">
+      <span class="unit">sec</span>
+      <button class="btn" id="btn-record-all" onclick="recordAll()"
+              title="Press again mid-recording to extend it by this many seconds from now">⏺ RECORD ALL</button>
+      <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
+    </span>
   </div>
 </header>
 
@@ -295,9 +339,11 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         <div class="cam-actions">
           <span class="rec-dot"></span>
           <span class="status-pill connecting" id="pill-<?= htmlspecialchars($cam['id']) ?>">CONNECTING</span>
+          <span class="rec-pill" id="recpill-<?= htmlspecialchars($cam['id']) ?>"></span>
           <button class="cam-btn" id="pwr-<?= htmlspecialchars($cam['id']) ?>" data-enabled="1"
                   title="Pause/resume this camera's capture on the device (power + bandwidth saving)"
                   onclick="togglePower('<?= htmlspecialchars($cam['id']) ?>')">⏻ ON</button>
+          <button class="cam-btn" onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
           <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
           <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
                   onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
@@ -329,6 +375,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         <span>CAM <?= str_pad($i + 1, 2, '0', STR_PAD_LEFT) ?></span>
       </div>
 
+      <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
+
     </div>
     <?php endforeach; ?>
   </div>
@@ -347,6 +395,10 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     document.getElementById('footer-time').textContent = t.toLocaleString('en-GB');
   }
   tick(); setInterval(tick, 1000);
+
+  function getAllCameraIds() {
+    return [...document.querySelectorAll('.cam-card')].map(el => el.id.replace('card-', ''));
+  }
 
   // ── Stream state callbacks ──
   function onStreamLoad(id) {
@@ -379,13 +431,11 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   // ── Reload a single stream ──
   function reloadStream(id) {
     const img  = document.getElementById('img-' + id);
-    const pill = document.getElementById('pill-' + id);
 
     // Only reload if not hidden
     if (img.dataset.hidden === '1') return;
 
     setStatus(id, 'connecting', 'CONNECTING');
-    showOverlay(id, '', '');
     document.getElementById('overlay-' + id).innerHTML =
       '<div class="spinner"></div><span>CONNECTING…</span>';
     document.getElementById('overlay-' + id).classList.add('visible');
@@ -402,8 +452,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   }
 
   // ── Hide / show (local to this browser tab only — the camera itself
-  // keeps capturing and pushing frames; use the ⏻ power button below to
-  // actually stop the device) ──
+  // keeps capturing and pushing frames; use the ⏻ power button to actually
+  // stop the device) ──
   function toggleHide(id) {
     const img  = document.getElementById('img-' + id);
     const btn  = document.getElementById('hide-' + id);
@@ -465,11 +515,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     }
   }
 
-  // Reflect each camera's actual on/off state on page load, in case it was
-  // left paused from a previous visit or a different browser.
   async function loadInitialPowerStates() {
-    for (const card of document.querySelectorAll('.cam-card')) {
-      const id = card.id.replace('card-', '');
+    for (const id of getAllCameraIds()) {
       try {
         const res = await fetch(`control.php?cam=${encodeURIComponent(id)}`);
         if (!res.ok) continue;
@@ -482,6 +529,140 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     }
   }
   loadInitialPowerStates();
+
+  // ── Recording — one button + one duration field starts a timed,
+  // server-side recording on every camera at once (footage is written on
+  // the Pi by server.js, not on the ESP32-CAM boards). Pressing it again
+  // while already recording extends that same recording: the relay resets
+  // its countdown to the new seconds value measured from the moment of
+  // this second press, rather than adding on top of what was left. ──
+  const recordCountdowns = {}; // id -> interval id
+
+  async function recordAll() {
+    const secondsInput = document.getElementById('record-seconds');
+    const seconds = parseInt(secondsInput.value, 10);
+    if (!Number.isFinite(seconds) || seconds < 1) {
+      alert('Enter a valid number of seconds');
+      return;
+    }
+
+    const btn = document.getElementById('btn-record-all');
+    btn.disabled = true;
+    const results = await Promise.all(getAllCameraIds().map(id => startRecording(id, seconds)));
+    btn.disabled = false;
+
+    if (results.some(r => r && r.recording)) {
+      btn.classList.add('recording');
+      document.getElementById('btn-stop-all').style.display = '';
+    }
+  }
+
+  async function stopRecordAll() {
+    const btn = document.getElementById('btn-stop-all');
+    btn.disabled = true;
+    await Promise.all(getAllCameraIds().map(stopRecording));
+    btn.disabled = false;
+  }
+
+  function updateRecordAllButtonState() {
+    const anyRecording = Object.keys(recordCountdowns).length > 0;
+    document.getElementById('btn-record-all').classList.toggle('recording', anyRecording);
+    document.getElementById('btn-stop-all').style.display = anyRecording ? '' : 'none';
+  }
+
+  async function startRecording(id, seconds) {
+    try {
+      const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&seconds=${seconds}`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.recording) {
+        beginRecordCountdown(id, seconds); // restarts the countdown, whether this was a fresh start or an extend
+      } else {
+        console.warn('Record start failed for', id, data);
+      }
+      return data;
+    } catch (e) {
+      console.error('Record start error for', id, e);
+      return null;
+    }
+  }
+
+  async function stopRecording(id) {
+    try {
+      const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&stop=1`, { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      endRecordCountdown(id);
+      return data;
+    } catch (e) {
+      console.error('Record stop error for', id, e);
+      return null;
+    }
+  }
+
+  function beginRecordCountdown(id, seconds) {
+    const pill = document.getElementById('recpill-' + id);
+    let remaining = seconds;
+    pill.classList.add('active');
+    pill.textContent = `⏺ REC ${remaining}s`;
+
+    if (recordCountdowns[id]) clearInterval(recordCountdowns[id]);
+    recordCountdowns[id] = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        endRecordCountdown(id);
+      } else {
+        pill.textContent = `⏺ REC ${remaining}s`;
+      }
+    }, 1000);
+    updateRecordAllButtonState();
+  }
+
+  function endRecordCountdown(id) {
+    const pill = document.getElementById('recpill-' + id);
+    if (recordCountdowns[id]) { clearInterval(recordCountdowns[id]); delete recordCountdowns[id]; }
+    pill.classList.remove('active');
+    pill.textContent = '';
+    updateRecordAllButtonState();
+    refreshRecordingsList(id); // pick up the newly finished file if the panel is open
+  }
+
+  // ── Recordings list panel — browse and download saved footage ──
+  async function toggleRecordingsPanel(id) {
+    const panel = document.getElementById('files-' + id);
+    const open = panel.classList.toggle('open');
+    if (open) await refreshRecordingsList(id);
+  }
+
+  async function refreshRecordingsList(id) {
+    const panel = document.getElementById('files-' + id);
+    if (!panel || !panel.classList.contains('open')) return;
+    try {
+      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}`);
+      const files = await res.json();
+      if (!Array.isArray(files) || files.length === 0) {
+        panel.innerHTML = '<div class="files-empty">No recordings yet.</div>';
+        return;
+      }
+      panel.innerHTML = files.map(f => `
+        <div class="files-row">
+          <span class="files-name">${escapeHtml(f.filename)}</span>
+          <span class="files-size">${formatBytes(f.sizeBytes)}</span>
+          <a class="cam-btn" href="recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}">⬇ GET</a>
+        </div>
+      `).join('');
+    } catch (e) {
+      panel.innerHTML = '<div class="files-empty">Could not load recordings.</div>';
+    }
+  }
+
+  function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
 
   // ── Layout toggle ──
   function setLayout(mode) {

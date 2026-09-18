@@ -1,5 +1,7 @@
 const express = require('express');
 const net = require('net');
+const fs = require('fs');
+const path = require('path');
 const { EventEmitter } = require('events');
 const config = require('./config'); // gitignored — see example.config.js
 
@@ -8,10 +10,15 @@ const PORT = process.env.PORT || config.port;
 const PUSH_PORT = process.env.PUSH_PORT || config.pushPort; // raw TCP, continuous frame push
 const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in each camera's sketch
 
+const RECORDINGS_DIR = path.join(__dirname, 'recordings');
+fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
+const SAFE_FILENAME = /^[A-Za-z0-9_.-]+\.mjpeg$/; // only ever matches names we generate ourselves
+
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
-const cameras = {}; // id -> { frame, emitter, lastSeen, enabled, socket }
+const cameras = {}; // id -> { frame, emitter, lastSeen, enabled, socket, recording }
 
 function getCamera(id) {
   if (!cameras[id]) {
@@ -19,8 +26,9 @@ function getCamera(id) {
       frame: null,
       emitter: new EventEmitter(),
       lastSeen: null,
-      enabled: true,  // dashboard-controlled: whether this camera should be capturing/pushing
-      socket: null,   // the camera's live push-connection socket, if connected right now
+      enabled: true,   // dashboard-controlled: whether this camera should be capturing/pushing
+      socket: null,    // the camera's live push-connection socket, if connected right now
+      recording: null, // in-progress recording, if any — see startRecording()
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
@@ -39,13 +47,76 @@ function sendControlByte(cam) {
   }
 }
 
+// ── Recording ──
+// Recording happens entirely here on the relay, not on the camera: while a
+// recording is active we just also write every incoming frame straight to a
+// file, alongside relaying it to live viewers as usual. JPEGs have their own
+// start/end markers, so a plain concatenation of raw frame bytes is already
+// a valid motion-JPEG stream — no container/framing needed. The result
+// (a .mjpeg file) plays directly in VLC/ffplay, and converts with e.g.
+// `ffmpeg -i recording.mjpeg -c:v libx264 out.mp4` if you want a smaller format.
+//
+// Recordings track an `endAt` timestamp rather than a fixed duration, so
+// that a repeat request while already recording can extend it: pressing
+// record with 60s at 11:20:05 ends at 11:21:05; pressing it again with 60s
+// at 11:20:30 pushes endAt to 11:21:30 (now + 60s), not to 11:21:35 — same
+// file, timer just restarted from the moment of the second press.
+function startRecording(cam, id, seconds) {
+  if (cam.recording) return null; // caller should call extendRecording() instead
+
+  const dir = path.join(RECORDINGS_DIR, id);
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${id}_${stamp}.mjpeg`;
+  const filePath = path.join(dir, filename);
+  const stream = fs.createWriteStream(filePath);
+
+  const onFrame = (frame) => stream.write(frame);
+  cam.emitter.on('frame', onFrame);
+
+  const startedAt = new Date();
+  const rec = {
+    startedAt,
+    endAt: new Date(startedAt.getTime() + seconds * 1000),
+    filename,
+    filePath,
+    stream,
+    onFrame,
+    timer: null,
+  };
+  rec.timer = setTimeout(() => stopRecording(cam), seconds * 1000);
+  cam.recording = rec;
+  return rec;
+}
+
+// Restarts the countdown on an in-progress recording — same file, same
+// listener, just a new end time `seconds` from now.
+function extendRecording(cam, seconds) {
+  const rec = cam.recording;
+  if (!rec) return null;
+  clearTimeout(rec.timer);
+  rec.endAt = new Date(Date.now() + seconds * 1000);
+  rec.timer = setTimeout(() => stopRecording(cam), seconds * 1000);
+  return rec;
+}
+
+function stopRecording(cam) {
+  const rec = cam.recording;
+  if (!rec) return null;
+  clearTimeout(rec.timer);
+  cam.emitter.off('frame', rec.onFrame);
+  rec.stream.end();
+  cam.recording = null;
+  return rec;
+}
+
 // Camera pushes a frame here
 app.post('/upload/:id', (req, res) => {
   if (req.query.key !== API_KEY) return res.sendStatus(403);
   const cam = getCamera(req.params.id);
   cam.frame = req.body;
   cam.lastSeen = new Date();
-  cam.emitter.emit('frame', cam.frame); // push instantly to any watching browsers
+  cam.emitter.emit('frame', cam.frame); // push instantly to any watching browsers (and any active recording)
   res.sendStatus(200);
 });
 
@@ -88,7 +159,13 @@ app.get('/snapshot/:id', (req, res) => {
 // Quick health check across all cameras
 app.get('/status', (req, res) => {
   const out = {};
-  for (const id in cameras) out[id] = { lastSeen: cameras[id].lastSeen, enabled: cameras[id].enabled };
+  for (const id in cameras) {
+    out[id] = {
+      lastSeen: cameras[id].lastSeen,
+      enabled: cameras[id].enabled,
+      recording: !!cameras[id].recording,
+    };
+  }
   res.json(out);
 });
 
@@ -110,6 +187,78 @@ app.post('/control/:id', (req, res) => {
   cam.enabled = enabled === '1';
   sendControlByte(cam);
   res.json({ id: req.params.id, enabled: cam.enabled });
+});
+
+// Start recording this camera's incoming frames to a file for `seconds`.
+// If it's already recording, this extends it instead — see extendRecording().
+// Same trust boundary as /control — no key, PHP layer only.
+app.post('/record/:id', (req, res) => {
+  const seconds = parseInt(req.query.seconds, 10);
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_RECORD_SECONDS) {
+    return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
+  }
+  const cam = getCamera(req.params.id);
+
+  if (cam.recording) {
+    const rec = extendRecording(cam, seconds);
+    return res.json({
+      id: req.params.id,
+      recording: true,
+      extended: true,
+      startedAt: rec.startedAt,
+      endAt: rec.endAt,
+    });
+  }
+
+  const rec = startRecording(cam, req.params.id, seconds);
+  res.json({ id: req.params.id, recording: true, extended: false, startedAt: rec.startedAt, endAt: rec.endAt });
+});
+
+// Stop a recording early.
+app.post('/record/:id/stop', (req, res) => {
+  const cam = getCamera(req.params.id);
+  const rec = stopRecording(cam);
+  if (!rec) return res.status(409).json({ error: 'not recording' });
+  res.json({ id: req.params.id, recording: false, filename: rec.filename });
+});
+
+// Current recording status/progress for one camera.
+app.get('/record/:id', (req, res) => {
+  const cam = getCamera(req.params.id);
+  if (!cam.recording) return res.json({ recording: false });
+  const now = Date.now();
+  const remaining = Math.max(0, (cam.recording.endAt.getTime() - now) / 1000);
+  const elapsed = Math.max(0, (now - cam.recording.startedAt.getTime()) / 1000);
+  res.json({
+    recording: true,
+    startedAt: cam.recording.startedAt,
+    endAt: cam.recording.endAt,
+    elapsed,
+    remaining,
+  });
+});
+
+// List saved recordings for a camera, newest first.
+app.get('/recordings/:id', (req, res) => {
+  const dir = path.join(RECORDINGS_DIR, req.params.id);
+  if (!fs.existsSync(dir)) return res.json([]);
+  const files = fs.readdirSync(dir)
+    .filter((f) => SAFE_FILENAME.test(f))
+    .map((f) => {
+      const stat = fs.statSync(path.join(dir, f));
+      return { filename: f, sizeBytes: stat.size, createdAt: stat.birthtime };
+    })
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(files);
+});
+
+// Download one recording.
+app.get('/recordings/:id/:filename', (req, res) => {
+  const { id, filename } = req.params;
+  if (!SAFE_FILENAME.test(filename)) return res.sendStatus(400); // rules out any path traversal too
+  const filePath = path.join(RECORDINGS_DIR, id, filename);
+  if (!fs.existsSync(filePath)) return res.sendStatus(404);
+  res.download(filePath);
 });
 
 app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`));
@@ -175,7 +324,7 @@ const pushServer = net.createServer((socket) => {
       const cam = getCamera(camId);
       cam.frame = frame;
       cam.lastSeen = new Date();
-      cam.emitter.emit('frame', cam.frame);
+      cam.emitter.emit('frame', cam.frame); // also feeds any active recording, via startRecording()'s listener
     }
   });
 
