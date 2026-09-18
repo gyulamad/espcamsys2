@@ -27,6 +27,48 @@ if (!$camera) {
 
 $relayBase = rtrim($camera['url'], '/') . '/recordings/' . rawurlencode($camera['id']);
 $download = $_GET['download'] ?? null;
+$delete = $_GET['delete'] ?? null;
+
+if ($delete !== null) {
+    header('Content-Type: application/json');
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['error' => 'Use POST to delete']);
+        exit;
+    }
+    // Only ever matches filenames the relay itself generates — also rules
+    // out path traversal (no '/', no '..').
+    if (!preg_match('/^[A-Za-z0-9_.-]+\.mjpeg$/', $delete)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid filename']);
+        exit;
+    }
+
+    $url = $relayBase . '/' . rawurlencode($delete);
+    $ctx = stream_context_create(['http' => [
+        'method'        => 'DELETE',
+        'timeout'       => 10,
+        'ignore_errors' => true,
+    ]]);
+    $result = @file_get_contents($url, false, $ctx);
+
+    if ($result === false) {
+        http_response_code(502);
+        echo json_encode(['error' => 'Could not reach relay']);
+        exit;
+    }
+
+    foreach ($http_response_header ?? [] as $header) {
+        if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
+            http_response_code((int) $m[1]);
+            break;
+        }
+    }
+
+    echo $result;
+    exit;
+}
 
 if ($download !== null) {
     // Only ever matches filenames the relay itself generates — also rules

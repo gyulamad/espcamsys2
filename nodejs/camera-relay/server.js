@@ -261,6 +261,16 @@ app.get('/recordings/:id/:filename', (req, res) => {
   res.download(filePath);
 });
 
+// Delete one recording.
+app.delete('/recordings/:id/:filename', (req, res) => {
+  const { id, filename } = req.params;
+  if (!SAFE_FILENAME.test(filename)) return res.sendStatus(400);
+  const filePath = path.join(RECORDINGS_DIR, id, filename);
+  if (!fs.existsSync(filePath)) return res.sendStatus(404);
+  fs.unlinkSync(filePath);
+  res.json({ deleted: filename });
+});
+
 app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`));
 
 // ── Raw TCP push listener ──

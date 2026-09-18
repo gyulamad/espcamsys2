@@ -183,6 +183,24 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   .cam-btn.danger:hover        { border-color: var(--accent2); color: var(--accent2); }
   .cam-btn.danger              { border-color: #4d1a1a; color: var(--accent2); }
   .cam-btn:disabled            { opacity: .5; cursor: default; }
+  .cam-btn.recording {
+    border-color: var(--accent2); color: var(--accent2);
+    box-shadow: 0 0 6px rgba(255,79,94,.3);
+    animation: blink 1.4s ease-in-out infinite;
+  }
+
+  /* Per-camera record controls */
+  .cam-record-row {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 6px 14px; border-top: 1px solid var(--border);
+    background: rgba(0,0,0,.15);
+  }
+  .cam-record-row input[type=number] {
+    width: 52px; font-family: var(--mono); font-size: .65rem;
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    border-radius: 3px; padding: 4px 6px;
+  }
+  .cam-record-row .unit { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
 
   .rec-dot {
     width: 7px; height: 7px; border-radius: 50%;
@@ -348,6 +366,17 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
           <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
                   onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
         </div>
+      </div>
+
+      <div class="cam-record-row">
+        <input type="number" id="seconds-<?= htmlspecialchars($cam['id']) ?>" min="1" max="3600" value="60"
+               title="Recording length in seconds">
+        <span class="unit">sec</span>
+        <button class="cam-btn" id="rec-btn-<?= htmlspecialchars($cam['id']) ?>"
+                title="Press again mid-recording to extend it by this many seconds from now"
+                onclick="recordOne('<?= htmlspecialchars($cam['id']) ?>')">⏺ RECORD</button>
+        <button class="cam-btn danger" id="stop-btn-<?= htmlspecialchars($cam['id']) ?>" style="display:none;"
+                onclick="stopOne('<?= htmlspecialchars($cam['id']) ?>')">⏹ STOP</button>
       </div>
 
       <div class="cam-stream-wrap" id="wrap-<?= htmlspecialchars($cam['id']) ?>">
@@ -564,10 +593,39 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     btn.disabled = false;
   }
 
+  // Same start/extend behaviour as "RECORD ALL", just scoped to one camera
+  // using that card's own duration field instead of the header's.
+  async function recordOne(id) {
+    const secondsInput = document.getElementById('seconds-' + id);
+    const seconds = parseInt(secondsInput.value, 10);
+    if (!Number.isFinite(seconds) || seconds < 1) {
+      alert('Enter a valid number of seconds');
+      return;
+    }
+    const btn = document.getElementById('rec-btn-' + id);
+    btn.disabled = true;
+    await startRecording(id, seconds);
+    btn.disabled = false;
+  }
+
+  async function stopOne(id) {
+    const btn = document.getElementById('stop-btn-' + id);
+    btn.disabled = true;
+    await stopRecording(id);
+    btn.disabled = false;
+  }
+
   function updateRecordAllButtonState() {
     const anyRecording = Object.keys(recordCountdowns).length > 0;
     document.getElementById('btn-record-all').classList.toggle('recording', anyRecording);
     document.getElementById('btn-stop-all').style.display = anyRecording ? '' : 'none';
+  }
+
+  function updateCameraRecordButtonState(id, recording) {
+    const recBtn = document.getElementById('rec-btn-' + id);
+    const stopBtn = document.getElementById('stop-btn-' + id);
+    if (recBtn) recBtn.classList.toggle('recording', recording);
+    if (stopBtn) stopBtn.style.display = recording ? '' : 'none';
   }
 
   async function startRecording(id, seconds) {
@@ -614,6 +672,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
       }
     }, 1000);
     updateRecordAllButtonState();
+    updateCameraRecordButtonState(id, true);
   }
 
   function endRecordCountdown(id) {
@@ -622,6 +681,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     pill.classList.remove('active');
     pill.textContent = '';
     updateRecordAllButtonState();
+    updateCameraRecordButtonState(id, false);
     refreshRecordingsList(id); // pick up the newly finished file if the panel is open
   }
 
@@ -647,10 +707,27 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
           <span class="files-name">${escapeHtml(f.filename)}</span>
           <span class="files-size">${formatBytes(f.sizeBytes)}</span>
           <a class="cam-btn" href="recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}">⬇ GET</a>
+          <button class="cam-btn danger" onclick="deleteRecording('${id}', '${f.filename}')">🗑 DEL</button>
         </div>
       `).join('');
     } catch (e) {
       panel.innerHTML = '<div class="files-empty">Could not load recordings.</div>';
+    }
+  }
+
+  async function deleteRecording(id, filename) {
+    if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&delete=${encodeURIComponent(filename)}`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      await refreshRecordingsList(id);
+    } catch (e) {
+      alert('Could not delete recording: ' + e.message);
     }
   }
 
