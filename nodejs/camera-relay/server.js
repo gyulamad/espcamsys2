@@ -2,6 +2,7 @@ const express = require('express');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const config = require('./config'); // gitignored — see example.config.js
 
@@ -13,7 +14,8 @@ const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in e
 const RECORDINGS_DIR = path.join(__dirname, 'recordings');
 fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
-const SAFE_FILENAME = /^[A-Za-z0-9_.-]+\.mjpeg$/; // only ever matches names we generate ourselves
+const SAFE_FILENAME = /^[A-Za-z0-9_.-]+\.mp4$/; // only ever matches names we generate ourselves
+const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
@@ -48,49 +50,68 @@ function sendControlByte(cam) {
 }
 
 // ── Recording ──
-// Recording happens entirely here on the relay, not on the camera: while a
-// recording is active we just also write every incoming frame straight to a
-// file, alongside relaying it to live viewers as usual. JPEGs have their own
-// start/end markers, so a plain concatenation of raw frame bytes is already
-// a valid motion-JPEG stream — no container/framing needed. The result
-// (a .mjpeg file) plays directly in VLC/ffplay, and converts with e.g.
-// `ffmpeg -i recording.mjpeg -c:v libx264 out.mp4` if you want a smaller format.
+// Recording happens entirely here on the relay, not on the camera. While a
+// recording is active, every incoming frame gets saved as its own numbered
+// .jpg in a temp folder (alongside being relayed to live viewers as usual).
+// When the recording stops, we hand those frames to ffmpeg with a frame
+// rate computed from how much real wall-clock time they actually spanned,
+// so the resulting .mp4 plays back at the right speed — not a guessed fixed
+// rate. This also produces an actual standard video file: a raw
+// concatenation of JPEGs plays as a real video only in a few
+// timing-agnostic tools (ffplay, VLC in some cases); most players either
+// guess a default frame rate or just show the first embedded image and
+// stop, which is why footage recorded that way looked like a single still.
 //
 // Recordings track an `endAt` timestamp rather than a fixed duration, so
 // that a repeat request while already recording can extend it: pressing
 // record with 60s at 11:20:05 ends at 11:21:05; pressing it again with 60s
 // at 11:20:30 pushes endAt to 11:21:30 (now + 60s), not to 11:21:35 — same
-// file, timer just restarted from the moment of the second press.
+// in-progress capture, timer just restarted from the moment of the second press.
 function startRecording(cam, id, seconds) {
   if (cam.recording) return null; // caller should call extendRecording() instead
 
   const dir = path.join(RECORDINGS_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `${id}_${stamp}.mjpeg`;
-  const filePath = path.join(dir, filename);
-  const stream = fs.createWriteStream(filePath);
-
-  const onFrame = (frame) => stream.write(frame);
-  cam.emitter.on('frame', onFrame);
+  const tempDir = path.join(dir, `.tmp_${stamp}`);
+  fs.mkdirSync(tempDir, { recursive: true });
 
   const startedAt = new Date();
   const rec = {
+    id,
+    stamp,
+    dir,
+    tempDir,
     startedAt,
     endAt: new Date(startedAt.getTime() + seconds * 1000),
-    filename,
-    filePath,
-    stream,
-    onFrame,
+    frameCount: 0,
+    firstFrameAt: null,
+    lastFrameAt: null,
+    onFrame: null,
     timer: null,
   };
+
+  rec.onFrame = (frame) => {
+    rec.frameCount += 1;
+    const now = Date.now();
+    if (!rec.firstFrameAt) rec.firstFrameAt = now;
+    rec.lastFrameAt = now;
+    const framePath = path.join(tempDir, `frame_${String(rec.frameCount).padStart(6, '0')}.jpg`);
+    try {
+      fs.writeFileSync(framePath, frame);
+    } catch (err) {
+      console.error(`[${id}] failed writing recording frame:`, err.message);
+    }
+  };
+  cam.emitter.on('frame', rec.onFrame);
+
   rec.timer = setTimeout(() => stopRecording(cam), seconds * 1000);
   cam.recording = rec;
   return rec;
 }
 
-// Restarts the countdown on an in-progress recording — same file, same
-// listener, just a new end time `seconds` from now.
+// Restarts the countdown on an in-progress recording — same capture in
+// progress, just a new end time `seconds` from now.
 function extendRecording(cam, seconds) {
   const rec = cam.recording;
   if (!rec) return null;
@@ -105,9 +126,50 @@ function stopRecording(cam) {
   if (!rec) return null;
   clearTimeout(rec.timer);
   cam.emitter.off('frame', rec.onFrame);
-  rec.stream.end();
   cam.recording = null;
+  finalizeRecording(rec); // encodes the captured frames into an .mp4, async — doesn't block the response
   return rec;
+}
+
+// Runs ffmpeg over the captured frames using their real measured frame
+// rate, writes `<dir>/<id>_<stamp>.mp4`, and cleans up the temp frames.
+function finalizeRecording(rec) {
+  if (rec.frameCount === 0) {
+    // Camera was paused/offline for this whole recording — nothing to encode.
+    fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
+    return;
+  }
+
+  const spanSeconds = rec.lastFrameAt > rec.firstFrameAt ? (rec.lastFrameAt - rec.firstFrameAt) / 1000 : 0;
+  const fps = spanSeconds > 0 ? Math.min(30, Math.max(1, rec.frameCount / spanSeconds)) : DEFAULT_FPS;
+
+  const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
+  const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
+
+  const ffmpeg = spawn('ffmpeg', [
+    '-y',
+    '-framerate', fps.toFixed(2),
+    '-i', framePattern,
+    '-c:v', 'libx264',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    outputPath,
+  ]);
+
+  ffmpeg.on('error', (err) => {
+    // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
+    // frames in place rather than deleting footage we can't otherwise recover.
+    console.error(`[${rec.id}] ffmpeg failed to start (is it installed?):`, err.message);
+    console.error(`[${rec.id}] raw frames kept at ${rec.tempDir}`);
+  });
+
+  ffmpeg.on('exit', (code) => {
+    if (code === 0) {
+      fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
+    } else {
+      console.error(`[${rec.id}] ffmpeg exited with code ${code}, raw frames kept at ${rec.tempDir}`);
+    }
+  });
 }
 
 // Camera pushes a frame here
@@ -214,12 +276,13 @@ app.post('/record/:id', (req, res) => {
   res.json({ id: req.params.id, recording: true, extended: false, startedAt: rec.startedAt, endAt: rec.endAt });
 });
 
-// Stop a recording early.
+// Stop a recording early. Encoding into the final .mp4 happens in the
+// background — it won't show up in /recordings/:id until ffmpeg finishes.
 app.post('/record/:id/stop', (req, res) => {
   const cam = getCamera(req.params.id);
   const rec = stopRecording(cam);
   if (!rec) return res.status(409).json({ error: 'not recording' });
-  res.json({ id: req.params.id, recording: false, filename: rec.filename });
+  res.json({ id: req.params.id, recording: false, encoding: rec.frameCount > 0 });
 });
 
 // Current recording status/progress for one camera.

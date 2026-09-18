@@ -39,7 +39,7 @@ if ($delete !== null) {
     }
     // Only ever matches filenames the relay itself generates — also rules
     // out path traversal (no '/', no '..').
-    if (!preg_match('/^[A-Za-z0-9_.-]+\.mjpeg$/', $delete)) {
+    if (!preg_match('/^[A-Za-z0-9_.-]+\.mp4$/', $delete)) {
         http_response_code(400);
         echo json_encode(['error' => 'Invalid filename']);
         exit;
@@ -73,7 +73,7 @@ if ($delete !== null) {
 if ($download !== null) {
     // Only ever matches filenames the relay itself generates — also rules
     // out path traversal (no '/', no '..').
-    if (!preg_match('/^[A-Za-z0-9_.-]+\.mjpeg$/', $download)) {
+    if (!preg_match('/^[A-Za-z0-9_.-]+\.mp4$/', $download)) {
         http_response_code(400);
         exit('Invalid filename');
     }
@@ -88,7 +88,7 @@ if ($download !== null) {
     }
 
     while (ob_get_level()) ob_end_clean();
-    header('Content-Type: video/x-motion-jpeg');
+    header('Content-Type: video/mp4');
     header('Content-Disposition: attachment; filename="' . $download . '"');
     fpassthru($stream);
     fclose($stream);

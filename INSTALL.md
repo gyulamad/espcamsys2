@@ -3,8 +3,8 @@
 This sets up three pieces:
 
 1. **ESP32-CAM devices** — capture JPEGs, push them to your Pi
-2. **`server.js` relay** — runs on the Pi, receives frames, re-serves them as live MJPEG
-3. **PHP dashboard** — runs on the Pi, shown to you over a Tor hidden service, proxies each camera's stream from the relay, and lets you pause/resume each camera's capture (power + bandwidth saving)
+2. **`server.js` relay** — runs on the Pi, receives frames, re-serves them as live MJPEG, and — on request — records incoming frames from any camera straight to a file on disk (the recording itself always happens here, never on the camera boards)
+3. **PHP dashboard** — runs on the Pi, shown to you over a Tor hidden service, proxies each camera's stream from the relay, lets you pause/resume each camera's capture (power + bandwidth saving), and lets you trigger/download timed recordings
 
 ```
 [ESP32-CAM] --push JPEG--> [server.js relay :8080] <--fetch-- [PHP dashboard] <--Tor--> [you, anywhere]
@@ -110,7 +110,13 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    sudo systemctl enable --now camrelay
    sudo systemctl status camrelay
    ```
-6. **Important:** the relay has no auth on `/stream`, `/snapshot`, `/status`, or `/control` — only `/upload` is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to it.
+6. **Important:** the relay has no auth on `/stream`, `/snapshot`, `/status`, `/control`, `/record`, or `/recordings` — only `/upload` is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to it.
+7. Recordings need `ffmpeg` installed on the Pi — it's what turns the captured frames into a real, standard `.mp4` file once a recording finishes:
+   ```bash
+   sudo apt install -y ffmpeg
+   ```
+   Without it, a recording's raw frames are still saved (under a hidden `.tmp_*` folder per recording) but never get encoded or show up in the dashboard's file list — check the relay's console output (`sudo journalctl -u camrelay -f`) if a recording seems to have vanished.
+8. Recordings themselves land at `/opt/camrelay/recordings/<camera-id>/<camera-id>_<timestamp>.mp4` — ordinary video files, playable anywhere. **Nothing deletes old recordings automatically** (you can delete them from the dashboard's file list, or manually) — keep an eye on disk space (`df -h`) if you record often, especially at higher resolutions.
 
 ---
 
