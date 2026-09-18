@@ -15,6 +15,13 @@ WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // per-frame HTTP request/response round trip
 bool pushAuthed = false;
 
+// Whether we should be capturing/pushing right now. Synced from the relay
+// over the same persistent connection — see server.js's /control endpoint,
+// which the dashboard's per-camera power button calls. Defaults to on at
+// boot; the relay also re-sends its current value right after we
+// (re)authenticate, in case the dashboard paused us while we were offline.
+bool streamEnabled = true;
+
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -124,8 +131,9 @@ void loop() {
   // (not just right at boot) still tells you which camera this is.
   static unsigned long lastIdentityPrint = 0;
   if (millis() - lastIdentityPrint > 10000) {
-    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus\n",
-                  CAMERA_ID, WiFi.RSSI(), millis() / 1000);
+    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s\n",
+                  CAMERA_ID, WiFi.RSSI(), millis() / 1000,
+                  streamEnabled ? "" : " (paused)");
     lastIdentityPrint = millis();
   }
 
@@ -136,17 +144,36 @@ void loop() {
     return;
   }
 
+  if (!ensurePushConnection()) {
+    Serial.println("Push connect failed, will retry");
+    delay(500);
+    return;
+  }
+
+  // Drain any pending control bytes from the relay (dashboard power
+  // button). Single raw byte, no framing needed — this rides the same
+  // socket as our outgoing frames but in the other direction, so it never
+  // collides with them: 0x00 = pause, 0x01 = resume. If several arrived
+  // since we last checked, only the last one matters.
+  while (pushClient.available()) {
+    int cmd = pushClient.read();
+    if (cmd == 0) streamEnabled = false;
+    else if (cmd == 1) streamEnabled = true;
+  }
+
+  if (!streamEnabled) {
+    // Paused from the dashboard — skip capture and push entirely, which is
+    // where the actual power/bandwidth savings come from. We deliberately
+    // keep WiFi and the push connection alive rather than sleeping, so the
+    // dashboard can resume us instantly with no reconnect delay.
+    delay(500);
+    return;
+  }
+
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("Frame capture failed");
     delay(200);
-    return;
-  }
-
-  if (!ensurePushConnection()) {
-    Serial.println("Push connect failed, will retry");
-    esp_camera_fb_return(fb);
-    delay(500);
     return;
   }
 

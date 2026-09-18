@@ -167,6 +167,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   }
   .cam-btn:hover               { border-color: var(--accent);  color: var(--accent); }
   .cam-btn.danger:hover        { border-color: var(--accent2); color: var(--accent2); }
+  .cam-btn.danger              { border-color: #4d1a1a; color: var(--accent2); }
+  .cam-btn:disabled            { opacity: .5; cursor: default; }
 
   .rec-dot {
     width: 7px; height: 7px; border-radius: 50%;
@@ -293,6 +295,9 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         <div class="cam-actions">
           <span class="rec-dot"></span>
           <span class="status-pill connecting" id="pill-<?= htmlspecialchars($cam['id']) ?>">CONNECTING</span>
+          <button class="cam-btn" id="pwr-<?= htmlspecialchars($cam['id']) ?>" data-enabled="1"
+                  title="Pause/resume this camera's capture on the device (power + bandwidth saving)"
+                  onclick="togglePower('<?= htmlspecialchars($cam['id']) ?>')">⏻ ON</button>
           <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
           <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
                   onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
@@ -396,7 +401,9 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     });
   }
 
-  // ── Hide / show ──
+  // ── Hide / show (local to this browser tab only — the camera itself
+  // keeps capturing and pushing frames; use the ⏻ power button below to
+  // actually stop the device) ──
   function toggleHide(id) {
     const img  = document.getElementById('img-' + id);
     const btn  = document.getElementById('hide-' + id);
@@ -420,6 +427,61 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         `<button class="cam-btn" onclick="toggleHide('${id}')">▶ RESTORE</button>`;
     }
   }
+
+  // ── Power on/off (real, device-side — tells the ESP32-CAM to stop or
+  // resume capturing/pushing frames entirely, for power and bandwidth
+  // saving). Affects every viewer of this camera, not just this tab. ──
+  async function togglePower(id) {
+    const btn = document.getElementById('pwr-' + id);
+    const wantEnable = btn.dataset.enabled === '0';
+    btn.disabled = true;
+    try {
+      const res = await fetch(`control.php?cam=${encodeURIComponent(id)}&enabled=${wantEnable ? 1 : 0}`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('control request failed: ' + res.status);
+      const data = await res.json();
+      setPower(id, data.enabled);
+    } catch (e) {
+      console.error('Power toggle failed for', id, e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function setPower(id, enabled) {
+    const btn = document.getElementById('pwr-' + id);
+    btn.dataset.enabled = enabled ? '1' : '0';
+    btn.textContent = enabled ? '⏻ ON' : '⏻ OFF';
+    btn.classList.toggle('danger', !enabled);
+
+    if (enabled) {
+      reloadStream(id);
+    } else {
+      setStatus(id, 'hidden', 'POWERED OFF');
+      showOverlay(id, '⏻', 'CAMERA POWERED OFF', false);
+      document.getElementById('overlay-' + id).innerHTML +=
+        `<button class="cam-btn" onclick="togglePower('${id}')">⏻ TURN ON</button>`;
+    }
+  }
+
+  // Reflect each camera's actual on/off state on page load, in case it was
+  // left paused from a previous visit or a different browser.
+  async function loadInitialPowerStates() {
+    for (const card of document.querySelectorAll('.cam-card')) {
+      const id = card.id.replace('card-', '');
+      try {
+        const res = await fetch(`control.php?cam=${encodeURIComponent(id)}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        setPower(id, data.enabled);
+      } catch (e) {
+        // Relay unreachable — leave the default (ON) shown, stream errors
+        // will surface separately via onStreamError.
+      }
+    }
+  }
+  loadInitialPowerStates();
 
   // ── Layout toggle ──
   function setLayout(mode) {

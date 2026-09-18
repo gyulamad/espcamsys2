@@ -4,7 +4,7 @@ This sets up three pieces:
 
 1. **ESP32-CAM devices** — capture JPEGs, push them to your Pi
 2. **`server.js` relay** — runs on the Pi, receives frames, re-serves them as live MJPEG
-3. **PHP dashboard** — runs on the Pi, shown to you over a Tor hidden service, proxies each camera's stream from the relay
+3. **PHP dashboard** — runs on the Pi, shown to you over a Tor hidden service, proxies each camera's stream from the relay, and lets you pause/resume each camera's capture (power + bandwidth saving)
 
 ```
 [ESP32-CAM] --push JPEG--> [server.js relay :8080] <--fetch-- [PHP dashboard] <--Tor--> [you, anywhere]
@@ -35,20 +35,27 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    ```bash
    cp example.config.h config.h
    ```
-   Edit `config.h`:
+   Edit `config.h`. List every Wi-Fi extender this camera might be near — it connects
+   to whichever has the strongest signal and fails over automatically if one drops,
+   so you don't need to know in advance which extender it'll end up closest to:
    ```cpp
-   const char* WIFI_SSID     = "your-wifi-ssid";
-   const char* WIFI_PASSWORD = "your-wifi-password";
+   WifiNetwork WIFI_NETWORKS[] = {
+     { "extender-1-ssid", "extender-1-password" },
+     { "extender-2-ssid", "extender-2-password" },
+     { "extender-3-ssid", "extender-3-password" },
+   };
+   const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
+
    const char* SERVER_HOST   = "192.168.4.9";   // your Pi's LAN IP
-   const int   SERVER_PORT   = 8080;
-   const char* CAMERA_ID     = "cam1";          // unique per device — must match config.php on the Pi
+   const int   PUSH_PORT     = 8081;            // relay's raw push port — must match pushPort in server's config.js
+   const char* CAMERA_ID     = "cam1";          // unique per device — must match its id in config.php
    const char* API_KEY       = "<same long random string as camKey in the Pi's config.js>";
    ```
 4. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
 5. Disconnect GPIO0 from GND and power-cycle the board. Open the Serial Monitor (115200 baud) — you should see it connect to Wi-Fi and print its IP.
 6. Repeat for every camera, giving each one a unique `CAMERA_ID` (`cam1`, `cam2`, `cam3`, `cam4`, ...) and its own `config.h`.
 
-> Since these boards only push frames outbound, they work from any Wi-Fi network that can reach the Pi's `SERVER_HOST:SERVER_PORT` — including a NAT'd guest network — no port forwarding needed on the camera side.
+> Since these boards only push frames outbound, they work from any Wi-Fi network that can reach the Pi's `SERVER_HOST:PUSH_PORT` — including a NAT'd guest network — no port forwarding needed on the camera side.
 
 ---
 
@@ -69,6 +76,7 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    ```js
    module.exports = {
      port: 8080,
+     pushPort: 8081,
      camKey: '<generate with: openssl rand -hex 24>',
    };
    ```
@@ -77,7 +85,7 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    npm install
    node server.js
    ```
-   You should see `Camera relay listening on :8080`. Leave it running and check that a camera shows up:
+   You should see `Camera relay (HTTP) listening on :8080` and `Camera relay (raw push) listening on :8081`. Leave it running and check that a camera shows up:
    ```bash
    curl http://localhost:8080/status
    ```
@@ -102,7 +110,7 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    sudo systemctl enable --now camrelay
    sudo systemctl status camrelay
    ```
-6. **Important:** the relay has no auth on `/stream`, `/snapshot`, or `/status` — only `/upload` is key-protected. Make sure nothing forwards port 8080 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows it from `localhost` or your LAN, since only the PHP layer should ever talk to it.
+6. **Important:** the relay has no auth on `/stream`, `/snapshot`, `/status`, or `/control` — only `/upload` is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to it.
 
 ---
 
@@ -113,7 +121,7 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    sudo apt install -y apache2 php libapache2-mod-php
    sudo a2enmod headers
    ```
-2. Copy `index.php`, `stream.php`, `cameras.php`, `auth.php`, and `example.config.php` into your web root, e.g. `/var/www/camdash/`.
+2. Copy `index.php`, `stream.php`, `control.php`, `cameras.php`, `auth.php`, and `example.config.php` into your web root, e.g. `/var/www/camdash/`.
 3. Create the real config:
    ```bash
    cd /var/www/camdash
@@ -132,10 +140,10 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
        ],
    ];
    ```
-4. Point an Apache vhost at that folder:
+4. Point an Apache vhost at that folder. Since Tor is going to hand this straight to port 80, and nothing else on the Pi needs port 80, the vhost can just listen there directly — no extra port to keep track of:
    ```apache
    # /etc/apache2/sites-available/camdash.conf
-   <VirtualHost 127.0.0.1:8081>
+   <VirtualHost 127.0.0.1:80>
        DocumentRoot /var/www/camdash
        <Directory /var/www/camdash>
            AllowOverride All
@@ -150,9 +158,9 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    ```
 5. Sanity check from the Pi itself:
    ```bash
-   curl -u pick-a-username:yourpassword http://127.0.0.1:8081/
+   curl -u pick-a-username:yourpassword http://127.0.0.1/
    ```
-   You should get the dashboard HTML back. From a LAN browser you should get a Basic Auth prompt, then see live streams.
+   You should get the dashboard HTML back. From a LAN browser you should get a Basic Auth prompt, then see live streams, with a power button on each camera to pause/resume its capture.
 
 ---
 
@@ -162,10 +170,10 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    ```bash
    sudo apt install -y tor
    ```
-2. Edit `/etc/tor/torrc` and add:
+2. Edit `/etc/tor/torrc` and add — external port 80 straight to Apache's port 80, no remapping needed:
    ```
    HiddenServiceDir /var/lib/tor/camdash/
-   HiddenServicePort 80 127.0.0.1:8081
+   HiddenServicePort 80 127.0.0.1:80
    ```
 3. Restart Tor and grab your onion address:
    ```bash
@@ -180,9 +188,10 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
 
 - [ ] Each camera's serial monitor shows `Connected, IP: ...` and no repeated `Push failed` errors
 - [ ] `curl http://localhost:8080/status` on the Pi shows a recent `lastSeen` for every camera
-- [ ] `http://127.0.0.1:8081/` on the Pi (with `-u user:pass`) shows all cameras live
+- [ ] `http://127.0.0.1/` on the Pi (with `-u user:pass`) shows all cameras live
 - [ ] The `.onion` address, opened in Tor Browser, prompts for Basic Auth and then shows all cameras live
-- [ ] Port 8080 and 8081 are **not** reachable from outside your LAN (check your router's port-forwarding list — there should be none for this project)
+- [ ] The power button on a camera's card pauses it (its serial monitor prints `(paused)`, its stream stops updating) and resumes it again
+- [ ] Ports 8080 and 8081 are **not** reachable from outside your LAN (check your router's port-forwarding list — there should be none for this project)
 
 ---
 

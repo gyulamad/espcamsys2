@@ -11,14 +11,32 @@ const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in e
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
-const cameras = {}; // id -> { frame, emitter, lastSeen }
+const cameras = {}; // id -> { frame, emitter, lastSeen, enabled, socket }
 
 function getCamera(id) {
   if (!cameras[id]) {
-    cameras[id] = { frame: null, emitter: new EventEmitter(), lastSeen: null };
+    cameras[id] = {
+      frame: null,
+      emitter: new EventEmitter(),
+      lastSeen: null,
+      enabled: true,  // dashboard-controlled: whether this camera should be capturing/pushing
+      socket: null,   // the camera's live push-connection socket, if connected right now
+    };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
   return cameras[id];
+}
+
+// Tells a connected camera whether it should be capturing, over its own
+// persistent push socket. Single raw byte, no framing needed since this is
+// a totally separate direction of traffic from the camera's [len][jpeg]
+// frames: 0x00 = pause, 0x01 = resume. No-op if the camera isn't connected
+// right now — its `enabled` flag is still saved and gets sent the moment it
+// (re)connects, in sendControlByte() below.
+function sendControlByte(cam) {
+  if (cam.socket && cam.socket.writable) {
+    cam.socket.write(Buffer.from([cam.enabled ? 1 : 0]));
+  }
 }
 
 // Camera pushes a frame here
@@ -70,8 +88,28 @@ app.get('/snapshot/:id', (req, res) => {
 // Quick health check across all cameras
 app.get('/status', (req, res) => {
   const out = {};
-  for (const id in cameras) out[id] = { lastSeen: cameras[id].lastSeen };
+  for (const id in cameras) out[id] = { lastSeen: cameras[id].lastSeen, enabled: cameras[id].enabled };
   res.json(out);
+});
+
+// Dashboard reads/sets whether a camera should be capturing right now.
+// Used for the per-camera power button (power + bandwidth saving) — the
+// camera itself decides to skip capture/push while paused, this just carries
+// the on/off signal to it. No key required, same trust boundary as
+// /stream, /snapshot, /status: only the PHP layer (behind Tor Basic Auth)
+// is expected to be able to reach this port at all (see INSTALL.md 2.6).
+app.get('/control/:id', (req, res) => {
+  const cam = getCamera(req.params.id);
+  res.json({ id: req.params.id, enabled: cam.enabled });
+});
+
+app.post('/control/:id', (req, res) => {
+  const enabled = req.query.enabled;
+  if (enabled !== '0' && enabled !== '1') return res.sendStatus(400);
+  const cam = getCamera(req.params.id);
+  cam.enabled = enabled === '1';
+  sendControlByte(cam);
+  res.json({ id: req.params.id, enabled: cam.enabled });
 });
 
 app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`));
@@ -83,6 +121,11 @@ app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`))
 //   2. repeated:  [4-byte big-endian length][that many bytes of JPEG]
 // No response is sent back for each frame — this is intentionally
 // fire-and-forget so the camera never waits on a round trip between frames.
+//
+// The one exception is the control channel above: whenever the dashboard
+// changes a camera's enabled state, or right after a camera authenticates,
+// we write a single 0x00/0x01 byte down this same socket (see
+// sendControlByte()). The camera reads it opportunistically between frames.
 const pushServer = net.createServer((socket) => {
   socket.setNoDelay(true);
 
@@ -108,6 +151,12 @@ const pushServer = net.createServer((socket) => {
       }
       camId = id;
       authed = true;
+
+      const cam = getCamera(camId);
+      cam.socket = socket;
+      // Sync this camera to whatever state the dashboard last set, in case
+      // it changed while this camera was offline or mid-reconnect.
+      sendControlByte(cam);
     }
 
     // Drain as many complete [length][payload] frames as are buffered
@@ -127,6 +176,12 @@ const pushServer = net.createServer((socket) => {
       cam.frame = frame;
       cam.lastSeen = new Date();
       cam.emitter.emit('frame', cam.frame);
+    }
+  });
+
+  socket.on('close', () => {
+    if (camId && cameras[camId] && cameras[camId].socket === socket) {
+      cameras[camId].socket = null;
     }
   });
 
