@@ -6,3 +6,4 @@ config.h
 
 # Node
 node_modules/
+nodejs/camera-relay/recordings/
