@@ -16,6 +16,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     --bg:      #0b0e14;
     --surface: #111520;
     --border:  #1e2840;
+    --border-light: #3c4d80;
     --accent:  #00e5ff;
     --accent2: #ff4f5e;
     --text:    #cdd8f0;
@@ -100,8 +101,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   .btn {
     font-family: var(--mono); font-size: .7rem;
     padding: 6px 12px; border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: transparent; color: var(--muted);
+    border: 1px solid var(--border-light);
+    background: transparent; color: var(--text);
     cursor: pointer; letter-spacing: .06em; transition: all .2s;
   }
   .btn:hover, .btn.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 8px rgba(0,229,255,.2); }
@@ -174,14 +175,14 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   .cam-btn {
     font-family: var(--mono); font-size: .65rem;
     padding: 3px 8px; border-radius: 3px;
-    border: 1px solid var(--border);
-    background: transparent; color: var(--muted);
+    border: 1px solid var(--border-light);
+    background: transparent; color: var(--text);
     cursor: pointer; text-decoration: none;
     transition: all .15s; letter-spacing: .04em;
   }
   .cam-btn:hover               { border-color: var(--accent);  color: var(--accent); }
   .cam-btn.danger:hover        { border-color: var(--accent2); color: var(--accent2); }
-  .cam-btn.danger              { border-color: #4d1a1a; color: var(--accent2); }
+  .cam-btn.danger              { border-color: #7a2e3a; color: var(--accent2); }
   .cam-btn:disabled            { opacity: .5; cursor: default; }
   .cam-btn.recording {
     border-color: var(--accent2); color: var(--accent2);
@@ -385,13 +386,14 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
           <button class="cam-btn" id="pwr-<?= htmlspecialchars($cam['id']) ?>" data-enabled="1"
                   title="Turn this camera's capture on for the given duration, or off now, on the device itself (power + bandwidth saving)"
                   onclick="togglePower('<?= htmlspecialchars($cam['id']) ?>')">⏻ ON</button>
-          <button class="cam-btn" onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
           <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
           <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
                   onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
         </div>
       </div>
 
+      <!-- Recording + its file list live together: start/stop a recording,
+           browse and download what's already been saved, all in one place. -->
       <div class="cam-record-row">
         <input type="number" id="seconds-<?= htmlspecialchars($cam['id']) ?>" min="1" max="3600" value="60"
                title="Recording length in seconds">
@@ -401,7 +403,10 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
                 onclick="recordOne('<?= htmlspecialchars($cam['id']) ?>')">⏺ RECORD</button>
         <button class="cam-btn danger" id="stop-btn-<?= htmlspecialchars($cam['id']) ?>" style="display:none;"
                 onclick="stopOne('<?= htmlspecialchars($cam['id']) ?>')">⏹ STOP</button>
+        <button class="cam-btn" onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
       </div>
+
+      <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
 
       <div class="cam-stream-wrap" id="wrap-<?= htmlspecialchars($cam['id']) ?>">
 
@@ -427,8 +432,6 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         <span>PROXY → stream.php?cam=<?= htmlspecialchars($cam['id']) ?></span>
         <span>CAM <?= str_pad($i + 1, 2, '0', STR_PAD_LEFT) ?></span>
       </div>
-
-      <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
 
     </div>
     <?php endforeach; ?>
