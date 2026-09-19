@@ -254,6 +254,18 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     height: 100%;
     object-fit: contain;
     display: block;
+    cursor: zoom-in;
+  }
+
+  /* Fullscreen the stream by clicking it — browser chrome fills the
+     wrap div; the image itself just needs to stay centered/contained. */
+  .cam-stream-wrap:fullscreen,
+  .cam-stream-wrap:-webkit-full-screen {
+    background: #000;
+  }
+  .cam-stream-wrap:fullscreen img.stream,
+  .cam-stream-wrap:-webkit-full-screen img.stream {
+    cursor: zoom-out;
   }
 
   /* Offline / error overlay */
@@ -305,13 +317,21 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     padding: 8px 14px; border-top: 1px solid var(--border);
     background: rgba(0,0,0,.25);
     font-family: var(--mono); font-size: .62rem; color: var(--muted);
-    max-height: 160px; overflow-y: auto;
+    max-height: 320px; overflow-y: auto;
   }
   .files-panel.open { display: flex; }
+  .files-panel-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px solid var(--border);
+  }
   .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .files-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .files-size { flex-shrink: 0; }
   .files-empty { color: var(--muted); padding: 4px 0; }
+  .files-player video {
+    width: 100%; max-height: 220px; border-radius: 4px;
+    margin: 2px 0 6px; display: block; background: #000;
+  }
 
   /* ── Footer ── */
   footer {
@@ -357,6 +377,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
       <button class="btn" id="btn-record-all" onclick="recordAll()"
               title="Press again mid-recording to extend it by this many seconds from now">⏺ RECORD ALL</button>
       <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
+      <button class="btn danger" id="btn-delete-all" onclick="deleteAllRecordingsEverywhere()"
+              title="Delete every saved recording, for every camera">🗑 DELETE ALL FOOTAGE</button>
     </span>
   </div>
 </header>
@@ -424,6 +446,8 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
           data-src="<?= $proxyUrl ?>"
           onload="onStreamLoad('<?= htmlspecialchars($cam['id']) ?>')"
           onerror="onStreamError('<?= htmlspecialchars($cam['id']) ?>')"
+          onclick="toggleStreamFullscreen('<?= htmlspecialchars($cam['id']) ?>')"
+          title="Click to view full screen"
         >
 
       </div>
@@ -507,6 +531,23 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     });
   }
 
+  // ── Fullscreen — click the stream image to blow it up, click it again
+  // (or press Esc) to leave. Fullscreens the wrap div rather than just the
+  // <img> so the connecting/error overlay stays layered correctly on top
+  // of it if the stream drops while zoomed in. ──
+  function toggleStreamFullscreen(id) {
+    const wrap = document.getElementById('wrap-' + id);
+    if (!wrap) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl === wrap) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else if (wrap.requestFullscreen) {
+      wrap.requestFullscreen().catch(err => console.error('Fullscreen failed:', err));
+    } else if (wrap.webkitRequestFullscreen) {
+      wrap.webkitRequestFullscreen(); // Safari
+    }
+  }
+
   // ── Hide / show (local to this browser tab only — the camera itself
   // keeps capturing and pushing frames; use the ⏻ power button to actually
   // stop the device) ──
@@ -573,26 +614,34 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     }
   }
 
+  // wasEnabled/wasRecording transitions (below) exist so polling every few
+  // seconds — needed to pick up changes from other tabs, other users, or a
+  // camera's own alarm-trigger GPIO calling the relay directly — doesn't
+  // reset the live stream or re-render the overlay on every single poll
+  // when nothing has actually changed.
   function setPower(id, enabled, enabledUntil) {
     const btn = document.getElementById('pwr-' + id);
+    const wasEnabled = btn.dataset.enabled === '1';
     btn.dataset.enabled = enabled ? '1' : '0';
     btn.textContent = enabled ? '⏻ ON' : '⏻ OFF';
     btn.classList.toggle('danger', !enabled);
 
     if (enabled) {
-      reloadStream(id);
+      if (!wasEnabled) reloadStream(id); // only reconnect the <img> on an actual off->on transition
       if (enabledUntil) {
         const remaining = Math.max(1, Math.round((new Date(enabledUntil).getTime() - Date.now()) / 1000));
-        beginPowerCountdown(id, remaining);
+        beginPowerCountdown(id, remaining); // safe to call every poll — resyncs the pill to the real remaining time
       } else {
         endPowerCountdown(id); // on indefinitely (or unknown) — no countdown to show
       }
     } else {
       endPowerCountdown(id);
-      setStatus(id, 'hidden', 'POWERED OFF');
-      showOverlay(id, '⏻', 'CAMERA POWERED OFF', false);
-      document.getElementById('overlay-' + id).innerHTML +=
-        `<button class="cam-btn" onclick="togglePower('${id}')">⏻ TURN ON</button>`;
+      if (wasEnabled) {
+        setStatus(id, 'hidden', 'POWERED OFF');
+        showOverlay(id, '⏻', 'CAMERA POWERED OFF', false);
+        document.getElementById('overlay-' + id).innerHTML +=
+          `<button class="cam-btn" onclick="togglePower('${id}')">⏻ TURN ON</button>`;
+      }
     }
   }
 
@@ -632,20 +681,9 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     if (pill) { pill.classList.remove('active'); pill.textContent = ''; }
   }
 
-  async function loadInitialPowerStates() {
-    for (const id of getAllCameraIds()) {
-      try {
-        const res = await fetch(`control.php?cam=${encodeURIComponent(id)}`);
-        if (!res.ok) continue;
-        const data = await res.json();
-        setPower(id, data.enabled, data.enabledUntil);
-      } catch (e) {
-        // Relay unreachable — leave the default (ON) shown, stream errors
-        // will surface separately via onStreamError.
-      }
-    }
-  }
-  loadInitialPowerStates();
+  // Initial per-camera power/recording state is seeded by pollAllStatuses()
+  // near the bottom of this script, which also keeps re-polling afterwards —
+  // see the comment there for why a single mechanism covers both cases.
 
   // ── Recording — one button + one duration field starts a timed,
   // server-side recording on every camera at once (footage is written on
@@ -780,7 +818,25 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     refreshRecordingsList(id); // pick up the newly finished file if the panel is open
   }
 
-  // ── Recordings list panel — browse and download saved footage ──
+  // Poll-driven counterpart to beginRecordCountdown/endRecordCountdown:
+  // decides which one applies based on whether recording state actually
+  // changed since the last poll, so this is safe to call every few seconds
+  // regardless of whether anything happened. Mirrors setPower()'s
+  // wasEnabled gating for the same reason.
+  function applyRecordingState(id, recording, endAt) {
+    const wasRecording = !!recordCountdowns[id];
+    if (recording) {
+      if (endAt) {
+        const remaining = Math.max(1, Math.round((new Date(endAt).getTime() - Date.now()) / 1000));
+        beginRecordCountdown(id, remaining); // resyncs the pill to the relay's real remaining time either way —
+                                              // catches extends triggered from another tab or the alarm GPIO too
+      }
+    } else if (wasRecording) {
+      endRecordCountdown(id); // recording finished server-side without this tab's own countdown reaching 0
+    }
+  }
+
+  // ── Recordings list panel — browse, play, download and delete saved footage ──
   async function toggleRecordingsPanel(id) {
     const panel = document.getElementById('files-' + id);
     const open = panel.classList.toggle('open');
@@ -797,17 +853,46 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         panel.innerHTML = '<div class="files-empty">No recordings yet.</div>';
         return;
       }
-      panel.innerHTML = files.map(f => `
+      const header = `
+        <div class="files-panel-header">
+          <span>${files.length} recording${files.length === 1 ? '' : 's'}</span>
+          <button class="cam-btn danger" onclick="deleteAllRecordings('${id}')">🗑 DELETE ALL</button>
+        </div>
+      `;
+      const rows = files.map(f => `
         <div class="files-row">
           <span class="files-name">${escapeHtml(f.filename)}</span>
           <span class="files-size">${formatBytes(f.sizeBytes)}</span>
+          <button class="cam-btn" onclick="togglePlayRecording('${id}', '${f.filename}')">▶ PLAY</button>
           <a class="cam-btn" href="recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}">⬇ GET</a>
           <button class="cam-btn danger" onclick="deleteRecording('${id}', '${f.filename}')">🗑 DEL</button>
         </div>
+        <div class="files-player" id="player-${id}-${f.filename}"></div>
       `).join('');
+      panel.innerHTML = header + rows;
     } catch (e) {
       panel.innerHTML = '<div class="files-empty">Could not load recordings.</div>';
     }
+  }
+
+  // Toggles a plain HTML5 <video> element in place under the clicked
+  // file's row — the browser's own built-in player handles playback, no
+  // extra library needed. recordings.php's ?play= streams the same bytes
+  // as ?download= but with an inline Content-Disposition and Range-header
+  // forwarding, so seeking/scrubbing works. Filenames only ever contain
+  // [A-Za-z0-9_.-], enforced server-side, so it's safe to use one directly
+  // in a DOM id/URL without extra escaping here.
+  function togglePlayRecording(id, filename) {
+    const container = document.getElementById(`player-${id}-${filename}`);
+    if (!container) return;
+    if (container.dataset.open === '1') {
+      container.innerHTML = ''; // also stops playback — removing the <video> drops its media element
+      container.dataset.open = '0';
+      return;
+    }
+    const src = `recordings.php?cam=${encodeURIComponent(id)}&play=${encodeURIComponent(filename)}`;
+    container.innerHTML = `<video controls autoplay src="${src}"></video>`;
+    container.dataset.open = '1';
   }
 
   async function deleteRecording(id, filename) {
@@ -826,6 +911,37 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     }
   }
 
+  async function deleteAllRecordings(id) {
+    if (!confirm('Delete ALL recordings for this camera? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      await refreshRecordingsList(id);
+    } catch (e) {
+      alert('Could not delete recordings: ' + e.message);
+    }
+  }
+
+  // Global "DELETE ALL FOOTAGE" button — fans out a deleteAll request to
+  // every configured camera, same pattern as recordAll()/stopRecordAll().
+  async function deleteAllRecordingsEverywhere() {
+    if (!confirm('Delete ALL recordings for EVERY camera? This cannot be undone.')) return;
+    const btn = document.getElementById('btn-delete-all');
+    btn.disabled = true;
+    try {
+      await Promise.all(getAllCameraIds().map(id =>
+        fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST' }).catch(() => null)
+      ));
+      // Refresh any panels currently open so deleted files disappear immediately.
+      await Promise.all(getAllCameraIds().map(refreshRecordingsList));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function formatBytes(n) {
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -835,6 +951,34 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
+
+  // ── Status polling — the single mechanism that keeps the dashboard in
+  // sync with state that can change on the relay without this browser tab
+  // being the one that caused it: another tab, another user, or a
+  // camera's alarm-trigger GPIO calling /record directly on the relay.
+  // Without this, nothing here updates until the user next clicks
+  // something — the ⏻ button, the REC pill, and the file list would all
+  // silently go stale. Also doubles as the initial-state load on page
+  // open (including "was already recording before I opened this page",
+  // which previously wasn't handled at all). ──
+  async function pollAllStatuses() {
+    try {
+      const res = await fetch('status.php');
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const id of getAllCameraIds()) {
+        const s = data[id];
+        if (!s) continue; // camera hasn't registered with the relay yet
+        setPower(id, s.enabled, s.enabledUntil);
+        applyRecordingState(id, s.recording, s.recordingEndAt);
+      }
+    } catch (e) {
+      // Relay unreachable this round — the next poll will try again.
+    }
+  }
+  const STATUS_POLL_MS = 4000;
+  pollAllStatuses();
+  setInterval(pollAllStatuses, STATUS_POLL_MS);
 
   // ── Layout toggle ──
   function setLayout(mode) {

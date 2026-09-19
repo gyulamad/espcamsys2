@@ -117,6 +117,8 @@ void triggerAlarmRecording() {
 // a sensor that happens to power up already in its active position doesn't
 // kick off a recording before anything has actually "happened".
 void checkAlarmTrigger() {
+  if (ALARM_GPIO_PIN < 0) return; // feature turned off — see ALARM_GPIO_PIN in config.h
+
   int raw = digitalRead(ALARM_GPIO_PIN);
 
   if (raw != alarmRawState) {
@@ -192,8 +194,11 @@ void setup() {
   // GND) reads a clean HIGH when idle and LOW when pressed with no extra
   // hardware. A future alarm sensor with its own active-driven output can
   // still be read fine through the pull-up; swap to plain INPUT here if
-  // its datasheet calls for it.
-  pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
+  // its datasheet calls for it. Skipped entirely when the feature is off
+  // (ALARM_GPIO_PIN < 0) — no pin claimed, nothing to configure.
+  if (ALARM_GPIO_PIN >= 0) {
+    pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
+  }
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other

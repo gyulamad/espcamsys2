@@ -269,15 +269,21 @@ app.get('/snapshot/:id', (req, res) => {
   res.send(cam.frame);
 });
 
-// Quick health check across all cameras
+// Quick health check across all cameras — also what the dashboard polls on
+// an interval (via status.php) to pick up state changes that didn't
+// originate from a click in that browser tab: another tab, another user,
+// or a camera's alarm-trigger GPIO calling /record directly.
 app.get('/status', (req, res) => {
   const out = {};
   for (const id in cameras) {
+    const cam = cameras[id];
     out[id] = {
-      lastSeen: cameras[id].lastSeen,
-      enabled: cameras[id].enabled,
-      enabledUntil: cameras[id].enabledUntil,
-      recording: !!cameras[id].recording,
+      lastSeen: cam.lastSeen,
+      enabled: cam.enabled,
+      enabledUntil: cam.enabledUntil,
+      recording: !!cam.recording,
+      recordingStartedAt: cam.recording ? cam.recording.startedAt : null,
+      recordingEndAt: cam.recording ? cam.recording.endAt : null,
     };
   }
   res.json(out);
@@ -431,7 +437,28 @@ app.get('/recordings/:id', (req, res) => {
   res.json(files);
 });
 
-// Download one recording.
+// Delete every saved recording for a camera at once (the per-camera
+// "DELETE ALL" button). Same path as the list route above, distinguished
+// by method — no filename segment, so it can't collide with the
+// single-file delete route below.
+app.delete('/recordings/:id', (req, res) => {
+  const dir = path.join(RECORDINGS_DIR, req.params.id);
+  if (!fs.existsSync(dir)) return res.json({ deleted: [] });
+  const deleted = fs.readdirSync(dir)
+    .filter((f) => SAFE_FILENAME.test(f))
+    .map((f) => {
+      fs.unlinkSync(path.join(dir, f));
+      return f;
+    });
+  res.json({ deleted });
+});
+
+// Download one recording (recordings.php decides whether the browser sees
+// it as an attachment or inline/playable — see that file's play vs
+// download handling). Range requests are handled automatically by
+// Express's res.download()/sendFile() — that's what lets the dashboard's
+// inline <video> player seek/scrub instead of only ever playing from the
+// start, as long as recordings.php forwards the Range header through.
 app.get('/recordings/:id/:filename', (req, res) => {
   const { id, filename } = req.params;
   if (!SAFE_FILENAME.test(filename)) return res.sendStatus(400); // rules out any path traversal too

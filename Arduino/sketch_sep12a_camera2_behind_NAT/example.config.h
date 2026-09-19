@@ -35,7 +35,8 @@ const float PUSH_INTERVAL_MUL = 1.5;   // gap after each push = last push time *
 // constants. Wiring assumed for the default values below: pin to GND
 // through a button, with the pin's internal pull-up enabled in the sketch,
 // so it reads HIGH normally and LOW while the button is held down.
-const int  ALARM_GPIO_PIN           = 13;    // which GPIO the alarm input is wired to
+const int  ALARM_GPIO_PIN           = 13;    // which GPIO the alarm input is wired to; -1 turns the
+                                              // whole feature off (no pin claimed, no polling, no HTTP calls)
 const int  ALARM_ACTIVE_STATE       = LOW;   // HIGH or LOW — the pin level that means "alarm!"
 const int  ALARM_RECORD_SECONDS     = 60;    // footage length per trigger; a repeat trigger mid-recording
                                               // extends it by this many seconds from that moment, same as
