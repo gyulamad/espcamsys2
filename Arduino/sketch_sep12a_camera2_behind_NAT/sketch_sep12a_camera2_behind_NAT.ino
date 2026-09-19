@@ -1,6 +1,7 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WiFiMulti.h>
+#include <HTTPClient.h>
 
 // Wi-Fi networks (one per extender), relay host, camera id and API key live
 // in config.h, a file in this same sketch folder that is gitignored (never
@@ -21,6 +22,18 @@ bool pushAuthed = false;
 // boot; the relay also re-sends its current value right after we
 // (re)authenticate, in case the dashboard paused us while we were offline.
 bool streamEnabled = true;
+
+// ── Alarm trigger state ──────────────────────────────────────────────
+// Debounced edge-detection for ALARM_GPIO_PIN (see checkAlarmTrigger()).
+// A short settle window is required before a reading is trusted, so a
+// noisy/bouncy button press doesn't fire multiple times. Kept as an
+// implementation detail here rather than in config.h, unlike the alarm
+// constants, which are the "business" parameters someone tuning the alarm
+// setup would actually want to change.
+const unsigned long ALARM_DEBOUNCE_MS = 50;
+int alarmRawState = -1;           // most recent raw digitalRead(); -1 = not read yet
+int alarmStableState = -1;        // debounced state once it's held steady for ALARM_DEBOUNCE_MS
+unsigned long alarmLastChangeMs = 0;
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
@@ -55,6 +68,73 @@ bool ensurePushConnection() {
   pushClient.print(String(CAMERA_ID) + "\t" + API_KEY + "\n");
   pushAuthed = true;
   return true;
+}
+
+// POSTs http://SERVER_HOST:HTTP_PORT/record/<id>?seconds=ALARM_RECORD_SECONDS
+// — the exact same endpoint the dashboard's RECORD button calls (via
+// record.php), so the relay's existing start/extend behaviour just works:
+// if that camera isn't already recording, this starts a fresh
+// ALARM_RECORD_SECONDS-long recording; if it is, this extends it by
+// ALARM_RECORD_SECONDS measured from now. Logged, not retried — the next
+// alarm edge (or the relay's own auto-extend on a still-active sensor)
+// gets another chance. This blocks loop() for up to setTimeout() while it
+// runs, which briefly pauses frame pushing too — acceptable since alarm
+// triggers are rare and short-lived, not something happening every loop.
+void sendRecordRequest(const String &id) {
+  HTTPClient http;
+  String url = "http://" + String(SERVER_HOST) + ":" + String(HTTP_PORT) +
+               "/record/" + id + "?seconds=" + String(ALARM_RECORD_SECONDS);
+  http.begin(url);
+  http.setTimeout(5000);
+  int code = http.POST(""); // relay expects no body, same as the dashboard's proxy_post()
+  if (code > 0) {
+    Serial.printf("[alarm] record request for '%s' -> HTTP %d\n", id.c_str(), code);
+  } else {
+    Serial.printf("[alarm] record request for '%s' failed: %s\n", id.c_str(), http.errorToString(code).c_str());
+  }
+  http.end();
+}
+
+// Asks the relay to (re)start a recording — on just this camera, or on
+// every camera the relay currently knows about, per ALARM_RECORD_ALL_CAMERAS.
+void triggerAlarmRecording() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[alarm] triggered but WiFi is down — skipping record request");
+    return;
+  }
+  if (ALARM_RECORD_ALL_CAMERAS) {
+    sendRecordRequest("all");
+  } else {
+    sendRecordRequest(String(CAMERA_ID));
+  }
+}
+
+// Debounced edge-detection on ALARM_GPIO_PIN. Only fires on a *transition*
+// into ALARM_ACTIVE_STATE — not on every loop while the pin is held there —
+// so a sustained alarm signal triggers once per press/contact rather than
+// flooding the relay with requests. The very first stable reading after
+// boot never fires on its own (see the `alarmStableState != -1` guard), so
+// a sensor that happens to power up already in its active position doesn't
+// kick off a recording before anything has actually "happened".
+void checkAlarmTrigger() {
+  int raw = digitalRead(ALARM_GPIO_PIN);
+
+  if (raw != alarmRawState) {
+    alarmRawState = raw;
+    alarmLastChangeMs = millis();
+    return; // reading just moved — wait for it to settle before trusting it
+  }
+
+  if (millis() - alarmLastChangeMs < ALARM_DEBOUNCE_MS) return; // still settling
+
+  if (raw != alarmStableState) {
+    bool hadPriorReading = (alarmStableState != -1);
+    alarmStableState = raw;
+    if (hadPriorReading && alarmStableState == ALARM_ACTIVE_STATE) {
+      Serial.println("[alarm] triggered");
+      triggerAlarmRecording();
+    }
+  }
 }
 
 void setup() {
@@ -108,6 +188,13 @@ void setup() {
     return;
   }
 
+  // Internal pull-up so the default push-button wiring (pin -> button ->
+  // GND) reads a clean HIGH when idle and LOW when pressed with no extra
+  // hardware. A future alarm sensor with its own active-driven output can
+  // still be read fine through the pull-up; swap to plain INPUT here if
+  // its datasheet calls for it.
+  pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
+
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
                           // big source of added latency on ESP32 WiFi
@@ -143,6 +230,11 @@ void loop() {
     delay(500);
     return;
   }
+
+  // Polled every loop, independent of streamEnabled/push-connection state
+  // below, so the alarm keeps working even while this camera is paused
+  // from the dashboard or its push socket is mid-reconnect.
+  checkAlarmTrigger();
 
   if (!ensurePushConnection()) {
     Serial.println("Push connect failed, will retry");

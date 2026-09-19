@@ -327,9 +327,39 @@ app.post('/control/:id', (req, res) => {
   res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
 });
 
+// Start/extend a recording on every camera the relay currently knows about
+// at once — same start/extend semantics as /record/:id below, just looped
+// over every registered camera id. This is what ALARM_RECORD_ALL_CAMERAS in
+// the ESP32 sketch calls when one camera's alarm input should kick off
+// footage from the whole fleet, not just itself. ("Knows about" means any
+// camera that has connected/registered at least once since this process
+// started — same set /status reports on.) Registered before /record/:id so
+// Express doesn't try to match "all" as a literal camera id.
+app.post('/record/all', (req, res) => {
+  const seconds = parseInt(req.query.seconds, 10);
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_RECORD_SECONDS) {
+    return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
+  }
+
+  const results = Object.keys(cameras).map((id) => {
+    const cam = cameras[id];
+    if (cam.recording) {
+      const rec = extendRecording(cam, seconds);
+      return { id, recording: true, extended: true, startedAt: rec.startedAt, endAt: rec.endAt };
+    }
+    const rec = startRecording(cam, id, seconds);
+    return { id, recording: true, extended: false, startedAt: rec.startedAt, endAt: rec.endAt };
+  });
+
+  res.json({ cameras: results });
+});
+
 // Start recording this camera's incoming frames to a file for `seconds`.
 // If it's already recording, this extends it instead — see extendRecording().
-// Same trust boundary as /control — no key, PHP layer only.
+// Same trust boundary as /control — no key. Called by the PHP layer (the
+// dashboard's RECORD button) and now also directly by camera boards
+// themselves, over the LAN, when their alarm-trigger GPIO fires — see the
+// ESP32 sketch's ALARM_* constants and sendRecordRequest().
 app.post('/record/:id', (req, res) => {
   const seconds = parseInt(req.query.seconds, 10);
   if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_RECORD_SECONDS) {
