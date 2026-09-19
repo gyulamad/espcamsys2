@@ -189,6 +189,24 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     animation: blink 1.4s ease-in-out infinite;
   }
 
+  /* Power-on duration field, sits directly next to the ⏻ ON/OFF button */
+  .pwr-controls { display: flex; align-items: center; gap: 4px; }
+  .pwr-controls input[type=number] {
+    width: 52px; font-family: var(--mono); font-size: .65rem;
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    border-radius: 3px; padding: 4px 6px;
+  }
+  .pwr-controls .unit { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
+
+  /* Auto power-off countdown pill, shown while a camera is on a timer */
+  .pwr-pill {
+    font-family: var(--mono); font-size: .62rem;
+    padding: 2px 7px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--accent);
+    white-space: nowrap; display: none;
+  }
+  .pwr-pill.active { display: inline-block; }
+
   /* Per-camera record controls */
   .cam-record-row {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
@@ -358,8 +376,14 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
           <span class="rec-dot"></span>
           <span class="status-pill connecting" id="pill-<?= htmlspecialchars($cam['id']) ?>">CONNECTING</span>
           <span class="rec-pill" id="recpill-<?= htmlspecialchars($cam['id']) ?>"></span>
+          <span class="pwr-pill" id="pwrpill-<?= htmlspecialchars($cam['id']) ?>"></span>
+          <span class="pwr-controls">
+            <input type="number" id="pwr-seconds-<?= htmlspecialchars($cam['id']) ?>" min="1" max="3600" value="300"
+                   title="How long ⏻ ON keeps the camera powered before it auto powers-off">
+            <span class="unit">sec</span>
+          </span>
           <button class="cam-btn" id="pwr-<?= htmlspecialchars($cam['id']) ?>" data-enabled="1"
-                  title="Pause/resume this camera's capture on the device (power + bandwidth saving)"
+                  title="Turn this camera's capture on for the given duration, or off now, on the device itself (power + bandwidth saving)"
                   onclick="togglePower('<?= htmlspecialchars($cam['id']) ?>')">⏻ ON</button>
           <button class="cam-btn" onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
           <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
@@ -509,18 +533,36 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
 
   // ── Power on/off (real, device-side — tells the ESP32-CAM to stop or
   // resume capturing/pushing frames entirely, for power and bandwidth
-  // saving). Affects every viewer of this camera, not just this tab. ──
+  // saving). Affects every viewer of this camera, not just this tab.
+  //
+  // Works the same way recording does: turning ON runs the camera for the
+  // number of seconds in the field next to the button (300 by default),
+  // then it powers itself back off automatically — nobody has to remember
+  // to turn it off. Pressing ON again while already on extends it: the
+  // countdown resets to the new seconds value measured from that second
+  // press, rather than adding on top of what was left. Turning OFF is
+  // immediate and cancels any pending auto-off. ──
+  const powerCountdowns = {}; // id -> interval id
+
   async function togglePower(id) {
     const btn = document.getElementById('pwr-' + id);
     const wantEnable = btn.dataset.enabled === '0';
     btn.disabled = true;
     try {
-      const res = await fetch(`control.php?cam=${encodeURIComponent(id)}&enabled=${wantEnable ? 1 : 0}`, {
-        method: 'POST',
-      });
+      let url = `control.php?cam=${encodeURIComponent(id)}&enabled=${wantEnable ? 1 : 0}`;
+      if (wantEnable) {
+        const secondsInput = document.getElementById('pwr-seconds-' + id);
+        const seconds = parseInt(secondsInput.value, 10);
+        if (!Number.isFinite(seconds) || seconds < 1) {
+          alert('Enter a valid number of seconds');
+          return;
+        }
+        url += `&seconds=${seconds}`;
+      }
+      const res = await fetch(url, { method: 'POST' });
       if (!res.ok) throw new Error('control request failed: ' + res.status);
       const data = await res.json();
-      setPower(id, data.enabled);
+      setPower(id, data.enabled, data.enabledUntil);
     } catch (e) {
       console.error('Power toggle failed for', id, e);
     } finally {
@@ -528,7 +570,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
     }
   }
 
-  function setPower(id, enabled) {
+  function setPower(id, enabled, enabledUntil) {
     const btn = document.getElementById('pwr-' + id);
     btn.dataset.enabled = enabled ? '1' : '0';
     btn.textContent = enabled ? '⏻ ON' : '⏻ OFF';
@@ -536,12 +578,55 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
 
     if (enabled) {
       reloadStream(id);
+      if (enabledUntil) {
+        const remaining = Math.max(1, Math.round((new Date(enabledUntil).getTime() - Date.now()) / 1000));
+        beginPowerCountdown(id, remaining);
+      } else {
+        endPowerCountdown(id); // on indefinitely (or unknown) — no countdown to show
+      }
     } else {
+      endPowerCountdown(id);
       setStatus(id, 'hidden', 'POWERED OFF');
       showOverlay(id, '⏻', 'CAMERA POWERED OFF', false);
       document.getElementById('overlay-' + id).innerHTML +=
         `<button class="cam-btn" onclick="togglePower('${id}')">⏻ TURN ON</button>`;
     }
+  }
+
+  function beginPowerCountdown(id, seconds) {
+    const pill = document.getElementById('pwrpill-' + id);
+    if (!pill) return;
+    let remaining = seconds;
+    pill.classList.add('active');
+    pill.textContent = `⏻ AUTO-OFF ${remaining}s`;
+
+    if (powerCountdowns[id]) clearInterval(powerCountdowns[id]);
+    powerCountdowns[id] = setInterval(async () => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        endPowerCountdown(id);
+        // The relay's own timer is the source of truth for the actual
+        // device state — re-check it rather than assuming OFF locally,
+        // in case of clock drift or a mid-flight extend from this request.
+        try {
+          const res = await fetch(`control.php?cam=${encodeURIComponent(id)}`);
+          if (res.ok) {
+            const data = await res.json();
+            setPower(id, data.enabled, data.enabledUntil);
+          }
+        } catch (e) {
+          // Relay unreachable — leave things as-is, next reload will resync.
+        }
+      } else {
+        pill.textContent = `⏻ AUTO-OFF ${remaining}s`;
+      }
+    }, 1000);
+  }
+
+  function endPowerCountdown(id) {
+    const pill = document.getElementById('pwrpill-' + id);
+    if (powerCountdowns[id]) { clearInterval(powerCountdowns[id]); delete powerCountdowns[id]; }
+    if (pill) { pill.classList.remove('active'); pill.textContent = ''; }
   }
 
   async function loadInitialPowerStates() {
@@ -550,7 +635,7 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
         const res = await fetch(`control.php?cam=${encodeURIComponent(id)}`);
         if (!res.ok) continue;
         const data = await res.json();
-        setPower(id, data.enabled);
+        setPower(id, data.enabled, data.enabledUntil);
       } catch (e) {
         // Relay unreachable — leave the default (ON) shown, stream errors
         // will surface separately via onStreamError.

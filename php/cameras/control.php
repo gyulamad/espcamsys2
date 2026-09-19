@@ -4,8 +4,16 @@
 // stream in one browser tab. Proxies to the server.js relay's /control/:id,
 // which forwards an on/off byte down to the camera's persistent connection.
 //
-// GET  control.php?cam=ID              -> current { id, enabled } state
-// POST control.php?cam=ID&enabled=0|1  -> set state, returns new { id, enabled }
+// Turning a camera on works the same way recording does: it runs for a
+// given number of seconds (300 by default) and then switches itself back
+// off on its own, so nobody has to remember to turn it off. Turning it on
+// again while already on extends it — the relay resets its countdown to
+// the new seconds value measured from this request, rather than adding on
+// top of what was left. Turning off is immediate.
+//
+// GET  control.php?cam=ID                       -> current { id, enabled, enabledUntil } state
+// POST control.php?cam=ID&enabled=1&seconds=N    -> turn on for N seconds (default 300)
+// POST control.php?cam=ID&enabled=0              -> turn off now, returns new { id, enabled } state
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
@@ -31,13 +39,7 @@ if (!$camera) {
 $relayUrl = rtrim($camera['url'], '/') . '/control/' . rawurlencode($camera['id']);
 $method = $_SERVER['REQUEST_METHOD'];
 
-if ($method === 'POST') {
-    $enabled = $_GET['enabled'] ?? '';
-    if ($enabled !== '0' && $enabled !== '1') {
-        http_response_code(400);
-        echo json_encode(['error' => 'enabled must be 0 or 1']);
-        exit;
-    }
+function control_proxy_post($url) {
     $ctx = stream_context_create([
         'http' => [
             'method'        => 'POST',
@@ -46,12 +48,35 @@ if ($method === 'POST') {
             'ignore_errors' => true,
         ],
     ]);
-    $result = @file_get_contents($relayUrl . '?enabled=' . $enabled, false, $ctx);
+    return [@file_get_contents($url, false, $ctx), $http_response_header ?? []];
+}
+
+if ($method === 'POST') {
+    $enabled = $_GET['enabled'] ?? '';
+    if ($enabled !== '0' && $enabled !== '1') {
+        http_response_code(400);
+        echo json_encode(['error' => 'enabled must be 0 or 1']);
+        exit;
+    }
+
+    $query = 'enabled=' . $enabled;
+    if ($enabled === '1' && isset($_GET['seconds']) && $_GET['seconds'] !== '') {
+        $seconds = $_GET['seconds'];
+        if (!ctype_digit((string) $seconds) || (int) $seconds < 1) {
+            http_response_code(400);
+            echo json_encode(['error' => 'seconds must be a positive integer']);
+            exit;
+        }
+        $query .= '&seconds=' . urlencode($seconds);
+    }
+
+    [$result, $headers] = control_proxy_post($relayUrl . '?' . $query);
 } else {
     $ctx = stream_context_create([
         'http' => ['timeout' => 5, 'ignore_errors' => true],
     ]);
     $result = @file_get_contents($relayUrl, false, $ctx);
+    $headers = $http_response_header ?? [];
 }
 
 if ($result === false) {
@@ -60,5 +85,15 @@ if ($result === false) {
     exit;
 }
 
-// The relay already returns { id, enabled } JSON — pass it straight through.
+// Forward the relay's actual status code (e.g. 400 "seconds must be ...")
+// instead of always answering 200.
+foreach ($headers as $header) {
+    if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
+        http_response_code((int) $m[1]);
+        break;
+    }
+}
+
+// The relay already returns { id, enabled, enabledUntil } JSON — pass it
+// straight through.
 echo $result;

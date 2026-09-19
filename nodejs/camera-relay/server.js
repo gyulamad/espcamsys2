@@ -17,10 +17,13 @@ const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
 const SAFE_FILENAME = /^[A-Za-z0-9_.-]+\.mp4$/; // only ever matches names we generate ourselves
 const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
+const DEFAULT_POWER_SECONDS = 300; // "ON" with no explicit duration runs for 5 minutes before auto power-off
+const MAX_POWER_SECONDS = 3600; // 1 hour cap per power-on, same sanity limit as recording
+
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
-const cameras = {}; // id -> { frame, emitter, lastSeen, enabled, socket, recording }
+const cameras = {}; // id -> { frame, emitter, lastSeen, enabled, enabledUntil, powerTimer, socket, recording }
 
 function getCamera(id) {
   if (!cameras[id]) {
@@ -28,13 +31,40 @@ function getCamera(id) {
       frame: null,
       emitter: new EventEmitter(),
       lastSeen: null,
-      enabled: true,   // dashboard-controlled: whether this camera should be capturing/pushing
-      socket: null,    // the camera's live push-connection socket, if connected right now
-      recording: null, // in-progress recording, if any — see startRecording()
+      enabled: true,      // dashboard-controlled: whether this camera should be capturing/pushing
+      enabledUntil: null, // when `enabled` will auto-flip back to false, or null while off / on indefinitely
+      powerTimer: null,   // pending auto power-off timeout, if any — see scheduleAutoOff()
+      socket: null,       // the camera's live push-connection socket, if connected right now
+      recording: null,    // in-progress recording, if any — see startRecording()
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
   return cameras[id];
+}
+
+// Turns a camera on for `seconds` (or leaves it off, with the timer
+// cancelled, when seconds is null) — the same "start/extend from now"
+// pattern as recording: calling this again while already on resets the
+// countdown to `seconds` measured from this call, it doesn't add on top of
+// whatever was left. Only schedules the flip-back-to-false; actually
+// notifying the camera device is still sendControlByte()'s job, called
+// separately by the route handlers below.
+function scheduleAutoOff(cam, seconds) {
+  if (cam.powerTimer) {
+    clearTimeout(cam.powerTimer);
+    cam.powerTimer = null;
+  }
+  if (seconds == null) {
+    cam.enabledUntil = null;
+    return;
+  }
+  cam.enabledUntil = new Date(Date.now() + seconds * 1000);
+  cam.powerTimer = setTimeout(() => {
+    cam.enabled = false;
+    cam.enabledUntil = null;
+    cam.powerTimer = null;
+    sendControlByte(cam);
+  }, seconds * 1000);
 }
 
 // Tells a connected camera whether it should be capturing, over its own
@@ -225,6 +255,7 @@ app.get('/status', (req, res) => {
     out[id] = {
       lastSeen: cameras[id].lastSeen,
       enabled: cameras[id].enabled,
+      enabledUntil: cameras[id].enabledUntil,
       recording: !!cameras[id].recording,
     };
   }
@@ -237,18 +268,42 @@ app.get('/status', (req, res) => {
 // the on/off signal to it. No key required, same trust boundary as
 // /stream, /snapshot, /status: only the PHP layer (behind Tor Basic Auth)
 // is expected to be able to reach this port at all (see INSTALL.md 2.6).
+//
+// Turning a camera on works the same way recording does: it runs for a
+// given number of seconds (300 by default) and then switches itself back
+// off, so a camera nobody remembered to turn off doesn't keep drawing power
+// and bandwidth indefinitely. Turning one on again while it's already on
+// extends it — resets the countdown to the new `seconds` value measured
+// from that request, same as extendRecording(). Turning off is immediate
+// and cancels any pending auto-off.
+//
+// GET  /control/:id                    -> current { id, enabled, enabledUntil }
+// POST /control/:id?enabled=1&seconds=N -> turn on for N seconds (default 300)
+// POST /control/:id?enabled=0           -> turn off now, cancel any auto-off
 app.get('/control/:id', (req, res) => {
   const cam = getCamera(req.params.id);
-  res.json({ id: req.params.id, enabled: cam.enabled });
+  res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
 });
 
 app.post('/control/:id', (req, res) => {
   const enabled = req.query.enabled;
   if (enabled !== '0' && enabled !== '1') return res.sendStatus(400);
   const cam = getCamera(req.params.id);
-  cam.enabled = enabled === '1';
+
+  if (enabled === '1') {
+    const seconds = req.query.seconds !== undefined ? parseInt(req.query.seconds, 10) : DEFAULT_POWER_SECONDS;
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_POWER_SECONDS) {
+      return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_POWER_SECONDS}` });
+    }
+    cam.enabled = true;
+    scheduleAutoOff(cam, seconds);
+  } else {
+    cam.enabled = false;
+    scheduleAutoOff(cam, null); // cancel any pending auto-off
+  }
+
   sendControlByte(cam);
-  res.json({ id: req.params.id, enabled: cam.enabled });
+  res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
 });
 
 // Start recording this camera's incoming frames to a file for `seconds`.
