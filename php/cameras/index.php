@@ -719,6 +719,13 @@ $cols  = $count === 1 ? 1 : ($count <= 4 ? 2 : 3);
       const data = await res.json();
       if (res.ok && data.recording) {
         beginRecordCountdown(id, seconds); // restarts the countdown, whether this was a fresh start or an extend
+        // Recording keeps the camera powered on for at least as long as the
+        // recording runs (see ensurePoweredThrough() on the relay) — reflect
+        // whatever power state that produced in the ⏻ button/pill right away,
+        // instead of waiting for the next manual toggle or page load.
+        if (data.enabled !== undefined) {
+          setPower(id, data.enabled, data.enabledUntil);
+        }
       } else {
         console.warn('Record start failed for', id, data);
       }

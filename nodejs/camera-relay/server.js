@@ -79,6 +79,24 @@ function sendControlByte(cam) {
   }
 }
 
+// Recording needs the camera actually capturing, so starting or extending a
+// recording also guarantees the camera is powered on for at least as long
+// as the recording will run. This only ever extends power — never
+// shortens it: if the camera is already on with a timer that runs past
+// when this recording will end, it's left alone; if it's off, or its
+// auto-off would fire before the recording finishes, it's (re)armed for
+// exactly as long as the recording needs.
+function ensurePoweredThrough(cam, seconds) {
+  const recordingEndsAt = Date.now() + seconds * 1000;
+  const alreadyCovered = cam.enabled && cam.enabledUntil && cam.enabledUntil.getTime() >= recordingEndsAt;
+  if (alreadyCovered) return;
+
+  const powerSeconds = Math.max(1, Math.ceil((recordingEndsAt - Date.now()) / 1000));
+  cam.enabled = true;
+  scheduleAutoOff(cam, powerSeconds);
+  sendControlByte(cam);
+}
+
 // ── Recording ──
 // Recording happens entirely here on the relay, not on the camera. While a
 // recording is active, every incoming frame gets saved as its own numbered
@@ -99,6 +117,8 @@ function sendControlByte(cam) {
 // in-progress capture, timer just restarted from the moment of the second press.
 function startRecording(cam, id, seconds) {
   if (cam.recording) return null; // caller should call extendRecording() instead
+
+  ensurePoweredThrough(cam, seconds); // camera must be on for the whole recording
 
   const dir = path.join(RECORDINGS_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
@@ -145,6 +165,7 @@ function startRecording(cam, id, seconds) {
 function extendRecording(cam, seconds) {
   const rec = cam.recording;
   if (!rec) return null;
+  ensurePoweredThrough(cam, seconds); // keep the camera on through the new end time too
   clearTimeout(rec.timer);
   rec.endAt = new Date(Date.now() + seconds * 1000);
   rec.timer = setTimeout(() => stopRecording(cam), seconds * 1000);
@@ -324,11 +345,21 @@ app.post('/record/:id', (req, res) => {
       extended: true,
       startedAt: rec.startedAt,
       endAt: rec.endAt,
+      enabled: cam.enabled,
+      enabledUntil: cam.enabledUntil,
     });
   }
 
   const rec = startRecording(cam, req.params.id, seconds);
-  res.json({ id: req.params.id, recording: true, extended: false, startedAt: rec.startedAt, endAt: rec.endAt });
+  res.json({
+    id: req.params.id,
+    recording: true,
+    extended: false,
+    startedAt: rec.startedAt,
+    endAt: rec.endAt,
+    enabled: cam.enabled,
+    enabledUntil: cam.enabledUntil,
+  });
 });
 
 // Stop a recording early. Encoding into the final .mp4 happens in the
