@@ -30,6 +30,13 @@ bool pushAuthed = false;
 // (re)authenticate, in case the dashboard paused us while we were offline.
 bool streamEnabled = true;
 
+// Whether esp_camera_init() has succeeded. WiFi is brought up unconditionally
+// in setup() regardless of this — a camera fault must never leave WiFi
+// uninitialized, which previously crashed the watchdog once loop() started
+// calling wifiMulti.run() against a radio that was never put into station
+// mode. See initCamera() / the camera-retry block in loop().
+bool cameraReady = false;
+
 // ── Alarm trigger state ──────────────────────────────────────────────
 // Debounced edge-detection for ALARM_GPIO_PIN (see checkAlarmTrigger()).
 // A short settle window is required before a reading is trusted, so a
@@ -131,19 +138,12 @@ void checkAlarmTrigger() {
   }
 }
 
-void setup() {
-  Serial.begin(115200);
-  delay(200); // give the serial monitor a moment to attach
-
-  // Print identity FIRST, before camera/WiFi init even runs — so this is
-  // visible even if init fails, and you can confirm which physical board
-  // this is before re-flashing it.
-  Serial.println();
-  Serial.println("========================================");
-  Serial.printf("  CAMERA_ID: %s\n", CAMERA_ID);
-  Serial.println("========================================");
-  Serial.println();
-
+// Configures and initializes the OV2640 camera driver. Split out of setup()
+// so it can also be retried from loop() if it fails at boot — a frame-buffer
+// malloc failure here is usually a marginal power supply or PSRAM not being
+// enabled in board settings, and can clear up on its own once the supply
+// settles, without needing a full reboot.
+bool initCamera() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer   = LEDC_TIMER_0;
@@ -179,8 +179,23 @@ void setup() {
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed: 0x%x\n", err);
-    return;
+    return false;
   }
+  return true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(200); // give the serial monitor a moment to attach
+
+  // Print identity FIRST, before camera/WiFi init even runs — so this is
+  // visible even if init fails, and you can confirm which physical board
+  // this is before re-flashing it.
+  Serial.println();
+  Serial.println("========================================");
+  Serial.printf("  CAMERA_ID: %s\n", CAMERA_ID);
+  Serial.println("========================================");
+  Serial.println();
 
   // Internal pull-up so the default push-button wiring (pin -> button ->
   // GND) reads a clean HIGH when idle and LOW when pressed with no extra
@@ -192,6 +207,9 @@ void setup() {
     pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
   }
 
+  // WiFi comes up unconditionally, BEFORE the camera — a camera fault must
+  // never leave WiFi uninitialized (see cameraReady above). This also means
+  // a camera-less board still shows up with working diagnostics/alarm.
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
                           // big source of added latency on ESP32 WiFi
@@ -208,6 +226,8 @@ void setup() {
   Serial.println("\n[" + String(CAMERA_ID) + "] Connected to " + WiFi.SSID() +
                   ", IP: " + WiFi.localIP().toString() +
                   ", RSSI: " + WiFi.RSSI());
+
+  cameraReady = initCamera();
 }
 
 void loop() {
@@ -215,9 +235,10 @@ void loop() {
   // (not just right at boot) still tells you which camera this is.
   static unsigned long lastIdentityPrint = 0;
   if (millis() - lastIdentityPrint > 10000) {
-    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s\n",
+    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s%s\n",
                   CAMERA_ID, WiFi.RSSI(), millis() / 1000,
-                  streamEnabled ? "" : " (paused)");
+                  streamEnabled ? "" : " (paused)",
+                  cameraReady ? "" : " (camera not ready)");
     lastIdentityPrint = millis();
   }
 
@@ -228,10 +249,25 @@ void loop() {
     return;
   }
 
-  // Polled every loop, independent of streamEnabled/push-connection state
-  // below, so the alarm keeps working even while this camera is paused
-  // from the dashboard or its push socket is mid-reconnect.
+  // Polled every loop, independent of streamEnabled/push-connection/camera
+  // state below, so the alarm keeps working even while this camera is
+  // paused, mid-reconnect, or waiting on the camera to come up.
   checkAlarmTrigger();
+
+  if (!cameraReady) {
+    // Retry periodically instead of crash-looping or trying to push garbage
+    // frames. A frame-buffer malloc failure at boot is usually a marginal
+    // power rail or PSRAM not settling in time, and often clears up on its
+    // own — no reboot needed once it does.
+    static unsigned long lastCameraRetry = 0;
+    if (millis() - lastCameraRetry > 5000) {
+      Serial.println("Retrying camera init...");
+      cameraReady = initCamera();
+      lastCameraRetry = millis();
+    }
+    delay(200);
+    return;
+  }
 
   if (!ensurePushConnection()) {
     Serial.println("Push connect failed, will retry");
