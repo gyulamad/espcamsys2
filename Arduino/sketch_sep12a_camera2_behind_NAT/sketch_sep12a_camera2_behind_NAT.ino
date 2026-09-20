@@ -207,9 +207,16 @@ void setup() {
     pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
   }
 
-  // WiFi comes up unconditionally, BEFORE the camera — a camera fault must
-  // never leave WiFi uninitialized (see cameraReady above). This also means
-  // a camera-less board still shows up with working diagnostics/alarm.
+  // Camera MUST be initialized before WiFi comes up, not after: the WiFi
+  // driver claims a large chunk of internal DRAM for its buffers as soon as
+  // it starts, and the camera's DMA frame buffers need a big contiguous
+  // block of that same internal RAM. Camera-after-WiFi is exactly what
+  // produces "cam_dma_config: frame buffer malloc failed" even on boards
+  // that work fine otherwise. If it does fail, we don't return early
+  // though — WiFi still needs to come up regardless (see cameraReady above
+  // for why), so the failure is only logged here, not fatal to setup().
+  cameraReady = initCamera();
+
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
                           // big source of added latency on ESP32 WiFi
@@ -226,8 +233,6 @@ void setup() {
   Serial.println("\n[" + String(CAMERA_ID) + "] Connected to " + WiFi.SSID() +
                   ", IP: " + WiFi.localIP().toString() +
                   ", RSSI: " + WiFi.RSSI());
-
-  cameraReady = initCamera();
 }
 
 void loop() {
@@ -255,10 +260,15 @@ void loop() {
   checkAlarmTrigger();
 
   if (!cameraReady) {
-    // Retry periodically instead of crash-looping or trying to push garbage
-    // frames. A frame-buffer malloc failure at boot is usually a marginal
-    // power rail or PSRAM not settling in time, and often clears up on its
-    // own — no reboot needed once it does.
+    // Retry periodically rather than being stuck forever. This can only
+    // recover a genuinely transient failure (e.g. a one-off timing/power
+    // glitch at boot) — if the camera failed because WiFi already claimed
+    // the internal DRAM it needs (see the ordering note in setup()), these
+    // retries will keep failing for the same reason every time, since WiFi
+    // is already up by the time loop() runs. That's a "camera never came up
+    // at all" problem to fix at the setup()/hardware level, not something a
+    // retry can paper over — but retrying here is still strictly better
+    // than crash-looping ever did.
     static unsigned long lastCameraRetry = 0;
     if (millis() - lastCameraRetry > 5000) {
       Serial.println("Retrying camera init...");
