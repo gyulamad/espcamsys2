@@ -7,3 +7,6 @@ config.h
 # Node
 node_modules/
 nodejs/camera-relay/recordings/
+
+# Compiled test binaries
+tests/cpp/build/
