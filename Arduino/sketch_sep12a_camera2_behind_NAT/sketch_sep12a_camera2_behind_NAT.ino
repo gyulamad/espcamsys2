@@ -9,6 +9,13 @@
 //   cp example.config.h config.h
 #include "config.h"
 
+// All the sketch's actual decision-making (debounce, URL/line building,
+// frame framing, etc.) lives in logic.h as plain, hardware-free C++ so it
+// can be unit-tested on a desktop with g++/gdb — see tests/cpp/. This file
+// only reads the hardware and calls into it.
+#include "logic.h"
+using namespace esp32cam_logic;
+
 WiFiMulti wifiMulti;
 WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // port, held open for the sketch's whole runtime —
@@ -29,11 +36,11 @@ bool streamEnabled = true;
 // noisy/bouncy button press doesn't fire multiple times. Kept as an
 // implementation detail here rather than in config.h, unlike the alarm
 // constants, which are the "business" parameters someone tuning the alarm
-// setup would actually want to change.
+// setup would actually want to change. The actual debounce state machine
+// lives in logic.h (alarmDebounceUpdate()) — this is just its persistent
+// state across loop() calls.
 const unsigned long ALARM_DEBOUNCE_MS = 50;
-int alarmRawState = -1;           // most recent raw digitalRead(); -1 = not read yet
-int alarmStableState = -1;        // debounced state once it's held steady for ALARM_DEBOUNCE_MS
-unsigned long alarmLastChangeMs = 0;
+AlarmDebounceState alarmState;
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
@@ -65,7 +72,8 @@ bool ensurePushConnection() {
     return false;
   }
   pushClient.setNoDelay(true);
-  pushClient.print(String(CAMERA_ID) + "\t" + API_KEY + "\n");
+  std::string authLine = buildAuthLine(CAMERA_ID, API_KEY);
+  pushClient.print(authLine.c_str());
   pushAuthed = true;
   return true;
 }
@@ -82,9 +90,8 @@ bool ensurePushConnection() {
 // triggers are rare and short-lived, not something happening every loop.
 void sendRecordRequest(const String &id) {
   HTTPClient http;
-  String url = "http://" + String(SERVER_HOST) + ":" + String(HTTP_PORT) +
-               "/record/" + id + "?seconds=" + String(ALARM_RECORD_SECONDS);
-  http.begin(url);
+  std::string url = buildRecordUrl(SERVER_HOST, HTTP_PORT, id.c_str(), ALARM_RECORD_SECONDS);
+  http.begin(String(url.c_str()));
   http.setTimeout(5000);
   int code = http.POST(""); // relay expects no body, same as the dashboard's proxy_post()
   if (code > 0) {
@@ -102,11 +109,8 @@ void triggerAlarmRecording() {
     Serial.println("[alarm] triggered but WiFi is down — skipping record request");
     return;
   }
-  if (ALARM_RECORD_ALL_CAMERAS) {
-    sendRecordRequest("all");
-  } else {
-    sendRecordRequest(String(CAMERA_ID));
-  }
+  std::string targetId = alarmRecordTargetId(ALARM_RECORD_ALL_CAMERAS, CAMERA_ID);
+  sendRecordRequest(String(targetId.c_str()));
 }
 
 // Debounced edge-detection on ALARM_GPIO_PIN. Only fires on a *transition*
@@ -120,22 +124,10 @@ void checkAlarmTrigger() {
   if (ALARM_GPIO_PIN < 0) return; // feature turned off — see ALARM_GPIO_PIN in config.h
 
   int raw = digitalRead(ALARM_GPIO_PIN);
-
-  if (raw != alarmRawState) {
-    alarmRawState = raw;
-    alarmLastChangeMs = millis();
-    return; // reading just moved — wait for it to settle before trusting it
-  }
-
-  if (millis() - alarmLastChangeMs < ALARM_DEBOUNCE_MS) return; // still settling
-
-  if (raw != alarmStableState) {
-    bool hadPriorReading = (alarmStableState != -1);
-    alarmStableState = raw;
-    if (hadPriorReading && alarmStableState == ALARM_ACTIVE_STATE) {
-      Serial.println("[alarm] triggered");
-      triggerAlarmRecording();
-    }
+  bool triggered = alarmDebounceUpdate(alarmState, raw, millis(), ALARM_DEBOUNCE_MS, ALARM_ACTIVE_STATE);
+  if (triggered) {
+    Serial.println("[alarm] triggered");
+    triggerAlarmRecording();
   }
 }
 
@@ -254,8 +246,7 @@ void loop() {
   // since we last checked, only the last one matters.
   while (pushClient.available()) {
     int cmd = pushClient.read();
-    if (cmd == 0) streamEnabled = false;
-    else if (cmd == 1) streamEnabled = true;
+    applyControlByte(cmd, streamEnabled);
   }
 
   if (!streamEnabled) {
@@ -275,16 +266,15 @@ void loop() {
   }
 
   uint32_t len = fb->len;
-  uint8_t lenPrefix[4] = {
-    (uint8_t)(len >> 24), (uint8_t)(len >> 16), (uint8_t)(len >> 8), (uint8_t)len
-  };
+  uint8_t lenPrefix[4];
+  encodeFrameLengthPrefix(len, lenPrefix);
 
   unsigned long t0 = millis();
   size_t written = pushClient.write(lenPrefix, 4);
   written += pushClient.write(fb->buf, fb->len);
   unsigned long pushMs = millis() - t0;
 
-  if (written != 4 + len || !pushClient.connected()) {
+  if (!pushWriteSucceeded(written, len, pushClient.connected())) {
     Serial.println("Push write failed — dropping connection, will reconnect next loop");
     pushClient.stop();
   }
@@ -294,5 +284,5 @@ void loop() {
   // Gap scales with how long the last push actually took: fast/idle link ->
   // short gap -> max fps; congested link -> pushMs grows -> gap grows with
   // it -> backs off automatically instead of adding to the jam.
-  delay((unsigned long)(pushMs * PUSH_INTERVAL_MUL));
+  delay(computePushDelayMs(pushMs, PUSH_INTERVAL_MUL));
 }

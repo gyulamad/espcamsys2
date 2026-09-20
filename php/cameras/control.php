@@ -14,21 +14,20 @@
 // GET  control.php?cam=ID                       -> current { id, enabled, enabledUntil } state
 // POST control.php?cam=ID&enabled=1&seconds=N    -> turn on for N seconds (default 300)
 // POST control.php?cam=ID&enabled=0              -> turn off now, returns new { id, enabled } state
+//
+// The param validation, query-string building, and status-code forwarding
+// logic below all live in lib/Logic.php (CamLogic) so they can be unit
+// tested without a web server or a running relay — see
+// tests/php/test_logic.php.
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
+require_once __DIR__ . '/lib/Logic.php';
 
 header('Content-Type: application/json');
 
 $requested = $_GET['cam'] ?? '';
-
-$camera = null;
-foreach ($cameras as $cam) {
-    if ($cam['id'] === $requested) {
-        $camera = $cam;
-        break;
-    }
-}
+$camera = CamLogic::findCameraById($cameras, $requested);
 
 if (!$camera) {
     http_response_code(404);
@@ -52,24 +51,24 @@ function control_proxy_post($url) {
 }
 
 if ($method === 'POST') {
-    $enabled = $_GET['enabled'] ?? '';
-    if ($enabled !== '0' && $enabled !== '1') {
+    $enabled = CamLogic::validateEnabledParam($_GET['enabled'] ?? '');
+    if ($enabled === null) {
         http_response_code(400);
         echo json_encode(['error' => 'enabled must be 0 or 1']);
         exit;
     }
 
-    $query = 'enabled=' . $enabled;
-    if ($enabled === '1' && isset($_GET['seconds']) && $_GET['seconds'] !== '') {
-        $seconds = $_GET['seconds'];
-        if (!ctype_digit((string) $seconds) || (int) $seconds < 1) {
+    $seconds = null;
+    if ($enabled && isset($_GET['seconds']) && $_GET['seconds'] !== '') {
+        $seconds = CamLogic::validatePositiveIntParam($_GET['seconds']);
+        if ($seconds === null) {
             http_response_code(400);
             echo json_encode(['error' => 'seconds must be a positive integer']);
             exit;
         }
-        $query .= '&seconds=' . urlencode($seconds);
     }
 
+    $query = CamLogic::buildControlQuery($enabled, $seconds);
     [$result, $headers] = control_proxy_post($relayUrl . '?' . $query);
 } else {
     $ctx = stream_context_create([
@@ -87,11 +86,9 @@ if ($result === false) {
 
 // Forward the relay's actual status code (e.g. 400 "seconds must be ...")
 // instead of always answering 200.
-foreach ($headers as $header) {
-    if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
-        http_response_code((int) $m[1]);
-        break;
-    }
+$statusCode = CamLogic::extractStatusCode($headers);
+if ($statusCode !== null) {
+    http_response_code($statusCode);
 }
 
 // The relay already returns { id, enabled, enabledUntil } JSON — pass it

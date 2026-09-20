@@ -10,19 +10,17 @@
 // GET  recordings.php?cam=ID&play=FILENAME      -> streams that file inline, for <video src="">
 // POST recordings.php?cam=ID&delete=FILENAME    -> deletes one recording
 // POST recordings.php?cam=ID&deleteAll=1        -> deletes every recording for this camera
+//
+// Camera lookup, filename validation, and header forwarding all live in
+// lib/Logic.php (CamLogic) so they can be unit tested without a web
+// server or a running relay — see tests/php/test_logic.php.
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
+require_once __DIR__ . '/lib/Logic.php';
 
 $requested = $_GET['cam'] ?? '';
-
-$camera = null;
-foreach ($cameras as $cam) {
-    if ($cam['id'] === $requested) {
-        $camera = $cam;
-        break;
-    }
-}
+$camera = CamLogic::findCameraById($cameras, $requested);
 
 if (!$camera) {
     http_response_code(404);
@@ -34,10 +32,6 @@ $download = $_GET['download'] ?? null;
 $play = $_GET['play'] ?? null;
 $delete = $_GET['delete'] ?? null;
 $deleteAll = isset($_GET['deleteAll']);
-
-// Only ever matches filenames the relay itself generates — also rules out
-// path traversal (no '/', no '..').
-const SAFE_FILENAME = '/^[A-Za-z0-9_.-]+\.mp4$/';
 
 if ($deleteAll) {
     header('Content-Type: application/json');
@@ -61,11 +55,9 @@ if ($deleteAll) {
         exit;
     }
 
-    foreach ($http_response_header ?? [] as $header) {
-        if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
-            http_response_code((int) $m[1]);
-            break;
-        }
+    $statusCode = CamLogic::extractStatusCode($http_response_header ?? []);
+    if ($statusCode !== null) {
+        http_response_code($statusCode);
     }
 
     echo $result;
@@ -80,7 +72,7 @@ if ($delete !== null) {
         echo json_encode(['error' => 'Use POST to delete']);
         exit;
     }
-    if (!preg_match(SAFE_FILENAME, $delete)) {
+    if (!CamLogic::isSafeFilename($delete)) {
         http_response_code(400);
         echo json_encode(['error' => 'Invalid filename']);
         exit;
@@ -100,11 +92,9 @@ if ($delete !== null) {
         exit;
     }
 
-    foreach ($http_response_header ?? [] as $header) {
-        if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
-            http_response_code((int) $m[1]);
-            break;
-        }
+    $statusCode = CamLogic::extractStatusCode($http_response_header ?? []);
+    if ($statusCode !== null) {
+        http_response_code($statusCode);
     }
 
     echo $result;
@@ -136,20 +126,14 @@ function stream_recording($url, $filename, $disposition) {
         exit('Could not reach relay');
     }
 
-    $status = 200;
-    $passThroughHeaders = [];
-    foreach ($http_response_header ?? [] as $header) {
-        if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
-            $status = (int) $m[1];
-        } elseif (preg_match('#^(Content-Range|Content-Length|Accept-Ranges):#i', $header)) {
-            $passThroughHeaders[] = $header;
-        }
-    }
+    $headers = $http_response_header ?? [];
+    $status = CamLogic::extractStatusCode($headers) ?? 200;
+    $passThroughHeaders = CamLogic::extractPassThroughHeaders($headers);
 
     while (ob_get_level()) ob_end_clean();
     http_response_code($status);
     header('Content-Type: video/mp4');
-    header('Content-Disposition: ' . $disposition . '; filename="' . $filename . '"');
+    header('Content-Disposition: ' . CamLogic::buildContentDispositionHeader($disposition, $filename));
     foreach ($passThroughHeaders as $header) {
         header($header);
     }
@@ -159,7 +143,7 @@ function stream_recording($url, $filename, $disposition) {
 }
 
 if ($download !== null) {
-    if (!preg_match(SAFE_FILENAME, $download)) {
+    if (!CamLogic::isSafeFilename($download)) {
         http_response_code(400);
         exit('Invalid filename');
     }
@@ -167,7 +151,7 @@ if ($download !== null) {
 }
 
 if ($play !== null) {
-    if (!preg_match(SAFE_FILENAME, $play)) {
+    if (!CamLogic::isSafeFilename($play)) {
         http_response_code(400);
         exit('Invalid filename');
     }

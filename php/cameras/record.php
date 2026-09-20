@@ -7,21 +7,19 @@
 // GET  record.php?cam=ID                 -> current { recording, ... } status
 // POST record.php?cam=ID&seconds=N       -> start recording for N seconds
 // POST record.php?cam=ID&stop=1          -> stop early
+//
+// Camera lookup, seconds validation, and status-code forwarding all live
+// in lib/Logic.php (CamLogic) so they can be unit tested without a web
+// server or a running relay — see tests/php/test_logic.php.
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
+require_once __DIR__ . '/lib/Logic.php';
 
 header('Content-Type: application/json');
 
 $requested = $_GET['cam'] ?? '';
-
-$camera = null;
-foreach ($cameras as $cam) {
-    if ($cam['id'] === $requested) {
-        $camera = $cam;
-        break;
-    }
-}
+$camera = CamLogic::findCameraById($cameras, $requested);
 
 if (!$camera) {
     http_response_code(404);
@@ -47,13 +45,13 @@ function proxy_post($url) {
 if ($method === 'POST' && isset($_GET['stop'])) {
     [$result, $headers] = proxy_post($base . '/stop');
 } elseif ($method === 'POST') {
-    $seconds = $_GET['seconds'] ?? '';
-    if (!ctype_digit((string) $seconds) || (int) $seconds < 1) {
+    $seconds = CamLogic::validatePositiveIntParam($_GET['seconds'] ?? '');
+    if ($seconds === null) {
         http_response_code(400);
         echo json_encode(['error' => 'seconds must be a positive integer']);
         exit;
     }
-    [$result, $headers] = proxy_post($base . '?seconds=' . urlencode($seconds));
+    [$result, $headers] = proxy_post($base . '?seconds=' . urlencode((string) $seconds));
 } else {
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
     $result = @file_get_contents($base, false, $ctx);
@@ -68,11 +66,9 @@ if ($result === false) {
 
 // Forward the relay's actual status code (e.g. 409 "already recording")
 // instead of always answering 200.
-foreach ($headers as $header) {
-    if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $m)) {
-        http_response_code((int) $m[1]);
-        break;
-    }
+$statusCode = CamLogic::extractStatusCode($headers);
+if ($statusCode !== null) {
+    http_response_code($statusCode);
 }
 
 echo $result;

@@ -2,20 +2,17 @@
 // stream.php — MJPEG proxy for ESP32-CAM
 // Usage: stream.php?cam=cam1
 // The cam parameter must match an 'id' in config.php
+//
+// Camera lookup and content-type extraction live in lib/Logic.php
+// (CamLogic) so they can be unit tested without a web server or a running
+// relay — see tests/php/test_logic.php.
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
+require_once __DIR__ . '/lib/Logic.php';
 
 $requested = $_GET['cam'] ?? '';
-
-// Find the matching camera
-$camera = null;
-foreach ($cameras as $cam) {
-    if ($cam['id'] === $requested) {
-        $camera = $cam;
-        break;
-    }
-}
+$camera = CamLogic::findCameraById($cameras, $requested);
 
 if (!$camera) {
     http_response_code(404);
@@ -45,14 +42,7 @@ if (!$stream) {
 // (ESP32 sends multipart/x-mixed-replace; boundary=...)
 $meta        = stream_get_meta_data($stream);
 $wrapperData = $meta['wrapper_data'] ?? [];
-$contentType = 'multipart/x-mixed-replace; boundary=frame'; // fallback
-
-foreach ($wrapperData as $header) {
-    if (stripos($header, 'Content-Type:') === 0) {
-        $contentType = trim(substr($header, 13));
-        break;
-    }
-}
+$contentType = CamLogic::extractContentType($wrapperData, 'multipart/x-mixed-replace; boundary=frame');
 
 // Disable output buffering so frames reach the browser immediately
 while (ob_get_level()) ob_end_clean();
