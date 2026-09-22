@@ -88,4 +88,40 @@ test('encodeControlByte', () => {
   assertEqual(Array.from(protocol.encodeControlByte(false)), [0]);
 });
 
+test('encodeCommandFrame starts with the command frame tag', () => {
+  const frame = protocol.encodeCommandFrame({ ai_enabled: false, live_peek_until_epoch: 0 });
+  assertEqual(frame[0], protocol.COMMAND_FRAME_TAG);
+});
+
+test('encodeCommandFrame never collides with a legacy control byte tag', () => {
+  // 0x00/0x01 are reserved for encodeControlByte() on this same socket —
+  // the whole point of the tag byte is that a reader can always tell the
+  // two message kinds apart.
+  assertTrue(protocol.COMMAND_FRAME_TAG !== 0x00 && protocol.COMMAND_FRAME_TAG !== 0x01);
+});
+
+test('encodeCommandFrame length prefix matches the JSON payload length', () => {
+  const command = { ai_enabled: true, live_peek_until_epoch: 1234567890 };
+  const frame = protocol.encodeCommandFrame(command);
+  const declaredLen = frame.readUInt16BE(1);
+  const json = frame.slice(3, 3 + declaredLen);
+  assertEqual(declaredLen, Buffer.byteLength(JSON.stringify(command), 'utf8'));
+  assertEqual(JSON.parse(json.toString('utf8')), command);
+});
+
+test('encodeCommandFrame emits compact JSON (no whitespace)', () => {
+  // The device-side decoder is a fixed-format substring scan, not a real
+  // JSON parser (see logic.h) — it depends on this exact `"key":value`
+  // spacing with no extra whitespace anywhere.
+  const frame = protocol.encodeCommandFrame({ ai_enabled: false, live_peek_until_epoch: 0 });
+  const declaredLen = frame.readUInt16BE(1);
+  const json = frame.slice(3, 3 + declaredLen).toString('utf8');
+  assertEqual(json, '{"ai_enabled":false,"live_peek_until_epoch":0}');
+});
+
+test('encodeCommandFrame throws if the JSON payload would exceed the length-prefix cap', () => {
+  const huge = { ai_enabled: false, live_peek_until_epoch: 0, padding: 'x'.repeat(protocol.MAX_COMMAND_FRAME_LEN) };
+  assertThrows(() => protocol.encodeCommandFrame(huge));
+});
+
 summarize();

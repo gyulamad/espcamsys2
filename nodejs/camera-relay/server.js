@@ -29,6 +29,14 @@ const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timi
 const DEFAULT_POWER_SECONDS = 300; // "ON" with no explicit duration runs for 5 minutes before auto power-off
 const MAX_POWER_SECONDS = 3600; // 1 hour cap per power-on, same sanity limit as recording
 
+// AI-alarm command state sent to each camera — see plans/AI_ALARM_IMPLEMENTATION_PLAN.md
+// §7 step 1. This is intentionally a fixed, hardcoded no-op for now: no
+// endpoint reads or writes it yet, and the device does nothing with it
+// besides logging receipt. It exists purely to prove the command-frame
+// round trip works before any real AI/dashboard logic is built on top of
+// it (step 2 onward). Do not wire this to real per-camera state yet.
+const AI_ALARM_COMMAND_NOOP = { ai_enabled: false, live_peek_until_epoch: 0 };
+
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
@@ -45,6 +53,7 @@ function getCamera(id) {
       powerTimer: null,   // pending auto power-off timeout, if any — see scheduleAutoOff()
       socket: null,       // the camera's live push-connection socket, if connected right now
       recording: null,    // in-progress recording, if any — see startRecording()
+      aiCommand: AI_ALARM_COMMAND_NOOP, // AI-alarm command state — see sendAiAlarmCommand()
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
@@ -85,6 +94,20 @@ function scheduleAutoOff(cam, seconds) {
 function sendControlByte(cam) {
   if (cam.socket && cam.socket.writable) {
     cam.socket.write(protocol.encodeControlByte(cam.enabled));
+  }
+}
+
+// Sends the camera's current AI-alarm command state down its push socket —
+// see plans/AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 1 and the big comment
+// on encodeCommandFrame() in lib/protocol.js for the wire format and why
+// this rides the push socket rather than an /upload response. Same
+// no-op-if-disconnected behavior as sendControlByte(): nothing to send to,
+// nothing sent; cam.aiCommand is still there to (re)send once it reconnects.
+// Only called right after auth for now (cam.aiCommand never changes yet —
+// step 2 adds an endpoint that mutates it and needs to call this again).
+function sendAiAlarmCommand(cam) {
+  if (cam.socket && cam.socket.writable) {
+    cam.socket.write(protocol.encodeCommandFrame(cam.aiCommand));
   }
 }
 
@@ -481,10 +504,14 @@ app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`))
 // No response is sent back for each frame — this is intentionally
 // fire-and-forget so the camera never waits on a round trip between frames.
 //
-// The one exception is the control channel above: whenever the dashboard
-// changes a camera's enabled state, or right after a camera authenticates,
-// we write a single 0x00/0x01 byte down this same socket (see
-// sendControlByte()). The camera reads it opportunistically between frames.
+// The one exception is the pair of relay -> device channels sharing this
+// same socket, both written right after a camera authenticates (and, for
+// the control byte, whenever the dashboard changes a camera's enabled
+// state): a single 0x00/0x01 control byte (see sendControlByte()), and a
+// tagged JSON command frame carrying AI-alarm state (see
+// sendAiAlarmCommand() / encodeCommandFrame() in lib/protocol.js — tagged
+// so it can't be confused with the control byte on the same stream). The
+// camera reads both opportunistically between frames.
 const pushServer = net.createServer((socket) => {
   socket.setNoDelay(true);
 
@@ -515,6 +542,7 @@ const pushServer = net.createServer((socket) => {
       // Sync this camera to whatever state the dashboard last set, in case
       // it changed while this camera was offline or mid-reconnect.
       sendControlByte(cam);
+      sendAiAlarmCommand(cam); // AI-alarm plumbing, see sendAiAlarmCommand()
     }
 
     // Drain as many complete [length][payload] frames as are buffered

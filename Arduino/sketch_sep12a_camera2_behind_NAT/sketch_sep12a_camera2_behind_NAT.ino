@@ -23,6 +23,14 @@ WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // per-frame HTTP request/response round trip
 bool pushAuthed = false;
 
+// Raw bytes read from the push socket's relay->device direction (control
+// bytes + AI-alarm command frames), accumulated across loop() calls until
+// drainDownstream() (logic.h) can pull complete messages out of it — a
+// command frame's tag+length+payload can arrive split across multiple
+// pushClient.available()/read() passes, same reasoning as the relay
+// buffering incoming frame data across multiple 'data' events.
+std::string downstreamBuf;
+
 // Whether we should be capturing/pushing right now. Synced from the relay
 // over the same persistent connection — see server.js's /control endpoint,
 // which the dashboard's per-camera power button calls. Defaults to on at
@@ -323,14 +331,44 @@ void loop() {
     return;
   }
 
-  // Drain any pending control bytes from the relay (dashboard power
-  // button). Single raw byte, no framing needed — this rides the same
-  // socket as our outgoing frames but in the other direction, so it never
-  // collides with them: 0x00 = pause, 0x01 = resume. If several arrived
-  // since we last checked, only the last one matters.
+  // Drain any pending relay->device traffic: legacy control bytes
+  // (dashboard power button, 0x00 = pause / 0x01 = resume) and AI-alarm
+  // command frames (see logic.h's drainDownstream()), sharing this same
+  // socket in the direction opposite our outgoing frames, so neither
+  // collides with them. Bytes read this loop are appended to
+  // downstreamBuf, since a command frame can arrive split across more
+  // than one pass through here; only fully-buffered messages are drained
+  // out, and drainDownstream() hands back whatever's left over
+  // (a partial frame) to keep waiting on.
   while (pushClient.available()) {
-    int cmd = pushClient.read();
-    applyControlByte(cmd, streamEnabled);
+    downstreamBuf += (char)pushClient.read();
+  }
+  DownstreamDrainResult drained = drainDownstream(downstreamBuf);
+  if (drained.malformed) {
+    // Declared command-frame length was too large to be real — the stream
+    // is desynced, not worth trying to recover byte-by-byte. Same response
+    // as any other push-socket corruption: drop and reconnect next loop.
+    Serial.println("[ai-alarm] malformed command frame, dropping push connection");
+    pushClient.stop();
+    downstreamBuf.clear();
+  } else {
+    downstreamBuf = drained.rest;
+    // If several control bytes arrived since we last checked, only the
+    // last one matters (mirrors the old inline loop's behavior).
+    for (int cmd : drained.controlBytes) {
+      applyControlByte(cmd, streamEnabled);
+    }
+    for (const std::string &payload : drained.commandPayloads) {
+      AiAlarmCommand cmd = parseAiAlarmCommand(payload);
+      if (cmd.valid) {
+        // Step 1 is plumbing only (see AI_ALARM_IMPLEMENTATION_PLAN.md
+        // §7) — nothing acts on this yet beyond confirming it arrived.
+        Serial.printf("[ai-alarm] command received: ai_enabled=%d live_peek_until_epoch=%ld\n",
+                      cmd.aiEnabled, cmd.livePeekUntilEpoch);
+      } else {
+        Serial.println("[ai-alarm] received malformed command payload, ignoring");
+      }
+    }
   }
 
   if (!streamEnabled) {

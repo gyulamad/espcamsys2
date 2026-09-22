@@ -183,6 +183,180 @@ TEST(control_byte_only_last_of_several_matters) {
     TEST_ASSERT(!streamEnabled, "final byte in the batch wins");
 }
 
+// ── extractJsonBoolField / extractJsonIntField ───────────────────────────
+
+TEST(extract_json_bool_field_true) {
+    bool out = false;
+    bool ok = extractJsonBoolField("{\"ai_enabled\":true,\"live_peek_until_epoch\":0}", "ai_enabled", out);
+    TEST_ASSERT(ok, "field found");
+    TEST_ASSERT(out, "parsed as true");
+}
+
+TEST(extract_json_bool_field_false) {
+    bool out = true;
+    bool ok = extractJsonBoolField("{\"ai_enabled\":false,\"live_peek_until_epoch\":0}", "ai_enabled", out);
+    TEST_ASSERT(ok, "field found");
+    TEST_ASSERT(!out, "parsed as false");
+}
+
+TEST(extract_json_bool_field_missing_key) {
+    bool out = true;
+    bool ok = extractJsonBoolField("{\"live_peek_until_epoch\":0}", "ai_enabled", out);
+    TEST_ASSERT(!ok, "missing key reports failure");
+}
+
+TEST(extract_json_bool_field_wrong_type) {
+    bool out = true;
+    bool ok = extractJsonBoolField("{\"ai_enabled\":1}", "ai_enabled", out);
+    TEST_ASSERT(!ok, "a non-bool value reports failure rather than a wrong guess");
+}
+
+TEST(extract_json_int_field_zero) {
+    long out = -1;
+    bool ok = extractJsonIntField("{\"live_peek_until_epoch\":0}", "live_peek_until_epoch", out);
+    TEST_ASSERT(ok, "field found");
+    TEST_ASSERT_EQ(out, 0L, "parsed as zero");
+}
+
+TEST(extract_json_int_field_multi_digit) {
+    long out = 0;
+    bool ok = extractJsonIntField("{\"ai_enabled\":true,\"live_peek_until_epoch\":1699999999}", "live_peek_until_epoch", out);
+    TEST_ASSERT(ok, "field found");
+    TEST_ASSERT_EQ(out, 1699999999L, "parsed multi-digit value");
+}
+
+TEST(extract_json_int_field_negative) {
+    long out = 0;
+    bool ok = extractJsonIntField("{\"live_peek_until_epoch\":-5}", "live_peek_until_epoch", out);
+    TEST_ASSERT(ok, "field found");
+    TEST_ASSERT_EQ(out, -5L, "parsed negative value");
+}
+
+TEST(extract_json_int_field_missing_key) {
+    long out = 0;
+    bool ok = extractJsonIntField("{\"ai_enabled\":true}", "live_peek_until_epoch", out);
+    TEST_ASSERT(!ok, "missing key reports failure");
+}
+
+// ── parseAiAlarmCommand ───────────────────────────────────────────────
+
+TEST(parse_ai_alarm_command_valid) {
+    AiAlarmCommand cmd = parseAiAlarmCommand("{\"ai_enabled\":true,\"live_peek_until_epoch\":42}");
+    TEST_ASSERT(cmd.valid, "well-formed payload parses");
+    TEST_ASSERT(cmd.aiEnabled, "ai_enabled parsed correctly");
+    TEST_ASSERT_EQ(cmd.livePeekUntilEpoch, 42L, "live_peek_until_epoch parsed correctly");
+}
+
+TEST(parse_ai_alarm_command_field_order_independent) {
+    // JSON.stringify's own key order happens to match this, but the parser
+    // shouldn't rely on it.
+    AiAlarmCommand cmd = parseAiAlarmCommand("{\"live_peek_until_epoch\":7,\"ai_enabled\":false}");
+    TEST_ASSERT(cmd.valid, "parses regardless of key order");
+    TEST_ASSERT(!cmd.aiEnabled, "ai_enabled parsed correctly");
+    TEST_ASSERT_EQ(cmd.livePeekUntilEpoch, 7L, "live_peek_until_epoch parsed correctly");
+}
+
+TEST(parse_ai_alarm_command_missing_field_is_invalid) {
+    AiAlarmCommand cmd = parseAiAlarmCommand("{\"ai_enabled\":true}");
+    TEST_ASSERT(!cmd.valid, "missing live_peek_until_epoch makes the whole command invalid");
+}
+
+TEST(parse_ai_alarm_command_garbage_is_invalid) {
+    AiAlarmCommand cmd = parseAiAlarmCommand("not json at all");
+    TEST_ASSERT(!cmd.valid, "unparsable payload is rejected, not guessed at");
+}
+
+// ── drainDownstream ───────────────────────────────────────────────────
+
+// Builds a raw command frame buffer: [tag][2-byte BE length][payload].
+static std::string buildCommandFrame(const std::string &payload) {
+    std::string out;
+    out += (char)COMMAND_FRAME_TAG;
+    out += (char)((payload.size() >> 8) & 0xFF);
+    out += (char)(payload.size() & 0xFF);
+    out += payload;
+    return out;
+}
+
+TEST(drain_downstream_single_control_byte) {
+    std::string buf;
+    buf += (char)CONTROL_BYTE_RESUME;
+    DownstreamDrainResult r = drainDownstream(buf);
+    TEST_ASSERT_EQ((int)r.controlBytes.size(), 1, "one control byte extracted");
+    TEST_ASSERT_EQ(r.controlBytes[0], CONTROL_BYTE_RESUME, "correct value");
+    TEST_ASSERT_EQ((int)r.commandPayloads.size(), 0, "no command payloads");
+    TEST_ASSERT_EQ(r.rest.size(), (size_t)0, "nothing left over");
+    TEST_ASSERT(!r.malformed, "not malformed");
+}
+
+TEST(drain_downstream_single_command_frame) {
+    std::string payload = "{\"ai_enabled\":false,\"live_peek_until_epoch\":0}";
+    DownstreamDrainResult r = drainDownstream(buildCommandFrame(payload));
+    TEST_ASSERT_EQ((int)r.commandPayloads.size(), 1, "one command payload extracted");
+    TEST_ASSERT_EQ(r.commandPayloads[0], payload, "payload bytes match exactly");
+    TEST_ASSERT_EQ((int)r.controlBytes.size(), 0, "no control bytes");
+    TEST_ASSERT_EQ(r.rest.size(), (size_t)0, "nothing left over");
+}
+
+TEST(drain_downstream_mixed_messages_in_order) {
+    std::string buf;
+    buf += (char)CONTROL_BYTE_PAUSE;
+    buf += buildCommandFrame("{\"ai_enabled\":true,\"live_peek_until_epoch\":1}");
+    buf += (char)CONTROL_BYTE_RESUME;
+    DownstreamDrainResult r = drainDownstream(buf);
+    TEST_ASSERT_EQ((int)r.controlBytes.size(), 2, "both control bytes extracted");
+    TEST_ASSERT_EQ(r.controlBytes[0], CONTROL_BYTE_PAUSE, "first control byte in order");
+    TEST_ASSERT_EQ(r.controlBytes[1], CONTROL_BYTE_RESUME, "second control byte in order");
+    TEST_ASSERT_EQ((int)r.commandPayloads.size(), 1, "command frame extracted between them");
+}
+
+TEST(drain_downstream_partial_command_frame_header_left_in_rest) {
+    std::string buf;
+    buf += (char)COMMAND_FRAME_TAG;
+    buf += (char)0; // only 1 of the 2 length bytes arrived so far
+    DownstreamDrainResult r = drainDownstream(buf);
+    TEST_ASSERT_EQ((int)r.commandPayloads.size(), 0, "nothing extracted yet");
+    TEST_ASSERT_EQ(r.rest.size(), (size_t)2, "partial header kept for next call");
+}
+
+TEST(drain_downstream_partial_command_frame_payload_left_in_rest) {
+    std::string full = buildCommandFrame("{\"ai_enabled\":true,\"live_peek_until_epoch\":9}");
+    std::string partial = full.substr(0, full.size() - 1); // one byte short
+    DownstreamDrainResult r = drainDownstream(partial);
+    TEST_ASSERT_EQ((int)r.commandPayloads.size(), 0, "incomplete frame not extracted yet");
+    TEST_ASSERT_EQ(r.rest.size(), partial.size(), "whole partial frame kept for next call");
+}
+
+TEST(drain_downstream_frame_split_across_two_calls) {
+    std::string full = buildCommandFrame("{\"ai_enabled\":false,\"live_peek_until_epoch\":3}");
+    std::string firstHalf = full.substr(0, 2); // just the tag + first length byte
+    std::string secondHalf = full.substr(2);
+
+    DownstreamDrainResult r1 = drainDownstream(firstHalf);
+    TEST_ASSERT_EQ((int)r1.commandPayloads.size(), 0, "nothing extracted from the first half alone");
+
+    DownstreamDrainResult r2 = drainDownstream(r1.rest + secondHalf);
+    TEST_ASSERT_EQ((int)r2.commandPayloads.size(), 1, "reassembled once the rest arrives");
+}
+
+TEST(drain_downstream_unrecognized_tag_is_skipped) {
+    std::string buf;
+    buf += (char)0x7F; // not a control byte or the command frame tag
+    buf += (char)CONTROL_BYTE_RESUME;
+    DownstreamDrainResult r = drainDownstream(buf);
+    TEST_ASSERT_EQ((int)r.controlBytes.size(), 1, "the unrecognized byte is skipped, not fatal");
+    TEST_ASSERT_EQ(r.controlBytes[0], CONTROL_BYTE_RESUME, "parsing resumes correctly after it");
+}
+
+TEST(drain_downstream_oversized_length_is_malformed) {
+    std::string buf;
+    buf += (char)COMMAND_FRAME_TAG;
+    buf += (char)0xFF;
+    buf += (char)0xFF; // declares a 65535-byte payload, over MAX_COMMAND_FRAME_LEN
+    DownstreamDrainResult r = drainDownstream(buf);
+    TEST_ASSERT(r.malformed, "oversized declared length is flagged malformed");
+}
+
 // ── writeStalled ─────────────────────────────────────────────────────
 
 TEST(write_stalled_false_while_within_timeout) {
@@ -226,6 +400,30 @@ int main() {
     RUN_TEST(control_byte_one_resumes);
     RUN_TEST(control_byte_unknown_is_ignored);
     RUN_TEST(control_byte_only_last_of_several_matters);
+
+    RUN_TEST(extract_json_bool_field_true);
+    RUN_TEST(extract_json_bool_field_false);
+    RUN_TEST(extract_json_bool_field_missing_key);
+    RUN_TEST(extract_json_bool_field_wrong_type);
+
+    RUN_TEST(extract_json_int_field_zero);
+    RUN_TEST(extract_json_int_field_multi_digit);
+    RUN_TEST(extract_json_int_field_negative);
+    RUN_TEST(extract_json_int_field_missing_key);
+
+    RUN_TEST(parse_ai_alarm_command_valid);
+    RUN_TEST(parse_ai_alarm_command_field_order_independent);
+    RUN_TEST(parse_ai_alarm_command_missing_field_is_invalid);
+    RUN_TEST(parse_ai_alarm_command_garbage_is_invalid);
+
+    RUN_TEST(drain_downstream_single_control_byte);
+    RUN_TEST(drain_downstream_single_command_frame);
+    RUN_TEST(drain_downstream_mixed_messages_in_order);
+    RUN_TEST(drain_downstream_partial_command_frame_header_left_in_rest);
+    RUN_TEST(drain_downstream_partial_command_frame_payload_left_in_rest);
+    RUN_TEST(drain_downstream_frame_split_across_two_calls);
+    RUN_TEST(drain_downstream_unrecognized_tag_is_skipped);
+    RUN_TEST(drain_downstream_oversized_length_is_malformed);
 
     RUN_TEST(write_stalled_false_while_within_timeout);
     RUN_TEST(write_stalled_true_once_timeout_elapsed);

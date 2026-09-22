@@ -14,9 +14,11 @@
 
 #pragma once
 
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace esp32cam_logic {
 
@@ -110,6 +112,137 @@ inline unsigned long computePushDelayMs(unsigned long lastPushMs, float interval
 inline void applyControlByte(int cmd, bool &streamEnabled) {
     if (cmd == 0) streamEnabled = false;
     else if (cmd == 1) streamEnabled = true;
+}
+
+// ── AI-alarm command channel (relay -> device, same push socket) ────────
+// See AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 1 and the matching comment
+// on encodeCommandFrame() in the relay's lib/protocol.js. This is
+// plumbing only for now: the relay always sends a hardcoded no-op
+// payload, and the only thing the device does with a successfully parsed
+// command is log it (see the .ino's loop()) — no behavior changes yet.
+
+// Tag bytes for relay->device messages on the push socket. 0x00/0x01 are
+// the pre-existing single-byte pause/resume control values (see
+// applyControlByte() above); COMMAND_FRAME_TAG is new and starts a
+// [tag][2-byte big-endian length][JSON payload] frame instead, so both
+// message shapes can share one byte stream without ambiguity.
+const int CONTROL_BYTE_PAUSE = 0x00;
+const int CONTROL_BYTE_RESUME = 0x01;
+const int COMMAND_FRAME_TAG = 0x02;
+
+// Safety cap on a command frame's declared length, matching the relay's
+// own MAX_COMMAND_FRAME_LEN (lib/protocol.js) — a declared length beyond
+// this can only be a corrupted/desynced stream, not a real payload, since
+// the JSON this channel actually carries is a handful of bytes.
+const size_t MAX_COMMAND_FRAME_LEN = 2048;
+
+// Parsed AI-alarm command state, as sent by the relay in a command frame.
+struct AiAlarmCommand {
+    bool aiEnabled = false;
+    long livePeekUntilEpoch = 0;
+    bool valid = false; // false if the payload couldn't be parsed — caller should ignore it and keep the previous known-good state
+};
+
+// Extracts a decimal integer value for `key` from a small flat JSON
+// object string, e.g. pulling 1699999999 out of
+// `...,"live_peek_until_epoch":1699999999}`. Returns false if the key
+// isn't present or isn't followed by a plain (optionally negative)
+// integer.
+inline bool extractJsonIntField(const std::string &json, const std::string &key, long &out) {
+    std::string needle = "\"" + key + "\":";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return false;
+    pos += needle.length();
+    size_t end = pos;
+    if (end < json.size() && json[end] == '-') end++;
+    size_t digitsStart = end;
+    while (end < json.size() && std::isdigit((unsigned char)json[end])) end++;
+    if (end == digitsStart) return false; // no digits found after the optional '-'
+    out = std::stol(json.substr(pos, end - pos));
+    return true;
+}
+
+// Extracts a JSON boolean (unquoted `true`/`false`) value for `key`.
+// Returns false if the key isn't present or its value is neither.
+inline bool extractJsonBoolField(const std::string &json, const std::string &key, bool &out) {
+    std::string needle = "\"" + key + "\":";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return false;
+    pos += needle.length();
+    if (json.compare(pos, 4, "true") == 0) { out = true; return true; }
+    if (json.compare(pos, 5, "false") == 0) { out = false; return true; }
+    return false;
+}
+
+// Parses a command-frame JSON payload of the fixed shape
+// {"ai_enabled":<bool>,"live_peek_until_epoch":<int>}. This is a
+// purpose-built extractor for that one known shape, not a general JSON
+// parser — kept dependency-free and desktop-testable like the rest of
+// this file, consistent with the sketch's other hand-rolled wire
+// protocols (auth line, frame length prefix) rather than pulling in a
+// JSON library for two fields. If either field is missing/malformed,
+// `valid` is false and the whole command should be ignored.
+inline AiAlarmCommand parseAiAlarmCommand(const std::string &json) {
+    AiAlarmCommand cmd;
+    bool aiEnabled = false;
+    long epoch = 0;
+    bool okBool = extractJsonBoolField(json, "ai_enabled", aiEnabled);
+    bool okInt = extractJsonIntField(json, "live_peek_until_epoch", epoch);
+    cmd.valid = okBool && okInt;
+    if (cmd.valid) {
+        cmd.aiEnabled = aiEnabled;
+        cmd.livePeekUntilEpoch = epoch;
+    }
+    return cmd;
+}
+
+// Result of draining as much of the relay->device byte stream as is fully
+// buffered: any legacy control bytes seen (in order), any complete
+// command-frame JSON payloads seen (in order, still un-parsed — call
+// parseAiAlarmCommand() on each), and whatever's left over (a partial
+// tag/length/payload) for the caller to keep buffering across loop() calls.
+struct DownstreamDrainResult {
+    std::vector<int> controlBytes;
+    std::vector<std::string> commandPayloads;
+    std::string rest;
+    bool malformed = false; // a command frame declared a length over MAX_COMMAND_FRAME_LEN — caller should drop the connection, same guard as the relay's own drainFrames()
+};
+
+// Same style/purpose as the relay's drainFrames() (lib/protocol.js), but
+// for the device side parsing relay->device traffic out of a plain
+// std::string buffer the .ino accumulates from repeated
+// pushClient.available()/read() calls — kept as a pure function over a
+// string so it's unit-testable without a real socket.
+inline DownstreamDrainResult drainDownstream(const std::string &buf) {
+    DownstreamDrainResult result;
+    size_t pos = 0;
+    while (pos < buf.size()) {
+        unsigned char tag = (unsigned char)buf[pos];
+        if ((int)tag == CONTROL_BYTE_PAUSE || (int)tag == CONTROL_BYTE_RESUME) {
+            result.controlBytes.push_back((int)tag);
+            pos += 1;
+            continue;
+        }
+        if ((int)tag == COMMAND_FRAME_TAG) {
+            if (pos + 3 > buf.size()) break; // tag + 2-byte length not fully here yet
+            size_t len = ((unsigned char)buf[pos + 1] << 8) | (unsigned char)buf[pos + 2];
+            if (len > MAX_COMMAND_FRAME_LEN) {
+                result.malformed = true;
+                result.rest.clear();
+                return result;
+            }
+            if (pos + 3 + len > buf.size()) break; // payload not fully here yet
+            result.commandPayloads.push_back(buf.substr(pos + 3, len));
+            pos += 3 + len;
+            continue;
+        }
+        // Unrecognized tag byte — skip it defensively rather than getting
+        // permanently stuck, mirroring applyControlByte()'s "anything else
+        // is ignored" stance.
+        pos += 1;
+    }
+    result.rest = buf.substr(pos);
+    return result;
 }
 
 // True once a stalled write (no forward progress at all) has gone on long

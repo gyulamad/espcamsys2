@@ -1,8 +1,10 @@
 # AI Human Detection Alarm — Implementation Plan
 
 **Project:** [gyulamad/espcamsys2](https://github.com/gyulamad/espcamsys2)
-**Status:** Design agreed, not yet implemented. This document is the handoff spec.
+**Status:** §7 step 1 implemented (see note below). Steps 2-8 not yet implemented.
 **Audience:** Written for an implementer (human or AI) with zero prior context on this conversation. Everything needed to start coding is below.
+
+> **Implementation note (step 1, added when step 1 was implemented):** by the time step 1 was implemented, the repo's actual transport for camera → relay traffic had moved from the per-frame `POST /upload` this whole document was written against to a **persistent raw TCP push connection** (`pushPort`/`PUSH_PORT`, see `server.js`'s `pushServer` and the sketch's `pushClient`) — `/upload` survives only as a legacy, unused-by-firmware endpoint (see `example.config.js`'s `(and legacy /upload)` comment). That socket already carried a device←relay control byte (pause/resume), i.e. an inbound channel to the camera already existed, contradicting §1's "no inbound channel" / decision #1's "piggyback on `/upload`" premise. Step 1 was implemented on the **existing push socket instead**, adding a new tagged JSON command frame alongside the pre-existing control byte (see §5.6 below, updated in place, and the code comments on `encodeCommandFrame()` in `nodejs/camera-relay/lib/protocol.js` / the AI-alarm section of `Arduino/sketch_sep12a_camera2_behind_NAT/logic.h`). The *intent* of decision #1 (no new inbound port, piggyback on an already-open device-initiated connection) is preserved; only the specific transport named changed. Everything else in this document (state machine, config keys, rolling buffer, etc.) is unaffected — implementers of steps 2+ should read §5.6 as corrected, not as originally written.
 
 ---
 
@@ -20,8 +22,8 @@ Confirmed from `INSTALL.md` in the repo. **Read this before touching any code.**
 [ESP32-CAM] --push JPEG (HTTP POST /upload)--> [server.js relay :8080] <--fetch-- [PHP dashboard] <--Tor--> [user, anywhere]
 ```
 
-- **ESP32-CAM devices** (AI-Thinker board, classic ESP32 — *not* S3) run `Arduino/sketch_sep12a_camera2_behind_NAT/sketch_sep12a_camera2_behind_NAT.ino`. They are **push-only clients** — they do **not** run their own web/streaming server. They periodically capture a JPEG and `POST` it to the relay's `/upload` endpoint, authenticated with a per-camera `API_KEY` (must match `camKey` in the relay's `config.js`). Each device has a unique `CAMERA_ID` set in its own `config.h`.
-  - **This means there is currently no inbound channel to the camera.** No port is forwarded to it; it only ever initiates outbound HTTP requests. Any "command" from the backend to the camera must ride on the response to a request the camera itself makes (see §5.6 — this was explicitly decided, not a limitation to work around later).
+- **ESP32-CAM devices** (AI-Thinker board, classic ESP32 — *not* S3) run `Arduino/sketch_sep12a_camera2_behind_NAT/sketch_sep12a_camera2_behind_NAT.ino`. They are **push-only clients** — they do **not** run their own web/streaming server. ~~They periodically capture a JPEG and `POST` it to the relay's `/upload` endpoint~~ **[Corrected — see the implementation note at the top of this document]** they hold one persistent raw-TCP connection to the relay's push port and continuously write length-prefixed JPEG frames down it (`/upload` is a legacy, firmware-unused HTTP endpoint), authenticated with a per-camera `API_KEY` (must match `camKey` in the relay's `config.js`). Each device has a unique `CAMERA_ID` set in its own `config.h`.
+  - ~~**This means there is currently no inbound channel to the camera.**~~ **[Corrected]** the persistent push connection is bidirectional: the relay already writes a control byte back down it (dashboard pause/resume), so an inbound channel already existed before this feature — see §5.6, updated in place, and the implementation note at the top of this document.
 - **`server.js` relay** (Node/Express, runs on a Raspberry Pi) receives pushed frames and re-serves them as live MJPEG. Known endpoints: `/upload` (key-protected, camera → relay), `/stream`, `/snapshot`, `/status`. Per the INSTALL guide, `/stream`/`/snapshot`/`/status` currently have **no auth** and are only safe because the Pi firewall restricts port 8080 to localhost/LAN — the PHP layer is the only public-facing auth boundary. **Any new relay endpoint must follow this same trust model** (LAN/localhost-only, or explicitly authenticated if it needs to be reachable more broadly).
 - **PHP dashboard** (`index.php`, `stream.php`, `cameras.php`, `auth.php`, `config.php`) runs on the Pi, exposed only via a **Tor hidden service** (onion address), protected by **HTTP Basic Auth** (`auth_user`/`auth_pass` in `config.php`). It proxies each camera's stream from the relay and lists cameras from a config array (`id`, `name`, `icon` per camera).
 - **Recording/footage storage is already implemented** in the existing codebase — clip storage, replay, and download already work. **Do not rebuild this.** The AI alarm feature only needs to *trigger* a recording using whatever mechanism already exists for manual/button-triggered recording; it should reuse that pipeline, not create a parallel one.
@@ -60,7 +62,7 @@ This is the core enabling piece. Key facts gathered during design:
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | Command channel | **Piggyback** commands on the response body of the existing `/upload` POST. No new inbound port, no polling endpoint. |
+| 1 | Command channel | **Piggyback** commands on an already-open device-initiated connection — no new inbound port, no polling endpoint. *(Originally specified as the response body of `/upload`; implemented in step 1 on the persistent push socket instead, since that turned out to be the connection actually in use — see the implementation note at the top of this document and §5.6.)* |
 | 2 | Cooldown / re-trigger | If a new detection triggers **within 3 seconds** (configurable) of the previous recording ending, **continue the same recording** rather than starting a new clip. UI shows a **"debounce"** label (not "recording") during this grace window, since it's ambiguous whether recording will resume or truly stop. |
 | 3 | Recording start latency | Maintain a **rolling pre-buffer** of the last **3 seconds** (configurable) of monitoring-mode frames in RAM; prepend these to the recording when a trigger fires, so the clip doesn't miss the moment right before the resolution switch completes. |
 | 4 | Extra sensors (radar/PIR) | **Not used.** AI-only detection, by deliberate choice to avoid extra hardware cost. Do not add radar wake-triggering unless asked again. |
@@ -131,17 +133,24 @@ Notes:
   - If false → start a genuinely new clip.
 - While in this grace window (after apparent detection loss, before the window expires or a new trigger arrives), the device/dashboard state should be `DEBOUNCE`, and the UI must show a **"debounce"** label distinctly from "recording" — this was an explicit UX decision, not just an implementation detail.
 
-### 5.6 Command channel (piggyback design)
+### 5.6 Command channel (piggyback design) — **[DONE] plumbing implemented in step 1, updated below to match**
 
-- **Device → relay (existing):** `POST /upload` with camera ID + API key + frame payload.
-- **Relay → device (new):** the HTTP **response body** to that same POST now includes a small JSON command payload, e.g.:
+> This section originally described piggybacking on `POST /upload`'s HTTP response. That transport turned out not to match reality (see the implementation note at the top of this document) — `/upload` is a legacy endpoint the firmware doesn't actually call. The design below is what step 1 actually implements, on the persistent raw-TCP push connection instead. The JSON payload shape and semantics are otherwise unchanged from the original design.
+
+- **Device → relay (existing):** the sketch holds one persistent TCP connection to the relay's push port (`PUSH_PORT`/`pushPort`), authenticates once with `"<CAMERA_ID>\t<API_KEY>\n"`, then continuously writes `[4-byte length][JPEG]` frames down it. No response is read for these — fire-and-forget, so frame pushing never waits on a round trip.
+- **Relay → device (new in step 1):** that same socket already carried a single raw control byte from relay to device (0x00 = pause / 0x01 = resume, for the dashboard's existing per-camera power toggle). Step 1 adds a second, tagged message type on the same socket/direction so it can't be confused with that control byte:
+  ```
+  [0x02][2-byte big-endian JSON length][JSON bytes]
+  ```
+  with the JSON payload shape unchanged from the original design:
   ```json
   { "ai_enabled": true, "live_peek_until_epoch": 0 }
   ```
   - `ai_enabled`: whether AI monitoring should be active on this camera right now.
-  - `live_peek_until_epoch`: 0 if no active peek, otherwise a unix timestamp the device compares against its own clock (device needs NTP/time sync if not already present — check existing sketch for this) to know when to auto-revert.
-- **Device behavior:** parse this response on every upload cycle and update local state accordingly. Since uploads happen frequently (every monitoring cycle in most states), command latency should be at most one cycle (~350ms in `MONITORING`), which is acceptable.
-- **Relay-side:** needs a small **per-camera command state store** — in-memory map keyed by `CAMERA_ID` is sufficient to start (no need for a database); persisted to a JSON file if surviving relay restarts matters (recommend doing this — otherwise a Pi reboot silently resets every camera to `AI_ALARM_ENABLED_DEFAULT`, which might not be what the user expects mid-review).
+  - `live_peek_until_epoch`: 0 if no active peek, otherwise a unix timestamp the device compares against its own clock to know when to auto-revert. **Still an open item** — see §8, which already flagged this as the field most likely to change (to a relative "seconds remaining" value) once NTP/clock-sync is confirmed one way or the other; step 1 hardcodes `0` and does not resolve this.
+  - See `encodeCommandFrame()` / `COMMAND_FRAME_TAG` / `MAX_COMMAND_FRAME_LEN` in `nodejs/camera-relay/lib/protocol.js`, and the matching `AiAlarmCommand` / `parseAiAlarmCommand()` / `drainDownstream()` in `Arduino/.../logic.h`, for the implementation.
+- **Device behavior (step 1):** the command frame is decoded via a small purpose-built extractor (`extractJsonBoolField`/`extractJsonIntField` in `logic.h`), not a general JSON parser — kept dependency-free like the rest of the sketch's hand-rolled wire protocols (no ArduinoJson or similar added). It's sent once right after the device authenticates (mirroring how the existing control byte is (re)sent on connect) and currently does nothing beyond `Serial.printf`-logging what it received — **no behavior changes yet**, per step 1's "plumbing only, hardcoded no-op" scope. Since the payload never changes yet, there's no ongoing per-cycle latency concern to worry about in step 1; steps 2+ (which start actually changing the state) should re-send the frame whenever `cam.aiCommand` changes, the same way `sendControlByte()` is already called both on connect and on every state change.
+- **Relay-side (step 1):** `cam.aiCommand` on the per-camera object (`getCamera()` in `server.js`) is the command state slot steps 2+ should read/write; step 1 hardcodes it to a fixed no-op constant (`AI_ALARM_COMMAND_NOOP`) with nothing yet writing to it. The **per-camera command state store / restart persistence** called for below is not yet built — still needed once step 2 makes this state actually mutable.
 
 ### 5.7 New backend endpoints (PHP dashboard side, must go through existing `auth.php`/Basic Auth mechanism)
 
@@ -229,7 +238,7 @@ This is illustrative, not final — adapt to whatever recording-trigger hooks al
 
 ## 7. Suggested implementation order (phased rollout)
 
-1. **Plumbing only:** implement the piggyback command channel (relay embeds JSON in `/upload` response; device parses it) with a hardcoded no-op command, verify round-trip works before any AI code exists.
+1. **[DONE] Plumbing only:** implement the piggyback command channel with a hardcoded no-op command, verify round-trip works before any AI code exists. *(Implemented on the persistent push socket rather than `/upload` — see the implementation note at the top of this document and the updated §5.6. Relay: `nodejs/camera-relay/lib/protocol.js` (`encodeCommandFrame`), `nodejs/camera-relay/server.js` (`sendAiAlarmCommand`, `AI_ALARM_COMMAND_NOOP`, `cam.aiCommand`). Firmware: `Arduino/sketch_sep12a_camera2_behind_NAT/logic.h` (`AiAlarmCommand`, `parseAiAlarmCommand`, `drainDownstream`), `.ino`'s `loop()`. Tests: `tests/node/test_protocol.js`, `tests/cpp/test_alarm_logic.cpp`. No new config keys were needed — the payload is still hardcoded, not wired to any config value; §5.1's config keys are for steps 2+.)*
 2. **Dashboard toggle (no AI yet):** add the `ai-alarm` endpoint + UI toggle, wire it to the command state, confirm the device receives and logs the change.
 3. **Monitoring-only AI:** implement 96×96 grayscale capture + TFLite inference at `AI_INFERENCE_INTERVAL_MS`, log detections to Serial only — no recording trigger yet. Validate inference timing/accuracy in isolation.
 4. **Confirmation burst:** add the extra-frame debounce logic (§5.4), still logging only.

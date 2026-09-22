@@ -70,6 +70,39 @@ function encodeControlByte(enabled) {
   return Buffer.from([enabled ? 1 : 0]);
 }
 
+// ── AI-alarm command frame (relay -> device, same push socket) ──────────
+//
+// AI_ALARM_IMPLEMENTATION_PLAN.md originally called for piggybacking this
+// on the /upload HTTP response (§5.6), written when the device pushed
+// frames one-per-HTTP-POST. The device now uses the persistent raw-TCP
+// push connection instead (see the big comment above `pushServer` in
+// server.js), which already carries a device<-relay control byte
+// (encodeControlByte above). Plan §7 step 1 is implemented on that
+// existing channel: a new tagged frame type shares the same socket/
+// direction as the control byte without colliding with it, since 0x00/
+// 0x01 stay reserved for the control byte and this frame starts with a
+// different tag byte.
+//
+// Wire format:  [0x02][2-byte big-endian JSON length][JSON bytes]
+//
+// The JSON payload must always be emitted compact (no whitespace) — the
+// device's decoder (see logic.h's extractJsonBoolField/extractJsonIntField)
+// is a small fixed-shape substring scan, not a general JSON parser, and
+// depends on that exact `"key":value` spacing.
+const COMMAND_FRAME_TAG = 0x02;
+const MAX_COMMAND_FRAME_LEN = 2048; // generous headroom over the small payloads this channel actually carries; also the device-side cap, see logic.h
+
+function encodeCommandFrame(commandObj) {
+  const json = Buffer.from(JSON.stringify(commandObj), 'utf8');
+  if (json.length > MAX_COMMAND_FRAME_LEN) {
+    throw new Error(`command frame payload too large: ${json.length} bytes`);
+  }
+  const header = Buffer.alloc(3);
+  header.writeUInt8(COMMAND_FRAME_TAG, 0);
+  header.writeUInt16BE(json.length, 1);
+  return Buffer.concat([header, json]);
+}
+
 module.exports = {
   findAuthLineEnd,
   isAuthLineTooLong,
@@ -77,4 +110,7 @@ module.exports = {
   isFrameLengthValid,
   drainFrames,
   encodeControlByte,
+  COMMAND_FRAME_TAG,
+  MAX_COMMAND_FRAME_LEN,
+  encodeCommandFrame,
 };
