@@ -67,6 +67,34 @@ AlarmDebounceState alarmState;
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+// Writes `len` bytes to the push socket, retrying partial writes instead of
+// treating one short write() as a hard failure. A single write() can
+// legitimately return fewer bytes than requested when the TCP send buffer
+// fills faster than the relay drains it — common with a weak WiFi signal
+// pushing a VGA-sized JPEG frame — and simply calling write() again with
+// the remainder is enough to finish the job in that case. Only gives up if
+// nothing gets through for PUSH_WRITE_TIMEOUT_MS straight, or the socket
+// actually disconnects mid-write.
+const unsigned long PUSH_WRITE_TIMEOUT_MS = 4000;
+
+size_t writePushBytes(const uint8_t *data, size_t len) {
+  size_t total = 0;
+  unsigned long lastProgress = millis();
+  while (total < len) {
+    if (!pushClient.connected()) break;
+    size_t n = pushClient.write(data + total, len - total);
+    if (n > 0) {
+      total += n;
+      lastProgress = millis();
+    } else if (writeStalled(lastProgress, millis(), PUSH_WRITE_TIMEOUT_MS)) {
+      break; // truly stuck — give up rather than hang loop() indefinitely
+    } else {
+      delay(1); // brief yield before retrying, rather than busy-spinning
+    }
+  }
+  return total;
+}
+
 // Opens the persistent push connection if it isn't already open, sending
 // the one-time auth line. Cheap to call every loop when already connected —
 // just checks the socket state, no reconnect attempt unless it's actually down.
@@ -144,7 +172,14 @@ void checkAlarmTrigger() {
 // enabled in board settings, and can clear up on its own once the supply
 // settles, without needing a full reboot.
 bool initCamera() {
-  camera_config_t config;
+  // Zero-initialize: camera_config_t has gained new fields (fb_location,
+  // grab_mode, ...) across esp32-camera library versions. Anything this
+  // sketch doesn't explicitly set below must default to a safe value
+  // instead of whatever was already sitting on the stack — an
+  // uninitialized fb_location in particular can force a VGA frame buffer
+  // into internal DRAM, where it doesn't fit, producing exactly the
+  // "frame buffer malloc failed" error this function is guarding against.
+  camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer   = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM;
@@ -165,15 +200,18 @@ bool initCamera() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;   // 640x480 — bump up if bandwidth allows
     config.jpeg_quality = 12;            // lower number = higher quality, bigger file
     config.fb_count = 2;
+    config.fb_location = CAMERA_FB_IN_PSRAM; // VGA*2 buffers only fits in PSRAM
   } else {
     config.frame_size = FRAMESIZE_QVGA;  // 320x240 — safer without PSRAM
     config.jpeg_quality = 15;
     config.fb_count = 1;
+    config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
   esp_err_t err = esp_camera_init(&config);
@@ -316,8 +354,10 @@ void loop() {
   encodeFrameLengthPrefix(len, lenPrefix);
 
   unsigned long t0 = millis();
-  size_t written = pushClient.write(lenPrefix, 4);
-  written += pushClient.write(fb->buf, fb->len);
+  size_t written = writePushBytes(lenPrefix, 4);
+  if (written == 4) {
+    written += writePushBytes(fb->buf, fb->len);
+  }
   unsigned long pushMs = millis() - t0;
 
   if (!pushWriteSucceeded(written, len, pushClient.connected())) {

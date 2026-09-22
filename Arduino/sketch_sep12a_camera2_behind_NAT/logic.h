@@ -112,4 +112,13 @@ inline void applyControlByte(int cmd, bool &streamEnabled) {
     else if (cmd == 1) streamEnabled = true;
 }
 
+// True once a stalled write (no forward progress at all) has gone on long
+// enough that it's not worth waiting any longer for — used by the
+// push-frame write loop to give up on a badly stuck connection instead of
+// blocking loop() forever, rather than to judge a single short write() as
+// already failed.
+inline bool writeStalled(unsigned long lastProgressMs, unsigned long nowMs, unsigned long timeoutMs) {
+    return (nowMs - lastProgressMs) >= timeoutMs;
+}
+
 } // namespace esp32cam_logic

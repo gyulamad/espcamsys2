@@ -183,6 +183,20 @@ TEST(control_byte_only_last_of_several_matters) {
     TEST_ASSERT(!streamEnabled, "final byte in the batch wins");
 }
 
+// ── writeStalled ─────────────────────────────────────────────────────
+
+TEST(write_stalled_false_while_within_timeout) {
+    TEST_ASSERT(!writeStalled(1000, 2000, 4000), "1s of no progress within a 4s timeout is not stalled yet");
+}
+
+TEST(write_stalled_true_once_timeout_elapsed) {
+    TEST_ASSERT(writeStalled(1000, 5001, 4000), "4001ms of no progress past a 4s timeout counts as stalled");
+}
+
+TEST(write_stalled_true_exactly_at_timeout_boundary) {
+    TEST_ASSERT(writeStalled(1000, 5000, 4000), "exactly the timeout elapsed also counts as stalled");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -212,6 +226,10 @@ int main() {
     RUN_TEST(control_byte_one_resumes);
     RUN_TEST(control_byte_unknown_is_ignored);
     RUN_TEST(control_byte_only_last_of_several_matters);
+
+    RUN_TEST(write_stalled_false_while_within_timeout);
+    RUN_TEST(write_stalled_true_once_timeout_elapsed);
+    RUN_TEST(write_stalled_true_exactly_at_timeout_boundary);
 
     return test::summarize();
 }
