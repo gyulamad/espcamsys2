@@ -347,4 +347,100 @@ inline PersonDetectionResult evaluatePersonScores(int8_t notPersonScoreRaw, int8
     return result;
 }
 
+// ── AI-alarm confirmation burst (step 4: §5.2/§5.4, still logging only) ──
+// See AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 4. Step 3 only ever sampled
+// at the single, fixed MONITORING cadence (AI_INFERENCE_INTERVAL_MS) and
+// logged every inference. Step 4 adds the §5.2 MONITORING<->CONFIRMING
+// state transitions and the §5.4 "don't trust one positive inference"
+// burst rule, entirely as pure state-machine logic here — same
+// hardware-free split as step 3: the .ino only needs to (a) tell loop()'s
+// capture-gating which cadence to sample at right now (see
+// currentAiSampleIntervalMs()) and (b) feed each inference's
+// personDetected bit through updateConfirmationBurst() and log whatever
+// it hands back. No recording trigger yet (that's step 5) — CONFIRMED
+// here just means "log it as confirmed", per this step's own "still
+// logging only" instruction.
+
+// MONITORING/CONFIRMING half of §5.2's state machine. RECORDING/DEBOUNCE/
+// LIVE_PEEK aren't needed yet — those first get a real meaning at steps
+// 5-7, once there's an actual recording pipeline hooked up to trigger.
+enum class AiAlarmMode {
+    MONITORING,
+    CONFIRMING,
+};
+
+// Persistent (across loop()/aiTask() iterations) confirmation-burst state.
+// Owned entirely by the inference side (aiTask() in the .ino, Core 0) —
+// loop() (Core 1) only ever needs to know the resulting `mode`, to pick
+// the right sampling cadence; see currentAiSampleIntervalMs().
+struct ConfirmationBurstState {
+    AiAlarmMode mode = AiAlarmMode::MONITORING;
+    int framesSeen = 0;   // positive extra-confirmation frames seen so far in the current burst
+    int framesNeeded = 0; // snapshot of AI_CONFIRM_EXTRA_FRAMES taken when the burst started
+};
+
+// What happened as a result of feeding one inference through the state
+// machine — the .ino logs each of these differently (or not at all, for
+// NONE, which covers both "still monitoring, nothing detected" and "still
+// mid-burst, need more frames").
+enum class ConfirmationBurstOutcome {
+    NONE,              // no state change worth logging
+    ENTERED_CONFIRMING,// first hit — burst starting
+    CONFIRMED,         // burst completed, all extra frames agreed
+    REJECTED,          // burst broken by a non-positive frame — false positive filtered
+};
+
+// Feeds one inference's personDetected bit through the §5.2/§5.4 state
+// machine. `confirmExtraFrames` is AI_CONFIRM_INTERVAL_MS's companion
+// config value, AI_CONFIRM_EXTRA_FRAMES — passed in rather than baked in
+// so this stays a pure function of its inputs, like the rest of this
+// file.
+//
+//   MONITORING, not detected      -> stays MONITORING, NONE
+//   MONITORING, detected          -> CONFIRMING (burst starts), ENTERED_CONFIRMING
+//     (confirmExtraFrames <= 0 is treated as "nothing further to confirm"
+//     and resolves as CONFIRMED immediately on the same call — a
+//     misconfigured-to-zero burst shouldn't silently never confirm.)
+//   CONFIRMING, not detected      -> back to MONITORING, REJECTED
+//   CONFIRMING, detected, still short of framesNeeded -> stays CONFIRMING, NONE
+//   CONFIRMING, detected, reaches framesNeeded         -> back to MONITORING, CONFIRMED
+//
+// "All extra frames must also be positive" (§5.4's simplest rule) falls
+// out directly: a single non-positive frame anywhere in the burst
+// rejects it immediately rather than tolerating any misses.
+inline ConfirmationBurstOutcome updateConfirmationBurst(ConfirmationBurstState &st, bool personDetected, int confirmExtraFrames) {
+    if (st.mode == AiAlarmMode::MONITORING) {
+        if (!personDetected) return ConfirmationBurstOutcome::NONE;
+        st.framesSeen = 0;
+        st.framesNeeded = confirmExtraFrames;
+        if (st.framesNeeded <= 0) {
+            st.mode = AiAlarmMode::MONITORING; // nothing to confirm, resolve immediately
+            return ConfirmationBurstOutcome::CONFIRMED;
+        }
+        st.mode = AiAlarmMode::CONFIRMING;
+        return ConfirmationBurstOutcome::ENTERED_CONFIRMING;
+    }
+
+    // CONFIRMING
+    if (!personDetected) {
+        st.mode = AiAlarmMode::MONITORING;
+        return ConfirmationBurstOutcome::REJECTED;
+    }
+    st.framesSeen++;
+    if (st.framesSeen >= st.framesNeeded) {
+        st.mode = AiAlarmMode::MONITORING;
+        return ConfirmationBurstOutcome::CONFIRMED;
+    }
+    return ConfirmationBurstOutcome::NONE; // still burst-sampling, no verdict yet
+}
+
+// Which cadence loop() should be sampling at right now: the normal
+// AI_INFERENCE_INTERVAL_MS monitoring rate, or the faster
+// AI_CONFIRM_INTERVAL_MS burst rate while a confirmation burst is in
+// progress — §5.4's "not waiting for the normal monitoring interval" for
+// the extra confirmation frames.
+inline unsigned long currentAiSampleIntervalMs(AiAlarmMode mode, unsigned long monitoringIntervalMs, unsigned long confirmIntervalMs) {
+    return mode == AiAlarmMode::CONFIRMING ? confirmIntervalMs : monitoringIntervalMs;
+}
+
 } // namespace esp32cam_logic

@@ -96,15 +96,36 @@ bool aiEnabled = AI_ALARM_ENABLED_DEFAULT;
 
 TaskHandle_t aiTaskHandle = nullptr;
 
+// Which of §5.2's MONITORING/CONFIRMING states the confirmation-burst
+// state machine (logic.h's updateConfirmationBurst()) is currently in.
+// Owned/written by aiTask() (Core 0, the only place that ever calls
+// updateConfirmationBurst()); read by aiSampleFromFrame() (Core 1) purely
+// to pick the current sampling cadence (currentAiSampleIntervalMs()) — see
+// AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 4. volatile for the same
+// cross-core-visibility reason as aiFrameFresh above; a plain read racing
+// a rare mode flip is harmless here (worst case one sample uses last
+// loop's cadence), same "good enough, no hard mutex needed for a single
+// scalar" reasoning already applied to aiEnabled/streamEnabled elsewhere
+// in this file.
+volatile esp32cam_logic::AiAlarmMode currentAiMode = esp32cam_logic::AiAlarmMode::MONITORING;
+
 // Core 0 task: consumes whatever loop() last placed in aiFrameBuf and runs
-// person-detection inference on it, logging the result. No recording
-// trigger yet (that's step 5) — this step only validates that capture ->
-// downsample -> inference -> log works end to end and at a sane cadence.
+// person-detection inference on it. Step 3 just logged every inference;
+// step 4 additionally runs each result through the §5.2/§5.4 confirmation
+// burst state machine (logic.h's updateConfirmationBurst()) — still no
+// recording trigger (that's step 5), CONFIRMED is only ever logged here.
 void aiTask(void *param) {
   (void)param;
   static uint8_t localFrame[96 * 96];
+  static ConfirmationBurstState burstState; // Core-0-owned, see currentAiMode's comment above
+
   for (;;) {
     if (!aiEnabled || !ai_person_detect::modelReady()) {
+      // AI monitoring is off (or the model never loaded) — nothing to run,
+      // and any burst that happened to be in progress when it was turned
+      // off is abandoned rather than resumed stale once it's back on.
+      burstState = ConfirmationBurstState{};
+      currentAiMode = burstState.mode;
       vTaskDelay(pdMS_TO_TICKS(AI_INFERENCE_INTERVAL_MS));
       continue;
     }
@@ -120,12 +141,33 @@ void aiTask(void *param) {
 
     if (haveFrame) {
       PersonDetectionResult result = ai_person_detect::runInference(localFrame, AI_CONFIDENCE_THRESHOLD);
-      Serial.printf("[ai-alarm] inference: person=%d score=%.2f\n", result.personDetected ? 1 : 0, result.personScore);
+      ConfirmationBurstOutcome outcome = updateConfirmationBurst(burstState, result.personDetected, AI_CONFIRM_EXTRA_FRAMES);
+      currentAiMode = burstState.mode; // publish for aiSampleFromFrame()'s cadence choice
+
+      switch (outcome) {
+        case ConfirmationBurstOutcome::ENTERED_CONFIRMING:
+          Serial.printf("[ai-alarm] possible detection (score=%.2f) — starting %d-frame confirmation burst\n",
+                        result.personScore, AI_CONFIRM_EXTRA_FRAMES);
+          break;
+        case ConfirmationBurstOutcome::CONFIRMED:
+          Serial.printf("[ai-alarm] CONFIRMED person detection (score=%.2f) — no recording trigger yet (step 5)\n",
+                        result.personScore);
+          break;
+        case ConfirmationBurstOutcome::REJECTED:
+          Serial.printf("[ai-alarm] confirmation burst rejected (score=%.2f) — false positive filtered\n",
+                        result.personScore);
+          break;
+        case ConfirmationBurstOutcome::NONE:
+          Serial.printf("[ai-alarm] inference: person=%d score=%.2f%s\n", result.personDetected ? 1 : 0, result.personScore,
+                        burstState.mode == AiAlarmMode::CONFIRMING ? " (mid-burst)" : "");
+          break;
+      }
     }
 
     // Short poll, not the actual sampling cadence — that's governed by how
     // often loop() (Core 1) refreshes aiFrameBuf, gated there by
-    // AI_INFERENCE_INTERVAL_MS via shouldRunInference(). This just avoids
+    // currentAiSampleIntervalMs() (AI_INFERENCE_INTERVAL_MS normally, the
+    // faster AI_CONFIRM_INTERVAL_MS mid-burst). This just avoids
     // busy-spinning while waiting for the next sample.
     vTaskDelay(pdMS_TO_TICKS(20));
   }
@@ -134,12 +176,15 @@ void aiTask(void *param) {
 // Called from loop(), after a frame has been captured for streaming but
 // before it's returned to the driver. Decodes+downsamples it for AI
 // sampling if AI monitoring is on and enough time has passed since the
-// last sample (AI_INFERENCE_INTERVAL_MS) — cheap enough to check every
+// last sample — normally AI_INFERENCE_INTERVAL_MS, or the faster
+// AI_CONFIRM_INTERVAL_MS while aiTask() is mid confirmation-burst (see
+// currentAiMode/currentAiSampleIntervalMs()) — cheap enough to check every
 // loop, since fmt2rgb888()+downsample only actually runs a few times a
 // second, not every push.
 void aiSampleFromFrame(camera_fb_t *fb) {
   if (!aiEnabled || !ai_person_detect::modelReady()) return;
-  if (!shouldRunInference(lastAiSampleMs, millis(), AI_INFERENCE_INTERVAL_MS)) return;
+  unsigned long intervalMs = currentAiSampleIntervalMs(currentAiMode, AI_INFERENCE_INTERVAL_MS, AI_CONFIRM_INTERVAL_MS);
+  if (!shouldRunInference(lastAiSampleMs, millis(), intervalMs)) return;
   lastAiSampleMs = millis();
 
   // Allocated from PSRAM when available (VGA RGB888 is ~900KB — the same

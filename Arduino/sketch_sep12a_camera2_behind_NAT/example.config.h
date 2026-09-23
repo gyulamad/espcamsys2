@@ -45,12 +45,12 @@ const bool ALARM_RECORD_ALL_CAMERAS = false; // false: alarm here only starts/ex
                                               // camera (CAMERA_ID); true: on every camera the relay knows about
 
 // ── AI Human Detection Alarm (plans/AI_ALARM_IMPLEMENTATION_PLAN.md) ───
-// §7 step 3: monitoring-only person detection, logged to Serial only —
-// this does NOT trigger recording yet (that's step 5). See
-// Arduino/.../ai_person_detect.h and its model/README.md for the model
-// this needs to actually detect anything; without it, AI monitoring is
-// silently a no-op (logged once at boot) and the rest of the sketch is
-// unaffected.
+// §7 steps 3-4: person detection + false-positive confirmation burst,
+// logged to Serial only — this does NOT trigger recording yet (that's
+// step 5). See Arduino/.../ai_person_detect.h and its model/README.md for
+// the model this needs to actually detect anything; without it, AI
+// monitoring is silently a no-op (logged once at boot) and the rest of
+// the sketch is unaffected.
 const bool AI_ALARM_ENABLED_DEFAULT = true;  // boot-time default for this device's own AI monitoring
                                               // on/off state; can be changed at runtime by the relay's
                                               // dashboard toggle (see logic.h's AiAlarmCommand) —
@@ -62,3 +62,11 @@ const unsigned long AI_INFERENCE_INTERVAL_MS = 350;  // ~2-3 inferences/sec duri
 const float AI_CONFIDENCE_THRESHOLD = 0.6;   // person-detection confidence (0..1) that counts as a
                                               // detection worth logging; tune during field testing —
                                               // see logic.h's evaluatePersonScores()
+const int AI_CONFIRM_EXTRA_FRAMES = 2;       // §5.4 false-positive filtering: on an initial hit, this many
+                                              // *additional* frames must also score >= AI_CONFIDENCE_THRESHOLD
+                                              // before it's logged as CONFIRMED — a single positive inference
+                                              // is never trusted alone (see logic.h's updateConfirmationBurst());
+                                              // 0 confirms on the initial hit alone (no burst)
+const unsigned long AI_CONFIRM_INTERVAL_MS = 150;  // sampling cadence *during* a confirmation burst — faster
+                                                    // than AI_INFERENCE_INTERVAL_MS so the burst resolves
+                                                    // quickly instead of waiting on the normal monitoring cadence

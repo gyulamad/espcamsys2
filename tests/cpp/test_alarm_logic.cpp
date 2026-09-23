@@ -478,6 +478,86 @@ TEST(evaluate_person_scores_at_threshold_boundary_detects) {
     TEST_ASSERT(r.personDetected, "score exactly equal to threshold counts as detected");
 }
 
+// ── updateConfirmationBurst (step 4, §5.2/§5.4) ─────────────────────────
+
+TEST(burst_monitoring_no_detection_stays_monitoring) {
+    ConfirmationBurstState st;
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, false, 2);
+    TEST_ASSERT(o == ConfirmationBurstOutcome::NONE, "nothing detected -> no outcome");
+    TEST_ASSERT(st.mode == AiAlarmMode::MONITORING, "stays in MONITORING");
+}
+
+TEST(burst_monitoring_hit_enters_confirming) {
+    ConfirmationBurstState st;
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, true, 2);
+    TEST_ASSERT(o == ConfirmationBurstOutcome::ENTERED_CONFIRMING, "first hit starts the burst");
+    TEST_ASSERT(st.mode == AiAlarmMode::CONFIRMING, "mode switches to CONFIRMING");
+    TEST_ASSERT_EQ(st.framesSeen, 0, "no extra frames confirmed yet");
+    TEST_ASSERT_EQ(st.framesNeeded, 2, "snapshots the requested extra-frame count");
+}
+
+TEST(burst_zero_extra_frames_confirms_immediately) {
+    // A misconfigured-to-zero AI_CONFIRM_EXTRA_FRAMES shouldn't hang
+    // forever waiting for confirmation frames that were never asked for.
+    ConfirmationBurstState st;
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, true, 0);
+    TEST_ASSERT(o == ConfirmationBurstOutcome::CONFIRMED, "nothing to confirm -> confirmed on the spot");
+    TEST_ASSERT(st.mode == AiAlarmMode::MONITORING, "returns to MONITORING immediately, no burst needed");
+}
+
+TEST(burst_negative_extra_frames_treated_like_zero) {
+    ConfirmationBurstState st;
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, true, -1);
+    TEST_ASSERT(o == ConfirmationBurstOutcome::CONFIRMED, "negative count is nonsensical, treated as \"nothing to confirm\"");
+}
+
+TEST(burst_full_sequence_all_positive_confirms) {
+    ConfirmationBurstState st;
+    TEST_ASSERT(updateConfirmationBurst(st, true, 2) == ConfirmationBurstOutcome::ENTERED_CONFIRMING, "initial hit");
+    TEST_ASSERT(updateConfirmationBurst(st, true, 2) == ConfirmationBurstOutcome::NONE, "1st extra frame positive, still need one more");
+    TEST_ASSERT(st.mode == AiAlarmMode::CONFIRMING, "still confirming after 1 of 2");
+    ConfirmationBurstOutcome last = updateConfirmationBurst(st, true, 2);
+    TEST_ASSERT(last == ConfirmationBurstOutcome::CONFIRMED, "2nd extra frame positive -> confirmed");
+    TEST_ASSERT(st.mode == AiAlarmMode::MONITORING, "returns to MONITORING once confirmed");
+}
+
+TEST(burst_one_negative_frame_rejects_immediately) {
+    // §5.4's "simplest: all extra frames must also be positive" rule — a
+    // single miss anywhere in the burst rejects it, no partial credit.
+    ConfirmationBurstState st;
+    updateConfirmationBurst(st, true, 3); // ENTERED_CONFIRMING
+    updateConfirmationBurst(st, true, 3); // 1st extra frame positive
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, false, 3); // 2nd extra frame negative
+    TEST_ASSERT(o == ConfirmationBurstOutcome::REJECTED, "one miss rejects the whole burst");
+    TEST_ASSERT(st.mode == AiAlarmMode::MONITORING, "returns to MONITORING after rejection");
+}
+
+TEST(burst_rejection_immediately_after_first_hit) {
+    ConfirmationBurstState st;
+    updateConfirmationBurst(st, true, 2); // ENTERED_CONFIRMING
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, false, 2);
+    TEST_ASSERT(o == ConfirmationBurstOutcome::REJECTED, "very first confirmation frame already fails");
+    TEST_ASSERT_EQ(st.framesSeen, 0, "no extra frame was ever counted as positive");
+}
+
+TEST(burst_after_rejection_a_fresh_hit_starts_a_new_burst) {
+    ConfirmationBurstState st;
+    updateConfirmationBurst(st, true, 1);  // ENTERED_CONFIRMING
+    updateConfirmationBurst(st, false, 1); // REJECTED, back to MONITORING
+    ConfirmationBurstOutcome o = updateConfirmationBurst(st, true, 1); // a brand new hit
+    TEST_ASSERT(o == ConfirmationBurstOutcome::ENTERED_CONFIRMING, "MONITORING accepts a fresh trigger after a prior rejection");
+}
+
+// ── currentAiSampleIntervalMs ────────────────────────────────────────────
+
+TEST(sample_interval_monitoring_uses_monitoring_interval) {
+    TEST_ASSERT_EQ((long)currentAiSampleIntervalMs(AiAlarmMode::MONITORING, 350, 150), 350, "MONITORING uses AI_INFERENCE_INTERVAL_MS");
+}
+
+TEST(sample_interval_confirming_uses_confirm_interval) {
+    TEST_ASSERT_EQ((long)currentAiSampleIntervalMs(AiAlarmMode::CONFIRMING, 350, 150), 150, "CONFIRMING uses the faster AI_CONFIRM_INTERVAL_MS");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -553,6 +633,18 @@ int main() {
     RUN_TEST(evaluate_person_scores_equal_scores_is_fifty_fifty);
     RUN_TEST(evaluate_person_scores_respects_custom_threshold);
     RUN_TEST(evaluate_person_scores_at_threshold_boundary_detects);
+
+    RUN_TEST(burst_monitoring_no_detection_stays_monitoring);
+    RUN_TEST(burst_monitoring_hit_enters_confirming);
+    RUN_TEST(burst_zero_extra_frames_confirms_immediately);
+    RUN_TEST(burst_negative_extra_frames_treated_like_zero);
+    RUN_TEST(burst_full_sequence_all_positive_confirms);
+    RUN_TEST(burst_one_negative_frame_rejects_immediately);
+    RUN_TEST(burst_rejection_immediately_after_first_hit);
+    RUN_TEST(burst_after_rejection_a_fresh_hit_starts_a_new_burst);
+
+    RUN_TEST(sample_interval_monitoring_uses_monitoring_interval);
+    RUN_TEST(sample_interval_confirming_uses_confirm_interval);
 
     return test::summarize();
 }
