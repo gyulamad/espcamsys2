@@ -27,6 +27,7 @@
 // every other suite run_tests.sh runs).
 
 const net = require('net');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -61,6 +62,46 @@ function check(name, cond, detail) {
 function summarize() {
   console.log(`\n${passCount} passed, ${failCount} failed`);
   process.exitCode = failCount === 0 ? 0 : 1;
+}
+
+// Tiny HTTP helper — no third-party dependency, same philosophy as the
+// rest of this test. Always resolves (never rejects on a non-2xx status)
+// so callers can assert on the actual status code/body themselves.
+function httpRequest(method, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port: TEST_PORT, path: urlPath, method },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          let json = null;
+          try { json = JSON.parse(body); } catch (e) { /* leave null */ }
+          resolve({ statusCode: res.statusCode, body, json });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// Polls `check()` (a plain function returning truthy/falsy) every
+// `stepMs` until it passes or `timeoutMs` elapses. Used to wait for an
+// async side effect (a new command frame arriving on the push socket)
+// without a fixed, potentially-flaky sleep.
+function waitUntil(condition, timeoutMs, stepMs = 25) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      if (condition() || Date.now() - start >= timeoutMs) {
+        resolve(condition());
+        return;
+      }
+      setTimeout(tick, stepMs);
+    };
+    tick();
+  });
 }
 
 // `server.js` does `require('./config')` unconditionally, so it needs
@@ -124,14 +165,16 @@ function startRelay() {
 // Talks to the push socket exactly like a real camera's first few moments
 // would: connect, authenticate, then collect + decode whatever the relay
 // sends back, the same tag-based framing drainDownstream() (logic.h)
-// implements on the device side.
-function talkToRelay() {
+// implements on the device side. Unlike a one-shot request, this stays
+// connected and returns a live handle (state object + a way to push a
+// frame) rather than resolving once at the end — plan step 2's HTTP
+// toggle needs to happen *while* this socket is open, the same way a real
+// camera would still be connected when the dashboard flips the switch.
+function connectAsCamera() {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(TEST_PUSH_PORT, '127.0.0.1');
     let buf = Buffer.alloc(0);
-    const controlBytes = [];
-    const commandPayloads = [];
-    let connectionDropped = false;
+    const state = { controlBytes: [], commandPayloads: [], connectionDropped: false };
 
     socket.on('connect', () => {
       socket.write(`${TEST_CAM_ID}\t${TEST_CAM_KEY}\n`);
@@ -143,7 +186,7 @@ function talkToRelay() {
         if (buf.length < 1) break;
         const tag = buf[0];
         if (tag === CONTROL_BYTE_PAUSE || tag === CONTROL_BYTE_RESUME) {
-          controlBytes.push(tag);
+          state.controlBytes.push(tag);
           buf = buf.slice(1);
           continue;
         }
@@ -151,7 +194,7 @@ function talkToRelay() {
           if (buf.length < 3) break;
           const len = buf.readUInt16BE(1);
           if (buf.length < 3 + len) break;
-          commandPayloads.push(buf.slice(3, 3 + len).toString('utf8'));
+          state.commandPayloads.push(buf.slice(3, 3 + len).toString('utf8'));
           buf = buf.slice(3 + len);
           continue;
         }
@@ -159,26 +202,23 @@ function talkToRelay() {
       }
     });
 
-    socket.on('close', () => { connectionDropped = true; });
+    socket.on('close', () => { state.connectionDropped = true; });
     socket.on('error', (err) => reject(err));
 
     // Give the relay's on-auth sendControlByte()/sendAiAlarmCommand() a
-    // moment to arrive, then push one fake length-prefixed frame — same
-    // shape a real JPEG push uses — to confirm the new relay->device
-    // traffic hasn't broken parsing of the pre-existing device->relay
-    // frame direction on the same socket.
-    setTimeout(() => {
-      const fakeJpeg = Buffer.from('not-a-real-jpeg-but-same-shape');
-      const lenPrefix = Buffer.alloc(4);
-      lenPrefix.writeUInt32BE(fakeJpeg.length, 0);
-      socket.write(Buffer.concat([lenPrefix, fakeJpeg]));
-
-      setTimeout(() => {
-        socket.end();
-        resolve({ controlBytes, commandPayloads, connectionDropped });
-      }, 300);
-    }, 500);
+    // moment to actually arrive before handing the socket back.
+    setTimeout(() => resolve({ socket, state }), 500);
   });
+}
+
+// Writes one fake length-prefixed frame — same shape a real JPEG push
+// uses — to confirm the new relay->device traffic hasn't broken parsing
+// of the pre-existing device->relay frame direction on the same socket.
+function pushFakeFrame(socket) {
+  const fakeJpeg = Buffer.from('not-a-real-jpeg-but-same-shape');
+  const lenPrefix = Buffer.alloc(4);
+  lenPrefix.writeUInt32BE(fakeJpeg.length, 0);
+  socket.write(Buffer.concat([lenPrefix, fakeJpeg]));
 }
 
 async function main() {
@@ -200,33 +240,32 @@ async function main() {
   }
   check('relay starts up and reports ready', true);
 
+  let cam;
   try {
-    const { controlBytes, commandPayloads, connectionDropped } = await talkToRelay();
+    cam = await connectAsCamera();
+    const { state } = cam;
 
     check(
       'sends the existing control byte on connect (0x01 = resume, fresh camera defaults enabled)',
-      controlBytes.length >= 1 && controlBytes[0] === CONTROL_BYTE_RESUME,
-      `got control bytes: ${JSON.stringify(controlBytes)}`
+      state.controlBytes.length >= 1 && state.controlBytes[0] === CONTROL_BYTE_RESUME,
+      `got control bytes: ${JSON.stringify(state.controlBytes)}`
     );
 
     check(
       'sends exactly one AI-alarm command frame on connect',
-      commandPayloads.length === 1,
-      `got ${commandPayloads.length} command frame(s): ${JSON.stringify(commandPayloads)}`
+      state.commandPayloads.length === 1,
+      `got ${state.commandPayloads.length} command frame(s): ${JSON.stringify(state.commandPayloads)}`
     );
 
-    if (commandPayloads.length >= 1) {
+    let initialAiEnabled = null;
+    if (state.commandPayloads.length >= 1) {
       let parsed = null;
       let parseError = null;
-      try { parsed = JSON.parse(commandPayloads[0]); } catch (e) { parseError = e.message; }
+      try { parsed = JSON.parse(state.commandPayloads[0]); } catch (e) { parseError = e.message; }
 
       check('command frame payload is valid JSON', parsed !== null, parseError);
 
       if (parsed !== null) {
-        // Shape/type checks only — not the exact current no-op values,
-        // since step 2+ of the plan makes these genuinely dynamic. If you
-        // need to confirm the literal current no-op values too, they're
-        // printed below for a human to eyeball.
         check(
           'command frame has a boolean ai_enabled field',
           typeof parsed.ai_enabled === 'boolean',
@@ -237,18 +276,90 @@ async function main() {
           typeof parsed.live_peek_until_epoch === 'number',
           `live_peek_until_epoch was: ${JSON.stringify(parsed.live_peek_until_epoch)}`
         );
-        console.log(`  (received command payload: ${commandPayloads[0]})`);
+        console.log(`  (received command payload: ${state.commandPayloads[0]})`);
+        initialAiEnabled = parsed.ai_enabled;
       }
     }
 
+    // ── Plan §7 step 2: the dashboard's ai-alarm toggle ──────────────────
+    // GET /ai-alarm/:id should agree with what just arrived on the socket.
+    const getBefore = await httpRequest('GET', `/ai-alarm/${TEST_CAM_ID}`);
+    check(
+      'GET /ai-alarm/:id reflects the camera\'s current (default) aiEnabled state',
+      getBefore.statusCode === 200 && getBefore.json && getBefore.json.aiEnabled === initialAiEnabled,
+      `got ${getBefore.statusCode} ${getBefore.body}`
+    );
+
+    // Toggle it to the opposite of whatever the default was, so this
+    // assertion is meaningful regardless of what AI_ALARM_ENABLED_DEFAULT
+    // is configured to.
+    const wantEnabled = !initialAiEnabled;
+    const postResult = await httpRequest(
+      'POST', `/ai-alarm/${TEST_CAM_ID}?enabled=${wantEnabled ? 1 : 0}`
+    );
+    check(
+      'POST /ai-alarm/:id?enabled=.. returns the new aiEnabled state',
+      postResult.statusCode === 200 && postResult.json && postResult.json.aiEnabled === wantEnabled,
+      `got ${postResult.statusCode} ${postResult.body}`
+    );
+
+    // The relay should re-push an updated command frame down the *already
+    // open* push socket, unprompted — the same "notify a connected camera
+    // immediately" behavior sendControlByte() already has for /control.
+    await waitUntil(() => state.commandPayloads.length >= 2, 2000);
+    check(
+      'toggling AI-alarm sends a second, updated command frame down the open push socket',
+      state.commandPayloads.length >= 2,
+      `only got ${state.commandPayloads.length} command frame(s) total`
+    );
+
+    if (state.commandPayloads.length >= 2) {
+      let parsed = null;
+      try { parsed = JSON.parse(state.commandPayloads[1]); } catch (e) { /* checked below */ }
+      check(
+        'the updated command frame carries the new ai_enabled value',
+        parsed !== null && parsed.ai_enabled === wantEnabled,
+        `got payload: ${state.commandPayloads[1]}`
+      );
+    }
+
+    // GET /ai-alarm/:id again should agree with the toggle.
+    const getAfter = await httpRequest('GET', `/ai-alarm/${TEST_CAM_ID}`);
+    check(
+      'GET /ai-alarm/:id reflects the toggled state',
+      getAfter.statusCode === 200 && getAfter.json && getAfter.json.aiEnabled === wantEnabled,
+      `got ${getAfter.statusCode} ${getAfter.body}`
+    );
+
+    // /status (what the dashboard actually polls) should mirror it too.
+    const statusResult = await httpRequest('GET', '/status');
+    const camStatus = statusResult.json ? statusResult.json[TEST_CAM_ID] : null;
+    check(
+      '/status includes the toggled aiEnabled state for this camera',
+      camStatus && camStatus.aiEnabled === wantEnabled,
+      `got status: ${statusResult.body}`
+    );
+
+    // A bad ?enabled= value should be rejected, same as /control/:id.
+    const badPost = await httpRequest('POST', `/ai-alarm/${TEST_CAM_ID}?enabled=maybe`);
+    check(
+      'POST /ai-alarm/:id?enabled=<invalid> is rejected with 400',
+      badPost.statusCode === 400,
+      `got ${badPost.statusCode} ${badPost.body}`
+    );
+
+    pushFakeFrame(cam.socket);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
     check(
       'push socket stays open after a normal frame is sent (new command channel did not break frame parsing)',
-      !connectionDropped,
+      !state.connectionDropped,
       'the relay closed the connection — it should not have for a well-formed frame'
     );
   } catch (err) {
     check('talked to the relay over its push socket', false, err.message);
   } finally {
+    if (cam && cam.socket) cam.socket.end();
     relay.kill('SIGTERM');
     setTimeout(() => { try { relay.kill('SIGKILL'); } catch (e) { /* already dead */ } }, 1000).unref();
     clearTimeout(overallTimer);

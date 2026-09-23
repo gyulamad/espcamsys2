@@ -409,6 +409,9 @@ $cols  = CamLogic::computeGridColumns($count);
           <button class="cam-btn" id="pwr-<?= htmlspecialchars($cam['id']) ?>" data-enabled="1"
                   title="Turn this camera's capture on for the given duration, or off now, on the device itself (power + bandwidth saving)"
                   onclick="togglePower('<?= htmlspecialchars($cam['id']) ?>')">⏻ ON</button>
+          <button class="cam-btn" id="ai-<?= htmlspecialchars($cam['id']) ?>" data-ai-enabled="1"
+                  title="Toggle AI human-detection monitoring for this camera (see plans/AI_ALARM_IMPLEMENTATION_PLAN.md — detection/auto-recording itself isn't built yet, this only turns the feature's command channel on/off)"
+                  onclick="toggleAiAlarm('<?= htmlspecialchars($cam['id']) ?>')">🤖 AI ON</button>
           <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
           <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
                   onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
@@ -685,6 +688,43 @@ $cols  = CamLogic::computeGridColumns($count);
   // Initial per-camera power/recording state is seeded by pollAllStatuses()
   // near the bottom of this script, which also keeps re-polling afterwards —
   // see the comment there for why a single mechanism covers both cases.
+
+  // ── AI Human Detection Alarm — per-camera ON/OFF toggle
+  // (plans/AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 2). No detection or
+  // auto-recording runs yet (that's plan step 3+) — this only flips the
+  // relay's per-camera command-channel state (see server.js's
+  // /ai-alarm/:id), which the device already receives and logs (plan step
+  // 1). Unlike the power toggle, there's no auto-off timer here — AI
+  // monitoring stays on/off until explicitly toggled again (a duration
+  // input is Live Peek's job, plan step 7, not this button's). ──
+  async function toggleAiAlarm(id) {
+    const btn = document.getElementById('ai-' + id);
+    if (!btn) return;
+    const wantEnable = btn.dataset.aiEnabled === '0';
+    btn.disabled = true;
+    try {
+      const url = `ai-alarm.php?cam=${encodeURIComponent(id)}&enabled=${wantEnable ? 1 : 0}`;
+      const res = await fetch(url, { method: 'POST' });
+      if (!res.ok) throw new Error('ai-alarm request failed: ' + res.status);
+      const data = await res.json();
+      setAiAlarm(id, data.aiEnabled);
+    } catch (e) {
+      console.error('AI-alarm toggle failed for', id, e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Reflects the current aiEnabled state onto the button — called both
+  // right after a manual toggle and on every status poll, so a change made
+  // from another tab/user (or a future automated source) shows up here too.
+  function setAiAlarm(id, aiEnabled) {
+    const btn = document.getElementById('ai-' + id);
+    if (!btn) return;
+    btn.dataset.aiEnabled = aiEnabled ? '1' : '0';
+    btn.textContent = aiEnabled ? '🤖 AI ON' : '🤖 AI OFF';
+    btn.classList.toggle('danger', !aiEnabled);
+  }
 
   // ── Recording — one button + one duration field starts a timed,
   // server-side recording on every camera at once (footage is written on
@@ -972,6 +1012,7 @@ $cols  = CamLogic::computeGridColumns($count);
         if (!s) continue; // camera hasn't registered with the relay yet
         setPower(id, s.enabled, s.enabledUntil);
         applyRecordingState(id, s.recording, s.recordingEndAt);
+        if (s.aiEnabled !== undefined) setAiAlarm(id, s.aiEnabled);
       }
     } catch (e) {
       // Relay unreachable this round — the next poll will try again.

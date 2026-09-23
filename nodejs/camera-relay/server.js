@@ -29,13 +29,16 @@ const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timi
 const DEFAULT_POWER_SECONDS = 300; // "ON" with no explicit duration runs for 5 minutes before auto power-off
 const MAX_POWER_SECONDS = 3600; // 1 hour cap per power-on, same sanity limit as recording
 
-// AI-alarm command state sent to each camera — see plans/AI_ALARM_IMPLEMENTATION_PLAN.md
-// §7 step 1. This is intentionally a fixed, hardcoded no-op for now: no
-// endpoint reads or writes it yet, and the device does nothing with it
-// besides logging receipt. It exists purely to prove the command-frame
-// round trip works before any real AI/dashboard logic is built on top of
-// it (step 2 onward). Do not wire this to real per-camera state yet.
-const AI_ALARM_COMMAND_NOOP = { ai_enabled: false, live_peek_until_epoch: 0 };
+// AI-alarm: initial ai_enabled state for a camera that hasn't been toggled
+// by the dashboard yet since this relay process started — see
+// plans/AI_ALARM_IMPLEMENTATION_PLAN.md §5.1's AI_ALARM_ENABLED_DEFAULT and
+// §7 step 2 (the dashboard toggle that first makes this state mutable).
+// Falls back to `true` (AI monitoring on by default) if a deployed
+// config.js predates this key, so existing installs don't need to touch
+// config.js just to pick up this feature — see example.config.js.
+const AI_ALARM_ENABLED_DEFAULT = config.aiAlarmEnabledDefault !== undefined
+  ? !!config.aiAlarmEnabledDefault
+  : true;
 
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
@@ -53,7 +56,12 @@ function getCamera(id) {
       powerTimer: null,   // pending auto power-off timeout, if any — see scheduleAutoOff()
       socket: null,       // the camera's live push-connection socket, if connected right now
       recording: null,    // in-progress recording, if any — see startRecording()
-      aiCommand: AI_ALARM_COMMAND_NOOP, // AI-alarm command state — see sendAiAlarmCommand()
+      // AI-alarm command state pushed to the device — see sendAiAlarmCommand()
+      // below and the /ai-alarm/:id route. Seeded from AI_ALARM_ENABLED_DEFAULT
+      // above; `live_peek_until_epoch` stays 0 (no active peek) until plan
+      // step 7 (Live Peek) adds a way to set it. Not yet persisted across a
+      // relay restart — see the open item in AI_ALARM_IMPLEMENTATION_PLAN.md §5.6.
+      aiCommand: { ai_enabled: AI_ALARM_ENABLED_DEFAULT, live_peek_until_epoch: 0 },
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
@@ -98,13 +106,17 @@ function sendControlByte(cam) {
 }
 
 // Sends the camera's current AI-alarm command state down its push socket —
-// see plans/AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 1 and the big comment
-// on encodeCommandFrame() in lib/protocol.js for the wire format and why
-// this rides the push socket rather than an /upload response. Same
-// no-op-if-disconnected behavior as sendControlByte(): nothing to send to,
-// nothing sent; cam.aiCommand is still there to (re)send once it reconnects.
-// Only called right after auth for now (cam.aiCommand never changes yet —
-// step 2 adds an endpoint that mutates it and needs to call this again).
+// see plans/AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 1 (the channel itself)
+// and step 2 (the /ai-alarm/:id route that now actually mutates
+// cam.aiCommand) and the big comment on encodeCommandFrame() in
+// lib/protocol.js for the wire format and why this rides the push socket
+// rather than an /upload response. Same no-op-if-disconnected behavior as
+// sendControlByte(): nothing to send to, nothing sent; cam.aiCommand is
+// still there to (re)send once it reconnects. Called right after auth
+// (so a reconnecting camera picks up whatever changed while it was away)
+// and again by the /ai-alarm/:id POST handler below, every time
+// cam.aiCommand actually changes — the same "on connect + on every state
+// change" pattern sendControlByte() already uses.
 function sendAiAlarmCommand(cam) {
   if (cam.socket && cam.socket.writable) {
     cam.socket.write(protocol.encodeCommandFrame(cam.aiCommand));
@@ -348,6 +360,44 @@ app.post('/control/:id', (req, res) => {
 
   sendControlByte(cam);
   res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
+});
+
+// Dashboard reads/sets whether AI human-detection monitoring should be
+// active on a camera right now — plan §7 step 2 (the dashboard toggle),
+// the first thing to actually mutate cam.aiCommand since step 1 built the
+// command channel it rides on. No AI inference exists yet (that's step 3);
+// this only flips the flag the relay sends the device and that the device
+// currently just logs (see the .ino's loop()) — the "confirm the device
+// receives and logs the change" half of step 2's acceptance criteria.
+// Same trust boundary as /control and /status: no key, LAN/localhost-only,
+// only the PHP layer is expected to reach this port at all (INSTALL.md 2.6).
+//
+// GET  /ai-alarm/:id                  -> current { id, aiEnabled, livePeekUntilEpoch }
+// POST /ai-alarm/:id?enabled=1&0      -> turn AI-alarm monitoring on/off for this camera
+app.get('/ai-alarm/:id', (req, res) => {
+  const cam = getCamera(req.params.id);
+  res.json({
+    id: req.params.id,
+    aiEnabled: cam.aiCommand.ai_enabled,
+    livePeekUntilEpoch: cam.aiCommand.live_peek_until_epoch,
+  });
+});
+
+app.post('/ai-alarm/:id', (req, res) => {
+  const enabled = validation.parseEnabledFlag(req.query.enabled);
+  if (enabled === null) return res.sendStatus(400);
+  const cam = getCamera(req.params.id);
+
+  // live_peek_until_epoch is untouched here — plan step 7 (Live Peek) is
+  // the first thing that sets it to anything other than "no active peek".
+  cam.aiCommand = { ai_enabled: enabled, live_peek_until_epoch: cam.aiCommand.live_peek_until_epoch };
+  sendAiAlarmCommand(cam);
+
+  res.json({
+    id: req.params.id,
+    aiEnabled: cam.aiCommand.ai_enabled,
+    livePeekUntilEpoch: cam.aiCommand.live_peek_until_epoch,
+  });
 });
 
 // Start/extend a recording on every camera the relay currently knows about

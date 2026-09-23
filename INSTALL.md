@@ -78,8 +78,10 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
      port: 8080,
      pushPort: 8081,
      camKey: '<generate with: openssl rand -hex 24>',
+     aiAlarmEnabledDefault: true, // AI Human Detection Alarm feature — see below; optional, defaults to true
    };
    ```
+   `aiAlarmEnabledDefault` is part of the (still in-progress — see `plans/AI_ALARM_IMPLEMENTATION_PLAN.md`) AI Human Detection Alarm feature: it's the AI-monitoring on/off state a camera starts in when this relay process (re)starts, until the dashboard's AI toggle changes it. Optional — omit it and the relay defaults to `true`.
 4. Install dependencies and do a test run:
    ```bash
    npm install
@@ -110,7 +112,7 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    sudo systemctl enable --now camrelay
    sudo systemctl status camrelay
    ```
-6. **Important:** the relay has no auth on `/stream`, `/snapshot`, `/status`, `/control`, `/record`, or `/recordings` — only `/upload` is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to it.
+6. **Important:** the relay has no auth on `/stream`, `/snapshot`, `/status`, `/control`, `/ai-alarm`, `/record`, or `/recordings` — only `/upload` is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to it.
 7. Recordings need `ffmpeg` installed on the Pi — it's what turns the captured frames into a real, standard `.mp4` file once a recording finishes:
    ```bash
    sudo apt install -y ffmpeg
@@ -127,7 +129,7 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
    sudo apt install -y apache2 php libapache2-mod-php
    sudo a2enmod headers
    ```
-2. Copy `index.php`, `stream.php`, `control.php`, `cameras.php`, `auth.php`, and `example.config.php` into your web root, e.g. `/var/www/camdash/`.
+2. Copy `index.php`, `stream.php`, `control.php`, `ai-alarm.php`, `cameras.php`, `auth.php`, and `example.config.php` into your web root, e.g. `/var/www/camdash/`. (`ai-alarm.php` is the still-in-progress AI Human Detection Alarm feature's dashboard toggle — see `plans/AI_ALARM_IMPLEMENTATION_PLAN.md`; safe to copy even before the feature is finished, it just proxies the relay's `/ai-alarm/:id`.)
 3. Create the real config:
    ```bash
    cd /var/www/camdash
