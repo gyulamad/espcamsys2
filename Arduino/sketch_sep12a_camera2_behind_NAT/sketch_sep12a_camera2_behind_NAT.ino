@@ -1,7 +1,10 @@
 #include "esp_camera.h"
+#include "img_converters.h" // fmt2rgb888() — used to decode the already-captured JPEG
+                             // frame for AI sampling, see aiSampleFromFrame() below
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <HTTPClient.h>
+#include <cstring> // memcpy() in aiTask()/aiSampleFromFrame() below
 
 // Wi-Fi networks (one per extender), relay host, camera id and API key live
 // in config.h, a file in this same sketch folder that is gitignored (never
@@ -15,6 +18,12 @@
 // only reads the hardware and calls into it.
 #include "logic.h"
 using namespace esp32cam_logic;
+
+// ESP32-hardware/TFLite-Micro-only half of the AI alarm — kept out of
+// logic.h on purpose, see that file's header comment and
+// ai_person_detect.h's own header comment for why and what library/model
+// this depends on.
+#include "ai_person_detect.h"
 
 WiFiMulti wifiMulti;
 WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
@@ -56,6 +65,104 @@ bool cameraReady = false;
 // state across loop() calls.
 const unsigned long ALARM_DEBOUNCE_MS = 50;
 AlarmDebounceState alarmState;
+
+// ── AI-alarm monitoring (step 3: inference + Serial logging only) ──────
+// See AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 3 and §6.1's task/core
+// layout. Split in two so the ~200-400ms model Invoke() (§3) never stalls
+// the frame-push loop below, without needing two tasks to touch the
+// camera driver concurrently (§6.1's mutex note) — instead:
+//   - loop() (Core 1, below) decodes+downsamples the JPEG frame it just
+//     captured for streaming anyway (no second camera call) into a 96x96
+//     grayscale sample, at most once every AI_INFERENCE_INTERVAL_MS, and
+//     hands it off through aiFrameBuf/aiFrameFresh under aiFrameMux.
+//   - aiTask() (Core 0, new dedicated task) only ever reads that buffer
+//     and runs the actual (slow) model Invoke() on it.
+// This is the concrete instance of the "mutex or small queue to hand
+// frame data safely between the capture/upload logic and the inference
+// task" §6.1 asks for.
+portMUX_TYPE aiFrameMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t aiFrameBuf[96 * 96];
+volatile bool aiFrameFresh = false;
+unsigned long lastAiSampleMs = 0;
+
+// This device's own AI-monitoring on/off state. Boots to
+// AI_ALARM_ENABLED_DEFAULT (config.h) and can change at runtime from the
+// relay's command channel — see loop()'s command-frame handling below,
+// which previously (step 1/2) only logged AiAlarmCommand.aiEnabled and
+// now actually applies it, since this is the step that first gives the
+// device an AI state of its own to apply it to (see the step 2 note at
+// the top of AI_ALARM_IMPLEMENTATION_PLAN.md).
+bool aiEnabled = AI_ALARM_ENABLED_DEFAULT;
+
+TaskHandle_t aiTaskHandle = nullptr;
+
+// Core 0 task: consumes whatever loop() last placed in aiFrameBuf and runs
+// person-detection inference on it, logging the result. No recording
+// trigger yet (that's step 5) — this step only validates that capture ->
+// downsample -> inference -> log works end to end and at a sane cadence.
+void aiTask(void *param) {
+  (void)param;
+  static uint8_t localFrame[96 * 96];
+  for (;;) {
+    if (!aiEnabled || !ai_person_detect::modelReady()) {
+      vTaskDelay(pdMS_TO_TICKS(AI_INFERENCE_INTERVAL_MS));
+      continue;
+    }
+
+    bool haveFrame = false;
+    portENTER_CRITICAL(&aiFrameMux);
+    if (aiFrameFresh) {
+      memcpy(localFrame, aiFrameBuf, sizeof(localFrame));
+      aiFrameFresh = false;
+      haveFrame = true;
+    }
+    portEXIT_CRITICAL(&aiFrameMux);
+
+    if (haveFrame) {
+      PersonDetectionResult result = ai_person_detect::runInference(localFrame, AI_CONFIDENCE_THRESHOLD);
+      Serial.printf("[ai-alarm] inference: person=%d score=%.2f\n", result.personDetected ? 1 : 0, result.personScore);
+    }
+
+    // Short poll, not the actual sampling cadence — that's governed by how
+    // often loop() (Core 1) refreshes aiFrameBuf, gated there by
+    // AI_INFERENCE_INTERVAL_MS via shouldRunInference(). This just avoids
+    // busy-spinning while waiting for the next sample.
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+// Called from loop(), after a frame has been captured for streaming but
+// before it's returned to the driver. Decodes+downsamples it for AI
+// sampling if AI monitoring is on and enough time has passed since the
+// last sample (AI_INFERENCE_INTERVAL_MS) — cheap enough to check every
+// loop, since fmt2rgb888()+downsample only actually runs a few times a
+// second, not every push.
+void aiSampleFromFrame(camera_fb_t *fb) {
+  if (!aiEnabled || !ai_person_detect::modelReady()) return;
+  if (!shouldRunInference(lastAiSampleMs, millis(), AI_INFERENCE_INTERVAL_MS)) return;
+  lastAiSampleMs = millis();
+
+  // Allocated from PSRAM when available (VGA RGB888 is ~900KB — the same
+  // reason initCamera() puts its own VGA frame buffers in PSRAM, not
+  // internal DRAM, which WiFi/streaming already keep tight).
+  size_t rgbLen = (size_t)fb->width * (size_t)fb->height * 3;
+  uint8_t *rgb = psramFound() ? (uint8_t *)ps_malloc(rgbLen) : (uint8_t *)malloc(rgbLen);
+  if (!rgb) {
+    Serial.println("[ai-alarm] sample skipped: malloc failed for RGB888 decode buffer");
+    return;
+  }
+  if (fmt2rgb888(fb->buf, fb->len, fb->format, rgb)) {
+    uint8_t downsampled[96 * 96];
+    downsampleRgb888ToGray(rgb, fb->width, fb->height, downsampled, 96, 96);
+    portENTER_CRITICAL(&aiFrameMux);
+    memcpy(aiFrameBuf, downsampled, sizeof(aiFrameBuf));
+    aiFrameFresh = true;
+    portEXIT_CRITICAL(&aiFrameMux);
+  } else {
+    Serial.println("[ai-alarm] sample skipped: fmt2rgb888() failed to decode captured frame");
+  }
+  free(rgb);
+}
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
@@ -279,6 +386,15 @@ void setup() {
   Serial.println("\n[" + String(CAMERA_ID) + "] Connected to " + WiFi.SSID() +
                   ", IP: " + WiFi.localIP().toString() +
                   ", RSSI: " + WiFi.RSSI());
+
+  // AI-alarm model + inference task. Safe to call/start even if the model
+  // isn't vendored (see ai_person_detect.h) — begin() just reports it
+  // unavailable and aiTask() then no-ops every cycle. Started regardless
+  // of cameraReady/streamEnabled: it only ever consumes frames loop()
+  // hands it, never touches the camera driver itself (see aiTask()'s
+  // comment above).
+  ai_person_detect::begin();
+  xTaskCreatePinnedToCore(aiTask, "aiTask", 8192, nullptr, 1, &aiTaskHandle, 0 /* Core 0, opposite loop()'s Core 1 */);
 }
 
 void loop() {
@@ -286,10 +402,11 @@ void loop() {
   // (not just right at boot) still tells you which camera this is.
   static unsigned long lastIdentityPrint = 0;
   if (millis() - lastIdentityPrint > 10000) {
-    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s%s\n",
+    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s%s%s\n",
                   CAMERA_ID, WiFi.RSSI(), millis() / 1000,
                   streamEnabled ? "" : " (paused)",
-                  cameraReady ? "" : " (camera not ready)");
+                  cameraReady ? "" : " (camera not ready)",
+                  aiEnabled ? (ai_person_detect::modelReady() ? " (ai monitoring on)" : " (ai monitoring on, model not loaded)") : "");
     lastIdentityPrint = millis();
   }
 
@@ -361,8 +478,11 @@ void loop() {
     for (const std::string &payload : drained.commandPayloads) {
       AiAlarmCommand cmd = parseAiAlarmCommand(payload);
       if (cmd.valid) {
-        // Step 1 is plumbing only (see AI_ALARM_IMPLEMENTATION_PLAN.md
-        // §7) — nothing acts on this yet beyond confirming it arrived.
+        // Step 3 is the first step with a device-side AI state to apply
+        // this to (see the step 2 implementation note at the top of
+        // AI_ALARM_IMPLEMENTATION_PLAN.md) — steps 1-2 only logged this.
+        // live_peek_until_epoch is still unused (Live Peek is step 7).
+        aiEnabled = cmd.aiEnabled;
         Serial.printf("[ai-alarm] command received: ai_enabled=%d live_peek_until_epoch=%ld\n",
                       cmd.aiEnabled, cmd.livePeekUntilEpoch);
       } else {
@@ -386,6 +506,13 @@ void loop() {
     delay(200);
     return;
   }
+
+  // AI sampling: decode+downsample this already-captured frame for the
+  // person-detection task if it's due (see aiSampleFromFrame()'s own
+  // comment) — before the push below, so a slow/failed push doesn't delay
+  // it, though the AI-alarm plan otherwise puts no priority requirement
+  // between the two.
+  aiSampleFromFrame(fb);
 
   uint32_t len = fb->len;
   uint8_t lenPrefix[4];

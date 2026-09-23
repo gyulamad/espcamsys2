@@ -43,3 +43,22 @@ const int  ALARM_RECORD_SECONDS     = 60;    // footage length per trigger; a re
                                               // pressing the dashboard's RECORD button again
 const bool ALARM_RECORD_ALL_CAMERAS = false; // false: alarm here only starts/extends recording on this
                                               // camera (CAMERA_ID); true: on every camera the relay knows about
+
+// ── AI Human Detection Alarm (plans/AI_ALARM_IMPLEMENTATION_PLAN.md) ───
+// §7 step 3: monitoring-only person detection, logged to Serial only —
+// this does NOT trigger recording yet (that's step 5). See
+// Arduino/.../ai_person_detect.h and its model/README.md for the model
+// this needs to actually detect anything; without it, AI monitoring is
+// silently a no-op (logged once at boot) and the rest of the sketch is
+// unaffected.
+const bool AI_ALARM_ENABLED_DEFAULT = true;  // boot-time default for this device's own AI monitoring
+                                              // on/off state; can be changed at runtime by the relay's
+                                              // dashboard toggle (see logic.h's AiAlarmCommand) —
+                                              // this is only what a freshly-booted/never-toggled-yet
+                                              // device starts in
+const unsigned long AI_INFERENCE_INTERVAL_MS = 350;  // ~2-3 inferences/sec during normal monitoring —
+                                                       // see AI_ALARM_IMPLEMENTATION_PLAN.md §3 on the
+                                                       // ~200-400ms/inference budget this fits inside
+const float AI_CONFIDENCE_THRESHOLD = 0.6;   // person-detection confidence (0..1) that counts as a
+                                              // detection worth logging; tune during field testing —
+                                              // see logic.h's evaluatePersonScores()

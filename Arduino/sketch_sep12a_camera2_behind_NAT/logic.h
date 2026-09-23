@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -252,6 +253,98 @@ inline DownstreamDrainResult drainDownstream(const std::string &buf) {
 // already failed.
 inline bool writeStalled(unsigned long lastProgressMs, unsigned long nowMs, unsigned long timeoutMs) {
     return (nowMs - lastProgressMs) >= timeoutMs;
+}
+
+// ── AI-alarm monitoring (step 3: inference + Serial logging only) ──────
+// See AI_ALARM_IMPLEMENTATION_PLAN.md §7 step 3 and §6.2's pseudocode.
+// Everything in this section is the hardware-free half of that step: the
+// actual TFLite Micro model invocation is unavoidably hardware/library
+// dependent (see the new Arduino/.../ai_person_detect.h, which is NOT
+// unit-tested here for that reason — see its own header comment) and
+// therefore lives outside logic.h per this file's own rules above. What
+// *is* kept here, and unit-tested in tests/cpp/test_alarm_logic.cpp, is
+// every piece of the pipeline that doesn't actually need the model: the
+// inference-cadence timing gate, the JPEG-frame-you-already-captured ->
+// 96x96 grayscale downsampling (§2's "prefer software-downscaling ...
+// where possible" — this reuses the frame the main loop already grabbed
+// for streaming, no second camera call, no sensor reconfiguration), the
+// uint8 -> int8 quantization the model's input tensor expects, and the
+// raw two-score model output -> normalized 0..1 confidence + threshold
+// decision (mirrors output->data.int8[1] "person" vs [0] "not_person"
+// from the reference person_detection example, without needing a real
+// TfLiteTensor to test it).
+
+// True once at least intervalMs has elapsed since the last inference
+// sample was taken — gates how often loop() bothers decoding/downsampling
+// a captured frame for AI at all, independent of how often loop() itself
+// runs. Mirrors the debounce-style "elapsed since last X" checks already
+// used elsewhere in this file (e.g. writeStalled()).
+inline bool shouldRunInference(unsigned long lastSampleMs, unsigned long nowMs, unsigned long intervalMs) {
+    return (nowMs - lastSampleMs) >= intervalMs;
+}
+
+// Downsamples an RGB888 source image (srcW x srcH, 3 bytes/pixel) to a
+// dstW x dstH grayscale (luma) image using nearest-neighbor sampling.
+// `dst` must have room for dstW*dstH bytes. Integer-only Rec.601 luma
+// approximation (0.299R + 0.587G + 0.114B, scaled by 256) — cheap enough
+// to run on every AI sample without needing floating point.
+//
+// Nearest-neighbor (not averaging/bilinear) is a deliberate simplification:
+// the model only needs a recognizable low-res silhouette, not a
+// photometrically accurate downscale, and this keeps the per-sample cost
+// small and simple — the dominant cost of a sample is the model's own
+// Invoke() (~200-400ms per §3), not this downsample step (see
+// ai_person_detect.h — the downsample runs inline in loop() on Core 1,
+// Invoke() runs on the separate Core 0 task).
+inline void downsampleRgb888ToGray(const uint8_t *src, int srcW, int srcH,
+                                    uint8_t *dst, int dstW, int dstH) {
+    if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+    for (int y = 0; y < dstH; y++) {
+        int sy = (y * srcH) / dstH;
+        if (sy >= srcH) sy = srcH - 1;
+        for (int x = 0; x < dstW; x++) {
+            int sx = (x * srcW) / dstW;
+            if (sx >= srcW) sx = srcW - 1;
+            const uint8_t *p = src + ((size_t)sy * (size_t)srcW + (size_t)sx) * 3;
+            uint8_t gray = (uint8_t)(((int)p[0] * 77 + (int)p[1] * 150 + (int)p[2] * 29) >> 8);
+            dst[(size_t)y * (size_t)dstW + (size_t)x] = gray;
+        }
+    }
+}
+
+// Converts one uint8 [0,255] grayscale sample into the int8 [-128,127]
+// value the reference person-detection model's quantized input tensor
+// expects (zero_point=128, scale=1 — the model's own published
+// quantization parameters).
+inline int8_t quantizeGrayscaleToInt8(uint8_t gray) {
+    return (int8_t)((int)gray - 128);
+}
+
+// Result of one person-detection inference: a normalized 0..1 confidence
+// and the threshold decision derived from it.
+struct PersonDetectionResult {
+    bool personDetected = false;
+    float personScore = 0.0f;
+};
+
+// Converts the model's raw two-score int8 output (not-person, person) into
+// a normalized 0..1 "person" confidence via softmax, then compares it
+// against `threshold` (AI_CONFIDENCE_THRESHOLD). Softmax rather than a
+// raw int8 comparison so the confidence is meaningful on its own (e.g. for
+// logging) rather than an opaque model-specific int8 gap, and so
+// `threshold` stays the same intuitive 0..1 scale documented in
+// example.config.h regardless of this model's particular int8 output
+// range.
+inline PersonDetectionResult evaluatePersonScores(int8_t notPersonScoreRaw, int8_t personScoreRaw, float threshold) {
+    PersonDetectionResult result;
+    float p = (float)personScoreRaw;
+    float np = (float)notPersonScoreRaw;
+    float maxScore = p > np ? p : np; // subtract the max before exponentiating for numerical stability
+    float ep = std::exp(p - maxScore);
+    float enp = std::exp(np - maxScore);
+    result.personScore = ep / (ep + enp);
+    result.personDetected = result.personScore >= threshold;
+    return result;
 }
 
 } // namespace esp32cam_logic

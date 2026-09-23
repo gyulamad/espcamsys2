@@ -27,10 +27,13 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
 ## 1. Flash each ESP32-CAM
 
 1. Install the ESP32 board package in Arduino IDE if you haven't already (Boards Manager → search "esp32" → install), and select **AI Thinker ESP32-CAM** as the board.
-2. On your laptop, create a sketch folder containing these three files together:
+2. On your laptop, create a sketch folder containing these files together:
    - `sketch_sep12a_camera2_behind_NAT.ino`
+   - `logic.h`
+   - `ai_person_detect.h`
    - `example.config.h`
    - *(you'll create `config.h` in the next step)*
+   - *(optional — see step 3a below — a `model/` subfolder for AI-alarm person detection)*
 3. Copy the template and fill in this device's real values:
    ```bash
    cp example.config.h config.h
@@ -56,6 +59,20 @@ Everything below assumes the Pi is the only thing with a public-facing address, 
 6. Repeat for every camera, giving each one a unique `CAMERA_ID` (`cam1`, `cam2`, `cam3`, `cam4`, ...) and its own `config.h`.
 
 > Since these boards only push frames outbound, they work from any Wi-Fi network that can reach the Pi's `SERVER_HOST:PUSH_PORT` — including a NAT'd guest network — no port forwarding needed on the camera side.
+
+---
+
+### 1a. (Optional, in progress) AI Human Detection Alarm — person-detection model
+
+The still-in-progress AI Human Detection Alarm feature (`plans/AI_ALARM_IMPLEMENTATION_PLAN.md`) needs a TFLite Micro model to actually detect anything. **The sketch compiles and runs fine without doing this step** — AI monitoring is just reported unavailable on Serial at boot, and every other part of the sketch (streaming, the physical alarm trigger, the AI on/off toggle itself) works normally either way. Skip this section entirely until you want AI person detection working.
+
+1. Install the `espressif/esp-tflite-micro` library (pinned to **v1.3.3** — see `ai_person_detect.h`'s header comment) into your Arduino libraries folder:
+   ```bash
+   cd ~/Arduino/libraries   # Windows: Documents\Arduino\libraries
+   git clone --branch v1.3.3 https://github.com/espressif/esp-tflite-micro.git
+   ```
+2. Copy the reference person-detection model from that library's own example into this sketch's `model/` subfolder — see `model/README.md` for the exact `cp` command.
+3. Re-upload the sketch. The Serial Monitor should now print `[ai-alarm] person-detection model loaded` at boot instead of the "model not vendored" message, and periodic `[ai-alarm] inference: person=... score=...` lines once AI monitoring is toggled on from the dashboard (`AI_ALARM_ENABLED_DEFAULT` in `config.h` controls whether it starts on or off at boot).
 
 ---
 

@@ -10,6 +10,8 @@
 
 #include "framework.h"
 #include "../../Arduino/sketch_sep12a_camera2_behind_NAT/logic.h"
+#include <cstring>
+#include <vector>
 
 using namespace esp32cam_logic;
 
@@ -371,6 +373,111 @@ TEST(write_stalled_true_exactly_at_timeout_boundary) {
     TEST_ASSERT(writeStalled(1000, 5000, 4000), "exactly the timeout elapsed also counts as stalled");
 }
 
+// ── shouldRunInference ──────────────────────────────────────────────────
+
+TEST(should_run_inference_false_before_interval_elapsed) {
+    TEST_ASSERT(!shouldRunInference(1000, 1200, 350), "only 200ms elapsed, interval is 350ms");
+}
+
+TEST(should_run_inference_true_once_interval_elapsed) {
+    TEST_ASSERT(shouldRunInference(1000, 1350, 350), "exactly the interval elapsed");
+}
+
+TEST(should_run_inference_true_on_first_ever_call) {
+    // lastSampleMs defaults to 0 (see the .ino's lastAiSampleMs) — the very
+    // first loop() after boot should be allowed to sample immediately
+    // rather than waiting a full interval from millis()==0.
+    TEST_ASSERT(shouldRunInference(0, 400, 350), "first-ever sample not held back");
+}
+
+// ── downsampleRgb888ToGray ───────────────────────────────────────────────
+
+TEST(downsample_solid_color_produces_uniform_gray) {
+    // 4x4 solid mid-gray-ish RGB source -> every output pixel should be the
+    // same luma value, regardless of which source pixel nearest-neighbor
+    // picks.
+    uint8_t src[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) { src[i*3+0] = 100; src[i*3+1] = 150; src[i*3+2] = 200; }
+    uint8_t dst[2 * 2];
+    downsampleRgb888ToGray(src, 4, 4, dst, 2, 2);
+    uint8_t expected = (uint8_t)((100*77 + 150*150 + 200*29) >> 8);
+    TEST_ASSERT_EQ(dst[0], expected, "top-left matches expected luma");
+    TEST_ASSERT_EQ(dst[1], expected, "top-right matches expected luma");
+    TEST_ASSERT_EQ(dst[2], expected, "bottom-left matches expected luma");
+    TEST_ASSERT_EQ(dst[3], expected, "bottom-right matches expected luma");
+}
+
+TEST(downsample_pure_white_and_black_extremes) {
+    uint8_t src[2 * 1 * 3] = { 255, 255, 255, 0, 0, 0 };
+    uint8_t dst[2 * 1];
+    downsampleRgb888ToGray(src, 2, 1, dst, 2, 1);
+    TEST_ASSERT_EQ((int)dst[0], 255, "white source pixel stays (near) 255");
+    TEST_ASSERT_EQ((int)dst[1], 0, "black source pixel stays 0");
+}
+
+TEST(downsample_output_dimensions_match_requested_size) {
+    // A larger, non-square source (mimics a decoded QVGA-ish frame) downsampled
+    // to the model's fixed 96x96 input — every output pixel must be filled,
+    // none left uninitialized/out of bounds.
+    const int srcW = 320, srcH = 240;
+    std::vector<uint8_t> src((size_t)srcW * srcH * 3, 42);
+    uint8_t dst[96 * 96];
+    memset(dst, 0xAA, sizeof(dst)); // sentinel so we can tell every byte got written
+    downsampleRgb888ToGray(src.data(), srcW, srcH, dst, 96, 96);
+    bool allWritten = true;
+    for (int i = 0; i < 96 * 96; i++) if (dst[i] == 0xAA) allWritten = false;
+    TEST_ASSERT(allWritten, "every one of the 96x96 output pixels got written");
+}
+
+// ── quantizeGrayscaleToInt8 ───────────────────────────────────────────────
+
+TEST(quantize_grayscale_midpoint) {
+    TEST_ASSERT_EQ((int)quantizeGrayscaleToInt8(128), 0, "128 (mid-gray) maps to 0");
+}
+
+TEST(quantize_grayscale_black) {
+    TEST_ASSERT_EQ((int)quantizeGrayscaleToInt8(0), -128, "0 (black) maps to -128");
+}
+
+TEST(quantize_grayscale_white) {
+    TEST_ASSERT_EQ((int)quantizeGrayscaleToInt8(255), 127, "255 (white) maps to 127");
+}
+
+// ── evaluatePersonScores ───────────────────────────────────────────────
+
+TEST(evaluate_person_scores_strong_person_signal_detected) {
+    PersonDetectionResult r = evaluatePersonScores(/*notPerson=*/-128, /*person=*/127, 0.6f);
+    TEST_ASSERT(r.personDetected, "overwhelming person score triggers detection");
+    TEST_ASSERT(r.personScore > 0.99f, "confidence close to 1.0");
+}
+
+TEST(evaluate_person_scores_strong_not_person_signal_not_detected) {
+    PersonDetectionResult r = evaluatePersonScores(/*notPerson=*/127, /*person=*/-128, 0.6f);
+    TEST_ASSERT(!r.personDetected, "overwhelming not-person score does not trigger");
+    TEST_ASSERT(r.personScore < 0.01f, "confidence close to 0.0");
+}
+
+TEST(evaluate_person_scores_equal_scores_is_fifty_fifty) {
+    PersonDetectionResult r = evaluatePersonScores(0, 0, 0.6f);
+    TEST_ASSERT(!r.personDetected, "0.5 confidence does not clear a 0.6 threshold");
+    TEST_ASSERT(r.personScore > 0.49f && r.personScore < 0.51f, "equal raw scores give ~0.5 confidence");
+}
+
+TEST(evaluate_person_scores_respects_custom_threshold) {
+    PersonDetectionResult lenient = evaluatePersonScores(0, 0, 0.4f);
+    TEST_ASSERT(lenient.personDetected, "same 0.5 confidence clears a lower 0.4 threshold");
+    PersonDetectionResult strict = evaluatePersonScores(0, 0, 0.9f);
+    TEST_ASSERT(!strict.personDetected, "same 0.5 confidence does not clear a stricter 0.9 threshold");
+}
+
+TEST(evaluate_person_scores_at_threshold_boundary_detects) {
+    // Construct scores that produce almost exactly 0.6 confidence isn't
+    // practical with raw int8 logits, so instead check the boundary
+    // semantics directly: score >= threshold, not > threshold.
+    PersonDetectionResult r = evaluatePersonScores(0, 0, 0.5f); // exactly 0.5 confidence, 0.5 threshold
+    TEST_ASSERT(r.personDetected, "score exactly equal to threshold counts as detected");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -428,6 +535,24 @@ int main() {
     RUN_TEST(write_stalled_false_while_within_timeout);
     RUN_TEST(write_stalled_true_once_timeout_elapsed);
     RUN_TEST(write_stalled_true_exactly_at_timeout_boundary);
+
+    RUN_TEST(should_run_inference_false_before_interval_elapsed);
+    RUN_TEST(should_run_inference_true_once_interval_elapsed);
+    RUN_TEST(should_run_inference_true_on_first_ever_call);
+
+    RUN_TEST(downsample_solid_color_produces_uniform_gray);
+    RUN_TEST(downsample_pure_white_and_black_extremes);
+    RUN_TEST(downsample_output_dimensions_match_requested_size);
+
+    RUN_TEST(quantize_grayscale_midpoint);
+    RUN_TEST(quantize_grayscale_black);
+    RUN_TEST(quantize_grayscale_white);
+
+    RUN_TEST(evaluate_person_scores_strong_person_signal_detected);
+    RUN_TEST(evaluate_person_scores_strong_not_person_signal_not_detected);
+    RUN_TEST(evaluate_person_scores_equal_scores_is_fifty_fifty);
+    RUN_TEST(evaluate_person_scores_respects_custom_threshold);
+    RUN_TEST(evaluate_person_scores_at_threshold_boundary_detects);
 
     return test::summarize();
 }

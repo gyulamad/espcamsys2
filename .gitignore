@@ -10,3 +10,9 @@ nodejs/camera-relay/recordings/
 
 # Compiled test binaries
 tests/cpp/build/
+
+# Vendored TFLite Micro person-detection model (large generated binary-as-C
+# array, fetched per Arduino/.../model/README.md — not hand-editable source)
+Arduino/sketch_sep12a_camera2_behind_NAT/model/person_detect_model_data.h
+Arduino/sketch_sep12a_camera2_behind_NAT/model/person_detect_model_data.cc
+Arduino/sketch_sep12a_camera2_behind_NAT/person_detect_model_data.cc
