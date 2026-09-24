@@ -109,6 +109,18 @@ TaskHandle_t aiTaskHandle = nullptr;
 // in this file.
 volatile esp32cam_logic::AiAlarmMode currentAiMode = esp32cam_logic::AiAlarmMode::MONITORING;
 
+// Set by aiTask() (Core 0) the moment a confirmation burst resolves as
+// CONFIRMED; consumed and cleared by checkAiAlarmTrigger() in loop() (Core
+// 1), which is where the actual (blocking, HTTPClient-based) recording
+// request happens — see the big comment where this is set, in aiTask(),
+// for why the network call itself stays off Core 0. A plain volatile
+// bool is enough here (not a queue): if two CONFIRMED outcomes land
+// before loop() gets around to checking this, the second one just finds
+// the flag already true and is a no-op — that's fine, since
+// sendRecordRequest() would have made the exact same start-or-extend
+// request either way.
+volatile bool aiAlarmTriggerRequested = false;
+
 // Core 0 task: consumes whatever loop() last placed in aiFrameBuf and runs
 // person-detection inference on it. Step 3 just logged every inference;
 // step 4 additionally runs each result through the §5.2/§5.4 confirmation
@@ -150,7 +162,7 @@ void aiTask(void *param) {
                         result.personScore, AI_CONFIRM_EXTRA_FRAMES);
           break;
         case ConfirmationBurstOutcome::CONFIRMED:
-          Serial.printf("[ai-alarm] CONFIRMED person detection (score=%.2f) — no recording trigger yet (step 5)\n",
+          Serial.printf("[ai-alarm] CONFIRMED person detection (score=%.2f) — requesting recording\n",
                         result.personScore);
           break;
         case ConfirmationBurstOutcome::REJECTED:
@@ -161,6 +173,29 @@ void aiTask(void *param) {
           Serial.printf("[ai-alarm] inference: person=%d score=%.2f%s\n", result.personDetected ? 1 : 0, result.personScore,
                         burstState.mode == AiAlarmMode::CONFIRMING ? " (mid-burst)" : "");
           break;
+      }
+
+      // Step 5 (§1/§5.2): a CONFIRMED detection asks the relay to
+      // (re)start a recording, via the *existing* alarm-recording
+      // mechanism unchanged (see triggerAlarmRecording()'s own comment) —
+      // no new trigger pathway. That function uses HTTPClient (blocking,
+      // up to a few seconds) and touches WiFi.status(), so it's only ever
+      // called from loop() on Core 1 (same as checkAlarmTrigger()'s
+      // GPIO-driven calls to it already do) rather than directly here on
+      // Core 0 — aiTask() just raises a request flag; checkAiAlarmTrigger()
+      // in loop() does the actual network call. This also means a
+      // CONFIRMED outcome never blocks aiTask() from picking up the next
+      // sample. If the person stays in view, later confirmation bursts
+      // keep CONFIRMing and keep re-raising this flag — each one becomes
+      // another sendRecordRequest() call, which (per its own doc comment)
+      // *extends* an already-in-progress recording rather than starting a
+      // duplicate one, so a continuously-visible person naturally keeps
+      // the recording alive without any separate "is it still recording"
+      // tracking needed here. (The DEBOUNCE state / merge-window grace
+      // period for *gaps* in detection, and its own UI label, are §5.5 —
+      // step 6's concern, not this one.)
+      if (shouldTriggerAiAlarmRecording(outcome)) {
+        aiAlarmTriggerRequested = true;
       }
     }
 
@@ -326,6 +361,20 @@ void checkAlarmTrigger() {
   }
 }
 
+// Runs on Core 1 (loop()) — see aiAlarmTriggerRequested's declaration for
+// why the actual network call has to happen here rather than on Core 0,
+// right where aiTask() decides a recording is warranted. Reuses exactly
+// the same triggerAlarmRecording() the GPIO alarm above calls: same
+// ALARM_RECORD_SECONDS duration, same ALARM_RECORD_ALL_CAMERAS targeting,
+// same relay endpoint — an AI-confirmed detection and a physical alarm
+// press are indistinguishable to the relay, by design (§1: "reuse that
+// pipeline, not create a parallel one").
+void checkAiAlarmTrigger() {
+  if (!aiAlarmTriggerRequested) return;
+  aiAlarmTriggerRequested = false;
+  triggerAlarmRecording();
+}
+
 // Configures and initializes the OV2640 camera driver. Split out of setup()
 // so it can also be retried from loop() if it fails at boot — a frame-buffer
 // malloc failure here is usually a marginal power supply or PSRAM not being
@@ -466,6 +515,7 @@ void loop() {
   // state below, so the alarm keeps working even while this camera is
   // paused, mid-reconnect, or waiting on the camera to come up.
   checkAlarmTrigger();
+  checkAiAlarmTrigger(); // AI-alarm equivalent — see its own comment above
 
   if (!cameraReady) {
     // Retry periodically rather than being stuck forever. This can only

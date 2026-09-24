@@ -16,4 +16,15 @@ module.exports = {
   // defaults to `true` in server.js if omitted, so existing config.js files
   // don't need this key added just to keep running.
   aiAlarmEnabledDefault: true,
+
+  // AI Human Detection Alarm feature, continued: how many seconds of
+  // already-arriving push frames (full resolution, whatever the camera is
+  // currently streaming) to retain per camera as a pre-roll for the next
+  // recording that starts — see plans/AI_ALARM_IMPLEMENTATION_PLAN.md
+  // §5.3 and lib/frameBuffer.js's header comment for why this is a
+  // relay-side setting rather than a device-side one. Applies to every
+  // recording trigger (AI alarm, GPIO alarm, manual dashboard RECORD
+  // button), not just AI-alarm-initiated ones. Optional — defaults to 3
+  // (the plan's own suggested default) in server.js if omitted.
+  rollingPreBufferSeconds: 3,
 };

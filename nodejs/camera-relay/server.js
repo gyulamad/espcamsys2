@@ -15,6 +15,7 @@ const timing = require('./lib/timing');
 const video = require('./lib/video');
 const protocol = require('./lib/protocol');
 const statusView = require('./lib/statusView');
+const frameBuffer = require('./lib/frameBuffer'); // AI-alarm rolling pre-buffer, see its header comment
 
 const app = express();
 const PORT = process.env.PORT || config.port;
@@ -40,6 +41,22 @@ const AI_ALARM_ENABLED_DEFAULT = config.aiAlarmEnabledDefault !== undefined
   ? !!config.aiAlarmEnabledDefault
   : true;
 
+// AI-alarm: how many seconds of already-arriving push frames to retain per
+// camera as a pre-roll for the next recording that starts — see
+// plans/AI_ALARM_IMPLEMENTATION_PLAN.md §5.1's ROLLING_BUFFER_SECONDS and
+// lib/frameBuffer.js's header comment for why this lives here (relay-side,
+// full-resolution) rather than on the device as originally sketched.
+// Falls back to 3 (the plan's own suggested default) if a deployed
+// config.js predates this key, same "old config.js still works" pattern
+// AI_ALARM_ENABLED_DEFAULT above already uses. Also overridable via
+// ROLLING_PRE_BUFFER_SECONDS, same env-var-first pattern PORT/PUSH_PORT/
+// CAM_KEY already use above — lets tests (see
+// tests/e2e/test_recording_prebuffer_e2e.js) pick a deterministic value
+// without needing to write to or disturb a real config.js.
+const ROLLING_PRE_BUFFER_SECONDS = process.env.ROLLING_PRE_BUFFER_SECONDS !== undefined
+  ? Number(process.env.ROLLING_PRE_BUFFER_SECONDS)
+  : (config.rollingPreBufferSeconds !== undefined ? Number(config.rollingPreBufferSeconds) : 3);
+
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
@@ -56,6 +73,15 @@ function getCamera(id) {
       powerTimer: null,   // pending auto power-off timeout, if any — see scheduleAutoOff()
       socket: null,       // the camera's live push-connection socket, if connected right now
       recording: null,    // in-progress recording, if any — see startRecording()
+      // AI-alarm rolling pre-buffer: the last ROLLING_PRE_BUFFER_SECONDS
+      // worth of already-arriving push frames (full resolution, whatever
+      // the camera is currently streaming), kept so a fresh recording can
+      // be seeded with a few seconds of footage from *before* its trigger
+      // — see lib/frameBuffer.js's header comment and startRecording()
+      // below. Updated on every incoming frame regardless of recording
+      // state (see the two 'frame' handlers further down), trimmed by
+      // pushAndTrim() to stay bounded to the configured window.
+      frameBuffer: [],
       // AI-alarm command state pushed to the device — see sendAiAlarmCommand()
       // below and the /ai-alarm/:id route. Seeded from AI_ALARM_ENABLED_DEFAULT
       // above; `live_peek_until_epoch` stays 0 (no active peek) until plan
@@ -185,6 +211,28 @@ function startRecording(cam, id, seconds) {
     timer: null,
   };
 
+  // AI-alarm rolling pre-buffer (§5.3): seed the clip with whatever
+  // full-resolution frames were already sitting in cam.frameBuffer —
+  // frames that arrived (for live view) in the ROLLING_PRE_BUFFER_SECONDS
+  // before this recording started. Written out first, in arrival order,
+  // so they play at the start of the clip; the live cam.emitter listener
+  // below continues the same numbering from wherever this leaves off. This
+  // benefits every trigger source (AI alarm, GPIO alarm, manual dashboard
+  // RECORD button) equally, since they all end up here — see
+  // lib/frameBuffer.js's header comment for why pre-roll lives here rather
+  // than only firing for AI-alarm-initiated recordings specifically.
+  for (const entry of cam.frameBuffer) {
+    rec.frameCount += 1;
+    if (!rec.firstFrameAt) rec.firstFrameAt = entry.atMs;
+    rec.lastFrameAt = entry.atMs;
+    const preRollPath = path.join(tempDir, `frame_${String(rec.frameCount).padStart(6, '0')}.jpg`);
+    try {
+      fs.writeFileSync(preRollPath, entry.frame);
+    } catch (err) {
+      console.error(`[${id}] failed writing pre-roll frame:`, err.message);
+    }
+  }
+
   rec.onFrame = (frame) => {
     rec.frameCount += 1;
     const now = Date.now();
@@ -264,6 +312,7 @@ app.post('/upload/:id', (req, res) => {
   const cam = getCamera(req.params.id);
   cam.frame = req.body;
   cam.lastSeen = new Date();
+  frameBuffer.pushAndTrim(cam.frameBuffer, cam.frame, Date.now(), ROLLING_PRE_BUFFER_SECONDS); // AI-alarm pre-roll, see startRecording()
   cam.emitter.emit('frame', cam.frame); // push instantly to any watching browsers (and any active recording)
   res.sendStatus(200);
 });
@@ -609,6 +658,7 @@ const pushServer = net.createServer((socket) => {
       const cam = getCamera(camId);
       cam.frame = frame;
       cam.lastSeen = new Date();
+      frameBuffer.pushAndTrim(cam.frameBuffer, frame, Date.now(), ROLLING_PRE_BUFFER_SECONDS); // AI-alarm pre-roll, see startRecording()
       cam.emitter.emit('frame', cam.frame); // also feeds any active recording, via startRecording()'s listener
     }
   });

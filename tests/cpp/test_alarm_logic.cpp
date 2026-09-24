@@ -558,6 +558,18 @@ TEST(sample_interval_confirming_uses_confirm_interval) {
     TEST_ASSERT_EQ((long)currentAiSampleIntervalMs(AiAlarmMode::CONFIRMING, 350, 150), 150, "CONFIRMING uses the faster AI_CONFIRM_INTERVAL_MS");
 }
 
+// ── shouldTriggerAiAlarmRecording ────────────────────────────────────────
+
+TEST(trigger_on_confirmed_outcome) {
+    TEST_ASSERT(shouldTriggerAiAlarmRecording(ConfirmationBurstOutcome::CONFIRMED), "CONFIRMED should trigger a recording request");
+}
+
+TEST(no_trigger_on_other_outcomes) {
+    TEST_ASSERT(!shouldTriggerAiAlarmRecording(ConfirmationBurstOutcome::NONE), "NONE should not trigger");
+    TEST_ASSERT(!shouldTriggerAiAlarmRecording(ConfirmationBurstOutcome::ENTERED_CONFIRMING), "starting a burst should not itself trigger yet");
+    TEST_ASSERT(!shouldTriggerAiAlarmRecording(ConfirmationBurstOutcome::REJECTED), "a rejected (false-positive) burst should not trigger");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -645,6 +657,9 @@ int main() {
 
     RUN_TEST(sample_interval_monitoring_uses_monitoring_interval);
     RUN_TEST(sample_interval_confirming_uses_confirm_interval);
+
+    RUN_TEST(trigger_on_confirmed_outcome);
+    RUN_TEST(no_trigger_on_other_outcomes);
 
     return test::summarize();
 }

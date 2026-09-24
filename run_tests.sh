@@ -65,23 +65,28 @@ else
     done
 fi
 
-# ── AI-alarm command channel end-to-end test ─────────────────────────────
-# Unlike the suites above (pure functions, no sockets/processes), this
-# spawns the real relay and talks to its push socket like an actual camera
-# would — see tests/e2e/test_ai_alarm_e2e.js for what it checks and why.
-# Slower and touches real TCP ports (overridable via E2E_PORT/E2E_PUSH_PORT
-# env vars if the defaults collide with something already running), but
-# still no third-party dependency — just `node`.
+# ── AI-alarm end-to-end tests ────────────────────────────────────────────
+# Unlike the suites above (pure functions, no sockets/processes), these
+# spawn the real relay and talk to it like an actual camera/HTTP client
+# would — see tests/e2e/*.js for what each checks and why. Slower and
+# touches real TCP ports (each file picks its own, overridable via env
+# vars — see each file's header — so they don't collide with each other or
+# with a real relay), but still no third-party dependency. Globbed the
+# same way the Node.js unit tests above are, so a new tests/e2e/test_*.js
+# file is picked up automatically.
 hr
-echo "End-to-end (AI-alarm command channel) test"
+echo "End-to-end (AI-alarm) tests"
 hr
 
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_ai_alarm_e2e.js"
-    [ $? -ne 0 ] && overall_status=1
+    for f in "$ROOT_DIR"/tests/e2e/test_*.js; do
+        echo "-- $(basename "$f")"
+        node "$f"
+        [ $? -ne 0 ] && overall_status=1
+    done
 fi
 
 # ── PHP logic tests ───────────────────────────────────────────────────────

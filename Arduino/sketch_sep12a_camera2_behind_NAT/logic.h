@@ -443,4 +443,25 @@ inline unsigned long currentAiSampleIntervalMs(AiAlarmMode mode, unsigned long m
     return mode == AiAlarmMode::CONFIRMING ? confirmIntervalMs : monitoringIntervalMs;
 }
 
+// ── AI-alarm recording trigger (step 5: §1/§5.2, "wire confirmed
+// detections into the existing recording pipeline") ────────────────────
+// Trivial on its own — CONFIRMED is the only outcome that should ever ask
+// for a recording — but expressed as a pure, named predicate (rather than
+// an inline "== CONFIRMED" check in the .ino) so the "which outcomes
+// trigger a recording" decision has a single, tested place, the same
+// reasoning every other alarm-adjacent decision in this codebase already
+// follows (see e.g. alarmDebounceUpdate() above). The .ino calls this
+// right where updateConfirmationBurst()'s outcome is already being
+// switched on for logging, and on true, calls the *existing*
+// triggerAlarmRecording()/sendRecordRequest() functions unchanged — no
+// new recording-trigger mechanism, no new endpoint, exactly what §1
+// asked for ("reuse that pipeline, not create a parallel one"). Left as
+// its own function rather than just inlining `outcome ==
+// ConfirmationBurstOutcome::CONFIRMED` so a future change to the
+// triggering rule (e.g. also re-triggering on some other outcome) has one
+// place to change and one test to update.
+inline bool shouldTriggerAiAlarmRecording(ConfirmationBurstOutcome outcome) {
+    return outcome == ConfirmationBurstOutcome::CONFIRMED;
+}
+
 } // namespace esp32cam_logic
