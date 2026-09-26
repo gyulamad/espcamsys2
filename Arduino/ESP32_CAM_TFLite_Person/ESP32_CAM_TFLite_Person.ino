@@ -4,6 +4,12 @@
 
 #include "config.h"
 
+// WiFi (multi-SSID, connects to whichever network is strongest, with
+// auto-failover) and OTA firmware updates. This sketch had no WiFi at
+// all before — see OTA.h for how it works and OTA.config.h (copy from
+// example.OTA.config.h) for its settings.
+#include "OTA.h"
+
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
@@ -504,6 +510,20 @@ void setup()
     }
 
 
+    // --------------------------------------------------------
+    // WiFi + OTA
+    //
+    // Brought up LAST, after the camera and the TFLite tensor arena are
+    // both already allocated — not as the first thing in setup(). The
+    // WiFi driver claims a sizeable chunk of internal DRAM for its own
+    // buffers as soon as it starts, and both the camera's frame buffer
+    // and the tensor arena (heap_caps_malloc(..., MALLOC_CAP_INTERNAL))
+    // want that same RAM. Starting WiFi first risks starving one of
+    // those allocations instead.
+    // --------------------------------------------------------
+
+    OTA.setup();
+
     Serial.println();
     Serial.println(
         "Detector ready."
@@ -518,6 +538,11 @@ void setup()
 
 void loop()
 {
+    // Keeps WiFi alive (auto-reconnect/failover) and services any
+    // pending OTA upload. Detection below runs regardless of WiFi
+    // state — this sketch's core job never depended on the network.
+    OTA.loop();
+
     float personScore = 0.0f;
     float noPersonScore = 0.0f;
 

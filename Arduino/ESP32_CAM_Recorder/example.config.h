@@ -4,17 +4,9 @@
 //
 //   cp example.config.h config.h
 
-struct WifiNetwork { const char* ssid; const char* password; };
-
-// List every extender's network here. The camera connects to whichever has
-// the strongest signal and automatically fails over if one drops — so you
-// don't need to know in advance which extender a given camera is "closest" to.
-WifiNetwork WIFI_NETWORKS[] = {
-  { "extender-1-ssid", "extender-1-password" },
-  { "extender-2-ssid", "extender-2-password" },
-  { "extender-3-ssid", "extender-3-password" },
-};
-const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
+// WiFi networks, OTA hostname/password and related settings now live in
+// OTA.config.h (copy it from example.OTA.config.h) instead of here — see
+// OTA.h for how the sketch uses them.
 
 const char* SERVER_HOST   = "192.168.4.9";     // your Pi's IP or hostname
 const int   PUSH_PORT     = 8081;              // relay's raw push port — must match pushPort in server's config.js

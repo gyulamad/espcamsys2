@@ -29,31 +29,23 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 ## 1. Flash each ESP32-CAM (streaming/recording sketch)
 
 1. Install the ESP32 board package in Arduino IDE if you haven't already (Boards Manager → search "esp32" → install), and select **AI Thinker ESP32-CAM** as the board.
-2. On your laptop, create a sketch folder containing these three files together (this sketch used to be called `sketch_sep12a_camera2_behind_NAT` — it's since been renamed):
+2. On your laptop, create a sketch folder containing these five files together (this sketch used to be called `sketch_sep12a_camera2_behind_NAT` — it's since been renamed):
    - `ESP32_CAM_Recorder.ino`
    - `example.config.h`
    - `logic.h`
-   - *(you'll create `config.h` in the next step)*
-3. Copy the template and fill in this device's real values:
+   - `OTA.h`
+   - `example.OTA.config.h`
+   - *(you'll create `config.h` and `OTA.config.h` in the next step)*
+3. Copy the templates and fill in this device's real values:
 
    ```
    cp example.config.h config.h
+   cp example.OTA.config.h OTA.config.h
    ```
 
    Edit `config.h`:
 
    ```cpp
-   struct WifiNetwork { const char* ssid; const char* password; };
-
-   // List every extender/AP here — the camera connects to whichever has the
-   // strongest signal and fails over automatically if one drops.
-   WifiNetwork WIFI_NETWORKS[] = {
-     { "extender-1-ssid", "extender-1-password" },
-     { "extender-2-ssid", "extender-2-password" },
-     { "extender-3-ssid", "extender-3-password" },
-   };
-   const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
-
    const char* SERVER_HOST   = "192.168.4.9";   // your Pi's LAN IP
    const int   PUSH_PORT     = 8081;            // relay's raw push port — must match pushPort in the Pi's config.js
    const int   HTTP_PORT     = 8080;            // relay's HTTP port — must match port in the Pi's config.js
@@ -67,6 +59,25 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
    const int  ALARM_ACTIVE_STATE       = LOW;   // pin level that means "alarm!"
    const int  ALARM_RECORD_SECONDS     = 60;    // recording length per trigger (re-trigger extends it)
    const bool ALARM_RECORD_ALL_CAMERAS = false; // false: only this camera records; true: every camera does
+   ```
+
+   Edit `OTA.config.h` (WiFi networks and the OTA updater's own settings — see the **OTA** note below):
+
+   ```cpp
+   struct OtaWifiNetwork { const char* ssid; const char* password; };
+
+   // List every extender/AP here — the camera connects to whichever has the
+   // strongest signal and fails over automatically if one drops.
+   OtaWifiNetwork OTA_WIFI_NETWORKS[] = {
+     { "extender-1-ssid", "extender-1-password" },
+     { "extender-2-ssid", "extender-2-password" },
+     { "extender-3-ssid", "extender-3-password" },
+   };
+   const int OTA_WIFI_NETWORK_COUNT = sizeof(OTA_WIFI_NETWORKS) / sizeof(OTA_WIFI_NETWORKS[0]);
+
+   const char* OTA_HOSTNAME = "espcam-recorder";  // shown in Arduino IDE's Tools > Port; make it unique per device
+   const char* OTA_PASSWORD = "change-me";        // required to push an OTA update to this device
+   const int   OTA_PORT     = 3232;
    ```
 
 4. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
@@ -90,17 +101,20 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 2. In Arduino IDE, make sure you're on the **esp32 by Espressif Systems v3.x** board package (Boards Manager). Older 2.x releases don't support building an ESP-IDF component library like this one straight out of `~/Arduino/libraries`, so if you get "no such file or directory" on the `tensorflow/lite/...` includes or link errors, check this first.
 
-3. Create a sketch folder containing these four files together:
+3. Create a sketch folder containing these six files together:
    - `ESP32_CAM_TFLite_Person.ino`
    - `example.config.h`
    - `person_detect_model_data.cc`
    - `person_detect_model_data.h`
-   - *(you'll create `config.h` in the next step)*
+   - `OTA.h`
+   - `example.OTA.config.h`
+   - *(you'll create `config.h` and `OTA.config.h` in the next step)*
 
-4. Copy the template and adjust if you want (the defaults work out of the box):
+4. Copy the templates and adjust if you want (the `config.h` defaults work out of the box; `OTA.config.h` needs your real WiFi networks — this sketch now joins WiFi for OTA updates, see the **OTA** note below):
 
    ```
    cp example.config.h config.h
+   cp example.OTA.config.h OTA.config.h
    ```
 
    `config.h` controls:
@@ -145,6 +159,36 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    The model expects 96×96 grayscale frames — the sketch already configures the camera for that, so there's nothing to adjust there.
 
 > This sketch is intentionally minimal (Serial + a GPIO pin) rather than wired into the relay/dashboard. If you want it to trigger a recording on another camera later, `PERSON_DETECTED_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
+
+---
+
+## Note: OTA (wireless firmware updates)
+
+Both sketches include a small `OTA.h` framework (see `OTA.h` in each sketch folder) that does two things once a device is on your WiFi:
+
+- **Connects to whichever configured network has the strongest signal**, and fails over to another one if it drops — the same multi-AP behavior the Recorder sketch already used, now shared by both sketches.
+- **Lets you re-flash the board over WiFi** from Arduino IDE, instead of unplugging it and reaching for the FTDI programmer every time.
+
+**This only works after the first flash.** OTA re-flashes an already-running sketch; it can't bootstrap a blank board. Flash each device over USB as described in step 1 or 2 above at least once — that build already needs `OTA.config.h` to exist and compile (`OTA.h` is `#include`d unconditionally), so create it up front:
+
+```
+cp example.OTA.config.h OTA.config.h
+```
+
+Fill in your real WiFi networks, a unique `OTA_HOSTNAME` per device, and a real `OTA_PASSWORD` — leaving the password blank lets anyone on the same network push firmware to that device.
+
+Once a device has booted with WiFi connected, updating it is:
+
+1. Open the sketch in Arduino IDE.
+2. **Tools → Port** — after a few seconds you should see the device listed under "Network Ports" as `<OTA_HOSTNAME> at <its IP address>`, alongside the usual serial ports. Select it.
+3. Click **Upload** as normal. Arduino IDE will prompt for the OTA password instead of using a USB connection.
+
+A few things worth knowing:
+
+- **`ESP32_CAM_TFLite_Person` may not have room for OTA.** Step 2 above has you select **Huge APP (3MB No OTA)** as the partition scheme, because the TFLite Micro runtime is too large for the default layout — but as the name says, that scheme has no OTA partition slots at all, so it can never accept a wireless update no matter what this framework does. OTA needs a scheme with two app slots, e.g. **Minimal SPIFFS (1.9MB APP with OTA)**. Try switching to it and see if the sketch still fits (Arduino IDE prints the compiled size after building); if it doesn't fit under ~1.9MB, OTA isn't usable for this sketch without a custom partition table, and USB flashing remains the way to update it.
+- **OTA traffic on this framework isn't encrypted** — the password stops casual/unauthenticated pushes, but a determined attacker already on your LAN could still intercept an upload. Fine for a home network; don't expose the OTA port (3232 by default) beyond it.
+- Like `config.h` and `config.js`, **`OTA.config.h` is gitignored** — it holds your WiFi passwords and OTA password, so it should never end up committed. Back it up the same way you'd back up your other `config.*` files.
+- If a device stops showing up under Network Ports, it's not on WiFi (or `OTA_HOSTNAME` collides with another device) — check its Serial Monitor output; `OTA.h` logs the connection attempt and result there the same way the old code used to.
 
 ---
 
@@ -313,6 +357,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 - [ ] The `.onion` address, opened in Tor Browser, prompts for Basic Auth and then shows all cameras live
 - [ ] Port 8080 and 8081 are **not** reachable from outside your LAN (check your router's port-forwarding list — there should be none for this project)
 - [ ] *(If you flashed the optional person detector)* its Serial Monitor prints changing `Person: NN% No person: NN%` lines and flips to `>>> PERSON DETECTED - GPIO HIGH <<<` when someone steps in front of it
+- [ ] *(If you're using OTA)* each device shows up under **Tools → Port → Network Ports** in Arduino IDE as `<OTA_HOSTNAME> at <IP>`, and a test upload over WiFi prompts for the OTA password
 
 ---
 
@@ -320,5 +365,5 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 - Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js`, and re-flash every camera's `config.h` with the same value.
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
-- Keep `config.php`, `config.js`, and every camera's `config.h` out of git — they're already listed in `.gitignore`; just don't force-add them.
-- Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
+- Keep `config.php`, `config.js`, and every camera's `config.h`/`OTA.config.h` out of git — they're already listed in `.gitignore`; just don't force-add them.
+- Back up your `config.*` and `OTA.config.h` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.

@@ -1,13 +1,19 @@
 #include "esp_camera.h"
 #include <WiFi.h>
-#include <WiFiMulti.h>
 #include <HTTPClient.h>
 
-// Wi-Fi networks (one per extender), relay host, camera id and API key live
-// in config.h, a file in this same sketch folder that is gitignored (never
-// committed). Copy example.config.h to config.h and fill in your real values:
+// Relay host, camera id and API key live in config.h, a file in this same
+// sketch folder that is gitignored (never committed). Copy example.config.h
+// to config.h and fill in your real values:
 //   cp example.config.h config.h
 #include "config.h"
+
+// WiFi (multi-SSID, connects to whichever extender is strongest, with
+// auto-failover) and OTA firmware updates are handled by the OTA
+// framework — see OTA.h for how it works and OTA.config.h (copy from
+// example.OTA.config.h) for its settings, including the network list
+// that used to live in this sketch's own config.h.
+#include "OTA.h"
 
 // All the sketch's actual decision-making (debounce, URL/line building,
 // frame framing, etc.) lives in logic.h as plain, hardware-free C++ so it
@@ -16,7 +22,6 @@
 #include "logic.h"
 using namespace esp32cam_logic;
 
-WiFiMulti wifiMulti;
 WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // port, held open for the sketch's whole runtime —
                          // frames are written straight to it with no
@@ -255,25 +260,26 @@ void setup() {
   // for why), so the failure is only logged here, not fatal to setup().
   cameraReady = initCamera();
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
-                          // big source of added latency on ESP32 WiFi
-
-  for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
-    wifiMulti.addAP(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password);
+  // OTA.setup() is what actually brings WiFi up (multi-SSID, strongest
+  // signal, auto-failover — see OTA.h) and starts the OTA listener once
+  // connected. Deliberately called AFTER initCamera(), not before: the
+  // WiFi driver claims a chunk of internal DRAM for its own buffers as
+  // soon as it starts, and the camera's DMA frame buffers need that same
+  // RAM — bringing WiFi up first is exactly what previously produced
+  // "frame buffer malloc failed" on this board.
+  OTA.setup();
+  if (OTA.isConnected()) {
+    Serial.println("[" + String(CAMERA_ID) + "] Connected to " + OTA.ssid() +
+                    ", IP: " + OTA.ip().toString() +
+                    ", RSSI: " + OTA.rssi());
   }
-
-  Serial.print("Connecting to WiFi");
-  while (wifiMulti.run() != WL_CONNECTED) {
-    delay(250);
-    Serial.print(".");
-  }
-  Serial.println("\n[" + String(CAMERA_ID) + "] Connected to " + WiFi.SSID() +
-                  ", IP: " + WiFi.localIP().toString() +
-                  ", RSSI: " + WiFi.RSSI());
 }
 
 void loop() {
+  // Keeps WiFi alive (auto-reconnect/failover between the configured
+  // extenders — see OTA.h) and services any pending OTA upload.
+  OTA.loop();
+
   // Periodic identity reminder — so opening the Serial Monitor at any point
   // (not just right at boot) still tells you which camera this is.
   static unsigned long lastIdentityPrint = 0;
@@ -285,9 +291,9 @@ void loop() {
     lastIdentityPrint = millis();
   }
 
-  // Cheap when already connected — only scans/reconnects if the link dropped,
-  // and will fail over to a different extender if the current one is gone.
-  if (wifiMulti.run() != WL_CONNECTED) {
+  // OTA.loop() above already keeps the link alive/failed-over — this just
+  // gates the rest of loop() on the current state.
+  if (WiFi.status() != WL_CONNECTED) {
     delay(500);
     return;
   }
