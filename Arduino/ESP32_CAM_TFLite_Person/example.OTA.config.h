@@ -43,7 +43,7 @@ const unsigned long OTA_WIFI_RECHECK_INTERVAL_MS = 500;
 // Name this device shows up as in Arduino IDE's Tools > Port network
 // list and via mDNS (<hostname>.local). MUST be unique per device on
 // the network — e.g. match it to CAMERA_ID in config.h.
-const char* OTA_HOSTNAME = "espcam-recorder";
+const char* OTA_HOSTNAME = "espcam-recogniser";
 
 // Password required to push an OTA update to this device. Leave as ""
 // to disable password protection (not recommended — anyone on the same
