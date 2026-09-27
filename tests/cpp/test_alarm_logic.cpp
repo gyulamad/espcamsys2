@@ -9,7 +9,7 @@
 // like running the binary directly.
 
 #include "framework.h"
-#include "../../Arduino/sketch_sep12a_camera2_behind_NAT/logic.h"
+#include "../../Arduino/ESP32_CAM_Recorder/logic.h"
 
 using namespace esp32cam_logic;
 
