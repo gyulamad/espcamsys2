@@ -122,12 +122,17 @@ bool initCamera()
         return false;
     }
 
-    // AI Thinker camera is mounted upside-down.
+    // Orientation: keep this identical to ESP32_CAM_Recorder, which leaves
+    // the sensor at its default (no flip/mirror) and looks upright in this
+    // mounting. The person-detection model also expects upright images.
+    // If your board is mounted differently, change BOTH sketches together
+    // (set_vflip + set_hmirror = 180-degree rotation).
     sensor_t *sensor = esp_camera_sensor_get();
 
     if (sensor)
     {
-        sensor->set_vflip(sensor, 1);
+        sensor->set_vflip(sensor, 0);
+        sensor->set_hmirror(sensor, 0);
     }
 
     return true;

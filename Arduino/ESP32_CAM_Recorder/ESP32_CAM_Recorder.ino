@@ -47,7 +47,18 @@ bool cameraReady = false;
 // lives in logic.h (alarmDebounceUpdate()) — this is just its persistent
 // state across loop() calls.
 const unsigned long ALARM_DEBOUNCE_MS = 50;
-AlarmDebounceState alarmState;
+// Set from the pin interrupt (onAlarmEdge), consumed in checkAlarmTrigger().
+// The ISR only latches "an edge happened", so a quick press is never lost
+// even when loop() is slow (frame push + delay).
+volatile bool alarmPending = false;
+volatile unsigned long alarmLastIsrMs = 0;
+
+void IRAM_ATTR onAlarmEdge() {
+  unsigned long now = millis();
+  if (now - alarmLastIsrMs < ALARM_DEBOUNCE_MS) return;  // lockout against contact bounce
+  alarmLastIsrMs = now;
+  alarmPending = true;
+}
 
 // AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
 #define PWDN_GPIO_NUM     32
@@ -148,19 +159,15 @@ void triggerAlarmRecording() {
   sendRecordRequest(String(targetId.c_str()));
 }
 
-// Debounced edge-detection on ALARM_GPIO_PIN. Only fires on a *transition*
-// into ALARM_ACTIVE_STATE — not on every loop while the pin is held there —
-// so a sustained alarm signal triggers once per press/contact rather than
-// flooding the relay with requests. The very first stable reading after
-// boot never fires on its own (see the `alarmStableState != -1` guard), so
-// a sensor that happens to power up already in its active position doesn't
-// kick off a recording before anything has actually "happened".
+// Handles an alarm edge latched by onAlarmEdge(). Fires once per edge into
+// ALARM_ACTIVE_STATE; edges that arrive while a previous trigger is still
+// being processed (e.g. during the blocking HTTP POST) collapse into one,
+// which is fine since a repeat trigger only extends the recording anyway.
 void checkAlarmTrigger() {
   if (ALARM_GPIO_PIN < 0) return; // feature turned off — see ALARM_GPIO_PIN in config.h
 
-  int raw = digitalRead(ALARM_GPIO_PIN);
-  bool triggered = alarmDebounceUpdate(alarmState, raw, millis(), ALARM_DEBOUNCE_MS, ALARM_ACTIVE_STATE);
-  if (triggered) {
+  if (alarmPending) {
+    alarmPending = false;
     Serial.println("[alarm] triggered");
     triggerAlarmRecording();
   }
@@ -219,6 +226,16 @@ bool initCamera() {
     Serial.printf("Camera init failed: 0x%x\n", err);
     return false;
   }
+
+  // Orientation: set explicitly (not left to driver defaults) and keep it
+  // identical to ESP32_CAM_TFLite_Person, so the live video and the AI
+  // detector always see the same picture. If your board is mounted
+  // differently, change BOTH sketches together (vflip + hmirror = 180°).
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor) {
+    sensor->set_vflip(sensor, 0);
+    sensor->set_hmirror(sensor, 0);
+  }
   return true;
 }
 
@@ -243,6 +260,9 @@ void setup() {
   // (ALARM_GPIO_PIN < 0) — no pin claimed, nothing to configure.
   if (ALARM_GPIO_PIN >= 0) {
     pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(ALARM_GPIO_PIN), onAlarmEdge,
+                    ALARM_ACTIVE_STATE == LOW ? FALLING : RISING);
+    alarmPending = false;
   }
 
   // Camera MUST be initialized before WiFi comes up, not after: the WiFi
