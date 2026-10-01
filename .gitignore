@@ -3,7 +3,6 @@
 config.php
 config.js
 config.h
-OTA.config.h
 
 # Node
 node_modules/

@@ -15,9 +15,12 @@
 struct OtaWifiNetwork { const char* ssid; const char* password; };
 
 OtaWifiNetwork OTA_WIFI_NETWORKS[] = {
-  { "extender-1-ssid", "extender-1-password" },
-  { "extender-2-ssid", "extender-2-password" },
-  { "extender-3-ssid", "extender-3-password" },
+  { "apucika", "apucika1" },
+  { "apucika_EXT_UK", "apucika1" },
+  { "apucika-ext", "apucika1" },
+  { "apucikaext1", "apucika1" },
+  { "apucikaext2", "apucika1" },
+  { "apucikaext3", "apucika1" },
 };
 const int OTA_WIFI_NETWORK_COUNT = sizeof(OTA_WIFI_NETWORKS) / sizeof(OTA_WIFI_NETWORKS[0]);
 
@@ -43,12 +46,12 @@ const unsigned long OTA_WIFI_RECHECK_INTERVAL_MS = 500;
 // Name this device shows up as in Arduino IDE's Tools > Port network
 // list and via mDNS (<hostname>.local). MUST be unique per device on
 // the network — e.g. match it to CAMERA_ID in config.h.
-const char* OTA_HOSTNAME = "espcam-recorder";
+const char* OTA_HOSTNAME = "cam2sens";
 
 // Password required to push an OTA update to this device. Leave as ""
 // to disable password protection (not recommended — anyone on the same
 // network could then flash arbitrary firmware to this device over OTA).
-const char* OTA_PASSWORD = "change-me";
+const char* OTA_PASSWORD = "apucika1";
 
 // UDP/TCP port ArduinoOTA listens on. 3232 is the ESP32 core default —
 // only change this if it conflicts with something else on your network.
