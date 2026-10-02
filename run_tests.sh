@@ -65,6 +65,25 @@ else
     done
 fi
 
+# ── Alarm-settings end-to-end test ───────────────────────────────────────
+# Spawns the real relay (on its own ports, with a throwaway settings file —
+# a real settings.json is never touched) and checks over real HTTP that an
+# alarm records/powers for the lengths stored via /settings rather than a
+# hardcoded value, that they persist across a restart, etc. See
+# tests/e2e/test_alarm_settings_e2e.js. Needs `npm install` to have been run
+# in nodejs/camera-relay/ (the relay itself needs express). Override the
+# ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+hr
+echo "End-to-end (alarm settings) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    node "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 # ── PHP logic tests ───────────────────────────────────────────────────────
 hr
 echo "PHP (dashboard logic) tests"

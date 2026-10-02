@@ -35,7 +35,7 @@ const MAX_POWER_SECONDS = 3600; // 1 hour cap per power-on, same sanity limit as
 // the cameras without reflashing them (currently the alarm durations — see
 // POST /alarm/:id). Stored as a small JSON file next to server.js; the
 // validation/defaulting rules live in lib/settings.js.
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const SETTINGS_FILE = process.env.SETTINGS_FILE || path.join(__dirname, 'settings.json'); // env override lets the e2e test use a throwaway file
 
 function loadSettings() {
   try {
