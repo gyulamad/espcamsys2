@@ -199,24 +199,6 @@ $cols  = CamLogic::computeGridColumns($count);
     animation: blink 1.4s ease-in-out infinite;
   }
 
-  /* Power-on duration field, sits directly next to the ⏻ ON/OFF button */
-  .pwr-controls { display: flex; align-items: center; gap: 4px; }
-  .pwr-controls input[type=number] {
-    width: 52px; font-family: var(--mono); font-size: .65rem;
-    background: transparent; border: 1px solid var(--border); color: var(--text);
-    border-radius: 3px; padding: 4px 6px;
-  }
-  .pwr-controls .unit { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
-
-  /* Auto power-off countdown pill, shown while a camera is on a timer */
-  .pwr-pill {
-    font-family: var(--mono); font-size: .62rem;
-    padding: 2px 7px; border-radius: 20px;
-    border: 1px solid var(--border); color: var(--accent);
-    white-space: nowrap; display: none;
-  }
-  .pwr-pill.active { display: inline-block; }
-
   /* Per-camera record controls */
   .cam-record-row {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
@@ -383,6 +365,7 @@ $cols  = CamLogic::computeGridColumns($count);
     <span class="record-controls">
       <input type="number" id="record-seconds" min="1" max="3600" value="60" title="Recording length in seconds">
       <span class="unit">sec</span>
+      <span class="unit preroll-note" id="preroll-note-record"></span>
       <button class="btn" id="btn-record-all" onclick="recordAll()"
               title="Press again mid-recording to extend it by this many seconds from now">⏺ RECORD ALL</button>
       <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
@@ -396,10 +379,7 @@ $cols  = CamLogic::computeGridColumns($count);
       <input type="number" id="alarm-record-seconds" min="1" max="3600" value="60"
              title="How long an alarm-triggered recording runs (a repeat alarm extends it from that moment)" onchange="saveAlarmSettings()">
       <span class="unit">sec</span>
-      <span class="lbl">camera on</span>
-      <input type="number" id="alarm-power-seconds" min="1" max="3600" value="60"
-             title="How long the camera is kept on after an alarm (never shorter than the recording itself)" onchange="saveAlarmSettings()">
-      <span class="unit">sec</span>
+      <span class="unit preroll-note" id="preroll-note-alarm"></span>
       <span id="alarm-status"></span>
     </span>
   </div>
@@ -421,15 +401,6 @@ $cols  = CamLogic::computeGridColumns($count);
           <span class="rec-dot"></span>
           <span class="status-pill connecting" id="pill-<?= htmlspecialchars($cam['id']) ?>">CONNECTING</span>
           <span class="rec-pill" id="recpill-<?= htmlspecialchars($cam['id']) ?>"></span>
-          <span class="pwr-pill" id="pwrpill-<?= htmlspecialchars($cam['id']) ?>"></span>
-          <span class="pwr-controls">
-            <input type="number" id="pwr-seconds-<?= htmlspecialchars($cam['id']) ?>" min="1" max="3600" value="300"
-                   title="How long ⏻ ON keeps the camera powered before it auto powers-off">
-            <span class="unit">sec</span>
-          </span>
-          <button class="cam-btn" id="pwr-<?= htmlspecialchars($cam['id']) ?>" data-enabled="1"
-                  title="Turn this camera's capture on for the given duration, or off now, on the device itself (power + bandwidth saving)"
-                  onclick="togglePower('<?= htmlspecialchars($cam['id']) ?>')">⏻ ON</button>
           <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
           <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
                   onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
@@ -570,9 +541,10 @@ $cols  = CamLogic::computeGridColumns($count);
     }
   }
 
-  // ── Hide / show (local to this browser tab only — the camera itself
-  // keeps capturing and pushing frames; use the ⏻ power button to actually
-  // stop the device) ──
+  // ── Hide / show (local to this browser tab only — it just stops THIS tab
+  // from loading the live stream, which saves bandwidth when viewing over
+  // a slow link. The camera itself keeps capturing and pushing frames, the
+  // relay keeps its pre-roll buffer, and recordings are unaffected.) ──
   function toggleHide(id) {
     const img  = document.getElementById('img-' + id);
     const btn  = document.getElementById('hide-' + id);
@@ -596,116 +568,6 @@ $cols  = CamLogic::computeGridColumns($count);
         `<button class="cam-btn" onclick="toggleHide('${id}')">▶ RESTORE</button>`;
     }
   }
-
-  // ── Power on/off (real, device-side — tells the ESP32-CAM to stop or
-  // resume capturing/pushing frames entirely, for power and bandwidth
-  // saving). Affects every viewer of this camera, not just this tab.
-  //
-  // Works the same way recording does: turning ON runs the camera for the
-  // number of seconds in the field next to the button (300 by default),
-  // then it powers itself back off automatically — nobody has to remember
-  // to turn it off. Pressing ON again while already on extends it: the
-  // countdown resets to the new seconds value measured from that second
-  // press, rather than adding on top of what was left. Turning OFF is
-  // immediate and cancels any pending auto-off. ──
-  const powerCountdowns = {}; // id -> interval id
-
-  async function togglePower(id) {
-    const btn = document.getElementById('pwr-' + id);
-    const wantEnable = btn.dataset.enabled === '0';
-    btn.disabled = true;
-    try {
-      let url = `control.php?cam=${encodeURIComponent(id)}&enabled=${wantEnable ? 1 : 0}`;
-      if (wantEnable) {
-        const secondsInput = document.getElementById('pwr-seconds-' + id);
-        const seconds = parseInt(secondsInput.value, 10);
-        if (!Number.isFinite(seconds) || seconds < 1) {
-          alert('Enter a valid number of seconds');
-          return;
-        }
-        url += `&seconds=${seconds}`;
-      }
-      const res = await fetch(url, { method: 'POST' });
-      if (!res.ok) throw new Error('control request failed: ' + res.status);
-      const data = await res.json();
-      setPower(id, data.enabled, data.enabledUntil);
-    } catch (e) {
-      console.error('Power toggle failed for', id, e);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
-  // wasEnabled/wasRecording transitions (below) exist so polling every few
-  // seconds — needed to pick up changes from other tabs, other users, or a
-  // camera's own alarm-trigger GPIO calling the relay directly — doesn't
-  // reset the live stream or re-render the overlay on every single poll
-  // when nothing has actually changed.
-  function setPower(id, enabled, enabledUntil) {
-    const btn = document.getElementById('pwr-' + id);
-    const wasEnabled = btn.dataset.enabled === '1';
-    btn.dataset.enabled = enabled ? '1' : '0';
-    btn.textContent = enabled ? '⏻ ON' : '⏻ OFF';
-    btn.classList.toggle('danger', !enabled);
-
-    if (enabled) {
-      if (!wasEnabled) reloadStream(id); // only reconnect the <img> on an actual off->on transition
-      if (enabledUntil) {
-        const remaining = Math.max(1, Math.round((new Date(enabledUntil).getTime() - Date.now()) / 1000));
-        beginPowerCountdown(id, remaining); // safe to call every poll — resyncs the pill to the real remaining time
-      } else {
-        endPowerCountdown(id); // on indefinitely (or unknown) — no countdown to show
-      }
-    } else {
-      endPowerCountdown(id);
-      if (wasEnabled) {
-        setStatus(id, 'hidden', 'POWERED OFF');
-        showOverlay(id, '⏻', 'CAMERA POWERED OFF', false);
-        document.getElementById('overlay-' + id).innerHTML +=
-          `<button class="cam-btn" onclick="togglePower('${id}')">⏻ TURN ON</button>`;
-      }
-    }
-  }
-
-  function beginPowerCountdown(id, seconds) {
-    const pill = document.getElementById('pwrpill-' + id);
-    if (!pill) return;
-    let remaining = seconds;
-    pill.classList.add('active');
-    pill.textContent = `⏻ AUTO-OFF ${remaining}s`;
-
-    if (powerCountdowns[id]) clearInterval(powerCountdowns[id]);
-    powerCountdowns[id] = setInterval(async () => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        endPowerCountdown(id);
-        // The relay's own timer is the source of truth for the actual
-        // device state — re-check it rather than assuming OFF locally,
-        // in case of clock drift or a mid-flight extend from this request.
-        try {
-          const res = await fetch(`control.php?cam=${encodeURIComponent(id)}`);
-          if (res.ok) {
-            const data = await res.json();
-            setPower(id, data.enabled, data.enabledUntil);
-          }
-        } catch (e) {
-          // Relay unreachable — leave things as-is, next reload will resync.
-        }
-      } else {
-        pill.textContent = `⏻ AUTO-OFF ${remaining}s`;
-      }
-    }, 1000);
-  }
-
-  function endPowerCountdown(id) {
-    const pill = document.getElementById('pwrpill-' + id);
-    if (powerCountdowns[id]) { clearInterval(powerCountdowns[id]); delete powerCountdowns[id]; }
-    if (pill) { pill.classList.remove('active'); pill.textContent = ''; }
-  }
-
-  // Initial per-camera power/recording state is seeded by pollAllStatuses()
-  // near the bottom of this script, which also keeps re-polling afterwards —
-  // see the comment there for why a single mechanism covers both cases.
 
   // ── Recording — one button + one duration field starts a timed,
   // server-side recording on every camera at once (footage is written on
@@ -782,13 +644,6 @@ $cols  = CamLogic::computeGridColumns($count);
       const data = await res.json();
       if (res.ok && data.recording) {
         beginRecordCountdown(id, seconds); // restarts the countdown, whether this was a fresh start or an extend
-        // Recording keeps the camera powered on for at least as long as the
-        // recording runs (see ensurePoweredThrough() on the relay) — reflect
-        // whatever power state that produced in the ⏻ button/pill right away,
-        // instead of waiting for the next manual toggle or page load.
-        if (data.enabled !== undefined) {
-          setPower(id, data.enabled, data.enabledUntil);
-        }
       } else {
         console.warn('Record start failed for', id, data);
       }
@@ -843,8 +698,7 @@ $cols  = CamLogic::computeGridColumns($count);
   // Poll-driven counterpart to beginRecordCountdown/endRecordCountdown:
   // decides which one applies based on whether recording state actually
   // changed since the last poll, so this is safe to call every few seconds
-  // regardless of whether anything happened. Mirrors setPower()'s
-  // wasEnabled gating for the same reason.
+  // regardless of whether anything happened.
   function applyRecordingState(id, recording, endAt) {
     const wasRecording = !!recordCountdowns[id];
     if (recording) {
@@ -979,8 +833,8 @@ $cols  = CamLogic::computeGridColumns($count);
   // being the one that caused it: another tab, another user, or a
   // camera's alarm-trigger GPIO calling /record directly on the relay.
   // Without this, nothing here updates until the user next clicks
-  // something — the ⏻ button, the REC pill, and the file list would all
-  // silently go stale. Also doubles as the initial-state load on page
+  // something — the REC pill and the file list would silently go
+  // stale. Also doubles as the initial-state load on page
   // open (including "was already recording before I opened this page",
   // which previously wasn't handled at all). ──
   async function pollAllStatuses() {
@@ -991,7 +845,6 @@ $cols  = CamLogic::computeGridColumns($count);
       for (const id of getAllCameraIds()) {
         const s = data[id];
         if (!s) continue; // camera hasn't registered with the relay yet
-        setPower(id, s.enabled, s.enabledUntil);
         applyRecordingState(id, s.recording, s.recordingEndAt);
       }
     } catch (e) {
@@ -1002,13 +855,14 @@ $cols  = CamLogic::computeGridColumns($count);
   pollAllStatuses();
   setInterval(pollAllStatuses, STATUS_POLL_MS);
 
-  // ── Alarm settings — how long an alarm-triggered recording runs and how
-  // long the camera stays on after an alarm. Stored on the relay (via
-  // settings.php), not on the camera boards, so changing them here takes
-  // effect on the next alarm without reflashing anything. Saved
-  // automatically whenever a field is changed. ──
+  // ── Alarm settings — how long an alarm-triggered recording runs. Stored
+  // on the relay (via settings.php), not on the camera boards, so changing
+  // it here takes effect on the next alarm without reflashing anything.
+  // Saved automatically whenever the field is changed. The same response
+  // carries the relay's read-only pre-roll length (config.js), shown next
+  // to the duration fields as "+ Ns pre-roll" since every recording is that
+  // much longer than the number you type. ──
   const alarmRecordInput = document.getElementById('alarm-record-seconds');
-  const alarmPowerInput  = document.getElementById('alarm-power-seconds');
   const alarmStatus      = document.getElementById('alarm-status');
 
   function setAlarmStatus(text, cls) {
@@ -1018,7 +872,17 @@ $cols  = CamLogic::computeGridColumns($count);
 
   function applyAlarmSettings(s) {
     if (document.activeElement !== alarmRecordInput) alarmRecordInput.value = s.alarmRecordSeconds;
-    if (document.activeElement !== alarmPowerInput)  alarmPowerInput.value  = s.alarmPowerSeconds;
+
+    const pre = Number(s.preRollSeconds);
+    const note = pre > 0 ? `+ ${pre}s pre-roll` : '';
+    const tip = pre > 0
+      ? `Every recording also includes the ${pre}s of footage from just BEFORE it was triggered, so the clip is ${pre}s longer than this number.`
+      : '';
+    for (const id of ['preroll-note-record', 'preroll-note-alarm']) {
+      const el = document.getElementById(id);
+      el.textContent = note;
+      el.title = tip;
+    }
   }
 
   async function loadAlarmSettings() {
@@ -1033,15 +897,13 @@ $cols  = CamLogic::computeGridColumns($count);
 
   async function saveAlarmSettings() {
     const rec = parseInt(alarmRecordInput.value, 10);
-    const pow = parseInt(alarmPowerInput.value, 10);
-    if (!Number.isFinite(rec) || rec < 1 || !Number.isFinite(pow) || pow < 1) {
+    if (!Number.isFinite(rec) || rec < 1) {
       setAlarmStatus('invalid value', 'err');
       return;
     }
     setAlarmStatus('saving…', '');
     try {
-      const res = await fetch(
-        `settings.php?alarmRecordSeconds=${rec}&alarmPowerSeconds=${pow}`, { method: 'POST' });
+      const res = await fetch(`settings.php?alarmRecordSeconds=${rec}`, { method: 'POST' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       applyAlarmSettings(await res.json()); // show exactly what the relay stored
       setAlarmStatus('saved ✓', 'ok');

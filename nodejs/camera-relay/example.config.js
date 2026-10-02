@@ -8,4 +8,12 @@ module.exports = {
   port: 8080,       // HTTP: /stream, /snapshot, /status (and legacy /upload)
   pushPort: 8081,   // raw TCP: cameras push frames here continuously (see sketch)
   camKey: 'change-me', // must match API_KEY in each camera's sketch
+
+  // Pre-roll ("black box"): the relay always keeps the last N seconds of every
+  // camera in RAM, and every recording — alarm, person detector, or the
+  // dashboard's RECORD button — starts with that footage, so the clip begins
+  // BEFORE the trigger even if the trigger was slow to arrive. 0 disables it.
+  preRollSeconds: 5,                 // 0–60, default 5
+  // preRollMaxBytes: 8 * 1024 * 1024, // optional RAM cap per camera (default 8 MiB); the
+  //                                   // buffer drops its oldest frames first if it's hit
 };

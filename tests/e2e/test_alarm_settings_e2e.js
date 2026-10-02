@@ -7,9 +7,9 @@
 // The bug this guards against: an alarm used to record for the sketch's
 // hardcoded ALARM_RECORD_SECONDS (60) no matter what the dashboard was set
 // to. Now the camera just calls POST /alarm/:id and the relay applies the
-// stored settings (alarmRecordSeconds / alarmPowerSeconds). The pure
+// stored setting (alarmRecordSeconds). The pure
 // validation logic is unit tested in tests/node/test_settings.js; this
-// checks the wiring those can't: the HTTP routes, the real recording/power
+// checks the wiring those can't: the HTTP routes, the real recording
 // timing the relay produces, persistence across a relay restart, etc.
 //
 // Like the other e2e test, it behaves like an independent client (no
@@ -201,29 +201,32 @@ async function main() {
   try {
     // ── Defaults ──────────────────────────────────────────────────────
     let r = await get('/settings');
-    check('fresh relay reports default settings (60s record / 60s camera-on)',
-      r.status === 200 && r.body && r.body.alarmRecordSeconds === 60 && r.body.alarmPowerSeconds === 60,
+    check('fresh relay reports the default record length (60s) and the read-only pre-roll length',
+      r.status === 200 && r.body && r.body.alarmRecordSeconds === 60 && r.body.preRollSeconds === 5
+        && !('alarmPowerSeconds' in r.body),
       JSON.stringify(r));
 
-    // ── Saving settings (the dashboard's two fields: 10s record, 20s on) ──
-    r = await post('/settings?alarmRecordSeconds=10&alarmPowerSeconds=20');
-    check('POST /settings saves both values and returns them',
-      r.status === 200 && r.body.alarmRecordSeconds === 10 && r.body.alarmPowerSeconds === 20,
+    // ── Saving settings (the dashboard's field: 10s record) ──────────
+    r = await post('/settings?alarmRecordSeconds=10');
+    check('POST /settings saves the value and returns it (plus the read-only pre-roll)',
+      r.status === 200 && r.body.alarmRecordSeconds === 10 && r.body.preRollSeconds === 5,
       JSON.stringify(r));
 
     r = await get('/settings');
     check('GET /settings returns what was saved',
-      r.body.alarmRecordSeconds === 10 && r.body.alarmPowerSeconds === 20, JSON.stringify(r.body));
+      r.body.alarmRecordSeconds === 10, JSON.stringify(r.body));
 
     let stored = null;
     try { stored = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch (e) { /* checked below */ }
     check('settings are written to the settings file',
-      stored && stored.alarmRecordSeconds === 10 && stored.alarmPowerSeconds === 20, JSON.stringify(stored));
+      stored && stored.alarmRecordSeconds === 10 && !('preRollSeconds' in stored), JSON.stringify(stored));
 
     // ── Validation: bad input is rejected and changes nothing ─────────
     for (const [label, q] of [
       ['zero', 'alarmRecordSeconds=0'],
-      ['too large', 'alarmPowerSeconds=99999'],
+      ['too large', 'alarmRecordSeconds=99999'],
+      ['the retired power setting', 'alarmPowerSeconds=20'],
+      ['pre-roll (read-only, comes from config.js)', 'preRollSeconds=9'],
       ['non-numeric', 'alarmRecordSeconds=abc'],
       ['no fields at all', ''],
     ]) {
@@ -232,7 +235,7 @@ async function main() {
     }
     r = await get('/settings');
     check('rejected updates left the stored settings unchanged',
-      r.body.alarmRecordSeconds === 10 && r.body.alarmPowerSeconds === 20, JSON.stringify(r.body));
+      r.body.alarmRecordSeconds === 10 && r.body.preRollSeconds === 5, JSON.stringify(r.body));
 
     // ── THE BUG: alarm must use the stored 10s/20s, not 60s ───────────
     r = await post(`/alarm/${CAM_A}`);
@@ -242,11 +245,8 @@ async function main() {
     if (r.body && r.body.startedAt) {
       const startedAt = Date.parse(r.body.startedAt);
       const recordMs = Date.parse(r.body.endAt) - startedAt;
-      const powerMs = Date.parse(r.body.enabledUntil) - startedAt;
       check('alarm recording length is the stored 10s (NOT the old hardcoded 60s)',
         within(recordMs, 10000), `recording lasts ${recordMs}ms`);
-      check('camera is kept on for the stored 20s after the alarm',
-        within(powerMs, 20000), `camera on for ${powerMs}ms`);
     }
 
     // Even if a client still sends a duration, the relay must ignore it.
@@ -270,18 +270,13 @@ async function main() {
       r.status === 200 && r.body.extended === true, JSON.stringify(r));
 
     // ── Changing the settings applies to the NEXT alarm ───────────────
-    await post('/settings?alarmRecordSeconds=5&alarmPowerSeconds=3');
+    await post('/settings?alarmRecordSeconds=5');
     r = await post(`/alarm/${CAM_ALL}`);
     if (r.body && r.body.startedAt) {
       const startedAt = Date.parse(r.body.startedAt);
       const recordMs = Date.parse(r.body.endAt) - startedAt;
-      const powerMs = Date.parse(r.body.enabledUntil) - startedAt;
       check('after changing settings, the next alarm uses the new record length (5s)',
         within(recordMs, 5000), `recording lasts ${recordMs}ms`);
-      // Power (3s) is shorter than the recording (5s): the recording must
-      // still keep the camera on for its whole length.
-      check('camera stays on at least as long as the recording, even if "camera on" is shorter',
-        within(powerMs, 5000), `camera on for ${powerMs}ms`);
     } else {
       check('after changing settings, the next alarm uses the new record length (5s)', false, JSON.stringify(r));
     }
@@ -293,12 +288,12 @@ async function main() {
       r.status === 200 && [CAM_A, CAM_B, CAM_ALL].every((id) => ids.includes(id)), JSON.stringify(ids));
 
     // ── Persistence: settings survive a relay restart ─────────────────
-    await post('/settings?alarmRecordSeconds=10&alarmPowerSeconds=20');
+    await post('/settings?alarmRecordSeconds=10');
     await stopRelay(relay);
     relay = await startRelay(settingsFile);
     r = await get('/settings');
     check('settings survive a relay restart',
-      r.body && r.body.alarmRecordSeconds === 10 && r.body.alarmPowerSeconds === 20, JSON.stringify(r.body));
+      r.body && r.body.alarmRecordSeconds === 10, JSON.stringify(r.body));
 
     // ── Corrupt settings file must not stop the relay from starting ───
     await stopRelay(relay);
@@ -306,7 +301,7 @@ async function main() {
     relay = await startRelay(settingsFile);
     r = await get('/settings');
     check('a corrupt settings file falls back to defaults instead of crashing the relay',
-      r.status === 200 && r.body.alarmRecordSeconds === 60 && r.body.alarmPowerSeconds === 60, JSON.stringify(r));
+      r.status === 200 && r.body.alarmRecordSeconds === 60, JSON.stringify(r));
   } catch (err) {
     check('test run completed without an unexpected error', false, err.stack || err.message);
   } finally {

@@ -65,14 +65,20 @@ else
     done
 fi
 
-# ── Alarm-settings end-to-end test ───────────────────────────────────────
-# Spawns the real relay (on its own ports, with a throwaway settings file —
-# a real settings.json is never touched) and checks over real HTTP that an
-# alarm records/powers for the lengths stored via /settings rather than a
-# hardcoded value, that they persist across a restart, etc. See
-# tests/e2e/test_alarm_settings_e2e.js. Needs `npm install` to have been run
-# in nodejs/camera-relay/ (the relay itself needs express). Override the
-# ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+# ── End-to-end tests ─────────────────────────────────────────────────────
+# Both spawn the real relay on their own ports (never the real 8080/8081)
+# with a throwaway settings file — a real settings.json is never touched.
+# Both need `npm install` to have been run in nodejs/camera-relay/ (the relay
+# itself needs express).
+#   - tests/e2e/test_alarm_settings_e2e.js: over real HTTP, checks that an
+#     alarm records for the length stored via /settings rather than a
+#     hardcoded value, that it persists across a restart, etc. Override the
+#     ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+#   - tests/e2e/test_preroll_e2e.js: a fake camera pushes frames over the
+#     real TCP protocol; checks that every recording starts with the
+#     pre-roll window (including in the encoded .mp4 when ffmpeg/ffprobe are
+#     installed). Takes ~20s of real time. Override the ports with
+#     E2E_PREROLL_PORT / E2E_PREROLL_PUSH_PORT.
 hr
 echo "End-to-end (alarm settings) test"
 hr
@@ -81,6 +87,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     node "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (recording pre-roll) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    node "$ROOT_DIR/tests/e2e/test_preroll_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

@@ -1,7 +1,7 @@
 'use strict';
 
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
-const { parseIntInRange, isSafeFilename, parseEnabledFlag } = require('../../nodejs/camera-relay/lib/validation');
+const { parseIntInRange, isSafeFilename } = require('../../nodejs/camera-relay/lib/validation');
 
 test('parseIntInRange accepts a value inside the range', () => {
   assertEqual(parseIntInRange('10', 1, 20), 10);
@@ -39,17 +39,6 @@ test('isSafeFilename rejects path traversal attempts', () => {
 
 test('isSafeFilename rejects the wrong extension', () => {
   assertTrue(!isSafeFilename('video.mov'));
-});
-
-test('parseEnabledFlag parses "1" and "0"', () => {
-  assertEqual(parseEnabledFlag('1'), true);
-  assertEqual(parseEnabledFlag('0'), false);
-});
-
-test('parseEnabledFlag rejects anything else', () => {
-  assertEqual(parseEnabledFlag('true'), null);
-  assertEqual(parseEnabledFlag(undefined), null);
-  assertEqual(parseEnabledFlag(''), null);
 });
 
 summarize();

@@ -55,19 +55,6 @@ camtest_test('computeGridColumns: more than four cameras get three columns', fun
     camtest_assert_equal(CamLogic::computeGridColumns(12), 3);
 });
 
-// ── validateEnabledParam ─────────────────────────────────────────────
-
-camtest_test('validateEnabledParam parses "1" and "0"', function () {
-    camtest_assert_equal(CamLogic::validateEnabledParam('1'), true);
-    camtest_assert_equal(CamLogic::validateEnabledParam('0'), false);
-});
-
-camtest_test('validateEnabledParam rejects anything else', function () {
-    camtest_assert_equal(CamLogic::validateEnabledParam('true'), null);
-    camtest_assert_equal(CamLogic::validateEnabledParam(null), null);
-    camtest_assert_equal(CamLogic::validateEnabledParam(''), null);
-});
-
 // ── validatePositiveIntParam ─────────────────────────────────────────
 
 camtest_test('validatePositiveIntParam accepts plain digits', function () {
@@ -80,20 +67,6 @@ camtest_test('validatePositiveIntParam rejects zero, negative and non-numeric in
     camtest_assert_equal(CamLogic::validatePositiveIntParam('abc'), null);
     camtest_assert_equal(CamLogic::validatePositiveIntParam(''), null);
     camtest_assert_equal(CamLogic::validatePositiveIntParam(null), null);
-});
-
-// ── buildControlQuery ────────────────────────────────────────────────
-
-camtest_test('buildControlQuery: turning off ignores seconds', function () {
-    camtest_assert_equal(CamLogic::buildControlQuery(false, 60), 'enabled=0');
-});
-
-camtest_test('buildControlQuery: turning on includes seconds', function () {
-    camtest_assert_equal(CamLogic::buildControlQuery(true, 300), 'enabled=1&seconds=300');
-});
-
-camtest_test('buildControlQuery: turning on without an explicit duration', function () {
-    camtest_assert_equal(CamLogic::buildControlQuery(true, null), 'enabled=1');
 });
 
 // ── extractStatusCode ────────────────────────────────────────────────
@@ -140,20 +113,12 @@ camtest_test('isSafeFilename rejects the wrong extension', function () {
 
 // ── buildSettingsQuery ───────────────────────────────────────────────
 
-camtest_test('buildSettingsQuery includes both fields when both are given', function () {
-    camtest_assert_equal(
-        CamLogic::buildSettingsQuery(10, 20),
-        'alarmRecordSeconds=10&alarmPowerSeconds=20'
-    );
-});
-
-camtest_test('buildSettingsQuery includes only the provided field', function () {
-    camtest_assert_equal(CamLogic::buildSettingsQuery(10, null), 'alarmRecordSeconds=10');
-    camtest_assert_equal(CamLogic::buildSettingsQuery(null, 20), 'alarmPowerSeconds=20');
+camtest_test('buildSettingsQuery builds the alarmRecordSeconds query', function () {
+    camtest_assert_equal(CamLogic::buildSettingsQuery(10), 'alarmRecordSeconds=10');
 });
 
 camtest_test('buildSettingsQuery returns an empty string when nothing is provided', function () {
-    camtest_assert_equal(CamLogic::buildSettingsQuery(null, null), '');
+    camtest_assert_equal(CamLogic::buildSettingsQuery(null), '');
 });
 
 // ── buildContentDispositionHeader ────────────────────────────────────

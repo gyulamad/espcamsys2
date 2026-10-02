@@ -20,7 +20,7 @@ if (empty($cameras)) {
 }
 
 // Every camera in config.php shares the same relay, so one request covers
-// all of them — no need to loop per camera the way record.php/control.php do.
+// all of them — no need to loop per camera the way record.php does.
 $relayUrl = rtrim($cameras[0]['url'], '/') . '/status';
 
 $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);

@@ -9,7 +9,7 @@
 // Parses a query-string value as a plain integer and checks it falls in
 // [min, max] inclusive. Returns null for anything that doesn't parse
 // cleanly (missing, non-numeric, out of range) — same rule server.js used
-// inline for `seconds` on /record/:id, /record/all and /control/:id.
+// inline for `seconds` on /record/:id and /record/all.
 function parseIntInRange(raw, min, max) {
   const n = parseInt(raw, 10);
   if (!Number.isInteger(n) || n < min || n > max) return null;
@@ -23,12 +23,4 @@ function isSafeFilename(name) {
   return SAFE_FILENAME_RE.test(name);
 }
 
-// Interprets the ?enabled= query param used by /control/:id. Must be
-// exactly the string '0' or '1'; anything else is invalid.
-function parseEnabledFlag(raw) {
-  if (raw === '1') return true;
-  if (raw === '0') return false;
-  return null;
-}
-
-module.exports = { parseIntInRange, isSafeFilename, parseEnabledFlag, SAFE_FILENAME_RE };
+module.exports = { parseIntInRange, isSafeFilename, SAFE_FILENAME_RE };

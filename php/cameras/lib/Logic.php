@@ -59,16 +59,7 @@ class CamLogic
         return $count <= 4 ? 2 : 3;
     }
 
-    // Interprets a raw ?enabled= value the way control.php does: must be
-    // exactly the string '0' or '1'; anything else is invalid.
-    public static function validateEnabledParam($raw): ?bool
-    {
-        if ($raw === '1') return true;
-        if ($raw === '0') return false;
-        return null;
-    }
-
-    // Interprets a raw ?seconds= value the way control.php/record.php do:
+    // Interprets a raw ?seconds= value the way settings.php/record.php do:
     // must be written in plain digits (ctype_digit) and be at least 1.
     // Returns null for anything else (missing, non-numeric, zero, negative,
     // or containing anything but digits — e.g. a leading '+' or '-').
@@ -80,32 +71,17 @@ class CamLogic
         return $n >= 1 ? $n : null;
     }
 
-    // Builds the "enabled=..&seconds=.." query string control.php sends
-    // through to the relay's /control/:id. `seconds` is only included when
-    // turning the camera on (relay ignores it when turning off).
-    public static function buildControlQuery(bool $enabled, ?int $seconds = null): string
+    // Builds the "alarmRecordSeconds=.." query string settings.php sends
+    // through to the relay's POST /settings. Returns '' if nothing was
+    // provided, so the caller can answer 400 instead of making a pointless
+    // request. (Takes a nullable value rather than a bare int so "not
+    // provided" stays distinguishable from a real value.)
+    public static function buildSettingsQuery(?int $alarmRecordSeconds): string
     {
-        $query = 'enabled=' . ($enabled ? '1' : '0');
-        if ($enabled && $seconds !== null) {
-            $query .= '&seconds=' . urlencode((string) $seconds);
+        if ($alarmRecordSeconds === null) {
+            return '';
         }
-        return $query;
-    }
-
-    // Builds the "alarmRecordSeconds=..&alarmPowerSeconds=.." query string
-    // settings.php sends through to the relay's POST /settings. Only the
-    // fields that were actually provided (non-null) are included, so the
-    // dashboard can save either one on its own. Returns '' if neither is set.
-    public static function buildSettingsQuery(?int $alarmRecordSeconds, ?int $alarmPowerSeconds): string
-    {
-        $parts = [];
-        if ($alarmRecordSeconds !== null) {
-            $parts[] = 'alarmRecordSeconds=' . urlencode((string) $alarmRecordSeconds);
-        }
-        if ($alarmPowerSeconds !== null) {
-            $parts[] = 'alarmPowerSeconds=' . urlencode((string) $alarmPowerSeconds);
-        }
-        return implode('&', $parts);
+        return 'alarmRecordSeconds=' . urlencode((string) $alarmRecordSeconds);
     }
 
     // Pulls the numeric HTTP status code out of the header array

@@ -1,6 +1,7 @@
 const express = require('express');
 const net = require('net');
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
@@ -16,6 +17,7 @@ const video = require('./lib/video');
 const protocol = require('./lib/protocol');
 const statusView = require('./lib/statusView');
 const settingsLogic = require('./lib/settings');
+const preroll = require('./lib/preroll');
 
 const app = express();
 const PORT = process.env.PORT || config.port;
@@ -27,13 +29,24 @@ fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
 const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
-const DEFAULT_POWER_SECONDS = 300; // "ON" with no explicit duration runs for 5 minutes before auto power-off
-const MAX_POWER_SECONDS = 3600; // 1 hour cap per power-on, same sanity limit as recording
+// ── Pre-roll ("black box") ──
+// Cameras now stream continuously (there is no power on/off any more), and
+// the relay keeps the last `preRollSeconds` of every camera's frames in RAM.
+// When a recording starts — alarm, person detector, or the dashboard's
+// RECORD button — those buffered frames are written first, so the clip begins
+// BEFORE the trigger instead of whenever the (possibly slow) request got here.
+// Set in config.js (preRollSeconds, default 5; 0 disables). The PREROLL_*
+// env vars override it, the same way PORT / CAM_KEY / SETTINGS_FILE do.
+const preRollCfg = preroll.resolvePreRollConfig({
+  seconds: process.env.PREROLL_SECONDS !== undefined ? process.env.PREROLL_SECONDS : config.preRollSeconds,
+  maxBytes: process.env.PREROLL_MAX_BYTES !== undefined ? process.env.PREROLL_MAX_BYTES : config.preRollMaxBytes,
+});
+for (const w of preRollCfg.warnings) console.warn(`[config] ${w}`);
 
 // ── Persistent settings ──
 // Dashboard-editable values that must survive relay restarts and apply to
-// the cameras without reflashing them (currently the alarm durations — see
-// POST /alarm/:id). Stored as a small JSON file next to server.js; the
+// the cameras without reflashing them (currently the alarm recording length
+// — see POST /alarm/:id). Stored as a small JSON file next to server.js; the
 // validation/defaulting rules live in lib/settings.js.
 const SETTINGS_FILE = process.env.SETTINGS_FILE || path.join(__dirname, 'settings.json'); // env override lets the e2e test use a throwaway file
 
@@ -55,10 +68,17 @@ function saveSettings(next) {
 
 let settings = loadSettings();
 
+// What GET/POST /settings return: the stored, editable settings plus the
+// read-only pre-roll length (it comes from config.js, so the dashboard can
+// show how much lead-in each recording will include).
+function settingsView() {
+  return { ...settings, preRollSeconds: preRollCfg.seconds };
+}
+
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
-const cameras = {}; // id -> { frame, emitter, lastSeen, enabled, enabledUntil, powerTimer, socket, recording }
+const cameras = {}; // id -> { frame, emitter, lastSeen, socket, recording, preRoll, lastRecordedUntil }
 
 function getCamera(id) {
   if (!cameras[id]) {
@@ -66,70 +86,27 @@ function getCamera(id) {
       frame: null,
       emitter: new EventEmitter(),
       lastSeen: null,
-      enabled: true,      // dashboard-controlled: whether this camera should be capturing/pushing
-      enabledUntil: null, // when `enabled` will auto-flip back to false, or null while off / on indefinitely
-      powerTimer: null,   // pending auto power-off timeout, if any — see scheduleAutoOff()
-      socket: null,       // the camera's live push-connection socket, if connected right now
-      recording: null,    // in-progress recording, if any — see startRecording()
+      socket: null,             // the camera's live push-connection socket, if connected right now
+      recording: null,          // in-progress recording, if any — see startRecording()
+      preRoll: new preroll.PreRollBuffer({ seconds: preRollCfg.seconds, maxBytes: preRollCfg.maxBytes }),
+      lastRecordedUntil: null,  // timestamp of the last frame the previous recording contained — see startRecording()
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
   return cameras[id];
 }
 
-// Turns a camera on for `seconds` (or leaves it off, with the timer
-// cancelled, when seconds is null) — the same "start/extend from now"
-// pattern as recording: calling this again while already on resets the
-// countdown to `seconds` measured from this call, it doesn't add on top of
-// whatever was left. Only schedules the flip-back-to-false; actually
-// notifying the camera device is still sendControlByte()'s job, called
-// separately by the route handlers below.
-function scheduleAutoOff(cam, seconds) {
-  if (cam.powerTimer) {
-    clearTimeout(cam.powerTimer);
-    cam.powerTimer = null;
-  }
-  if (seconds == null) {
-    cam.enabledUntil = null;
-    return;
-  }
-  cam.enabledUntil = timing.computeEnabledUntil(Date.now(), seconds);
-  cam.powerTimer = setTimeout(() => {
-    cam.enabled = false;
-    cam.enabledUntil = null;
-    cam.powerTimer = null;
-    sendControlByte(cam);
-  }, seconds * 1000);
-}
-
-// Tells a connected camera whether it should be capturing, over its own
-// persistent push socket. Single raw byte, no framing needed since this is
-// a totally separate direction of traffic from the camera's [len][jpeg]
-// frames: 0x00 = pause, 0x01 = resume. No-op if the camera isn't connected
-// right now — its `enabled` flag is still saved and gets sent the moment it
-// (re)connects, in sendControlByte() below.
-function sendControlByte(cam) {
-  if (cam.socket && cam.socket.writable) {
-    cam.socket.write(protocol.encodeControlByte(cam.enabled));
-  }
-}
-
-// Recording needs the camera actually capturing, so starting or extending a
-// recording also guarantees the camera is powered on for at least as long
-// as the recording will run. This only ever extends power — never
-// shortens it: if the camera is already on with a timer that runs past
-// when this recording will end, it's left alone; if it's off, or its
-// auto-off would fire before the recording finishes, it's (re)armed for
-// exactly as long as the recording needs.
-function ensurePoweredThrough(cam, seconds) {
-  const now = Date.now();
-  const recordingEndsAt = now + seconds * 1000;
-  const decision = timing.computePoweredThroughDecision(cam.enabled, cam.enabledUntil, recordingEndsAt, now);
-  if (decision.alreadyCovered) return;
-
-  cam.enabled = true;
-  scheduleAutoOff(cam, decision.powerSeconds);
-  sendControlByte(cam);
+// Every frame from every transport (the raw TCP push connection and the
+// legacy HTTP /upload) goes through here, so they can't drift apart:
+//   1. file it in the camera's pre-roll buffer (which returns the timestamp
+//      it used, so a recording and the buffer always agree on frame times)
+//   2. make it the latest frame (/snapshot, new stream viewers)
+//   3. emit it to live viewers and to any active recording
+function ingestFrame(cam, frame) {
+  const ts = cam.preRoll.push(frame, Date.now());
+  cam.frame = frame;
+  cam.lastSeen = new Date(ts);
+  cam.emitter.emit('frame', frame, ts);
 }
 
 // ── Recording ──
@@ -145,23 +122,62 @@ function ensurePoweredThrough(cam, seconds) {
 // guess a default frame rate or just show the first embedded image and
 // stop, which is why footage recorded that way looked like a single still.
 //
+// PRE-ROLL: a recording does not begin at the moment it was requested. The
+// frames the camera sent in the `preRollSeconds` BEFORE the request are
+// already sitting in the camera's pre-roll buffer (see ingestFrame()), and
+// startRecording() writes them out as the first frames of the clip. That is
+// what makes the footage start before the trigger even when the trigger
+// itself was slow to arrive (person detector -> alarm GPIO -> HTTP request
+// over weak Wi-Fi). Only a NEW recording gets pre-roll; extending one that
+// is already running just moves its end time, because it already holds
+// everything since it started.
+//
 // Recordings track an `endAt` timestamp rather than a fixed duration, so
 // that a repeat request while already recording can extend it: pressing
 // record with 60s at 11:20:05 ends at 11:21:05; pressing it again with 60s
 // at 11:20:30 pushes endAt to 11:21:30 (now + 60s), not to 11:21:35 — same
 // in-progress capture, timer just restarted from the moment of the second press.
+// `startedAt`/`endAt` are always trigger-relative: the clip itself is
+// `preRollSeconds` longer than `endAt - startedAt`.
+function frameFileName(index) {
+  return `frame_${String(index).padStart(6, '0')}.jpg`;
+}
+
+// Writes the pre-roll frames as frame_000001.jpg, frame_000002.jpg, ... in
+// order. Done asynchronously, one file at a time: a few hundred synchronous
+// writes on a Pi's SD card would stall the event loop (and every live
+// stream with it) at the exact moment an alarm fires, and opening them all
+// at once could run into the open-file limit. Never rejects — a failed
+// write is logged and the clip just has a missing frame, like a live one.
+async function writePreRollFrames(rec, frames) {
+  for (let i = 0; i < frames.length; i++) {
+    try {
+      await fsp.writeFile(path.join(rec.tempDir, frameFileName(i + 1)), frames[i].jpeg);
+    } catch (err) {
+      console.error(`[${rec.id}] failed writing pre-roll frame:`, err.message);
+    }
+  }
+}
+
 function startRecording(cam, id, seconds) {
   if (cam.recording) return null; // caller should call extendRecording() instead
 
-  ensurePoweredThrough(cam, seconds); // camera must be on for the whole recording
+  const triggerTs = Date.now();
 
   const dir = path.join(RECORDINGS_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const stamp = new Date(triggerTs).toISOString().replace(/[:.]/g, '-');
   const tempDir = path.join(dir, `.tmp_${stamp}`);
   fs.mkdirSync(tempDir, { recursive: true });
 
-  const { startedAt, endAt } = timing.computeRecordingWindow(Date.now(), seconds);
+  // Snapshot the pre-roll and attach the live-frame listener in the same
+  // synchronous step. JavaScript can't deliver a frame in between, so no
+  // frame is ever missed or written twice. Frames the PREVIOUS recording
+  // already contains (lastRecordedUntil) are skipped, so two clips close
+  // together are contiguous rather than overlapping.
+  const preFrames = cam.preRoll.preRollFor(triggerTs, cam.lastRecordedUntil == null ? -Infinity : cam.lastRecordedUntil);
+
+  const { startedAt, endAt } = timing.computeRecordingWindow(triggerTs, seconds);
   const rec = {
     id,
     stamp,
@@ -169,19 +185,22 @@ function startRecording(cam, id, seconds) {
     tempDir,
     startedAt,
     endAt,
-    frameCount: 0,
-    firstFrameAt: null,
-    lastFrameAt: null,
+    preRollFrames: preFrames.length,
+    preRollWritten: null,
+    frameCount: preFrames.length, // live frames are numbered after the pre-roll ones
+    firstFrameAt: preFrames.length ? preFrames[0].ts : null,
+    lastFrameAt: preFrames.length ? preFrames[preFrames.length - 1].ts : null,
     onFrame: null,
     timer: null,
   };
 
-  rec.onFrame = (frame) => {
+  rec.preRollWritten = writePreRollFrames(rec, preFrames);
+
+  rec.onFrame = (frame, ts = Date.now()) => {
     rec.frameCount += 1;
-    const now = Date.now();
-    if (!rec.firstFrameAt) rec.firstFrameAt = now;
-    rec.lastFrameAt = now;
-    const framePath = path.join(tempDir, `frame_${String(rec.frameCount).padStart(6, '0')}.jpg`);
+    if (!rec.firstFrameAt) rec.firstFrameAt = ts;
+    rec.lastFrameAt = ts;
+    const framePath = path.join(tempDir, frameFileName(rec.frameCount));
     try {
       fs.writeFileSync(framePath, frame);
     } catch (err) {
@@ -200,11 +219,27 @@ function startRecording(cam, id, seconds) {
 function extendRecording(cam, seconds) {
   const rec = cam.recording;
   if (!rec) return null;
-  ensurePoweredThrough(cam, seconds); // keep the camera on through the new end time too
   clearTimeout(rec.timer);
   rec.endAt = timing.computeRecordingEndAt(Date.now(), seconds);
   rec.timer = setTimeout(() => stopRecording(cam), seconds * 1000);
   return rec;
+}
+
+// Starts a recording of `seconds`, or — if one is already running —
+// extends it to `seconds` from now. The one place the alarm, "record all"
+// and per-camera record routes get that behaviour, so they can't diverge.
+// Returns the JSON-ready summary those routes respond with.
+function startOrExtendRecording(cam, id, seconds) {
+  const extended = !!cam.recording;
+  const rec = extended ? extendRecording(cam, seconds) : startRecording(cam, id, seconds);
+  return {
+    id,
+    recording: true,
+    extended,
+    startedAt: rec.startedAt,
+    endAt: rec.endAt,
+    preRollFrames: extended ? 0 : rec.preRollFrames, // frames of lead-in this call added to the clip
+  };
 }
 
 function stopRecording(cam) {
@@ -213,49 +248,51 @@ function stopRecording(cam) {
   clearTimeout(rec.timer);
   cam.emitter.off('frame', rec.onFrame);
   cam.recording = null;
+  if (rec.lastFrameAt != null) cam.lastRecordedUntil = rec.lastFrameAt; // so the next clip's pre-roll doesn't repeat this footage
   finalizeRecording(rec); // encodes the captured frames into an .mp4, async — doesn't block the response
   return rec;
 }
 
 // Runs ffmpeg over the captured frames using their real measured frame
 // rate, writes `<dir>/<id>_<stamp>.mp4`, and cleans up the temp frames.
+// Waits for the (asynchronous) pre-roll files to finish landing on disk
+// first, so a recording stopped immediately still encodes its full lead-in.
 function finalizeRecording(rec) {
   if (rec.frameCount === 0) {
-    // Camera was paused/offline for this whole recording — nothing to encode.
+    // Camera was offline for this whole recording and had nothing buffered — nothing to encode.
     fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
     return;
   }
 
-  const fps = video.computeFps(rec.frameCount, rec.firstFrameAt, rec.lastFrameAt, DEFAULT_FPS);
+  rec.preRollWritten.then(() => {
+    const fps = video.computeFps(rec.frameCount, rec.firstFrameAt, rec.lastFrameAt, DEFAULT_FPS);
 
-  const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
-  const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
+    const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
+    const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
 
-  const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath));
+    const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath));
 
-  ffmpeg.on('error', (err) => {
-    // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
-    // frames in place rather than deleting footage we can't otherwise recover.
-    console.error(`[${rec.id}] ffmpeg failed to start (is it installed?):`, err.message);
-    console.error(`[${rec.id}] raw frames kept at ${rec.tempDir}`);
-  });
+    ffmpeg.on('error', (err) => {
+      // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
+      // frames in place rather than deleting footage we can't otherwise recover.
+      console.error(`[${rec.id}] ffmpeg failed to start (is it installed?):`, err.message);
+      console.error(`[${rec.id}] raw frames kept at ${rec.tempDir}`);
+    });
 
-  ffmpeg.on('exit', (code) => {
-    if (code === 0) {
-      fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
-    } else {
-      console.error(`[${rec.id}] ffmpeg exited with code ${code}, raw frames kept at ${rec.tempDir}`);
-    }
+    ffmpeg.on('exit', (code) => {
+      if (code === 0) {
+        fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
+      } else {
+        console.error(`[${rec.id}] ffmpeg exited with code ${code}, raw frames kept at ${rec.tempDir}`);
+      }
+    });
   });
 }
 
 // Camera pushes a frame here
 app.post('/upload/:id', (req, res) => {
   if (req.query.key !== API_KEY) return res.sendStatus(403);
-  const cam = getCamera(req.params.id);
-  cam.frame = req.body;
-  cam.lastSeen = new Date();
-  cam.emitter.emit('frame', cam.frame); // push instantly to any watching browsers (and any active recording)
+  ingestFrame(getCamera(req.params.id), req.body); // pre-roll buffer, latest frame, live viewers and any active recording
   res.sendStatus(200);
 });
 
@@ -298,7 +335,8 @@ app.get('/snapshot/:id', (req, res) => {
 // Quick health check across all cameras — also what the dashboard polls on
 // an interval (via status.php) to pick up state changes that didn't
 // originate from a click in that browser tab: another tab, another user,
-// or a camera's alarm-trigger GPIO calling /record directly.
+// or a camera's alarm-trigger GPIO calling /alarm directly. Includes each
+// camera's pre-roll buffer fill, handy for checking the feature is working.
 app.get('/status', (req, res) => {
   const out = {};
   for (const id in cameras) {
@@ -307,60 +345,15 @@ app.get('/status', (req, res) => {
   res.json(out);
 });
 
-// Dashboard reads/sets whether a camera should be capturing right now.
-// Used for the per-camera power button (power + bandwidth saving) — the
-// camera itself decides to skip capture/push while paused, this just carries
-// the on/off signal to it. No key required, same trust boundary as
-// /stream, /snapshot, /status: only the PHP layer (behind Tor Basic Auth)
-// is expected to be able to reach this port at all (see INSTALL.md 2.6).
-//
-// Turning a camera on works the same way recording does: it runs for a
-// given number of seconds (300 by default) and then switches itself back
-// off, so a camera nobody remembered to turn off doesn't keep drawing power
-// and bandwidth indefinitely. Turning one on again while it's already on
-// extends it — resets the countdown to the new `seconds` value measured
-// from that request, same as extendRecording(). Turning off is immediate
-// and cancels any pending auto-off.
-//
-// GET  /control/:id                    -> current { id, enabled, enabledUntil }
-// POST /control/:id?enabled=1&seconds=N -> turn on for N seconds (default 300)
-// POST /control/:id?enabled=0           -> turn off now, cancel any auto-off
-app.get('/control/:id', (req, res) => {
-  const cam = getCamera(req.params.id);
-  res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
-});
-
-app.post('/control/:id', (req, res) => {
-  const enabled = validation.parseEnabledFlag(req.query.enabled);
-  if (enabled === null) return res.sendStatus(400);
-  const cam = getCamera(req.params.id);
-
-  if (enabled) {
-    const seconds = req.query.seconds !== undefined
-      ? validation.parseIntInRange(req.query.seconds, 1, MAX_POWER_SECONDS)
-      : DEFAULT_POWER_SECONDS;
-    if (seconds === null) {
-      return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_POWER_SECONDS}` });
-    }
-    cam.enabled = true;
-    scheduleAutoOff(cam, seconds);
-  } else {
-    cam.enabled = false;
-    scheduleAutoOff(cam, null); // cancel any pending auto-off
-  }
-
-  sendControlByte(cam);
-  res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
-});
-
 // ── Settings ──
-// GET  /settings                                          -> { alarmRecordSeconds, alarmPowerSeconds }
-// POST /settings?alarmRecordSeconds=N&alarmPowerSeconds=M -> save either/both, returns the new settings
-// Same trust boundary as /control and /record (only the PHP layer should
+// GET  /settings                         -> { alarmRecordSeconds, preRollSeconds }
+// POST /settings?alarmRecordSeconds=N    -> save it, returns the new settings
+// preRollSeconds is read-only here: it comes from config.js.
+// Same trust boundary as /record (only the PHP layer should
 // reach this port). Changes take effect on the next alarm; an alarm
 // recording that's already running keeps the length it was started with.
 app.get('/settings', (req, res) => {
-  res.json(settings);
+  res.json(settingsView());
 });
 
 app.post('/settings', (req, res) => {
@@ -373,45 +366,37 @@ app.post('/settings', (req, res) => {
     return res.status(500).json({ error: 'could not save settings' });
   }
   settings = result.settings;
-  res.json(settings);
+  res.json(settingsView());
 });
 
 // ── Alarm ──
-// What a camera's alarm-trigger GPIO calls. The camera no longer says how
-// long to record — the durations come from the stored settings above, so
-// they can be changed from the dashboard without touching the boards.
-// Behaviour per camera:
-//   - the camera is guaranteed to be on for at least alarmPowerSeconds
-//     (only ever extends power, never shortens it — same rule as recording)
-//   - a recording of alarmRecordSeconds is started, or, if one is already
-//     running, extended to alarmRecordSeconds from now
-// (The recording also keeps the camera on for its own length, so if
-// alarmPowerSeconds is shorter than alarmRecordSeconds the recording wins.)
+// What a camera's alarm-trigger GPIO ends up calling. Normally the camera
+// sends it IN-BAND — a 6-byte control message down its push connection (see
+// lib/protocol.js and the push server below), which doesn't stall the
+// camera's frame stream. The HTTP routes below are the fallback for when the
+// push connection happens to be down, and for anything else that wants to
+// trigger an alarm (a script, curl). Either way the camera doesn't say how
+// long to record — the duration comes from the stored settings above, so
+// it can be changed from the dashboard without touching the boards.
+// A recording of alarmRecordSeconds is started — beginning with the last
+// preRollSeconds of footage the camera sent BEFORE this request arrived —
+// or, if one is already running, extended to alarmRecordSeconds from now.
+// Cameras are always streaming, so there is nothing to "wake up": the
+// footage that matters is already in the pre-roll buffer by the time the
+// alarm request gets here, however slow that request was.
 function triggerAlarm(id) {
-  const cam = getCamera(id);
-  ensurePoweredThrough(cam, settings.alarmPowerSeconds);
-
-  const extended = !!cam.recording;
-  const rec = extended
-    ? extendRecording(cam, settings.alarmRecordSeconds)
-    : startRecording(cam, id, settings.alarmRecordSeconds);
-
-  return {
-    id,
-    recording: true,
-    extended,
-    startedAt: rec.startedAt,
-    endAt: rec.endAt,
-    enabled: cam.enabled,
-    enabledUntil: cam.enabledUntil,
-  };
+  return startOrExtendRecording(getCamera(id), id, settings.alarmRecordSeconds);
 }
 
 // Every camera the relay knows about — what ALARM_RECORD_ALL_CAMERAS in the
-// sketch uses. Registered before /alarm/:id so "all" isn't taken as a
-// literal camera id.
+// sketch uses. Each camera contributes its own pre-roll.
+function triggerAlarmAll() {
+  return Object.keys(cameras).map(triggerAlarm);
+}
+
+// Registered before /alarm/:id so "all" isn't taken as a literal camera id.
 app.post('/alarm/all', (req, res) => {
-  res.json({ cameras: Object.keys(cameras).map(triggerAlarm) });
+  res.json({ cameras: triggerAlarmAll() });
 });
 
 app.post('/alarm/:id', (req, res) => {
@@ -432,22 +417,15 @@ app.post('/record/all', (req, res) => {
     return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
   }
 
-  const results = Object.keys(cameras).map((id) => {
-    const cam = cameras[id];
-    if (cam.recording) {
-      const rec = extendRecording(cam, seconds);
-      return { id, recording: true, extended: true, startedAt: rec.startedAt, endAt: rec.endAt };
-    }
-    const rec = startRecording(cam, id, seconds);
-    return { id, recording: true, extended: false, startedAt: rec.startedAt, endAt: rec.endAt };
-  });
+  const results = Object.keys(cameras).map((id) => startOrExtendRecording(cameras[id], id, seconds));
 
   res.json({ cameras: results });
 });
 
-// Start recording this camera's incoming frames to a file for `seconds`.
-// If it's already recording, this extends it instead — see extendRecording().
-// Same trust boundary as /control — no key. Called by the PHP layer (the
+// Start recording this camera's incoming frames to a file for `seconds`
+// (plus the pre-roll lead-in — see the Recording notes above). If it's
+// already recording, this extends it instead — see extendRecording().
+// Same trust boundary as /status and /settings — no key. Called by the PHP layer (the
 // dashboard's RECORD button) and now also directly by camera boards
 // themselves, over the LAN, when their alarm-trigger GPIO fires — see the
 // ESP32 sketch's ALARM_* constants and sendRecordRequest().
@@ -456,31 +434,7 @@ app.post('/record/:id', (req, res) => {
   if (seconds === null) {
     return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
   }
-  const cam = getCamera(req.params.id);
-
-  if (cam.recording) {
-    const rec = extendRecording(cam, seconds);
-    return res.json({
-      id: req.params.id,
-      recording: true,
-      extended: true,
-      startedAt: rec.startedAt,
-      endAt: rec.endAt,
-      enabled: cam.enabled,
-      enabledUntil: cam.enabledUntil,
-    });
-  }
-
-  const rec = startRecording(cam, req.params.id, seconds);
-  res.json({
-    id: req.params.id,
-    recording: true,
-    extended: false,
-    startedAt: rec.startedAt,
-    endAt: rec.endAt,
-    enabled: cam.enabled,
-    enabledUntil: cam.enabledUntil,
-  });
+  res.json(startOrExtendRecording(getCamera(req.params.id), req.params.id, seconds));
 });
 
 // Stop a recording early. Encoding into the final .mp4 happens in the
@@ -572,10 +526,10 @@ app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`))
 // No response is sent back for each frame — this is intentionally
 // fire-and-forget so the camera never waits on a round trip between frames.
 //
-// The one exception is the control channel above: whenever the dashboard
-// changes a camera's enabled state, or right after a camera authenticates,
-// we write a single 0x00/0x01 byte down this same socket (see
-// sendControlByte()). The camera reads it opportunistically between frames.
+// Besides frames, a camera can send small control messages in the same
+// framing — currently just the in-band alarm (see lib/protocol.js).
+// Relay -> camera, the only thing ever written is a single legacy byte right
+// after a camera authenticates — see the comment where it's sent below.
 const pushServer = net.createServer((socket) => {
   socket.setNoDelay(true);
 
@@ -603,9 +557,13 @@ const pushServer = net.createServer((socket) => {
 
       const cam = getCamera(camId);
       cam.socket = socket;
-      // Sync this camera to whatever state the dashboard last set, in case
-      // it changed while this camera was offline or mid-reconnect.
-      sendControlByte(cam);
+      // COMPATIBILITY SHIM: cameras can no longer be paused (pre-roll needs
+      // them streaming all the time), but a board still running the OLD
+      // firmware that was paused when this relay was upgraded would stay
+      // paused until power-cycled. Telling it "resume" (0x01) on every
+      // connect un-sticks it; firmware without a pause feature just
+      // discards the byte. Safe to delete once every camera is reflashed.
+      socket.write(protocol.encodeControlByte(true));
     }
 
     // Drain as many complete [length][payload] frames as are buffered
@@ -618,11 +576,26 @@ const pushServer = net.createServer((socket) => {
     }
     buf = drained.rest;
 
-    for (const frame of drained.frames) {
-      const cam = getCamera(camId);
-      cam.frame = frame;
-      cam.lastSeen = new Date();
-      cam.emitter.emit('frame', cam.frame); // also feeds any active recording, via startRecording()'s listener
+    for (const payload of drained.frames) {
+      const msg = protocol.classifyPayload(payload);
+      if (msg.kind === 'frame') {
+        ingestFrame(getCamera(camId), payload); // pre-roll buffer, latest frame, live viewers and any active recording
+      } else if (msg.kind === 'alarm') {
+        // Handled right here, in order with the frames: every frame the camera
+        // sent before this message is already in its pre-roll buffer, and
+        // nothing it sends afterwards can be missed. The camera is
+        // authenticated (this socket passed the key check), so unlike the
+        // keyless HTTP route this can only be triggered by a real camera.
+        if (msg.all) {
+          const started = triggerAlarmAll();
+          console.log(`[${camId}] in-band alarm -> recording on ${started.length} camera(s)`);
+        } else {
+          const r = triggerAlarm(camId);
+          console.log(`[${camId}] in-band alarm -> ${r.extended ? 'extended' : 'started'} recording (${r.preRollFrames} pre-roll frames)`);
+        }
+      }
+      // msg.kind === 'unknown': a control message from newer firmware than this
+      // relay — ignore it rather than mistake it for a frame or drop the camera.
     }
   });
 

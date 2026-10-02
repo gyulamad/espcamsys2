@@ -1,14 +1,14 @@
 <?php
-// settings.php — lets the dashboard read and change the alarm settings that
-// are stored on the relay (server.js, settings.json): how long an alarm
-// recording runs, and how long the camera is guaranteed to stay on after an
-// alarm. Because the relay holds these, the camera boards never need to be
-// reflashed to change them.
+// settings.php — lets the dashboard read and change the alarm setting that
+// is stored on the relay (server.js, settings.json): how long an alarm
+// recording runs. Because the relay holds it, the camera boards never need
+// to be reflashed to change it.
 //
 // GET  settings.php
-//        -> { alarmRecordSeconds, alarmPowerSeconds }
-// POST settings.php?alarmRecordSeconds=N&alarmPowerSeconds=M
-//        -> saves either or both, returns the new settings
+//        -> { alarmRecordSeconds, preRollSeconds }
+//           (preRollSeconds is read-only — it's set in the relay's config.js)
+// POST settings.php?alarmRecordSeconds=N
+//        -> saves it, returns the new settings
 //
 // Settings are relay-wide (not per camera), so — like status.php — one
 // request to the relay covers everything, using the first camera's relay URL.
@@ -32,7 +32,6 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'POST') {
     $record = null;
-    $power = null;
 
     if (isset($_GET['alarmRecordSeconds']) && $_GET['alarmRecordSeconds'] !== '') {
         $record = CamLogic::validatePositiveIntParam($_GET['alarmRecordSeconds']);
@@ -42,19 +41,11 @@ if ($method === 'POST') {
             exit;
         }
     }
-    if (isset($_GET['alarmPowerSeconds']) && $_GET['alarmPowerSeconds'] !== '') {
-        $power = CamLogic::validatePositiveIntParam($_GET['alarmPowerSeconds']);
-        if ($power === null) {
-            http_response_code(400);
-            echo json_encode(['error' => 'alarmPowerSeconds must be a positive integer']);
-            exit;
-        }
-    }
 
-    $query = CamLogic::buildSettingsQuery($record, $power);
+    $query = CamLogic::buildSettingsQuery($record);
     if ($query === '') {
         http_response_code(400);
-        echo json_encode(['error' => 'provide alarmRecordSeconds and/or alarmPowerSeconds']);
+        echo json_encode(['error' => 'provide alarmRecordSeconds']);
         exit;
     }
 

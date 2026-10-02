@@ -155,34 +155,6 @@ TEST(push_delay_zero_when_push_instant) {
     TEST_ASSERT_EQ(computePushDelayMs(0, 1.5f), 0UL, "no gap needed when the push took no measurable time");
 }
 
-// ── applyControlByte ─────────────────────────────────────────────────
-
-TEST(control_byte_zero_pauses) {
-    bool streamEnabled = true;
-    applyControlByte(0, streamEnabled);
-    TEST_ASSERT(!streamEnabled, "0x00 pauses streaming");
-}
-
-TEST(control_byte_one_resumes) {
-    bool streamEnabled = false;
-    applyControlByte(1, streamEnabled);
-    TEST_ASSERT(streamEnabled, "0x01 resumes streaming");
-}
-
-TEST(control_byte_unknown_is_ignored) {
-    bool streamEnabled = true;
-    applyControlByte(42, streamEnabled);
-    TEST_ASSERT(streamEnabled, "unrecognised byte leaves state untouched");
-}
-
-TEST(control_byte_only_last_of_several_matters) {
-    // Mirrors the .ino draining several buffered bytes in one loop() pass.
-    bool streamEnabled = true;
-    int bytes[] = {0, 1, 0};
-    for (int b : bytes) applyControlByte(b, streamEnabled);
-    TEST_ASSERT(!streamEnabled, "final byte in the batch wins");
-}
-
 // ── writeStalled ─────────────────────────────────────────────────────
 
 TEST(write_stalled_false_while_within_timeout) {
@@ -195,6 +167,49 @@ TEST(write_stalled_true_once_timeout_elapsed) {
 
 TEST(write_stalled_true_exactly_at_timeout_boundary) {
     TEST_ASSERT(writeStalled(1000, 5000, 4000), "exactly the timeout elapsed also counts as stalled");
+}
+
+// ── encodeAlarmMessage / chooseAlarmRoute ────────────────────────────
+
+TEST(alarm_message_for_this_camera_is_the_exact_wire_bytes) {
+    uint8_t m[ALARM_MESSAGE_LEN];
+    encodeAlarmMessage(false, m);
+    const uint8_t expected[6] = {0x00, 0x00, 0x00, 0x02, 0x00, 0x01};
+    for (int i = 0; i < 6; i++) TEST_ASSERT_EQ((int)m[i], (int)expected[i], "byte matches the relay's protocol.js");
+}
+
+TEST(alarm_message_for_all_cameras_is_the_exact_wire_bytes) {
+    uint8_t m[ALARM_MESSAGE_LEN];
+    encodeAlarmMessage(true, m);
+    const uint8_t expected[6] = {0x00, 0x00, 0x00, 0x02, 0x00, 0x02};
+    for (int i = 0; i < 6; i++) TEST_ASSERT_EQ((int)m[i], (int)expected[i], "byte matches the relay's protocol.js");
+}
+
+TEST(alarm_message_can_never_be_mistaken_for_a_jpeg) {
+    uint8_t m[ALARM_MESSAGE_LEN];
+    encodeAlarmMessage(false, m);
+    TEST_ASSERT_EQ((int)m[4], 0x00, "control payload starts with the marker");
+    TEST_ASSERT((int)m[4] != 0xFF, "a JPEG starts with 0xFF 0xD8, a control message never does");
+}
+
+TEST(alarm_message_length_prefix_matches_its_payload) {
+    uint8_t m[ALARM_MESSAGE_LEN];
+    encodeAlarmMessage(true, m);
+    uint32_t len = ((uint32_t)m[0] << 24) | ((uint32_t)m[1] << 16) | ((uint32_t)m[2] << 8) | m[3];
+    TEST_ASSERT_EQ((int)len, (int)(ALARM_MESSAGE_LEN - 4), "prefix says 2 payload bytes follow");
+}
+
+TEST(alarm_route_prefers_the_push_connection) {
+    TEST_ASSERT(chooseAlarmRoute(true, true) == AlarmRoute::InBand, "push up -> in-band");
+    TEST_ASSERT(chooseAlarmRoute(true, false) == AlarmRoute::InBand, "push up wins even if WiFi status looks down");
+}
+
+TEST(alarm_route_falls_back_to_http_only_without_a_push_connection) {
+    TEST_ASSERT(chooseAlarmRoute(false, true) == AlarmRoute::Http, "no push connection but WiFi -> HTTP fallback");
+}
+
+TEST(alarm_route_skips_when_nothing_can_be_sent) {
+    TEST_ASSERT(chooseAlarmRoute(false, false) == AlarmRoute::Skip, "no push, no WiFi -> skip");
 }
 
 int main() {
@@ -222,14 +237,17 @@ int main() {
     RUN_TEST(push_delay_scales_with_last_push_time);
     RUN_TEST(push_delay_zero_when_push_instant);
 
-    RUN_TEST(control_byte_zero_pauses);
-    RUN_TEST(control_byte_one_resumes);
-    RUN_TEST(control_byte_unknown_is_ignored);
-    RUN_TEST(control_byte_only_last_of_several_matters);
 
     RUN_TEST(write_stalled_false_while_within_timeout);
     RUN_TEST(write_stalled_true_once_timeout_elapsed);
     RUN_TEST(write_stalled_true_exactly_at_timeout_boundary);
+    RUN_TEST(alarm_message_for_this_camera_is_the_exact_wire_bytes);
+    RUN_TEST(alarm_message_for_all_cameras_is_the_exact_wire_bytes);
+    RUN_TEST(alarm_message_can_never_be_mistaken_for_a_jpeg);
+    RUN_TEST(alarm_message_length_prefix_matches_its_payload);
+    RUN_TEST(alarm_route_prefers_the_push_connection);
+    RUN_TEST(alarm_route_falls_back_to_http_only_without_a_push_connection);
+    RUN_TEST(alarm_route_skips_when_nothing_can_be_sent);
 
     return test::summarize();
 }

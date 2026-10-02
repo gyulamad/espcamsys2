@@ -23,12 +23,13 @@ WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // per-frame HTTP request/response round trip
 bool pushAuthed = false;
 
-// Whether we should be capturing/pushing right now. Synced from the relay
-// over the same persistent connection — see server.js's /control endpoint,
-// which the dashboard's per-camera power button calls. Defaults to on at
-// boot; the relay also re-sends its current value right after we
-// (re)authenticate, in case the dashboard paused us while we were offline.
-bool streamEnabled = true;
+// There is deliberately no pause/resume switch: this camera captures and
+// pushes continuously, always. The relay keeps a rolling pre-roll buffer of
+// the last few seconds of every camera's frames and starts each recording
+// with it, so footage begins BEFORE an alarm/record trigger — which only
+// works if the camera was already streaming when the trigger happened.
+// (Older firmware could be paused from the dashboard; a relay still sends
+// one legacy "resume" byte on connect, which loop() just discards.)
 
 // Whether esp_camera_init() has succeeded. WiFi is brought up unconditionally
 // in setup() regardless of this — a camera fault must never leave WiFi
@@ -124,15 +125,13 @@ bool ensurePushConnection() {
   return true;
 }
 
-// POSTs http://SERVER_HOST:HTTP_PORT/alarm/<id> — no duration is sent. The
-// relay holds the alarm settings (how long to record, how long to keep the
-// camera on), editable from the dashboard, so they can be changed without
-// reflashing this board. If the camera isn't already recording the relay
-// starts a fresh recording; if it is, it extends it from now — the same
-// start/extend behaviour as the dashboard's RECORD button. Logged, not
-// retried — the next alarm edge gets another chance. This blocks loop() for
-// up to setTimeout() while it runs, which briefly pauses frame pushing too —
-// acceptable since alarm triggers are rare and short-lived.
+// FALLBACK alarm report: POSTs http://SERVER_HOST:HTTP_PORT/alarm/<id>. Only
+// used when the push connection is down (see triggerAlarmRecording()) — in
+// that case no frames are flowing anyway, so it doesn't matter that this
+// blocks loop() for up to setTimeout() while it runs. No duration is sent:
+// the relay holds the alarm setting (how long to record), editable from the
+// dashboard, so it can be changed without reflashing this board. Logged, not
+// retried — the next alarm edge gets another chance.
 void sendAlarmRequest(const String &id) {
   HTTPClient http;
   std::string url = buildAlarmUrl(SERVER_HOST, HTTP_PORT, id.c_str());
@@ -149,19 +148,56 @@ void sendAlarmRequest(const String &id) {
 
 // Asks the relay to (re)start a recording — on just this camera, or on
 // every camera the relay currently knows about, per ALARM_RECORD_ALL_CAMERAS.
+// If this camera isn't already recording the relay starts a fresh recording,
+// beginning with its pre-roll (the last few seconds this camera streamed
+// BEFORE the alarm); if it is, the recording is extended from now — the same
+// start/extend behaviour as the dashboard's RECORD button.
+//
+// The normal route is IN-BAND: a 6-byte control message written down the
+// push connection we already hold open for frames (see logic.h,
+// encodeAlarmMessage()). It never waits for the relay, so loop() carries on
+// capturing frames with no gap — the old HTTP request stalled the camera for
+// as long as it took, up to seconds on weak WiFi, exactly when the person was
+// in view. This runs at the top of loop(), never mid-frame, so the message
+// always lands cleanly between two frames, and the relay handles it in order
+// with them: every frame sent before the alarm is already in its pre-roll.
+//
+// The HTTP request is the fallback only when there is no push connection.
 void triggerAlarmRecording() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[alarm] triggered but WiFi is down — skipping record request");
-    return;
-  }
+  bool wifiUp = WiFi.status() == WL_CONNECTED;
   std::string targetId = alarmRecordTargetId(ALARM_RECORD_ALL_CAMERAS, CAMERA_ID);
-  sendAlarmRequest(String(targetId.c_str()));
+
+  switch (chooseAlarmRoute(pushClient.connected(), wifiUp)) {
+    case AlarmRoute::InBand: {
+      uint8_t msg[ALARM_MESSAGE_LEN];
+      encodeAlarmMessage(ALARM_RECORD_ALL_CAMERAS, msg);
+      if (writePushBytes(msg, ALARM_MESSAGE_LEN) == ALARM_MESSAGE_LEN) {
+        Serial.println("[alarm] sent in-band on the push connection");
+        return;
+      }
+      // A partial write leaves the byte stream stopped halfway through a
+      // message, which the relay can't make sense of — the connection is
+      // unusable. Drop it (loop() reconnects) and fall back to HTTP so this
+      // alarm isn't lost; the stream is down at this point anyway.
+      Serial.println("[alarm] in-band send failed — dropping the push connection, falling back to HTTP");
+      pushClient.stop();
+      if (wifiUp) sendAlarmRequest(String(targetId.c_str()));
+      return;
+    }
+    case AlarmRoute::Http:
+      Serial.println("[alarm] no push connection — using the HTTP fallback");
+      sendAlarmRequest(String(targetId.c_str()));
+      return;
+    case AlarmRoute::Skip:
+      Serial.println("[alarm] triggered but WiFi is down — skipping record request");
+      return;
+  }
 }
 
 // Handles an alarm edge latched by onAlarmEdge(). Fires once per edge into
 // ALARM_ACTIVE_STATE; edges that arrive while a previous trigger is still
-// being processed (e.g. during the blocking HTTP POST) collapse into one,
-// which is fine since a repeat trigger only extends the recording anyway.
+// being processed collapse into one, which is fine since a repeat trigger
+// only extends the recording anyway.
 void checkAlarmTrigger() {
   if (ALARM_GPIO_PIN < 0) return; // feature turned off — see ALARM_GPIO_PIN in config.h
 
@@ -297,9 +333,8 @@ void loop() {
   // (not just right at boot) still tells you which camera this is.
   static unsigned long lastIdentityPrint = 0;
   if (millis() - lastIdentityPrint > 10000) {
-    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s%s\n",
+    Serial.printf("[%s] RSSI: %d dBm, uptime: %lus%s\n",
                   CAMERA_ID, WiFi.RSSI(), millis() / 1000,
-                  streamEnabled ? "" : " (paused)",
                   cameraReady ? "" : " (camera not ready)");
     lastIdentityPrint = millis();
   }
@@ -311,9 +346,9 @@ void loop() {
     return;
   }
 
-  // Polled every loop, independent of streamEnabled/push-connection/camera
-  // state below, so the alarm keeps working even while this camera is
-  // paused, mid-reconnect, or waiting on the camera to come up.
+  // Polled every loop, independent of push-connection/camera state below,
+  // so the alarm keeps working even while this camera is mid-reconnect or
+  // waiting on the camera to come up.
   checkAlarmTrigger();
 
   if (!cameraReady) {
@@ -342,24 +377,11 @@ void loop() {
     return;
   }
 
-  // Drain any pending control bytes from the relay (dashboard power
-  // button). Single raw byte, no framing needed — this rides the same
-  // socket as our outgoing frames but in the other direction, so it never
-  // collides with them: 0x00 = pause, 0x01 = resume. If several arrived
-  // since we last checked, only the last one matters.
-  while (pushClient.available()) {
-    int cmd = pushClient.read();
-    applyControlByte(cmd, streamEnabled);
-  }
-
-  if (!streamEnabled) {
-    // Paused from the dashboard — skip capture and push entirely, which is
-    // where the actual power/bandwidth savings come from. We deliberately
-    // keep WiFi and the push connection alive rather than sleeping, so the
-    // dashboard can resume us instantly with no reconnect delay.
-    delay(500);
-    return;
-  }
+  // Discard anything the relay sent us. The only thing it ever writes down
+  // this socket is a single legacy "resume" byte right after authenticating
+  // (for old firmware that could be paused) — there is nothing to act on,
+  // but leaving bytes unread would slowly fill the receive buffer.
+  while (pushClient.available()) pushClient.read();
 
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {

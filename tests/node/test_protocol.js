@@ -83,9 +83,47 @@ test('drainFrames throws on an oversized frame prefix', () => {
   assertThrows(() => protocol.drainFrames(bad));
 });
 
-test('encodeControlByte', () => {
+test('encodeControlByte (legacy resume byte kept for old firmware)', () => {
   assertEqual(Array.from(protocol.encodeControlByte(true)), [1]);
   assertEqual(Array.from(protocol.encodeControlByte(false)), [0]);
+});
+
+// ── In-band control messages ─────────────────────────────────────────
+
+test('classifyPayload: a JPEG (starts FF D8) is a frame', () => {
+  assertEqual(protocol.classifyPayload(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])), { kind: 'frame' });
+});
+
+test('classifyPayload: existing non-JPEG test payloads still count as frames', () => {
+  assertEqual(protocol.classifyPayload(Buffer.from('hello')), { kind: 'frame' });
+});
+
+test('classifyPayload: alarm for this camera / for all cameras', () => {
+  assertEqual(protocol.classifyPayload(Buffer.from([0x00, protocol.MSG_ALARM])), { kind: 'alarm', all: false });
+  assertEqual(protocol.classifyPayload(Buffer.from([0x00, protocol.MSG_ALARM_ALL])), { kind: 'alarm', all: true });
+});
+
+test('classifyPayload: an unknown control type is "unknown", not a frame (forward compatible)', () => {
+  assertEqual(protocol.classifyPayload(Buffer.from([0x00, 0x7f])), { kind: 'unknown' });
+  assertEqual(protocol.classifyPayload(Buffer.from([0x00])), { kind: 'unknown' }); // marker with no type
+  assertEqual(protocol.classifyPayload(Buffer.from([0x00, 0x01, 0xaa, 0xbb])).kind, 'alarm'); // trailing reserved bytes ignored
+});
+
+test('classifyPayload: an empty payload is not mistaken for a control message', () => {
+  assertEqual(protocol.classifyPayload(Buffer.alloc(0)), { kind: 'frame' });
+});
+
+test('encodeAlarmMessage produces the exact 6 wire bytes the firmware sends', () => {
+  assertEqual(Array.from(protocol.encodeAlarmMessage(false)), [0, 0, 0, 2, 0x00, 0x01]);
+  assertEqual(Array.from(protocol.encodeAlarmMessage(true)), [0, 0, 0, 2, 0x00, 0x02]);
+});
+
+test('an alarm message survives the real framing: drainFrames then classifyPayload', () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 9, 9, 9]);
+  const stream = Buffer.concat([lengthPrefixed(jpeg), protocol.encodeAlarmMessage(true), lengthPrefixed(jpeg)]);
+  const { frames, rest } = protocol.drainFrames(stream);
+  assertEqual(frames.map((f) => protocol.classifyPayload(f).kind), ['frame', 'alarm', 'frame']);
+  assertEqual(rest.length, 0);
 });
 
 summarize();

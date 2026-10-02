@@ -68,7 +68,11 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
    const bool ALARM_RECORD_ALL_CAMERAS = false; // false: only this camera records; true: every camera does
    ```
 
-   How long an alarm records, and how long the camera stays on afterwards, is **not** set in `config.h`. It is stored on the relay and edited from the dashboard's **ALARM** fields (applies to every camera, takes effect on the next alarm, no reflashing needed).
+   How long an alarm records is **not** set in `config.h`. It is stored on the relay and edited from the dashboard's **ALARM** field (applies to every camera, takes effect on the next alarm, no reflashing needed). Every recording also starts with a few seconds of footage from *before* the trigger — see "Pre-roll" in the relay setup below.
+
+   When the alarm input fires, the camera reports it to the relay as a tiny message on the connection it already holds open for video frames, so it never stops streaming to make a separate HTTP request. (If that connection happens to be down, it falls back to a plain `POST /alarm/<id>`.) **This needs a relay that understands the message — update the relay before flashing this firmware.**
+
+   Cameras stream continuously — there is no on/off switch for a camera any more. That is what lets the relay keep the rolling pre-roll buffer.
 
 4. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
 5. Disconnect GPIO0 from GND and power-cycle the board. Open the Serial Monitor (115200 baud) — you should see it connect to Wi-Fi and print its IP.
@@ -170,11 +174,14 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
    ```js
    module.exports = {
-     port: 8080,          // HTTP: /stream, /snapshot, /status, /control, /record
+     port: 8080,          // HTTP: /stream, /snapshot, /status, /record, /alarm
      pushPort: 8081,      // raw TCP: cameras push frames here continuously
      camKey: '<generate with: openssl rand -hex 24>',  // must match every camera's API_KEY
+     preRollSeconds: 5,   // optional: seconds of footage BEFORE a trigger that every recording starts with (default 5, 0 = off)
    };
    ```
+
+   **Pre-roll.** The relay always keeps the last `preRollSeconds` of every camera's frames in memory (nothing is written to disk until a recording starts). When a recording starts — an alarm, the person detector, or the dashboard's RECORD button — those buffered frames become the first part of the clip, so the footage begins *before* the trigger even if the trigger took a while to reach the relay over slow Wi-Fi. Each recording is therefore `preRollSeconds` longer than its recording length. Pre-roll costs a few MB of RAM per camera (capped at 8 MiB per camera by default; set `preRollMaxBytes` in `config.js` to change that). `curl http://localhost:8080/status` shows each camera's buffer fill under `preRoll`. Keep the value comfortably above the total delay between something happening and the relay hearing about it (detector inference + alarm request) — 5 s is a good start.
 
 4. Install dependencies (already listed in `package.json`) and do a test run:
 
@@ -213,7 +220,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    sudo systemctl status camrelay
    ```
 
-6. **Important:** the relay's `/stream`, `/snapshot`, `/status`, `/control`, `/record`, `/alarm`, and `/settings` routes have no auth of their own — only `/upload` (the camera's push endpoint) is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
+6. **Important:** the relay's `/stream`, `/snapshot`, `/status`, `/record`, `/alarm`, and `/settings` routes have no auth of their own — only `/upload` (the camera's push endpoint) is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
 
 ---
 
@@ -226,7 +233,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    sudo a2enmod headers
    ```
 
-2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `control.php`, `record.php`, `recordings.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
+2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `record.php`, `recordings.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
 3. Create the real config:
 
    ```
@@ -275,7 +282,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    curl -u pick-a-username:yourpassword http://127.0.0.1:80/
    ```
 
-   You should get the dashboard HTML back. From a LAN browser you should get a Basic Auth prompt, then see live streams, per-camera power/record controls, and recordings.
+   You should get the dashboard HTML back. From a LAN browser you should get a Basic Auth prompt, then see live streams, per-camera record controls, and recordings.
 
 ---
 
@@ -323,3 +330,14 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
 - Keep `config.php`, `config.js`, and every camera's `config.h` out of git — they're already listed in `.gitignore`; just don't force-add them.
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
+
+---
+
+## Upgrading from the version with camera power on/off
+
+Cameras can no longer be switched off from the dashboard (pre-roll needs them streaming all the time), and the dashboard's "camera on" alarm setting is gone.
+
+1. **Relay first — before reflashing any camera.** Firmware with the in-band alarm sends a small control message on the video connection; a relay from before this change would take it for a (corrupt) video frame and the alarm would be lost. Copy the new `nodejs/camera-relay/` over the old one and restart it. Add `preRollSeconds` to `config.js` if you want something other than 5. The relay sends one harmless "resume" byte to every camera when it connects, so a camera running the *old* firmware that happened to be switched off at upgrade time starts streaming again by itself.
+2. **Dashboard.** Run `deploy.sh` (it now also removes the retired `control.php` from the web root).
+3. **Firmware (whenever convenient, after step 1).** Reflash the recorder boards with the new `ESP32_CAM_Recorder` sketch. This is what removes the gap in the footage right after an alarm (the old firmware's alarm request froze the camera until it finished); it also drops the unused pause code. Old firmware keeps working with the new relay in the meantime, using the HTTP alarm request as before — pre-roll works with either.
+4. An existing `settings.json` with an `alarmPowerSeconds` value is fine; it is simply ignored.

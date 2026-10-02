@@ -94,6 +94,39 @@ inline void encodeFrameLengthPrefix(uint32_t len, uint8_t out[4]) {
     out[3] = (uint8_t)(len);
 }
 
+// ── In-band alarm message ────────────────────────────────────────────
+// Instead of a separate (blocking) HTTP request, an alarm is reported as a
+// tiny control message written down the SAME persistent push connection the
+// frames use, between two frames. Same framing as a frame — [4-byte
+// big-endian length][payload] — but the payload is [CONTROL_MARKER][type]
+// rather than a JPEG. A JPEG always starts 0xFF 0xD8, so the relay can never
+// confuse the two. These values must match nodejs/camera-relay/lib/protocol.js
+// (CONTROL_MARKER, MSG_ALARM, MSG_ALARM_ALL); tests/node/test_protocol.js and
+// tests/cpp/test_alarm_logic.cpp pin the same 6 bytes on both sides.
+const uint8_t CONTROL_MARKER = 0x00;
+const uint8_t MSG_ALARM      = 0x01; // start/extend a recording on THIS camera
+const uint8_t MSG_ALARM_ALL  = 0x02; // start/extend a recording on EVERY camera
+const size_t  ALARM_MESSAGE_LEN = 6; // 4-byte length prefix + 2-byte payload
+
+inline void encodeAlarmMessage(bool allCameras, uint8_t out[ALARM_MESSAGE_LEN]) {
+    encodeFrameLengthPrefix(2, out);
+    out[4] = CONTROL_MARKER;
+    out[5] = allCameras ? MSG_ALARM_ALL : MSG_ALARM;
+}
+
+// How to report an alarm right now:
+//   InBand — the push connection is up: write the 6-byte message on it. This
+//            never waits for the relay, so the camera keeps capturing.
+//   Http   — no push connection (so no frames are flowing anyway, and
+//            blocking costs nothing) but WiFi is up: the old HTTP request.
+//   Skip   — no WiFi at all: nothing can be sent.
+enum class AlarmRoute { InBand, Http, Skip };
+
+inline AlarmRoute chooseAlarmRoute(bool pushConnected, bool wifiUp) {
+    if (pushConnected) return AlarmRoute::InBand;
+    return wifiUp ? AlarmRoute::Http : AlarmRoute::Skip;
+}
+
 // True if a push (length prefix + payload) went out completely and the
 // socket is still connected — i.e. no reconnect is needed next loop.
 inline bool pushWriteSucceeded(size_t written, uint32_t frameLen, bool stillConnected) {
@@ -105,14 +138,6 @@ inline bool pushWriteSucceeded(size_t written, uint32_t frameLen, bool stillConn
 // -> pushMs grows -> gap grows with it -> backs off automatically.
 inline unsigned long computePushDelayMs(unsigned long lastPushMs, float intervalMul) {
     return (unsigned long)((float)lastPushMs * intervalMul);
-}
-
-// Applies one control byte read from the relay's push socket to the
-// streaming-enabled flag: 0x00 = pause, 0x01 = resume. Anything else is
-// ignored (defensive — only 0/1 are meaningful on this channel).
-inline void applyControlByte(int cmd, bool &streamEnabled) {
-    if (cmd == 0) streamEnabled = false;
-    else if (cmd == 1) streamEnabled = true;
 }
 
 // True once a stalled write (no forward progress at all) has gone on long

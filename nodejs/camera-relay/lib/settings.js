@@ -1,21 +1,20 @@
 'use strict';
 
 // settings.js — pure logic for the relay's persistent, dashboard-editable
-// settings (currently the alarm durations). No fs, no Express: server.js
+// settings (currently the alarm recording length). No fs, no Express: server.js
 // does the file I/O and passes plain values in/out, so everything here can
 // be unit tested with plain `node` — see tests/node/test_settings.js.
 
 const { parseIntInRange } = require('./validation');
 
 const MIN_SECONDS = 1;
-const MAX_SECONDS = 3600; // same sanity cap as recording / power-on
+const MAX_SECONDS = 3600; // same sanity cap as a recording
 
 // Used until the dashboard saves something, and as the per-field fallback
 // if settings.json is missing or contains junk. 60 matches the old
 // hardcoded ALARM_RECORD_SECONDS in the ESP32 sketch.
 const DEFAULT_SETTINGS = Object.freeze({
   alarmRecordSeconds: 60, // how long an alarm-triggered recording runs
-  alarmPowerSeconds: 60,  // how long the camera is guaranteed to stay on after an alarm
 });
 
 const FIELDS = Object.keys(DEFAULT_SETTINGS);
