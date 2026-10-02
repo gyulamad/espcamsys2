@@ -114,13 +114,21 @@ $cols  = CamLogic::computeGridColumns($count);
     animation: blink 1.4s ease-in-out infinite;
   }
 
-  .record-controls { display: flex; align-items: center; gap: 6px; }
+  .record-controls, .alarm-controls { display: flex; align-items: center; gap: 6px; }
+  .alarm-controls input[type=number],
   .record-controls input[type=number] {
     width: 60px; font-family: var(--mono); font-size: .7rem;
     background: transparent; border: 1px solid var(--border); color: var(--text);
     border-radius: var(--radius); padding: 6px 8px;
   }
-  .record-controls span.unit { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
+  .record-controls span.unit,
+  .alarm-controls span.unit,
+  .alarm-controls span.lbl { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
+  .alarm-controls .lbl.title { color: var(--accent2); }
+  /* Small "saved / saving / error" note next to the alarm fields */
+  #alarm-status { font-family: var(--mono); font-size: .62rem; min-width: 70px; color: var(--muted); }
+  #alarm-status.ok  { color: var(--accent); }
+  #alarm-status.err { color: var(--accent2); }
 
   /* ── Main grid ── */
   main { flex: 1; padding: 24px 32px; }
@@ -380,6 +388,19 @@ $cols  = CamLogic::computeGridColumns($count);
       <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
       <button class="btn danger" id="btn-delete-all" onclick="deleteAllRecordingsEverywhere()"
               title="Delete every saved recording, for every camera">🗑 DELETE ALL FOOTAGE</button>
+    </span>
+    <span class="alarm-controls"
+          title="Used when a camera's alarm input triggers. Stored on the relay and applied to every camera — no reflashing needed. Changes apply to the next alarm.">
+      <span class="lbl title">🚨 ALARM:</span>
+      <span class="lbl">record</span>
+      <input type="number" id="alarm-record-seconds" min="1" max="3600" value="60"
+             title="How long an alarm-triggered recording runs (a repeat alarm extends it from that moment)" onchange="saveAlarmSettings()">
+      <span class="unit">sec</span>
+      <span class="lbl">camera on</span>
+      <input type="number" id="alarm-power-seconds" min="1" max="3600" value="60"
+             title="How long the camera is kept on after an alarm (never shorter than the recording itself)" onchange="saveAlarmSettings()">
+      <span class="unit">sec</span>
+      <span id="alarm-status"></span>
     </span>
   </div>
 </header>
@@ -980,6 +1001,56 @@ $cols  = CamLogic::computeGridColumns($count);
   const STATUS_POLL_MS = 4000;
   pollAllStatuses();
   setInterval(pollAllStatuses, STATUS_POLL_MS);
+
+  // ── Alarm settings — how long an alarm-triggered recording runs and how
+  // long the camera stays on after an alarm. Stored on the relay (via
+  // settings.php), not on the camera boards, so changing them here takes
+  // effect on the next alarm without reflashing anything. Saved
+  // automatically whenever a field is changed. ──
+  const alarmRecordInput = document.getElementById('alarm-record-seconds');
+  const alarmPowerInput  = document.getElementById('alarm-power-seconds');
+  const alarmStatus      = document.getElementById('alarm-status');
+
+  function setAlarmStatus(text, cls) {
+    alarmStatus.textContent = text;
+    alarmStatus.className = cls || '';
+  }
+
+  function applyAlarmSettings(s) {
+    if (document.activeElement !== alarmRecordInput) alarmRecordInput.value = s.alarmRecordSeconds;
+    if (document.activeElement !== alarmPowerInput)  alarmPowerInput.value  = s.alarmPowerSeconds;
+  }
+
+  async function loadAlarmSettings() {
+    try {
+      const res = await fetch('settings.php');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      applyAlarmSettings(await res.json());
+    } catch (e) {
+      setAlarmStatus('load failed', 'err');
+    }
+  }
+
+  async function saveAlarmSettings() {
+    const rec = parseInt(alarmRecordInput.value, 10);
+    const pow = parseInt(alarmPowerInput.value, 10);
+    if (!Number.isFinite(rec) || rec < 1 || !Number.isFinite(pow) || pow < 1) {
+      setAlarmStatus('invalid value', 'err');
+      return;
+    }
+    setAlarmStatus('saving…', '');
+    try {
+      const res = await fetch(
+        `settings.php?alarmRecordSeconds=${rec}&alarmPowerSeconds=${pow}`, { method: 'POST' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      applyAlarmSettings(await res.json()); // show exactly what the relay stored
+      setAlarmStatus('saved ✓', 'ok');
+      setTimeout(() => setAlarmStatus(''), 2500);
+    } catch (e) {
+      setAlarmStatus('save failed', 'err');
+    }
+  }
+  loadAlarmSettings();
 
   // ── Layout toggle ──
   function setLayout(mode) {

@@ -66,12 +66,15 @@ inline std::string alarmRecordTargetId(bool recordAllCameras, const std::string 
     return recordAllCameras ? std::string("all") : cameraId;
 }
 
-// The exact URL sendRecordRequest() POSTs to:
-//   http://<host>:<httpPort>/record/<targetId>?seconds=<seconds>
-inline std::string buildRecordUrl(const std::string &host, int httpPort,
-                                   const std::string &targetId, int seconds) {
+// The exact URL sendAlarmRequest() POSTs to:
+//   http://<host>:<httpPort>/alarm/<targetId>
+// No duration is sent: how long to record and how long to keep the camera
+// on are stored on the relay and edited from the dashboard, so they can be
+// changed without reflashing the board.
+inline std::string buildAlarmUrl(const std::string &host, int httpPort,
+                                  const std::string &targetId) {
     return "http://" + host + ":" + std::to_string(httpPort) +
-           "/record/" + targetId + "?seconds=" + std::to_string(seconds);
+           "/alarm/" + targetId;
 }
 
 // ── Push connection ──────────────────────────────────────────────────

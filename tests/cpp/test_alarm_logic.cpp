@@ -80,7 +80,7 @@ TEST(debounce_release_does_not_trigger) {
     TEST_ASSERT(!releaseFires, "release (transition to inactive) does not fire");
 }
 
-// ── alarmRecordTargetId / buildRecordUrl / buildAuthLine ────────────────
+// ── alarmRecordTargetId / buildAlarmUrl / buildAuthLine ────────────────
 
 TEST(alarm_record_target_single_camera) {
     TEST_ASSERT_EQ(alarmRecordTargetId(false, "cam2"), std::string("cam2"), "targets just this camera");
@@ -90,14 +90,14 @@ TEST(alarm_record_target_all_cameras) {
     TEST_ASSERT_EQ(alarmRecordTargetId(true, "cam2"), std::string("all"), "targets every camera");
 }
 
-TEST(build_record_url_format) {
-    std::string url = buildRecordUrl("192.168.4.9", 8080, "cam2", 60);
-    TEST_ASSERT_EQ(url, std::string("http://192.168.4.9:8080/record/cam2?seconds=60"), "record URL matches relay's expected format");
+TEST(build_alarm_url_format) {
+    std::string url = buildAlarmUrl("192.168.4.9", 8080, "cam2");
+    TEST_ASSERT_EQ(url, std::string("http://192.168.4.9:8080/alarm/cam2"), "alarm URL matches relay's expected format (no duration)");
 }
 
-TEST(build_record_url_all_target) {
-    std::string url = buildRecordUrl("192.168.4.9", 8080, "all", 30);
-    TEST_ASSERT_EQ(url, std::string("http://192.168.4.9:8080/record/all?seconds=30"), "record URL for the 'all cameras' target");
+TEST(build_alarm_url_all_target) {
+    std::string url = buildAlarmUrl("192.168.4.9", 8080, "all");
+    TEST_ASSERT_EQ(url, std::string("http://192.168.4.9:8080/alarm/all"), "alarm URL for the 'all cameras' target");
 }
 
 TEST(build_auth_line_format) {
@@ -206,8 +206,8 @@ int main() {
 
     RUN_TEST(alarm_record_target_single_camera);
     RUN_TEST(alarm_record_target_all_cameras);
-    RUN_TEST(build_record_url_format);
-    RUN_TEST(build_record_url_all_target);
+    RUN_TEST(build_alarm_url_format);
+    RUN_TEST(build_alarm_url_all_target);
     RUN_TEST(build_auth_line_format);
 
     RUN_TEST(encode_frame_length_prefix_zero);

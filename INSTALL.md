@@ -65,9 +65,10 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
    // ── Alarm trigger (optional hardware input) ──────────────────────────
    const int  ALARM_GPIO_PIN           = 13;    // GPIO wired to an alarm input; -1 disables the feature entirely
    const int  ALARM_ACTIVE_STATE       = LOW;   // pin level that means "alarm!"
-   const int  ALARM_RECORD_SECONDS     = 60;    // recording length per trigger (re-trigger extends it)
    const bool ALARM_RECORD_ALL_CAMERAS = false; // false: only this camera records; true: every camera does
    ```
+
+   How long an alarm records, and how long the camera stays on afterwards, is **not** set in `config.h`. It is stored on the relay and edited from the dashboard's **ALARM** fields (applies to every camera, takes effect on the next alarm, no reflashing needed).
 
 4. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
 5. Disconnect GPIO0 from GND and power-cycle the board. Open the Serial Monitor (115200 baud) — you should see it connect to Wi-Fi and print its IP.
@@ -212,7 +213,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    sudo systemctl status camrelay
    ```
 
-6. **Important:** the relay's `/stream`, `/snapshot`, `/status`, `/control`, and `/record` routes have no auth of their own — only `/upload` (the camera's push endpoint) is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
+6. **Important:** the relay's `/stream`, `/snapshot`, `/status`, `/control`, `/record`, `/alarm`, and `/settings` routes have no auth of their own — only `/upload` (the camera's push endpoint) is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
 
 ---
 
@@ -225,7 +226,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    sudo a2enmod headers
    ```
 
-2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `control.php`, `record.php`, `recordings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
+2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `control.php`, `record.php`, `recordings.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
 3. Create the real config:
 
    ```

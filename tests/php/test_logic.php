@@ -138,6 +138,24 @@ camtest_test('isSafeFilename rejects the wrong extension', function () {
     camtest_assert_true(!CamLogic::isSafeFilename('video.mov'));
 });
 
+// ── buildSettingsQuery ───────────────────────────────────────────────
+
+camtest_test('buildSettingsQuery includes both fields when both are given', function () {
+    camtest_assert_equal(
+        CamLogic::buildSettingsQuery(10, 20),
+        'alarmRecordSeconds=10&alarmPowerSeconds=20'
+    );
+});
+
+camtest_test('buildSettingsQuery includes only the provided field', function () {
+    camtest_assert_equal(CamLogic::buildSettingsQuery(10, null), 'alarmRecordSeconds=10');
+    camtest_assert_equal(CamLogic::buildSettingsQuery(null, 20), 'alarmPowerSeconds=20');
+});
+
+camtest_test('buildSettingsQuery returns an empty string when nothing is provided', function () {
+    camtest_assert_equal(CamLogic::buildSettingsQuery(null, null), '');
+});
+
 // ── buildContentDispositionHeader ────────────────────────────────────
 
 camtest_test('buildContentDispositionHeader', function () {

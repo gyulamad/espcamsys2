@@ -38,8 +38,8 @@ const float PUSH_INTERVAL_MUL = 1.5;   // gap after each push = last push time *
 const int  ALARM_GPIO_PIN           = 13;    // which GPIO the alarm input is wired to; -1 turns the
                                               // whole feature off (no pin claimed, no polling, no HTTP calls)
 const int  ALARM_ACTIVE_STATE       = LOW;   // HIGH or LOW — the pin level that means "alarm!"
-const int  ALARM_RECORD_SECONDS     = 60;    // footage length per trigger; a repeat trigger mid-recording
-                                              // extends it by this many seconds from that moment, same as
-                                              // pressing the dashboard's RECORD button again
+// (How long an alarm records, and how long the camera stays on, is NOT set
+// here any more — it is stored on the relay and edited from the dashboard's
+// "ALARM" fields, so it can be changed without reflashing the boards.)
 const bool ALARM_RECORD_ALL_CAMERAS = false; // false: alarm here only starts/extends recording on this
                                               // camera (CAMERA_ID); true: on every camera the relay knows about

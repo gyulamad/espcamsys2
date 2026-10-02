@@ -92,6 +92,22 @@ class CamLogic
         return $query;
     }
 
+    // Builds the "alarmRecordSeconds=..&alarmPowerSeconds=.." query string
+    // settings.php sends through to the relay's POST /settings. Only the
+    // fields that were actually provided (non-null) are included, so the
+    // dashboard can save either one on its own. Returns '' if neither is set.
+    public static function buildSettingsQuery(?int $alarmRecordSeconds, ?int $alarmPowerSeconds): string
+    {
+        $parts = [];
+        if ($alarmRecordSeconds !== null) {
+            $parts[] = 'alarmRecordSeconds=' . urlencode((string) $alarmRecordSeconds);
+        }
+        if ($alarmPowerSeconds !== null) {
+            $parts[] = 'alarmPowerSeconds=' . urlencode((string) $alarmPowerSeconds);
+        }
+        return implode('&', $parts);
+    }
+
     // Pulls the numeric HTTP status code out of the header array
     // $http_response_header gives you after a stream_context_create()
     // request, so the proxying endpoints can forward the relay's actual

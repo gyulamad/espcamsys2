@@ -15,6 +15,7 @@ const timing = require('./lib/timing');
 const video = require('./lib/video');
 const protocol = require('./lib/protocol');
 const statusView = require('./lib/statusView');
+const settingsLogic = require('./lib/settings');
 
 const app = express();
 const PORT = process.env.PORT || config.port;
@@ -28,6 +29,31 @@ const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timi
 
 const DEFAULT_POWER_SECONDS = 300; // "ON" with no explicit duration runs for 5 minutes before auto power-off
 const MAX_POWER_SECONDS = 3600; // 1 hour cap per power-on, same sanity limit as recording
+
+// ── Persistent settings ──
+// Dashboard-editable values that must survive relay restarts and apply to
+// the cameras without reflashing them (currently the alarm durations — see
+// POST /alarm/:id). Stored as a small JSON file next to server.js; the
+// validation/defaulting rules live in lib/settings.js.
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+function loadSettings() {
+  try {
+    return settingsLogic.parseStoredSettings(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  } catch (e) {
+    return { ...settingsLogic.DEFAULT_SETTINGS }; // no file yet (first run) or unreadable
+  }
+}
+
+function saveSettings(next) {
+  // Write to a temp file then rename, so a crash/power loss mid-write can
+  // never leave a half-written settings.json behind.
+  const tmp = SETTINGS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
+  fs.renameSync(tmp, SETTINGS_FILE);
+}
+
+let settings = loadSettings();
 
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
@@ -325,6 +351,71 @@ app.post('/control/:id', (req, res) => {
 
   sendControlByte(cam);
   res.json({ id: req.params.id, enabled: cam.enabled, enabledUntil: cam.enabledUntil });
+});
+
+// ── Settings ──
+// GET  /settings                                          -> { alarmRecordSeconds, alarmPowerSeconds }
+// POST /settings?alarmRecordSeconds=N&alarmPowerSeconds=M -> save either/both, returns the new settings
+// Same trust boundary as /control and /record (only the PHP layer should
+// reach this port). Changes take effect on the next alarm; an alarm
+// recording that's already running keeps the length it was started with.
+app.get('/settings', (req, res) => {
+  res.json(settings);
+});
+
+app.post('/settings', (req, res) => {
+  const result = settingsLogic.applySettingsUpdate(settings, req.query);
+  if (result.error) return res.status(400).json({ error: result.error });
+  try {
+    saveSettings(result.settings);
+  } catch (err) {
+    console.error('failed saving settings:', err.message);
+    return res.status(500).json({ error: 'could not save settings' });
+  }
+  settings = result.settings;
+  res.json(settings);
+});
+
+// ── Alarm ──
+// What a camera's alarm-trigger GPIO calls. The camera no longer says how
+// long to record — the durations come from the stored settings above, so
+// they can be changed from the dashboard without touching the boards.
+// Behaviour per camera:
+//   - the camera is guaranteed to be on for at least alarmPowerSeconds
+//     (only ever extends power, never shortens it — same rule as recording)
+//   - a recording of alarmRecordSeconds is started, or, if one is already
+//     running, extended to alarmRecordSeconds from now
+// (The recording also keeps the camera on for its own length, so if
+// alarmPowerSeconds is shorter than alarmRecordSeconds the recording wins.)
+function triggerAlarm(id) {
+  const cam = getCamera(id);
+  ensurePoweredThrough(cam, settings.alarmPowerSeconds);
+
+  const extended = !!cam.recording;
+  const rec = extended
+    ? extendRecording(cam, settings.alarmRecordSeconds)
+    : startRecording(cam, id, settings.alarmRecordSeconds);
+
+  return {
+    id,
+    recording: true,
+    extended,
+    startedAt: rec.startedAt,
+    endAt: rec.endAt,
+    enabled: cam.enabled,
+    enabledUntil: cam.enabledUntil,
+  };
+}
+
+// Every camera the relay knows about — what ALARM_RECORD_ALL_CAMERAS in the
+// sketch uses. Registered before /alarm/:id so "all" isn't taken as a
+// literal camera id.
+app.post('/alarm/all', (req, res) => {
+  res.json({ cameras: Object.keys(cameras).map(triggerAlarm) });
+});
+
+app.post('/alarm/:id', (req, res) => {
+  res.json(triggerAlarm(req.params.id));
 });
 
 // Start/extend a recording on every camera the relay currently knows about

@@ -124,26 +124,25 @@ bool ensurePushConnection() {
   return true;
 }
 
-// POSTs http://SERVER_HOST:HTTP_PORT/record/<id>?seconds=ALARM_RECORD_SECONDS
-// — the exact same endpoint the dashboard's RECORD button calls (via
-// record.php), so the relay's existing start/extend behaviour just works:
-// if that camera isn't already recording, this starts a fresh
-// ALARM_RECORD_SECONDS-long recording; if it is, this extends it by
-// ALARM_RECORD_SECONDS measured from now. Logged, not retried — the next
-// alarm edge (or the relay's own auto-extend on a still-active sensor)
-// gets another chance. This blocks loop() for up to setTimeout() while it
-// runs, which briefly pauses frame pushing too — acceptable since alarm
-// triggers are rare and short-lived, not something happening every loop.
-void sendRecordRequest(const String &id) {
+// POSTs http://SERVER_HOST:HTTP_PORT/alarm/<id> — no duration is sent. The
+// relay holds the alarm settings (how long to record, how long to keep the
+// camera on), editable from the dashboard, so they can be changed without
+// reflashing this board. If the camera isn't already recording the relay
+// starts a fresh recording; if it is, it extends it from now — the same
+// start/extend behaviour as the dashboard's RECORD button. Logged, not
+// retried — the next alarm edge gets another chance. This blocks loop() for
+// up to setTimeout() while it runs, which briefly pauses frame pushing too —
+// acceptable since alarm triggers are rare and short-lived.
+void sendAlarmRequest(const String &id) {
   HTTPClient http;
-  std::string url = buildRecordUrl(SERVER_HOST, HTTP_PORT, id.c_str(), ALARM_RECORD_SECONDS);
+  std::string url = buildAlarmUrl(SERVER_HOST, HTTP_PORT, id.c_str());
   http.begin(String(url.c_str()));
   http.setTimeout(5000);
   int code = http.POST(""); // relay expects no body, same as the dashboard's proxy_post()
   if (code > 0) {
-    Serial.printf("[alarm] record request for '%s' -> HTTP %d\n", id.c_str(), code);
+    Serial.printf("[alarm] alarm request for '%s' -> HTTP %d\n", id.c_str(), code);
   } else {
-    Serial.printf("[alarm] record request for '%s' failed: %s\n", id.c_str(), http.errorToString(code).c_str());
+    Serial.printf("[alarm] alarm request for '%s' failed: %s\n", id.c_str(), http.errorToString(code).c_str());
   }
   http.end();
 }
@@ -156,7 +155,7 @@ void triggerAlarmRecording() {
     return;
   }
   std::string targetId = alarmRecordTargetId(ALARM_RECORD_ALL_CAMERAS, CAMERA_ID);
-  sendRecordRequest(String(targetId.c_str()));
+  sendAlarmRequest(String(targetId.c_str()));
 }
 
 // Handles an alarm edge latched by onAlarmEdge(). Fires once per edge into
