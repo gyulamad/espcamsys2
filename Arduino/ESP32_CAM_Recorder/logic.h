@@ -114,16 +114,37 @@ inline void encodeAlarmMessage(bool allCameras, uint8_t out[ALARM_MESSAGE_LEN]) 
     out[5] = allCameras ? MSG_ALARM_ALL : MSG_ALARM;
 }
 
+// The relay announces what it understands with single raw bytes right after
+// we authenticate (nodejs/camera-relay/lib/protocol.js, RELAY_CAP_*). We must
+// only send the in-band alarm to a relay that has said it understands it: an
+// OLDER relay would take those 6 bytes for a video frame, show a corrupt
+// frame (a black screen) on the stream and lose the alarm. Old relays never
+// send the capability byte, so they simply never get the in-band message.
+const uint8_t RELAY_CAP_INBAND_ALARM = 0x02;
+
+// Applies one byte read from the relay to the "does this relay understand
+// in-band alarms" flag. The flag must be reset to false whenever a NEW
+// connection is made — capability is per connection (the relay could have
+// been downgraded or replaced in between). Any other byte is ignored here:
+// 0x00/0x01 were the old pause/resume bytes, and unknown values must be
+// ignored so a newer relay can add capabilities without breaking this board.
+inline void applyRelayByte(int b, bool &relaySupportsInBandAlarm) {
+    if (b == RELAY_CAP_INBAND_ALARM) relaySupportsInBandAlarm = true;
+}
+
 // How to report an alarm right now:
-//   InBand — the push connection is up: write the 6-byte message on it. This
-//            never waits for the relay, so the camera keeps capturing.
-//   Http   — no push connection (so no frames are flowing anyway, and
-//            blocking costs nothing) but WiFi is up: the old HTTP request.
+//   InBand — the push connection is up AND the relay has announced it
+//            understands in-band alarms: write the 6-byte message on it.
+//            This never waits for the relay, so the camera keeps capturing.
+//   Http   — otherwise, if WiFi is up: the plain HTTP request every relay
+//            version understands. It blocks loop() while it runs, which costs
+//            frames — but it is correct, and when there is no push connection
+//            nothing is streaming anyway.
 //   Skip   — no WiFi at all: nothing can be sent.
 enum class AlarmRoute { InBand, Http, Skip };
 
-inline AlarmRoute chooseAlarmRoute(bool pushConnected, bool wifiUp) {
-    if (pushConnected) return AlarmRoute::InBand;
+inline AlarmRoute chooseAlarmRoute(bool pushConnected, bool relaySupportsInBandAlarm, bool wifiUp) {
+    if (pushConnected && relaySupportsInBandAlarm) return AlarmRoute::InBand;
     return wifiUp ? AlarmRoute::Http : AlarmRoute::Skip;
 }
 

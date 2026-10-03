@@ -126,4 +126,13 @@ test('an alarm message survives the real framing: drainFrames then classifyPaylo
   assertEqual(rest.length, 0);
 });
 
+test('encodeRelayGreeting: legacy resume byte, then the in-band-alarm capability byte', () => {
+  assertEqual(Array.from(protocol.encodeRelayGreeting()), [0x01, 0x02]);
+  assertEqual(protocol.RELAY_CAP_INBAND_ALARM, 0x02);
+});
+
+test('the capability byte is not one old firmware acts on (it only understood 0x00 pause / 0x01 resume)', () => {
+  assertTrue(protocol.RELAY_CAP_INBAND_ALARM !== 0x00 && protocol.RELAY_CAP_INBAND_ALARM !== 0x01);
+});
+
 summarize();

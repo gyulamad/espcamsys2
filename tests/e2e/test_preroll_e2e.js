@@ -18,7 +18,14 @@
 //   - a recording right after another doesn't repeat footage the previous
 //     clip already holds
 //   - preRollSeconds=0 disables it, and a bad value falls back with a warning
-//   - the legacy "resume" byte is still sent to cameras on connect
+//   - on connect the relay greets a camera with the legacy "resume" byte and
+//     the "I understand in-band alarms" capability byte
+//   - a failure while handling an in-band alarm (here: the recordings folder
+//     is unusable) never takes the relay down: the camera stays connected,
+//     live viewers keep getting frames, the error is logged, and the next
+//     alarm works once the problem is gone (an error escaping the raw socket
+//     handler would otherwise kill the whole relay process — every stream
+//     black, no recording — at exactly the moment an alarm arrives)
 //   - the camera's alarm sent IN-BAND (a 6-byte control message on the push
 //     connection, no HTTP request) starts a recording with the pre-roll, for
 //     just that camera or for all of them, without disturbing the frame
@@ -57,7 +64,8 @@ const CAM_OFF = 'e2e-preroll-cam-off';
 const CAM_IB = 'e2e-inband-cam-a';     // sends in-band alarms
 const CAM_IB2 = 'e2e-inband-cam-b';    // a bystander camera, only recorded by "alarm all"
 const CAM_UNK = 'e2e-inband-cam-unk';  // receives an unknown control message
-const TEST_CAMS = [CAM, CAM_OFF, CAM_IB, CAM_IB2, CAM_UNK];
+const CAM_FAIL = 'e2e-inband-cam-fail'; // its recordings folder is deliberately broken
+const TEST_CAMS = [CAM, CAM_OFF, CAM_IB, CAM_IB2, CAM_UNK, CAM_FAIL];
 
 const PREROLL_SECONDS = 3;
 const FRAME_INTERVAL_MS = 100; // fake camera runs at ~10 fps
@@ -226,6 +234,32 @@ class FakeCamera {
   }
 }
 
+// A live viewer of /stream/<id> (what the dashboard is). Counts the video
+// frames it receives and how many were not valid JPEGs.
+function openViewer(id) {
+  const v = { frames: 0, bad: 0, req: null };
+  let buf = Buffer.alloc(0);
+  v.req = nodeHttp.get(`${BASE}/stream/${id}`, (res) => {
+    res.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        const end = buf.indexOf('\r\n\r\n');
+        if (end < 0) break;
+        const m = /Content-Length: (\d+)/.exec(buf.slice(0, end).toString());
+        if (!m) break;
+        const n = Number(m[1]);
+        if (buf.length < end + 4 + n + 2) break;
+        v.frames += 1;
+        if (buf[end + 4] !== 0xff || buf[end + 5] !== 0xd8) v.bad += 1;
+        buf = buf.slice(end + 4 + n + 2);
+      }
+    });
+  });
+  v.req.on('error', () => {});
+  v.close = () => v.req.destroy();
+  return v;
+}
+
 async function waitFor(fn, timeoutMs, stepMs = 250) {
   const end = Date.now() + timeoutMs;
   for (;;) {
@@ -298,8 +332,8 @@ async function main() {
       `buffered=${pr && pr.frames} pushed=${cam.pushed}`);
     check('buffered span is about the window length',
       pr && between(pr.bufferedSeconds, PREROLL_SECONDS - 0.7, PREROLL_SECONDS + 0.3), JSON.stringify(pr));
-    check('the legacy "resume" byte (0x01) is still sent to the camera on connect',
-      cam.firstBytes.length >= 1 && cam.firstBytes[0] === 1, JSON.stringify(cam.firstBytes));
+    check('the relay greets the camera with the legacy "resume" byte (0x01) then the in-band-alarm capability byte (0x02)',
+      cam.firstBytes.length >= 2 && cam.firstBytes[0] === 1 && cam.firstBytes[1] === 2, JSON.stringify(cam.firstBytes));
 
     // ── 2. Alarm: the new recording must START with the pre-roll ────
     r = await post(`/alarm/${CAM}`);
@@ -417,6 +451,39 @@ async function main() {
     check('...frames after it are still accepted',
       r.body[CAM_UNK] && r.body[CAM_UNK].preRoll.frames === 1, JSON.stringify(r.body[CAM_UNK]));
     unk.stop();
+
+    // ── 6c. A failure while handling an in-band alarm must not kill the relay ──
+    // Make the camera's recordings folder unusable (a FILE where the folder
+    // should be), so starting a recording throws inside the raw socket handler.
+    const failDir = path.join(RECORDINGS_DIR, CAM_FAIL);
+    fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+    removeDir(failDir);
+    fs.writeFileSync(failDir, 'not a folder');
+    const fail = new FakeCamera(CAM_FAIL);
+    await fail.connect();
+    fail.start();
+    const viewer = openViewer(CAM_FAIL);
+    await sleep(1500);
+    const framesBefore = viewer.frames;
+    check('(setup) a live viewer is receiving the camera\'s frames', framesBefore >= 5, `frames=${framesBefore}`);
+
+    fail.sendAlarm(false); // starting the recording will throw
+    await sleep(1200);
+    r = await get('/status').catch(() => ({ status: 0 }));
+    check('the relay is still alive after an in-band alarm that failed to start a recording', r.status === 200, JSON.stringify(r));
+    check('...the camera is still connected', fail.isOpen());
+    check('...live viewers keep receiving frames (the stream does not go black)',
+      viewer.frames >= framesBefore + 8 && viewer.bad === 0, `before=${framesBefore} after=${viewer.frames} bad=${viewer.bad}`);
+    check('...and the error is logged with the camera id, not swallowed silently',
+      relay.output().includes(`[${CAM_FAIL}] error handling a alarm`), relay.output());
+
+    removeDir(failDir); // the problem goes away (disk space freed, permissions fixed...)
+    fail.sendAlarm(false);
+    const recovered = await waitFor(() => isRecording(CAM_FAIL), 3000, 100);
+    check('...and the next alarm works as soon as the problem is gone', !!recovered);
+    await post(`/record/${CAM_FAIL}/stop`);
+    viewer.close();
+    fail.stop();
 
     await stopRelay(relay);
 

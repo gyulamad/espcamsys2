@@ -42,6 +42,9 @@ const preRollCfg = preroll.resolvePreRollConfig({
   maxBytes: process.env.PREROLL_MAX_BYTES !== undefined ? process.env.PREROLL_MAX_BYTES : config.preRollMaxBytes,
 });
 for (const w of preRollCfg.warnings) console.warn(`[config] ${w}`);
+console.log(preRollCfg.seconds > 0
+  ? `Pre-roll: every recording starts with the last ${preRollCfg.seconds}s of footage (up to ${Math.round(preRollCfg.maxBytes / 1048576)} MiB per camera)`
+  : 'Pre-roll: disabled (preRollSeconds = 0)');
 
 // ── Persistent settings ──
 // Dashboard-editable values that must survive relay restarts and apply to
@@ -530,6 +533,24 @@ app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`))
 // framing — currently just the in-band alarm (see lib/protocol.js).
 // Relay -> camera, the only thing ever written is a single legacy byte right
 // after a camera authenticates — see the comment where it's sent below.
+// Anything that goes wrong while handling a message from a camera (starting
+// a recording on a full disk, a bad folder permission, a bug) must never be
+// able to take the relay down: this code runs inside the raw socket's 'data'
+// event, where — unlike an Express route, which turns a thrown error into a
+// 500 — an uncaught exception ends the whole process and every camera's live
+// stream with it. So each message is handled in a try/catch, the error is
+// logged with its stack trace, and the camera stays connected and streaming.
+// Logged at most once per 5s per camera+kind, so a persistent fault can't
+// flood the log at 10 frames a second.
+const pushErrorLoggedAt = new Map();
+function logPushError(camId, what, err) {
+  const key = `${camId}:${what}`;
+  const now = Date.now();
+  if (now - (pushErrorLoggedAt.get(key) || 0) < 5000) return;
+  pushErrorLoggedAt.set(key, now);
+  console.error(`[${camId}] error handling a ${what} from the push connection (camera stays connected):`, err && err.stack ? err.stack : err);
+}
+
 const pushServer = net.createServer((socket) => {
   socket.setNoDelay(true);
 
@@ -557,13 +578,18 @@ const pushServer = net.createServer((socket) => {
 
       const cam = getCamera(camId);
       cam.socket = socket;
-      // COMPATIBILITY SHIM: cameras can no longer be paused (pre-roll needs
-      // them streaming all the time), but a board still running the OLD
-      // firmware that was paused when this relay was upgraded would stay
-      // paused until power-cycled. Telling it "resume" (0x01) on every
-      // connect un-sticks it; firmware without a pause feature just
-      // discards the byte. Safe to delete once every camera is reflashed.
-      socket.write(protocol.encodeControlByte(true));
+      // Greet the camera with two single bytes (see lib/protocol.js):
+      //  1. COMPATIBILITY SHIM — cameras can no longer be paused (pre-roll needs
+      //     them streaming all the time), but a board still running the OLD
+      //     firmware that was paused when this relay was upgraded would stay
+      //     paused until power-cycled. "Resume" (0x01) un-sticks it; firmware
+      //     without a pause feature just discards it. Safe to delete once
+      //     every camera is reflashed.
+      //  2. CAPABILITY — "I understand in-band alarm messages". Firmware only
+      //     sends those after seeing this on the current connection, so a
+      //     camera can never feed an alarm message to a relay that would
+      //     mistake it for a video frame.
+      socket.write(protocol.encodeRelayGreeting());
     }
 
     // Drain as many complete [length][payload] frames as are buffered
@@ -577,25 +603,31 @@ const pushServer = net.createServer((socket) => {
     buf = drained.rest;
 
     for (const payload of drained.frames) {
-      const msg = protocol.classifyPayload(payload);
-      if (msg.kind === 'frame') {
-        ingestFrame(getCamera(camId), payload); // pre-roll buffer, latest frame, live viewers and any active recording
-      } else if (msg.kind === 'alarm') {
-        // Handled right here, in order with the frames: every frame the camera
-        // sent before this message is already in its pre-roll buffer, and
-        // nothing it sends afterwards can be missed. The camera is
-        // authenticated (this socket passed the key check), so unlike the
-        // keyless HTTP route this can only be triggered by a real camera.
-        if (msg.all) {
-          const started = triggerAlarmAll();
-          console.log(`[${camId}] in-band alarm -> recording on ${started.length} camera(s)`);
-        } else {
-          const r = triggerAlarm(camId);
-          console.log(`[${camId}] in-band alarm -> ${r.extended ? 'extended' : 'started'} recording (${r.preRollFrames} pre-roll frames)`);
+      let kind = 'message';
+      try {
+        const msg = protocol.classifyPayload(payload);
+        kind = msg.kind;
+        if (msg.kind === 'frame') {
+          ingestFrame(getCamera(camId), payload); // pre-roll buffer, latest frame, live viewers and any active recording
+        } else if (msg.kind === 'alarm') {
+          // Handled right here, in order with the frames: every frame the camera
+          // sent before this message is already in its pre-roll buffer, and
+          // nothing it sends afterwards can be missed. The camera is
+          // authenticated (this socket passed the key check), so unlike the
+          // keyless HTTP route this can only be triggered by a real camera.
+          if (msg.all) {
+            const started = triggerAlarmAll();
+            console.log(`[${camId}] in-band alarm -> recording on ${started.length} camera(s)`);
+          } else {
+            const r = triggerAlarm(camId);
+            console.log(`[${camId}] in-band alarm -> ${r.extended ? 'extended' : 'started'} recording (${r.preRollFrames} pre-roll frames)`);
+          }
         }
+        // msg.kind === 'unknown': a control message from newer firmware than this
+        // relay — ignore it rather than mistake it for a frame or drop the camera.
+      } catch (err) {
+        logPushError(camId, kind === 'frame' ? 'video frame' : kind === 'alarm' ? 'alarm' : 'message', err);
       }
-      // msg.kind === 'unknown': a control message from newer firmware than this
-      // relay — ignore it rather than mistake it for a frame or drop the camera.
     }
   });
 

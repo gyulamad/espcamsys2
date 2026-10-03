@@ -123,6 +123,29 @@ function encodeControlByte(enabled) {
   return Buffer.from([enabled ? 1 : 0]);
 }
 
+// ── Capability handshake (relay -> camera, right after authentication) ──
+// A camera must NEVER send an in-band alarm to a relay that doesn't
+// understand it: an old relay would take the 6 bytes for a video frame, show
+// it as a corrupt frame on the stream (a black screen) and lose the alarm.
+// So the relay announces what it supports, and the firmware only uses the
+// in-band alarm once it has seen the announcement on the CURRENT connection
+// (otherwise it falls back to the HTTP alarm, which every relay version has).
+//
+// Everything the relay writes to a camera is a single raw byte, which the
+// firmware reads between frames. Values the firmware doesn't know are
+// ignored, so this is safe in both directions: old firmware ignores the new
+// capability byte, and an old relay simply never sends it.
+//   0x00 / 0x01  legacy pause / resume (see encodeControlByte)
+//   0x02         "I understand in-band alarm control messages"
+const RELAY_CAP_INBAND_ALARM = 0x02;
+
+// Sent once per authenticated connection: the legacy "resume" byte (so an
+// old-firmware camera that was paused at upgrade time un-sticks), then the
+// capability byte.
+function encodeRelayGreeting() {
+  return Buffer.concat([encodeControlByte(true), Buffer.from([RELAY_CAP_INBAND_ALARM])]);
+}
+
 module.exports = {
   findAuthLineEnd,
   isAuthLineTooLong,
@@ -135,4 +158,6 @@ module.exports = {
   classifyPayload,
   encodeAlarmMessage,
   encodeControlByte,
+  RELAY_CAP_INBAND_ALARM,
+  encodeRelayGreeting,
 };

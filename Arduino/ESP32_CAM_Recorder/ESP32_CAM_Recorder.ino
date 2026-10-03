@@ -23,6 +23,14 @@ WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // per-frame HTTP request/response round trip
 bool pushAuthed = false;
 
+// Whether the relay on the CURRENT push connection has announced that it
+// understands in-band alarm messages (see logic.h, RELAY_CAP_INBAND_ALARM).
+// False until the announcement byte arrives, and reset on every new
+// connection. Until it's true, alarms go out as an HTTP request instead — so
+// a relay that predates the in-band alarm can never mistake the alarm bytes
+// for a video frame (corrupt stream, lost alarm).
+bool relaySupportsInBandAlarm = false;
+
 // There is deliberately no pause/resume switch: this camera captures and
 // pushes continuously, always. The relay keeps a rolling pre-roll buffer of
 // the last few seconds of every camera's frames and starts each recording
@@ -114,6 +122,7 @@ bool ensurePushConnection() {
   if (pushClient.connected()) return true;
 
   pushAuthed = false;
+  relaySupportsInBandAlarm = false; // capability is per connection: wait for this relay to announce it
   pushClient.stop();
   if (!pushClient.connect(SERVER_HOST, PUSH_PORT)) {
     return false;
@@ -125,10 +134,11 @@ bool ensurePushConnection() {
   return true;
 }
 
-// FALLBACK alarm report: POSTs http://SERVER_HOST:HTTP_PORT/alarm/<id>. Only
-// used when the push connection is down (see triggerAlarmRecording()) — in
-// that case no frames are flowing anyway, so it doesn't matter that this
-// blocks loop() for up to setTimeout() while it runs. No duration is sent:
+// FALLBACK alarm report: POSTs http://SERVER_HOST:HTTP_PORT/alarm/<id>. Used
+// only when the in-band alarm can't be (see triggerAlarmRecording()). It
+// blocks loop() for up to setTimeout() while it runs — harmless when the push
+// connection is down (nothing is streaming anyway), a gap in the footage when
+// it's up but the relay is too old for the in-band message. No duration is sent:
 // the relay holds the alarm setting (how long to record), editable from the
 // dashboard, so it can be changed without reflashing this board. Logged, not
 // retried — the next alarm edge gets another chance.
@@ -162,12 +172,16 @@ void sendAlarmRequest(const String &id) {
 // always lands cleanly between two frames, and the relay handles it in order
 // with them: every frame sent before the alarm is already in its pre-roll.
 //
-// The HTTP request is the fallback only when there is no push connection.
+// The HTTP request is the fallback when there is no push connection, or the
+// relay on this connection hasn't announced it understands the in-band
+// message (an older relay, or this connection is brand new and the
+// announcement hasn't been read yet). That check is what makes it safe to run
+// this firmware against any relay version.
 void triggerAlarmRecording() {
   bool wifiUp = WiFi.status() == WL_CONNECTED;
   std::string targetId = alarmRecordTargetId(ALARM_RECORD_ALL_CAMERAS, CAMERA_ID);
 
-  switch (chooseAlarmRoute(pushClient.connected(), wifiUp)) {
+  switch (chooseAlarmRoute(pushClient.connected(), relaySupportsInBandAlarm, wifiUp)) {
     case AlarmRoute::InBand: {
       uint8_t msg[ALARM_MESSAGE_LEN];
       encodeAlarmMessage(ALARM_RECORD_ALL_CAMERAS, msg);
@@ -185,7 +199,9 @@ void triggerAlarmRecording() {
       return;
     }
     case AlarmRoute::Http:
-      Serial.println("[alarm] no push connection — using the HTTP fallback");
+      Serial.println(pushClient.connected()
+        ? "[alarm] relay hasn't announced in-band alarm support (old relay, or just connected) — using the HTTP request"
+        : "[alarm] no push connection — using the HTTP request");
       sendAlarmRequest(String(targetId.c_str()));
       return;
     case AlarmRoute::Skip:
@@ -377,11 +393,12 @@ void loop() {
     return;
   }
 
-  // Discard anything the relay sent us. The only thing it ever writes down
-  // this socket is a single legacy "resume" byte right after authenticating
-  // (for old firmware that could be paused) — there is nothing to act on,
-  // but leaving bytes unread would slowly fill the receive buffer.
-  while (pushClient.available()) pushClient.read();
+  // Read what the relay wrote to us. Right after we authenticate it sends two
+  // single bytes: a legacy "resume" (for old firmware that could be paused —
+  // nothing to do here) and the capability announcement, which is what
+  // switches alarms over to the in-band message. Everything is consumed so
+  // the receive buffer can't slowly fill up; unknown bytes are ignored.
+  while (pushClient.available()) applyRelayByte(pushClient.read(), relaySupportsInBandAlarm);
 
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {

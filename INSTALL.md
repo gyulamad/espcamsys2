@@ -70,7 +70,7 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 
    How long an alarm records is **not** set in `config.h`. It is stored on the relay and edited from the dashboard's **ALARM** field (applies to every camera, takes effect on the next alarm, no reflashing needed). Every recording also starts with a few seconds of footage from *before* the trigger — see "Pre-roll" in the relay setup below.
 
-   When the alarm input fires, the camera reports it to the relay as a tiny message on the connection it already holds open for video frames, so it never stops streaming to make a separate HTTP request. (If that connection happens to be down, it falls back to a plain `POST /alarm/<id>`.) **This needs a relay that understands the message — update the relay before flashing this firmware.**
+   When the alarm input fires, the camera reports it to the relay as a tiny message on the connection it already holds open for video frames, so it never stops streaming to make a separate HTTP request. (If that connection happens to be down, it falls back to a plain `POST /alarm/<id>`.) The relay announces to each camera, right after it connects, that it understands this message, and the camera only uses it after hearing that; against a relay that doesn't announce it (an older version), the camera keeps using the HTTP request, so mixing versions is safe.
 
    Cameras stream continuously — there is no on/off switch for a camera any more. That is what lets the relay keep the rolling pre-roll buffer.
 
@@ -337,7 +337,16 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 Cameras can no longer be switched off from the dashboard (pre-roll needs them streaming all the time), and the dashboard's "camera on" alarm setting is gone.
 
-1. **Relay first — before reflashing any camera.** Firmware with the in-band alarm sends a small control message on the video connection; a relay from before this change would take it for a (corrupt) video frame and the alarm would be lost. Copy the new `nodejs/camera-relay/` over the old one and restart it. Add `preRollSeconds` to `config.js` if you want something other than 5. The relay sends one harmless "resume" byte to every camera when it connects, so a camera running the *old* firmware that happened to be switched off at upgrade time starts streaming again by itself.
+1. **Relay first.** Copy the new `nodejs/camera-relay/` over the old one and **restart the relay process** (copying files does not change the running one). New firmware works with an older relay too (it falls back to the HTTP alarm), but you only get the no-gap alarm and pre-roll with the new relay. Add `preRollSeconds` to `config.js` if you want something other than 5. The relay sends one harmless "resume" byte to every camera when it connects, so a camera running the *old* firmware that happened to be switched off at upgrade time starts streaming again by itself.
 2. **Dashboard.** Run `deploy.sh` (it now also removes the retired `control.php` from the web root).
-3. **Firmware (whenever convenient, after step 1).** Reflash the recorder boards with the new `ESP32_CAM_Recorder` sketch. This is what removes the gap in the footage right after an alarm (the old firmware's alarm request froze the camera until it finished); it also drops the unused pause code. Old firmware keeps working with the new relay in the meantime, using the HTTP alarm request as before — pre-roll works with either.
+3. **Firmware (whenever convenient).** Reflash the recorder boards with the new `ESP32_CAM_Recorder` sketch. This is what removes the gap in the footage right after an alarm (the old firmware's alarm request froze the camera until it finished); it also drops the unused pause code. Old firmware keeps working with the new relay in the meantime, using the HTTP alarm request as before — pre-roll works with either.
 4. An existing `settings.json` with an `alarmPowerSeconds` value is fine; it is simply ignored.
+
+---
+
+## Troubleshooting: an alarm doesn't record, or a stream goes dark
+
+1. **Is the relay actually running the new code?** `curl -s http://<relay>:8080/status` — every camera should have a `preRoll` entry, and the relay's startup log has a line `Pre-roll: every recording starts with the last 5s…`. If not, the relay process was never restarted after the files were copied.
+2. **Did the alarm reach the relay?** The relay log shows `[<camera>] in-band alarm -> started recording (N pre-roll frames)` (or `extended`). If a recording could not start you will instead see `[<camera>] error handling a alarm from the push connection …` followed by the reason (full disk, folder permissions, …) — the relay itself keeps running and the camera keeps streaming; fix the reason and the next alarm works.
+3. **What did the camera do?** Serial Monitor on the recorder board prints one of: `[alarm] sent in-band on the push connection`, `[alarm] relay hasn't announced in-band alarm support … using the HTTP request`, or `[alarm] no push connection — using the HTTP request`.
+4. If the stream itself is black or frozen, check the relay is still up (`systemctl status …` / `pm2 status` / uptime) — a relay that restarted at the moment of an alarm will have an error with a stack trace just before the restart in its log.

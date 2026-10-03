@@ -199,17 +199,48 @@ TEST(alarm_message_length_prefix_matches_its_payload) {
     TEST_ASSERT_EQ((int)len, (int)(ALARM_MESSAGE_LEN - 4), "prefix says 2 payload bytes follow");
 }
 
-TEST(alarm_route_prefers_the_push_connection) {
-    TEST_ASSERT(chooseAlarmRoute(true, true) == AlarmRoute::InBand, "push up -> in-band");
-    TEST_ASSERT(chooseAlarmRoute(true, false) == AlarmRoute::InBand, "push up wins even if WiFi status looks down");
+TEST(alarm_route_uses_the_push_connection_only_when_the_relay_announced_support) {
+    TEST_ASSERT(chooseAlarmRoute(true, true, true) == AlarmRoute::InBand, "push up + relay supports -> in-band");
+    TEST_ASSERT(chooseAlarmRoute(true, true, false) == AlarmRoute::InBand, "in-band wins even if WiFi status looks down");
 }
 
-TEST(alarm_route_falls_back_to_http_only_without_a_push_connection) {
-    TEST_ASSERT(chooseAlarmRoute(false, true) == AlarmRoute::Http, "no push connection but WiFi -> HTTP fallback");
+TEST(alarm_route_never_sends_in_band_to_a_relay_that_did_not_announce_support) {
+    // The regression this guards against: an OLD relay takes the 6 alarm bytes for
+    // a video frame -> corrupt frame on the stream (black screen) and a lost alarm.
+    TEST_ASSERT(chooseAlarmRoute(true, false, true) == AlarmRoute::Http, "push up but relay silent -> HTTP, not in-band");
+    TEST_ASSERT(chooseAlarmRoute(true, false, false) == AlarmRoute::Skip, "...and nothing at all if WiFi is down too");
+}
+
+TEST(alarm_route_falls_back_to_http_without_a_push_connection) {
+    TEST_ASSERT(chooseAlarmRoute(false, false, true) == AlarmRoute::Http, "no push connection but WiFi -> HTTP fallback");
+    TEST_ASSERT(chooseAlarmRoute(false, true, true) == AlarmRoute::Http, "stale capability flag with no connection -> HTTP");
 }
 
 TEST(alarm_route_skips_when_nothing_can_be_sent) {
-    TEST_ASSERT(chooseAlarmRoute(false, false) == AlarmRoute::Skip, "no push, no WiFi -> skip");
+    TEST_ASSERT(chooseAlarmRoute(false, false, false) == AlarmRoute::Skip, "no push, no WiFi -> skip");
+}
+
+TEST(relay_capability_byte_sets_the_flag) {
+    bool supports = false;
+    applyRelayByte(RELAY_CAP_INBAND_ALARM, supports);
+    TEST_ASSERT(supports, "0x02 from the relay turns in-band alarms on");
+}
+
+TEST(old_relay_bytes_and_unknown_bytes_leave_the_flag_off) {
+    bool supports = false;
+    applyRelayByte(0, supports);   // legacy pause
+    applyRelayByte(1, supports);   // legacy resume (what an old relay sends on connect)
+    applyRelayByte(42, supports);  // unknown
+    applyRelayByte(-1, supports);  // read() with nothing available
+    TEST_ASSERT(!supports, "an old relay's bytes never enable in-band alarms");
+}
+
+TEST(relay_greeting_sequence_resume_then_capability) {
+    // Exactly what the new relay writes on connect: 0x01 then 0x02.
+    bool supports = false;
+    const int greeting[2] = {0x01, 0x02};
+    for (int i = 0; i < 2; i++) applyRelayByte(greeting[i], supports);
+    TEST_ASSERT(supports, "greeting enables in-band alarms");
 }
 
 int main() {
@@ -245,9 +276,13 @@ int main() {
     RUN_TEST(alarm_message_for_all_cameras_is_the_exact_wire_bytes);
     RUN_TEST(alarm_message_can_never_be_mistaken_for_a_jpeg);
     RUN_TEST(alarm_message_length_prefix_matches_its_payload);
-    RUN_TEST(alarm_route_prefers_the_push_connection);
-    RUN_TEST(alarm_route_falls_back_to_http_only_without_a_push_connection);
+    RUN_TEST(alarm_route_uses_the_push_connection_only_when_the_relay_announced_support);
+    RUN_TEST(alarm_route_never_sends_in_band_to_a_relay_that_did_not_announce_support);
+    RUN_TEST(alarm_route_falls_back_to_http_without_a_push_connection);
     RUN_TEST(alarm_route_skips_when_nothing_can_be_sent);
+    RUN_TEST(relay_capability_byte_sets_the_flag);
+    RUN_TEST(old_relay_bytes_and_unknown_bytes_leave_the_flag_off);
+    RUN_TEST(relay_greeting_sequence_resume_then_capability);
 
     return test::summarize();
 }
