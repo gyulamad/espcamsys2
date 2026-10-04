@@ -1,7 +1,7 @@
 'use strict';
 
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
-const { parseIntInRange, isSafeFilename } = require('../../nodejs/camera-relay/lib/validation');
+const { parseIntInRange, isSafeFilename, countRecordingFiles } = require('../../nodejs/camera-relay/lib/validation');
 
 test('parseIntInRange accepts a value inside the range', () => {
   assertEqual(parseIntInRange('10', 1, 20), 10);
@@ -39,6 +39,22 @@ test('isSafeFilename rejects path traversal attempts', () => {
 
 test('isSafeFilename rejects the wrong extension', () => {
   assertTrue(!isSafeFilename('video.mov'));
+});
+
+test('countRecordingFiles counts exactly the files the recordings list shows (isSafeFilename)', () => {
+  const names = ['cam1_2026-10-03T10-00-00-000Z.mp4', 'cam1_2026-10-03T11-00-00-000Z.mp4'];
+  assertEqual(countRecordingFiles(names), 2);
+  assertEqual(countRecordingFiles([]), 0);
+});
+
+test('countRecordingFiles ignores a recording in progress (.tmp_ folder) and anything that is not a recording', () => {
+  const names = ['a.mp4', '.tmp_2026-10-03T10-00-00-000Z', 'notes.txt', 'a.mp4.part', '..', 'b.MP4x'];
+  assertEqual(countRecordingFiles(names), 1);
+});
+
+test('countRecordingFiles agrees with isSafeFilename for every name (they cannot drift apart)', () => {
+  const names = ['x.mp4', 'y.mp3', '.hidden.mp4', 'a b.mp4', '../evil.mp4', 'ok-1_2.mp4', ''];
+  assertEqual(countRecordingFiles(names), names.filter(isSafeFilename).length);
 });
 
 summarize();

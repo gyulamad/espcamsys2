@@ -14,6 +14,7 @@ test('buildCameraStatusView: idle camera that has never recorded', () => {
     recordingStartedAt: null,
     recordingEndAt: null,
     preRoll: EMPTY_PREROLL,
+    recordingCount: null, // not known unless the caller says
   });
 });
 
@@ -38,6 +39,20 @@ test('buildCameraStatusView: reports the pre-roll buffer fill', () => {
   preRoll.push(Buffer.alloc(10), 3000);
   const view = buildCameraStatusView({ lastSeen: new Date(3000), recording: null, preRoll });
   assertEqual(view.preRoll, { frames: 2, bytes: 20, bufferedSeconds: 2, windowSeconds: 5 });
+});
+
+test('buildCameraStatusView: reports how many recordings the camera has (for the dashboard FILES button)', () => {
+  const cam = { lastSeen: null, recording: null };
+  assertEqual(buildCameraStatusView(cam, 7).recordingCount, 7);
+  assertEqual(buildCameraStatusView(cam, 0).recordingCount, 0, '0 is a real count, not "unknown"');
+  assertEqual(buildCameraStatusView(cam, null).recordingCount, null, 'null = the folder could not be read');
+});
+
+test('buildCameraStatusView: a camera that only exists as a folder of footage (never seen) still builds', () => {
+  const view = buildCameraStatusView({ lastSeen: null, recording: null, preRoll: null }, 3);
+  assertEqual(view.recording, false);
+  assertEqual(view.preRoll, EMPTY_PREROLL);
+  assertEqual(view.recordingCount, 3);
 });
 
 summarize();

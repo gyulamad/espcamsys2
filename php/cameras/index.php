@@ -418,7 +418,9 @@ $cols  = CamLogic::computeGridColumns($count);
                 onclick="recordOne('<?= htmlspecialchars($cam['id']) ?>')">⏺ RECORD</button>
         <button class="cam-btn danger" id="stop-btn-<?= htmlspecialchars($cam['id']) ?>" style="display:none;"
                 onclick="stopOne('<?= htmlspecialchars($cam['id']) ?>')">⏹ STOP</button>
-        <button class="cam-btn" onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
+        <button class="cam-btn" id="files-btn-<?= htmlspecialchars($cam['id']) ?>"
+                title="Saved recordings for this camera — click to open the list"
+                onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
       </div>
 
       <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
@@ -713,6 +715,20 @@ $cols  = CamLogic::computeGridColumns($count);
   }
 
   // ── Recordings list panel — browse, play, download and delete saved footage ──
+
+  // Shows how many recordings a camera has right on its FILES button —
+  // "📼 FILES (3)" — so you don't have to open the list to know. The number
+  // comes from the relay's /status (polled every few seconds, so it follows
+  // clips finishing and deletes made anywhere) and is also set instantly
+  // whenever this tab loads the list itself. Anything that isn't a whole
+  // number (a folder the relay couldn't read) leaves the button showing
+  // whatever it showed before rather than a wrong number.
+  function setFilesCount(id, count) {
+    if (!Number.isInteger(count) || count < 0) return;
+    const btn = document.getElementById('files-btn-' + id);
+    if (btn) btn.textContent = `📼 FILES (${count})`;
+  }
+
   async function toggleRecordingsPanel(id) {
     const panel = document.getElementById('files-' + id);
     const open = panel.classList.toggle('open');
@@ -725,6 +741,7 @@ $cols  = CamLogic::computeGridColumns($count);
     try {
       const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}`);
       const files = await res.json();
+      if (Array.isArray(files)) setFilesCount(id, files.length); // keep the button in step with what the list shows
       if (!Array.isArray(files) || files.length === 0) {
         panel.innerHTML = '<div class="files-empty">No recordings yet.</div>';
         return;
@@ -813,6 +830,7 @@ $cols  = CamLogic::computeGridColumns($count);
       ));
       // Refresh any panels currently open so deleted files disappear immediately.
       await Promise.all(getAllCameraIds().map(refreshRecordingsList));
+      await pollAllStatuses(); // update the FILES counts of cameras whose list panel is closed right away
     } finally {
       btn.disabled = false;
     }
@@ -842,10 +860,18 @@ $cols  = CamLogic::computeGridColumns($count);
       const res = await fetch('status.php');
       if (!res.ok) return;
       const data = await res.json();
+      // Only trust a genuine status map. An error-shaped or malformed answer must
+      // not be read as "no camera has any footage" and wipe the FILES counts.
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) return;
       for (const id of getAllCameraIds()) {
         const s = data[id];
-        if (!s) continue; // camera hasn't registered with the relay yet
+        if (!s) {
+          // Neither connected to the relay yet nor any footage on disk for it.
+          setFilesCount(id, 0);
+          continue;
+        }
         applyRecordingState(id, s.recording, s.recordingEndAt);
+        setFilesCount(id, s.recordingCount);
       }
     } catch (e) {
       // Relay unreachable this round — the next poll will try again.

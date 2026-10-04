@@ -23,4 +23,14 @@ function isSafeFilename(name) {
   return SAFE_FILENAME_RE.test(name);
 }
 
-module.exports = { parseIntInRange, isSafeFilename, SAFE_FILENAME_RE };
+// How many saved recordings a camera has, given the names found in its
+// recordings folder. Uses the SAME rule as the file list (GET /recordings/:id
+// shows exactly the names isSafeFilename accepts), so the number on the
+// dashboard's FILES button can never disagree with what the list then shows —
+// finished clips and a clip still being written both count, the temporary
+// .tmp_ folders of a recording in progress never do.
+function countRecordingFiles(names) {
+  return names.filter(isSafeFilename).length;
+}
+
+module.exports = { parseIntInRange, isSafeFilename, countRecordingFiles, SAFE_FILENAME_RE };

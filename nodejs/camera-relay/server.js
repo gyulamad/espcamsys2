@@ -340,12 +340,47 @@ app.get('/snapshot/:id', (req, res) => {
 // originate from a click in that browser tab: another tab, another user,
 // or a camera's alarm-trigger GPIO calling /alarm directly. Includes each
 // camera's pre-roll buffer fill, handy for checking the feature is working.
-app.get('/status', (req, res) => {
-  const out = {};
-  for (const id in cameras) {
-    out[id] = statusView.buildCameraStatusView(cameras[id]);
+// How many saved recordings a camera has — the same rule the file list uses
+// (see validation.countRecordingFiles). 0 if it has no folder yet; null if the
+// folder exists but couldn't be read, so one bad folder shows up as "unknown"
+// for that camera instead of failing the whole status response.
+async function countRecordings(id) {
+  try {
+    return validation.countRecordingFiles(await fsp.readdir(path.join(RECORDINGS_DIR, id)));
+  } catch (err) {
+    return err.code === 'ENOENT' ? 0 : null;
   }
-  res.json(out);
+}
+
+// Ids of every camera that has a recordings folder, whether or not the relay
+// has seen that camera since it last started — footage on disk is still
+// footage you want to see counted after a restart, before the camera has
+// reconnected.
+async function recordingFolderIds() {
+  try {
+    const entries = await fsp.readdir(RECORDINGS_DIR, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (err) {
+    return [];
+  }
+}
+
+// Cameras that only exist as a folder of footage have never been seen by this
+// relay run, so they get a quiet "never seen, not recording" entry.
+const NEVER_SEEN = { lastSeen: null, recording: null, preRoll: null };
+
+app.get('/status', async (req, res) => {
+  try {
+    const ids = [...new Set([...Object.keys(cameras), ...(await recordingFolderIds())])].sort();
+    const views = await Promise.all(ids.map(async (id) =>
+      statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id))));
+    const out = {};
+    ids.forEach((id, i) => { out[id] = views[i]; });
+    res.json(out);
+  } catch (err) {
+    console.error('[status] failed:', err && err.stack ? err.stack : err);
+    res.sendStatus(500);
+  }
 });
 
 // ── Settings ──

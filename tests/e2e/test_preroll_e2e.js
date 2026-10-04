@@ -20,6 +20,10 @@
 //   - preRollSeconds=0 disables it, and a bad value falls back with a warning
 //   - on connect the relay greets a camera with the legacy "resume" byte and
 //     the "I understand in-band alarms" capability byte
+//   - /status carries each camera's recordingCount (what the dashboard's
+//     FILES button shows): it equals the length of the file list and the
+//     files on disk, counts a camera that only exists as a folder of footage,
+//     ignores a recording in progress, and drops when recordings are deleted
 //   - a failure while handling an in-band alarm (here: the recordings folder
 //     is unusable) never takes the relay down: the camera stays connected,
 //     live viewers keep getting frames, the error is logged, and the next
@@ -65,7 +69,8 @@ const CAM_IB = 'e2e-inband-cam-a';     // sends in-band alarms
 const CAM_IB2 = 'e2e-inband-cam-b';    // a bystander camera, only recorded by "alarm all"
 const CAM_UNK = 'e2e-inband-cam-unk';  // receives an unknown control message
 const CAM_FAIL = 'e2e-inband-cam-fail'; // its recordings folder is deliberately broken
-const TEST_CAMS = [CAM, CAM_OFF, CAM_IB, CAM_IB2, CAM_UNK, CAM_FAIL];
+const CAM_FOLDER = 'e2e-folder-only';   // footage on disk, camera never connected this run
+const TEST_CAMS = [CAM, CAM_OFF, CAM_IB, CAM_IB2, CAM_UNK, CAM_FAIL, CAM_FOLDER];
 
 const PREROLL_SECONDS = 3;
 const FRAME_INTERVAL_MS = 100; // fake camera runs at ~10 fps
@@ -384,9 +389,48 @@ async function main() {
         check('first clip holds the pre-roll frames PLUS the live frames (it starts before the trigger)',
           frames !== null && Math.abs(frames - expected) <= 4 && frames > pushedAtStop - pushedAtAlarm + 20,
           `clip frames=${frames}, expected≈${expected} (pre ${preFrames} + live ${pushedAtStop - pushedAtAlarm})`);
+        // make sure the second clip has finished encoding too before the count checks below
+        await waitForFrameCount(path.join(dir, mp4s[1]));
       }
     } else {
       console.log('(ffmpeg/ffprobe not installed — skipping the encoded-clip check)');
+    }
+
+    // ── 6a. The FILES count shown on the dashboard ───────────────────
+    {
+      const dir = path.join(RECORDINGS_DIR, CAM);
+      const onDisk = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.mp4')).length : 0;
+      const list = await get(`/recordings/${CAM}`);
+      const st = await get('/status');
+      const count = st.body && st.body[CAM] && st.body[CAM].recordingCount;
+      check('/status reports the camera\'s recording count, equal to the file list and to the files on disk',
+        Array.isArray(list.body) && count === list.body.length && count === onDisk,
+        `status=${count} list=${Array.isArray(list.body) ? list.body.length : '?'} disk=${onDisk}`);
+      if (haveTool('ffmpeg') && haveTool('ffprobe')) {
+        check('...and it is the two clips recorded above', count === 2, `count=${count}`);
+      }
+
+      // A camera with footage on disk that never connected during this relay run is still counted,
+      // and a recording in progress (.tmp_ folder) or a stray file is not.
+      const fdir = path.join(RECORDINGS_DIR, CAM_FOLDER);
+      fs.mkdirSync(path.join(fdir, '.tmp_2026-01-01T00-00-00-000Z'), { recursive: true });
+      for (const n of ['e2e-folder-only_a.mp4', 'e2e-folder-only_b.mp4', 'e2e-folder-only_c.mp4', 'notes.txt']) {
+        fs.writeFileSync(path.join(fdir, n), 'x');
+      }
+      const st2 = await get('/status');
+      const fo = st2.body && st2.body[CAM_FOLDER];
+      check('a camera that only exists as a folder of footage is listed with its recording count',
+        fo && fo.recordingCount === 3 && fo.recording === false && fo.lastSeen === null, JSON.stringify(fo));
+      check('...a recording in progress (.tmp_ folder) and other stray files are not counted', fo && fo.recordingCount === 3);
+
+      // Deleting recordings brings the count down on the very next status call.
+      const del = await http('DELETE', `/recordings/${CAM_FOLDER}`);
+      const st3 = await get('/status');
+      check('deleting all recordings drops the count to 0',
+        del.status === 200 && st3.body[CAM_FOLDER] && st3.body[CAM_FOLDER].recordingCount === 0, JSON.stringify(st3.body[CAM_FOLDER]));
+      const st4 = await get('/status');
+      check('a camera with no recordings folder at all reports 0, not "unknown"',
+        st4.body[CAM_OFF] === undefined || st4.body[CAM_OFF].recordingCount === 0, JSON.stringify(st4.body[CAM_OFF]));
     }
 
     cam.stop();

@@ -1,13 +1,14 @@
 <?php
 // status.php — a single combined snapshot of every camera the relay
-// currently knows about: power state + auto-off timer, and whether each
-// is recording (plus when that recording will end). The dashboard polls
-// this on an interval so state changes that didn't originate from a click
-// in that browser tab — another tab, another user, or a camera's own
-// alarm-trigger GPIO calling /record directly on the relay — still show
-// up here without needing a page reload.
+// knows about (connected now, or with saved footage): whether each is
+// recording (plus when that recording will end), how full its pre-roll
+// buffer is, and how many recordings it has saved (shown on the dashboard's
+// FILES button). The dashboard polls this on an interval so state changes
+// that didn't originate from a click in that browser tab — another tab,
+// another user, or a camera's own alarm trigger — still show up here
+// without needing a page reload.
 //
-// GET status.php -> relay's { camId: { enabled, enabledUntil, recording, recordingEndAt, ... } } JSON
+// GET status.php -> relay's { camId: { recording, recordingEndAt, preRoll, recordingCount, ... } } JSON
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
