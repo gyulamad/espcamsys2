@@ -235,6 +235,16 @@ async function main() {
       `c=${JSON.stringify(filesLabel(page.html, 'e2e-dash-c'))} b=${JSON.stringify(filesLabel(page.html, 'e2e-dash-b'))}`);
     check('(current relay) a recording in progress (.tmp_ folder) and stray files are not counted', filesLabel(page.html, 'e2e-dash-a') === '📼 FILES (3)');
 
+    // The opened file list must be one long area on the page itself, not a box with its own scrollbar
+    // (hard to use on touch devices) — so its CSS rule must set no height limit and no overflow.
+    const rule = (sel) => { const m = new RegExp(`${sel.replace('.', '\\.')}\\s*\\{([^}]*)\\}`).exec(page.html.replace(/\/\*[\s\S]*?\*\//g, '')); return m ? m[1] : null; };
+    const panelCss = rule('.files-panel');
+    check('the file list panel has no height limit or scrollbar (shows every file in one long area)',
+      panelCss !== null && !/max-height|overflow|(^|[;\s])height\s*:/.test(panelCss), JSON.stringify(panelCss));
+    const gridCss = rule('.grid');
+    check('cards keep their own height, so one long list does not stretch the neighbouring cards',
+      gridCss !== null && /align-items\s*:\s*start/.test(gridCss), JSON.stringify(gridCss));
+
     // The number follows what is on disk — a reload after a delete shows the new count.
     fs.rmSync(path.join(RECORDINGS_DIR, 'e2e-dash-a', 'e2e-dash-a_0.mp4'));
     page = await fetchPage();

@@ -149,6 +149,9 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
     display: grid;
     grid-template-columns: repeat(var(--cols), 1fr);
     gap: 20px;
+    /* Cards keep their own height: opening a long file list on one camera
+       must not stretch the cards beside it in the same row. */
+    align-items: start;
   }
   .grid.layout-list { grid-template-columns: 1fr; }
 
@@ -320,7 +323,9 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
     padding: 8px 14px; border-top: 1px solid var(--border);
     background: rgba(0,0,0,.25);
     font-family: var(--mono); font-size: .62rem; color: var(--muted);
-    max-height: 320px; overflow-y: auto;
+    /* Deliberately NO max-height / overflow: the list is as long as it needs
+       to be and the page itself scrolls. A scroll box inside a scrolling page
+       is awkward to use on touch devices (the finger scrolls the wrong one). */
   }
   .files-panel.open { display: flex; }
   .files-panel-header {
