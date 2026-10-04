@@ -89,7 +89,18 @@ function check(name, cond, detail) {
     console.error(`[FAIL] ${name}${detail ? ' -- ' + detail : ''}`);
   }
 }
+let finished = false; // set once the run reaches its summary
+// If the process ever ends WITHOUT reaching the summary (an awaited promise that
+// never settles lets Node quit quietly with exit code 0), that must read as a
+// failure, not a pass.
+process.on('exit', () => {
+  if (!finished) {
+    console.error('[FAIL] the test ended without finishing (no summary was reached)');
+    process.exitCode = 1;
+  }
+});
 function summarize() {
+  finished = true;
   console.log(`\n${passCount} passed, ${failCount} failed`);
   process.exitCode = failCount === 0 ? 0 : 1;
 }
@@ -120,6 +131,7 @@ function cleanup(settingsFile) {
   for (const f of [settingsFile, settingsFile + '.tmp']) {
     try { fs.unlinkSync(f); } catch (e) { /* gone */ }
   }
+  try { fs.rmSync(path.dirname(settingsFile), { recursive: true, force: true }); } catch (e) { /* gone */ } // the temp folder that held it
 }
 
 // Starts the relay with extra env vars; resolves { child, output() }.
@@ -157,7 +169,7 @@ function startRelay(settingsFile, extraEnv) {
 function stopRelay(relay) {
   return new Promise((resolve) => {
     const child = relay && relay.child;
-    if (!child || child.exitCode !== null) return resolve();
+    if (!child || child.exitCode !== null || child.signalCode !== null) return resolve(); // a child ended by a signal has exitCode null
     child.once('exit', () => resolve());
     child.kill('SIGTERM');
     setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) { /* dead */ } }, 1500).unref();

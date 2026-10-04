@@ -4,6 +4,18 @@ require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
 $count = count($cameras);
 $cols  = CamLogic::computeGridColumns($count);
+
+// How many recordings each camera has, worked out NOW so the FILES buttons
+// already show it in the page the browser receives — no waiting for a
+// background request. Short timeout: the relay is on the local network, and
+// if it's down the page must still appear promptly (just without numbers;
+// the live status poll fills them in once it's reachable). See
+// CamLogic::collectRecordingCounts() for exactly what is asked of the relay.
+$recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $url): ?string {
+    $ctx = stream_context_create(['http' => ['timeout' => 2, 'ignore_errors' => true]]);
+    $body = @file_get_contents($url, false, $ctx);
+    return $body === false ? null : $body;
+});
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -420,7 +432,7 @@ $cols  = CamLogic::computeGridColumns($count);
                 onclick="stopOne('<?= htmlspecialchars($cam['id']) ?>')">⏹ STOP</button>
         <button class="cam-btn" id="files-btn-<?= htmlspecialchars($cam['id']) ?>"
                 title="Saved recordings for this camera — click to open the list"
-                onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')">📼 FILES</button>
+                onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
       </div>
 
       <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
@@ -717,12 +729,14 @@ $cols  = CamLogic::computeGridColumns($count);
   // ── Recordings list panel — browse, play, download and delete saved footage ──
 
   // Shows how many recordings a camera has right on its FILES button —
-  // "📼 FILES (3)" — so you don't have to open the list to know. The number
-  // comes from the relay's /status (polled every few seconds, so it follows
-  // clips finishing and deletes made anywhere) and is also set instantly
-  // whenever this tab loads the list itself. Anything that isn't a whole
-  // number (a folder the relay couldn't read) leaves the button showing
-  // whatever it showed before rather than a wrong number.
+  // "📼 FILES (3)" — so you don't have to open the list to know. The page
+  // arrives with the number already in it (PHP wrote it, see the top of this
+  // file); from there it's kept current by the relay's /status (polled every
+  // few seconds, so it follows clips finishing and deletes made anywhere) and
+  // set instantly whenever this tab loads the list itself. Anything that isn't
+  // a whole number (a folder the relay couldn't read) leaves the button
+  // showing whatever it showed before rather than a wrong number. The text
+  // must match CamLogic::formatFilesButtonLabel() in lib/Logic.php.
   function setFilesCount(id, count) {
     if (!Number.isInteger(count) || count < 0) return;
     const btn = document.getElementById('files-btn-' + id);

@@ -138,4 +138,96 @@ class CamLogic
         }
         return $fallback;
     }
+
+    // ── FILES (N) button — the recording count shown when the page first loads ──
+    //
+    // The count is worked out HERE, on the server, while the page is built, and
+    // written straight into the HTML — so it's there the moment the page
+    // appears, instead of waiting for a background request from the browser
+    // (which, over Tor, may be slow or, if it fails, never fill it in).
+
+    // The text of a camera's FILES button. No number when the count isn't
+    // known (relay unreachable) — better than a wrong one. The dashboard's
+    // JavaScript (setFilesCount in index.php) produces the identical text when
+    // it updates the number later.
+    public static function formatFilesButtonLabel(?int $count): string
+    {
+        return $count === null ? '📼 FILES' : '📼 FILES (' . $count . ')';
+    }
+
+    // Reads the relay's GET /status JSON into [cameraId => recordingCount],
+    // keeping only cameras that carry a whole-number count. Anything else — an
+    // error body, garbage, or a relay too old to report counts (no
+    // recordingCount field) — simply contributes nothing, so the caller can
+    // fall back to another way of finding out.
+    public static function parseStatusCounts(string $json): array
+    {
+        $data = json_decode($json, true);
+        if (!is_array($data) || isset($data['error'])) {
+            return [];
+        }
+        $counts = [];
+        foreach ($data as $id => $entry) {
+            if (is_array($entry) && isset($entry['recordingCount'])
+                && is_int($entry['recordingCount']) && $entry['recordingCount'] >= 0) {
+                $counts[(string) $id] = $entry['recordingCount'];
+            }
+        }
+        return $counts;
+    }
+
+    // Reads the relay's GET /recordings/<id> JSON — a plain list of files —
+    // into how many there are. Null if it isn't a list (an error body, garbage).
+    // That endpoint exists on every relay version, which is why it's the fallback.
+    public static function parseRecordingCount(string $json): ?int
+    {
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            return null;
+        }
+        // A JSON list decodes to keys 0..n-1; an error object like {"error":"..."} does not.
+        if ($data !== [] && array_keys($data) !== range(0, count($data) - 1)) {
+            return null;
+        }
+        return count($data);
+    }
+
+    // Works out [cameraId => recordingCount] for the dashboard, asking the relay
+    // through $fetch — a function(string $url): ?string returning the response
+    // body, or null if the relay couldn't be reached. (Injected so this can be
+    // tested without a network; index.php passes one with a short timeout.)
+    //
+    //   1. ONE request: the relay's /status, which carries every camera's count.
+    //      If the relay can't be reached at all, stop right there — the page
+    //      must not sit through one timeout per camera.
+    //   2. For any camera still without a count (a relay that predates counts in
+    //      /status, or one that hasn't seen the camera and has no footage),
+    //      ask its file list instead and count that. If the relay stops
+    //      answering midway, stop asking.
+    // Cameras whose count couldn't be found are left out of the result.
+    public static function collectRecordingCounts(array $cameras, callable $fetch): array
+    {
+        if (empty($cameras)) {
+            return [];
+        }
+        $statusBody = $fetch(rtrim($cameras[0]['url'], '/') . '/status');
+        if ($statusBody === null) {
+            return [];
+        }
+        $counts = self::parseStatusCounts($statusBody);
+        foreach ($cameras as $cam) {
+            if (isset($counts[$cam['id']])) {
+                continue;
+            }
+            $listBody = $fetch(rtrim($cam['url'], '/') . '/recordings/' . rawurlencode($cam['id']));
+            if ($listBody === null) {
+                break;
+            }
+            $n = self::parseRecordingCount($listBody);
+            if ($n !== null) {
+                $counts[$cam['id']] = $n;
+            }
+        }
+        return $counts;
+    }
 }

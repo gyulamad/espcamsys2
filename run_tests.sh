@@ -74,6 +74,12 @@ fi
 #     alarm records for the length stored via /settings rather than a
 #     hardcoded value, that it persists across a restart, etc. Override the
 #     ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+#   - tests/e2e/test_dashboard_counts_e2e.js: renders the real dashboard page
+#     with php -S and checks each camera's FILES button already shows its
+#     recording count in the HTML of the FIRST load (no JavaScript involved),
+#     against a current relay, an older relay (simulated) and no relay at all.
+#     Skips itself if php is missing. Override the ports with E2E_DASH_PORT /
+#     E2E_DASH_RELAY_PORT / E2E_DASH_PUSH_PORT / E2E_DASH_FAKE_PORT / E2E_DASH_DEAD_PORT.
 #   - tests/e2e/test_preroll_e2e.js: a fake camera pushes frames over the
 #     real TCP protocol; checks that every recording starts with the
 #     pre-roll window (including in the encoded .mp4 when ffmpeg/ffprobe are
@@ -87,6 +93,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     node "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (dashboard FILES count on first load) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    node "$ROOT_DIR/tests/e2e/test_dashboard_counts_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
