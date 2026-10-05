@@ -243,6 +243,10 @@ TEST(relay_greeting_sequence_resume_then_capability) {
     TEST_ASSERT(supports, "greeting enables in-band alarms");
 }
 
+TEST(log_url_points_at_the_relays_log_endpoint) {
+    TEST_ASSERT(buildLogUrl("192.168.4.9", 8080) == "http://192.168.4.9:8080/log", "host, port and /log");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -283,6 +287,7 @@ int main() {
     RUN_TEST(relay_capability_byte_sets_the_flag);
     RUN_TEST(old_relay_bytes_and_unknown_bytes_leave_the_flag_off);
     RUN_TEST(relay_greeting_sequence_resume_then_capability);
+    RUN_TEST(log_url_points_at_the_relays_log_endpoint);
 
     return test::summarize();
 }

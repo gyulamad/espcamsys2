@@ -144,6 +144,7 @@ function startRelay(settingsFile, extraEnv) {
         PUSH_PORT: String(PUSH_PORT),
         CAM_KEY,
         SETTINGS_FILE: settingsFile,
+        LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), // never write into the real logs/ folder
       }, extraEnv),
     });
     let output = '';

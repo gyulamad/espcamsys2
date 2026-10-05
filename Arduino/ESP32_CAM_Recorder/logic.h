@@ -68,13 +68,19 @@ inline std::string alarmRecordTargetId(bool recordAllCameras, const std::string 
 
 // The exact URL sendAlarmRequest() POSTs to:
 //   http://<host>:<httpPort>/alarm/<targetId>
-// No duration is sent: how long to record and how long to keep the camera
-// on are stored on the relay and edited from the dashboard, so they can be
-// changed without reflashing the board.
+// No duration is sent: how long to record is stored on the relay and edited
+// from the dashboard, so it can be changed without reflashing the board.
 inline std::string buildAlarmUrl(const std::string &host, int httpPort,
                                   const std::string &targetId) {
     return "http://" + host + ":" + std::to_string(httpPort) +
            "/alarm/" + targetId;
+}
+
+// Where the camera delivers its log messages (errors, warnings, notable
+// events) so they can be read on the relay instead of a serial monitor — see
+// remote_log.h. The request carries the API key in an X-Api-Key header.
+inline std::string buildLogUrl(const std::string &host, int httpPort) {
+    return "http://" + host + ":" + std::to_string(httpPort) + "/log";
 }
 
 // ── Push connection ──────────────────────────────────────────────────

@@ -43,3 +43,29 @@ const int  ALARM_ACTIVE_STATE       = LOW;   // HIGH or LOW — the pin level th
 // "ALARM" fields, so it can be changed without reflashing the boards.)
 const bool ALARM_RECORD_ALL_CAMERAS = false; // false: alarm here only starts/extends recording on this
                                               // camera (CAMERA_ID); true: on every camera the relay knows about
+
+// ── Remote logging (all optional — shown with their defaults) ───────────
+// Assembled cameras have no serial monitor attached, so everything this board
+// logs (errors, warnings, WiFi/relay connection changes, the reset reason at
+// boot, a status heartbeat) is ALSO sent to the relay's POST /log, which
+// appends it to a text file on the Pi (nodejs/camera-relay/logs/camera.log).
+// Each entry carries where in the firmware it came from, and for warnings and
+// errors the events leading up to it, plus free heap, WiFi signal and uptime.
+// The serial port still gets everything too (and is all there is if the relay
+// can't be reached).
+//
+// If delivery fails, entries stay in memory and are retried; after
+// REMOTE_LOG_RETRY_MAX failed retries the board gives up and logs to serial
+// only, until its connection to the relay comes back.
+//
+//   #define REMOTE_LOG_ENABLED                true  // false: serial only
+//   #define REMOTE_LOG_MIN_LEVEL              1     // sent to the relay: 0=DEBUG 1=INFO 2=WARN 3=ERROR
+//   #define REMOTE_LOG_ECHO_TO_SERIAL         true  // false: serial shows only what is NOT sent to the relay
+//   #define REMOTE_LOG_RETRY_MAX              3     // retries after a failed delivery, then serial only
+//   #define REMOTE_LOG_RETRY_PERIOD_SECONDS   300   // wait between retries (5 minutes)
+//   #define REMOTE_LOG_FLUSH_SECONDS          10    // routine entries wait this long so they go out together
+//                                                   // (WARN and ERROR are sent at once)
+//   #define REMOTE_LOG_REPEAT_WINDOW_SECONDS  30    // the same message repeating inside this window is counted,
+//                                                   // not repeated ("last message repeated N more times")
+//   #define REMOTE_LOG_HEARTBEAT_SECONDS      600   // a status line this often; a gap shows when a camera went quiet
+//   #define REMOTE_LOG_LOW_HEAP_BYTES         30000 // warn when free heap falls below this

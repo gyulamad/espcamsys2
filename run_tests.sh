@@ -32,21 +32,51 @@ echo "C++ (Arduino logic) tests"
 hr
 
 mkdir -p "$BUILD_DIR"
-CPP_BIN="$BUILD_DIR/test_alarm_logic"
+
+# Compiles tests/cpp/<name>.cpp and runs it (under gdb when available, for a
+# backtrace on a crash — see the note above).
+run_cpp_test() {
+    local name="$1"
+    local bin="$BUILD_DIR/$name"
+    echo "--- $name"
+    if ! g++ -std=c++17 -Wall -Wextra -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
+        echo "FAIL: could not compile $name"
+        overall_status=1
+    elif command -v gdb >/dev/null 2>&1; then
+        gdb -q -batch -ex run -ex bt -ex 'quit $_exitcode' --args "$bin"
+        [ $? -ne 0 ] && overall_status=1
+    else
+        echo "gdb not found on PATH — running the test binary directly instead"
+        "$bin"
+        [ $? -ne 0 ] && overall_status=1
+    fi
+}
 
 if ! command -v g++ >/dev/null 2>&1; then
     echo "FAIL: g++ not found on PATH"
     overall_status=1
-elif ! g++ -std=c++17 -Wall -Wextra -o "$CPP_BIN" "$ROOT_DIR/tests/cpp/test_alarm_logic.cpp"; then
-    echo "FAIL: could not compile C++ tests"
-    overall_status=1
-elif command -v gdb >/dev/null 2>&1; then
-    gdb -q -batch -ex run -ex bt -ex 'quit $_exitcode' --args "$CPP_BIN"
-    [ $? -ne 0 ] && overall_status=1
 else
-    echo "gdb not found on PATH — running the test binary directly instead"
-    "$CPP_BIN"
-    [ $? -ne 0 ] && overall_status=1
+    # The ESP32 Arduino toolchain compiles older C++ than the tests do, so the
+    # header it will really build must also be valid as C++11 (strictly).
+    echo "--- remote_log.h as C++11 (the ESP32 toolchain's dialect)"
+    if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
+           -include "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/remote_log.h" -x c++ /dev/null; then
+        echo "ok"
+    else
+        echo "FAIL: remote_log.h does not compile as C++11"
+        overall_status=1
+    fi
+
+    run_cpp_test test_alarm_logic
+    run_cpp_test test_remote_log
+
+    # The sketch's remote-logging glue is tested by compiling the code it
+    # ACTUALLY contains: extract the marked block from the .ino and build it
+    # against fake Arduino/FreeRTOS/HTTP objects. If the markers go missing the
+    # extract is empty and the compile below fails loudly.
+    sed -n '/Remote logging glue ──/,/end of remote logging glue/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/log_glue.inc"
+    run_cpp_test test_sketch_log_glue
 fi
 
 # ── Node.js logic tests ──────────────────────────────────────────────────
@@ -74,6 +104,11 @@ fi
 #     alarm records for the length stored via /settings rather than a
 #     hardcoded value, that it persists across a restart, etc. Override the
 #     ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+#   - tests/e2e/test_logging_e2e.js: the relay's log file and POST /log — key
+#     authentication, entries filed under the time they HAPPENED with the
+#     sender's IP, no forged lines, rotation, relay-observed events (camera
+#     connected/dropped), an unusable log location. Override the ports with
+#     E2E_LOG_PORT / E2E_LOG_PUSH_PORT.
 #   - tests/e2e/test_dashboard_counts_e2e.js: renders the real dashboard page
 #     with php -S and checks each camera's FILES button already shows its
 #     recording count in the HTML of the FIRST load (no JavaScript involved),
@@ -93,6 +128,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     node "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (relay logging) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    node "$ROOT_DIR/tests/e2e/test_logging_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

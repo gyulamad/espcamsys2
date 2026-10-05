@@ -178,6 +178,8 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
      pushPort: 8081,      // raw TCP: cameras push frames here continuously
      camKey: '<generate with: openssl rand -hex 24>',  // must match every camera's API_KEY
      preRollSeconds: 5,   // optional: seconds of footage BEFORE a trigger that every recording starts with (default 5, 0 = off)
+     // optional log file settings — see "Logging" at the end of this guide:
+     // logFile: 'logs/camera.log', logMaxBytes: 5 * 1024 * 1024, logKeepFiles: 2,
    };
    ```
 
@@ -344,10 +346,47 @@ Cameras can no longer be switched off from the dashboard (pre-roll needs them st
 
 ---
 
+## Logging: finding out what went wrong
+
+Assembled cameras have no serial monitor attached, so **the cameras send what they would print to the relay**, and the relay writes it — together with what the relay itself observes — into one plain-text file:
+
+```
+tail -f nodejs/camera-relay/logs/camera.log
+```
+
+(`logs/camera.log` next to `server.js`; change it with `logFile` in the relay's `config.js`.) A few lines look like this:
+
+```
+2026-10-03T12:00:01.234Z INFO  cam2@192.168.4.20 [relay]: camera connected
+2026-10-03T12:00:05.012Z INFO  cam2@192.168.4.20 up=12.8s heap=121004 rssi=-62 seq=3: connected to WiFi 'upstairs', IP 192.168.4.20, RSSI -62 dBm
+2026-10-03T12:41:17.680Z WARN  cam2@192.168.4.20 up=2476.2s heap=98112 rssi=-81 seq=57 late=312.4s fw="Oct  3 2026 11:02:44": push write failed after 4000 ms (wrote 5120 of 31244 bytes, disconnected) — dropping the connection, reconnecting
+    at ESP32_CAM_Recorder.ino:612 loop()
+    recent events (oldest first):
+      -310.1s INFO heartbeat: uptime 2166s, RSSI -79 dBm, free heap 98300 (lowest ever 91220), push connection up
+      -4.2s WARN slow frame push: 3900 ms for 31244 bytes — weak WiFi, or the relay is congested
+```
+
+- **Who and where:** the camera id and its IP address (the address the relay saw), then the camera's own uptime, free heap, WiFi signal (`rssi`) and a sequence number.
+- **When:** every entry is filed under the time it actually **happened**. Cameras have no clock; each entry says how long ago it happened, so one that waited in the camera's memory for minutes while the relay was unreachable still lands in the right place (`late=` shows how long it was held back).
+- **Trace:** the file, line and function it came from; for warnings and errors also the events that led up to it (the closest thing to a call stack a board with no debugger has).
+- **`[relay]`** marks what the relay itself saw rather than what the camera reported: cameras connecting and dropping (with the reason), a connection refused (wrong key), two boards flashed with the same `CAMERA_ID`, alarms, recordings started / extended / saved, errors with their stack trace, and the stack trace of a crash that killed the relay. Even a camera that cannot speak leaves a trail this way.
+- At boot a camera reports **why it restarted**: *BROWNOUT* means its power supply dipped (the usual culprit for random reboots), *watchdog* means something hung, *PANIC* means the firmware crashed.
+- A heartbeat line every 10 minutes (uptime, heap, signal): a gap in them shows when a camera went quiet, and the numbers show whether memory was shrinking or the signal weakening beforehand.
+
+**If the relay can't be reached**, the camera keeps its entries in memory (the most important — errors — are kept longest) and retries after `REMOTE_LOG_RETRY_PERIOD_SECONDS` (5 minutes), up to `REMOTE_LOG_RETRY_MAX` times (3). After that it logs to its serial port only, until its connection to the relay comes back, and then reports how many entries were lost. The same message repeating (a camera failing to connect every half second) is logged once with a count, not thousands of times. All of this is configured in the camera's `config.h` — see `example.config.h`.
+
+**The file can't fill the SD card:** it rotates (`logMaxBytes`, default 5 MiB; `logKeepFiles`, default 2, so at most 15 MiB in total). The log endpoint needs the camera key (`X-Api-Key` header), and nothing a camera sends can forge a log line.
+
+Cost on the camera: about 9 KB of RAM (a fixed block for 16 queued entries, no memory churn), and the HTTP delivery runs in a separate background task so it never delays the video stream.
+
+Notes: only the **recorder** firmware reports remotely — the person-detector board (`ESP32_CAM_TFLite_Person`) has no network connection at all, so it remains serial-only. Remote logging needs the new relay and new firmware; against an older relay the camera simply gives up after its retries and keeps printing to serial.
+
 ## Troubleshooting: an alarm doesn't record, or a stream goes dark
 
-1. **Is the relay actually running the new code?** `curl -s http://<relay>:8080/status` — every camera should have a `preRoll` entry, and the relay's startup log has a line `Pre-roll: every recording starts with the last 5s…`. If not, the relay process was never restarted after the files were copied.
-2. **Did the alarm reach the relay?** The relay log shows `[<camera>] in-band alarm -> started recording (N pre-roll frames)` (or `extended`). If a recording could not start you will instead see `[<camera>] error handling a alarm from the push connection …` followed by the reason (full disk, folder permissions, …) — the relay itself keeps running and the camera keeps streaming; fix the reason and the next alarm works.
-3. **What did the camera do?** Serial Monitor on the recorder board prints one of: `[alarm] sent in-band on the push connection`, `[alarm] relay hasn't announced in-band alarm support … using the HTTP request`, or `[alarm] no push connection — using the HTTP request`.
-4. If the stream itself is black or frozen, check the relay is still up (`systemctl status …` / `pm2 status` / uptime) — a relay that restarted at the moment of an alarm will have an error with a stack trace just before the restart in its log.
+Start with the log (`tail -n 200 nodejs/camera-relay/logs/camera.log`) — it usually answers the question directly.
+
+1. **Is the relay actually running the new code?** `curl -s http://<relay>:8080/status` — every camera should have a `preRoll` entry, and the log starts each run with `relay started (pid …)`. If not, the relay process was never restarted after the files were copied.
+2. **Did the alarm reach the relay?** Look for `alarm received (in-band)` followed by `recording started (…)` (or `recording extended`) for that camera. If a recording could not start you will instead see `error handling a alarm from the push connection …` with a stack trace and the reason (full disk, folder permissions, …) — the relay itself keeps running and the camera keeps streaming; fix the reason and the next alarm works.
+3. **What did the camera do?** Its own entries show which route the alarm took: `alarm sent in-band on the push connection`, `relay hasn't announced in-band alarm support … using the HTTP request`, or `alarm: no push connection — using the HTTP request`. (On a camera with a serial monitor attached the same lines appear there.)
+4. **Did a camera drop or restart?** Look for `camera disconnected after …s (reason)` from the relay and, from the camera, `booted after an abnormal restart: …`. If the relay itself restarted there is a `relay started` line, and just before it either `relay stopping (SIGTERM)` (on purpose) or `FATAL: uncaught exception` with its stack trace.
 5. **A FILES button with no number** (`📼 FILES` instead of `📼 FILES (3)`) means the dashboard's web server couldn't reach the relay within 2 seconds when it built the page — check `relay_url` in `config.php` and that the relay is running. A number is written into the page by the server on every load, then kept current by the live status poll; it works with older relays too (it counts their file list instead).
