@@ -23,6 +23,7 @@ const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
+const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 
 const app = express();
 const PORT = process.env.PORT || config.port;
@@ -320,7 +321,102 @@ function extendRecording(cam, seconds) {
 // extends it to `seconds` from now. The one place the alarm, "record all"
 // and per-camera record routes get that behaviour, so they can't diverge.
 // Returns the JSON-ready summary those routes respond with.
+// ── Recording ON/OFF switch ──
+// Each camera can be switched OFF, so that nothing records while people are at
+// the surveilled place (otherwise every movement is recorded and somebody has
+// to sort the footage by hand later). OFF is either for N minutes — it
+// switches itself back ON — or until someone switches it ON. The "all cameras"
+// button just sets every camera the relay knows at that moment, one by one;
+// afterwards each can be changed on its own, and a camera the relay hasn't
+// seen is unaffected. See lib/recswitch.js for the rules.
+//
+// OFF means no recording can START by any route — an alarm (in-band or HTTP),
+// the person detector, the dashboard's RECORD button — and a recording that is
+// running is stopped (what it captured so far is saved, not thrown away).
+// Live viewing is unaffected. When recording is switched back ON, footage the
+// camera streamed while it was OFF is never part of a clip (see resumeCamera).
+//
+// The state is saved to a small file, so it survives a relay restart: a timed
+// OFF is stored as the absolute time it ends, so it keeps counting while the
+// relay is down. A damaged file means every camera records.
+//
+// Changing it needs the CONTROL key (`controlKey` in config.js, sent as an
+// X-Control-Key header) — deliberately NOT the camera key: that one is flashed
+// into every camera board, and anyone who got hold of a board could otherwise
+// switch the whole system off. With no controlKey configured the switch is
+// refused (not left open). Reading the state needs nothing.
+const SWITCH_FILE = process.env.SWITCH_FILE || path.resolve(__dirname, config.switchFile || 'recording-switch.json');
+const CONTROL_KEY = process.env.CONTROL_KEY !== undefined ? process.env.CONTROL_KEY : (config.controlKey || '');
+
+function offText(state) {
+  return state.until === null ? 'until it is switched back ON' : `until ${new Date(state.until).toISOString()}`;
+}
+
+function loadSwitch() {
+  let text;
+  try {
+    text = fs.readFileSync(SWITCH_FILE, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') relayLog('WARN', `could not read the recording-switch file ${SWITCH_FILE}: ${err.message} — every camera records`);
+    return new RecordingSwitch();
+  }
+  const r = RecordingSwitch.parse(text, Date.now());
+  for (const w of r.warnings) relayLog('WARN', w);
+  for (const id of r.expired) relayLog('INFO', `recording for ${id} was switched OFF for a limited time, which ran out while the relay was stopped — it records again`, { sender: id });
+  const off = r.sw.offIds(Date.now());
+  if (off.length) relayLog('INFO', `recording is switched OFF (restored from ${SWITCH_FILE}) for: ${off.map((id) => `${id} ${offText(r.sw.offState(id, Date.now()))}`).join('; ')}`);
+  return r.sw;
+}
+const recSwitch = loadSwitch();
+
+// Written to a temp file and renamed, like settings.json, so a crash mid-write
+// can't leave a half-written file (which would silently turn every OFF back ON).
+function saveSwitch() {
+  const tmp = SWITCH_FILE + '.tmp';
+  try {
+    fs.writeFileSync(tmp, recSwitch.serialize());
+    fs.renameSync(tmp, SWITCH_FILE);
+    return true;
+  } catch (err) {
+    relayLog('ERROR', `could not save the recording switch to ${SWITCH_FILE}: ${err.message} — the change applies now but will be forgotten if the relay restarts`);
+    return false;
+  }
+}
+
+// The camera may record again from `atMs`. Everything it streamed before that
+// is marked as "already dealt with", so the pre-roll of the next recording can
+// only contain footage from after recording was allowed again — nothing from
+// the OFF period can leak into a clip through the rolling buffer.
+function resumeCamera(id, atMs) {
+  const cam = cameras[id];
+  if (cam) cam.lastRecordedUntil = Math.max(cam.lastRecordedUntil || 0, atMs);
+}
+
+// Ends timed OFFs whose time is up. Run on a timer AND at the start of every
+// decision that depends on it (so the answer is exact, not up to a few
+// seconds late), it is cheap and does nothing when nothing expired.
+function refreshSwitch(now = Date.now()) {
+  const ended = recSwitch.expire(now);
+  if (ended.length === 0) return;
+  for (const e of ended) {
+    resumeCamera(e.id, e.until);
+    camLog('INFO', e.id, 'recording switched back ON automatically (the OFF timer ran out)');
+  }
+  saveSwitch();
+}
+setInterval(refreshSwitch, 5000).unref();
+
+const suppressedThrottle = new Throttle(60 * 1000); // "ignored a recording request while OFF": once a minute per camera
+
 function startOrExtendRecording(cam, id, seconds) {
+  // The switch comes first: while a camera is OFF nothing can start a recording.
+  refreshSwitch();
+  const off = recSwitch.offState(id, Date.now());
+  if (off) {
+    const t = suppressedThrottle.check(id, Date.now());
+    if (t.allow) camLog('INFO', id, `recording request ignored — recording is switched OFF for this camera ${offText(off)}${suppressedNote(t.suppressed)}`);
+    return { id, recording: false, suppressed: true, reason: 'off', off: describeOff(off, Date.now()) };
+  }
   const extended = !!cam.recording;
   const rec = extended ? extendRecording(cam, seconds) : startRecording(cam, id, seconds);
   return {
@@ -463,8 +559,10 @@ const NEVER_SEEN = { lastSeen: null, recording: null, preRoll: null };
 app.get('/status', async (req, res) => {
   try {
     const ids = [...new Set([...Object.keys(cameras), ...(await recordingFolderIds())])].sort();
+    refreshSwitch();
+    const now = Date.now();
     const views = await Promise.all(ids.map(async (id) =>
-      statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id))));
+      statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id), describeOff(recSwitch.offState(id, now), now))));
     const out = {};
     ids.forEach((id, i) => { out[id] = views[i]; });
     res.json(out);
@@ -496,6 +594,96 @@ app.post('/settings', (req, res) => {
   }
   settings = result.settings;
   res.json(settingsView());
+});
+
+// ── Recording switch: changing it (authenticated) and reading it ──
+//   POST /recording/camera/:id/off?minutes=N   switch ONE camera OFF for N minutes (default 60; 0 or negative = until ON)
+//   POST /recording/camera/:id/on
+//   POST /recording/all/off?minutes=N          the same for every camera the relay knows right now
+//   POST /recording/all/on
+//   GET  /recording/state                      who is OFF (no key needed)
+// The four POSTs need `X-Control-Key: <controlKey>`; see the notes at the switch above.
+const switchAuthThrottle = new Throttle(60 * 1000);
+function requireControlKey(req, res, next) {
+  if (!CONTROL_KEY) {
+    return res.status(503).json({ error: 'switching is disabled: controlKey is not set in the relay config' });
+  }
+  const provided = req.headers['x-control-key'];
+  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = switchAuthThrottle.check(ip || 'unknown', Date.now());
+  if (t.allow) relayLog('WARN', `REJECTED a recording on/off request from ${ip || 'unknown address'} (${req.method} ${req.path}): missing or wrong control key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong control key' });
+}
+
+// Who is doing this, for the log: the dashboard passes the logged-in user's
+// name in X-Actor (the relay only sees the web server's own address).
+function actorOf(req) {
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const raw = req.headers['x-actor'];
+  return typeof raw === 'string' && raw.trim() !== '' ? `${logfile.safeToken(raw.trim())} (via ${ip || 'unknown address'})` : (ip || 'unknown address');
+}
+
+function switchOffCameras(ids, minutes, actor) {
+  const now = Date.now();
+  for (const id of ids) {
+    const entry = recSwitch.turnOff(id, minutes, now);
+    camLog('INFO', id, `recording switched OFF ${offText(entry)} by ${actor}`);
+    const cam = cameras[id];
+    if (cam && cam.recording) stopRecording(cam); // what it captured so far is saved; stopRecording logs it
+  }
+  saveSwitch();
+}
+
+function switchOnCameras(ids, actor) {
+  const now = Date.now();
+  for (const id of ids) {
+    if (!recSwitch.turnOn(id)) continue; // it was not OFF: nothing to do
+    resumeCamera(id, now);
+    camLog('INFO', id, `recording switched ON by ${actor}`);
+  }
+  saveSwitch();
+}
+
+// Builds the handler for the four POST routes. `target` returns the camera
+// ids to act on, or null after having answered with an error.
+function switchHandler(action, target) {
+  return (req, res) => {
+    refreshSwitch();
+    const ids = target(req, res);
+    if (ids === null) return undefined;
+    let minutes = null;
+    if (action === 'off') {
+      const m = parseMinutes(req.query.minutes);
+      if (!m.ok) return res.status(400).json({ error: m.error });
+      minutes = m.minutes;
+      switchOffCameras(ids, minutes, actorOf(req));
+    } else {
+      switchOnCameras(ids, actorOf(req));
+    }
+    const now = Date.now();
+    const off = {};
+    for (const id of ids) off[id] = describeOff(recSwitch.offState(id, now), now);
+    return res.json({ ok: true, action, minutes, forever: action === 'off' ? minutes === 0 : null, affected: ids, off });
+  };
+}
+const oneCamera = (req, res) => {
+  if (!logentry.CAMERA_ID_RE.test(req.params.id)) { res.status(400).json({ error: 'invalid camera id' }); return null; }
+  return [req.params.id];
+};
+const everyKnownCamera = () => Object.keys(cameras).sort();
+
+app.post('/recording/camera/:id/off', requireControlKey, switchHandler('off', oneCamera));
+app.post('/recording/camera/:id/on', requireControlKey, switchHandler('on', oneCamera));
+app.post('/recording/all/off', requireControlKey, switchHandler('off', everyKnownCamera));
+app.post('/recording/all/on', requireControlKey, switchHandler('on', everyKnownCamera));
+
+app.get('/recording/state', (req, res) => {
+  refreshSwitch();
+  const now = Date.now();
+  const off = {};
+  for (const id of recSwitch.offIds(now)) off[id] = describeOff(recSwitch.offState(id, now), now);
+  res.json({ off, controlEnabled: CONTROL_KEY !== '', defaultMinutes: DEFAULT_OFF_MINUTES });
 });
 
 // ── Camera logs ──
@@ -644,7 +832,10 @@ app.post('/record/:id', (req, res) => {
   if (seconds === null) {
     return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
   }
-  res.json(startOrExtendRecording(getCamera(req.params.id), req.params.id, seconds));
+  const result = startOrExtendRecording(getCamera(req.params.id), req.params.id, seconds);
+  // A person pressing RECORD must be told it did not happen; a camera's alarm (below) just gets the summary.
+  if (result.suppressed) return res.status(409).json(Object.assign({ error: 'recording is switched OFF for this camera' }, result));
+  res.json(result);
 });
 
 // Stop a recording early. Encoding into the final .mp4 happens in the
@@ -883,7 +1074,7 @@ pushServer.listen(PUSH_PORT, () => console.log(`Camera relay (raw push) listenin
 // A relay that restarted is the first thing to rule in or out when a camera
 // "dropped", and a crash is useless without its stack trace — so both leave a
 // line (written synchronously: the process may be about to die).
-relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file})`);
+relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file}; recording on/off switch ${CONTROL_KEY ? 'enabled' : 'DISABLED (no controlKey in config.js)'})`);
 
 process.on('uncaughtException', (err) => {
   relayLogSync('ERROR', `FATAL: uncaught exception — the relay is stopping: ${err && err.message ? err.message : err}`, { trace: err && err.stack });

@@ -175,7 +175,7 @@ function startRelay(settingsFile) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
-      env: Object.assign({}, process.env, { PORT: String(RELAY_PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: 'e2e-key', SETTINGS_FILE: settingsFile, LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log') }),
+      env: Object.assign({}, process.env, { PORT: String(RELAY_PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: 'e2e-key', SETTINGS_FILE: settingsFile, LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), SWITCH_FILE: path.join(path.dirname(settingsFile), 'switch.json') }),
     });
     let out = '';
     const onData = (d) => {

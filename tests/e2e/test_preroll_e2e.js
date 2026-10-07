@@ -145,6 +145,7 @@ function startRelay(settingsFile, extraEnv) {
         CAM_KEY,
         SETTINGS_FILE: settingsFile,
         LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), // never write into the real logs/ folder
+        SWITCH_FILE: path.join(path.dirname(settingsFile), 'switch.json'), // ...nor read a real recording-switch.json
       }, extraEnv),
     });
     let output = '';

@@ -178,6 +178,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
      pushPort: 8081,      // raw TCP: cameras push frames here continuously
      camKey: '<generate with: openssl rand -hex 24>',  // must match every camera's API_KEY
      preRollSeconds: 5,   // optional: seconds of footage BEFORE a trigger that every recording starts with (default 5, 0 = off)
+     controlKey: '<generate with: openssl rand -hex 24>',  // for the dashboard's recording ON/OFF buttons — see "Switching recording ON / OFF"
      // optional log file settings — see "Logging" at the end of this guide:
      // logFile: 'logs/camera.log', logMaxBytes: 5 * 1024 * 1024, logKeepFiles: 2,
    };
@@ -345,6 +346,45 @@ Cameras can no longer be switched off from the dashboard (pre-roll needs them st
 4. An existing `settings.json` with an `alarmPowerSeconds` value is fine; it is simply ignored.
 
 ---
+
+## Switching recording ON / OFF
+
+When people are at the surveilled place the cameras would otherwise record all that movement for no reason, and someone has to sort the footage by hand afterwards. The dashboard has **⏻ OFF / ⏻ ON** buttons:
+
+- **Per camera** (on each camera card): switches that camera only.
+- **ALL OFF / ALL ON** (in the header): sets every camera the relay knows at that moment, one by one — afterwards each camera can be changed on its own, and a camera the relay hasn't seen yet is unaffected.
+- **OFF takes a number of minutes** (default 60). `0` or a negative number means "OFF until I press ON": no countdown. A timed OFF switches itself back ON when the time is up (and says so in the log).
+- **While a camera is OFF nothing can start a recording** — not an alarm, not the person detector, not the RECORD button (which says so) — and a recording in progress is stopped (what it captured so far is saved). Live viewing is unaffected, and the camera keeps streaming.
+- **When recording is switched back ON, footage from the OFF period is never part of a clip** (the rolling pre-roll buffer is skipped past that moment).
+- **It survives a relay restart.** The state is kept in `recording-switch.json` next to `server.js`; a timed OFF is stored as the time it ends, so it keeps counting while the relay is down. If that file is damaged, every camera simply records (fail towards recording, never towards silence).
+
+### Setup: one secret, in two places
+
+Switching recording off is exactly what someone who wants to go unrecorded would try, so it needs its own key, **different from the cameras' key** (that one is flashed into every camera board — anyone who got hold of a board could otherwise switch your system off):
+
+```
+openssl rand -hex 24
+```
+
+Put the same value in both places:
+
+1. the relay's `config.js`: `controlKey: '<the value>'`
+2. the dashboard's `config.php`: `'relay_control_key' => '<the value>'`
+
+Then restart the relay and run `deploy.sh`. Without a key the buttons are shown as "not set up" and the relay refuses to switch anything — it never falls back to "open".
+
+How it is protected: the dashboard login → a request header only the dashboard's own script can send (so a page on another website can't trigger "OFF" using your cached login) → the control key, added by the dashboard's server (the browser never sees it) and checked by the relay in constant time. Every change is written to the log with who did it (`recording switched OFF until … by alice (via 127.0.0.1)`), and so is every refused attempt, with its address.
+
+Direct use (e.g. from the Pi, with `curl`):
+
+```
+curl -X POST -H "X-Control-Key: <key>" "http://localhost:8080/recording/camera/cam2/off?minutes=30"
+curl -X POST -H "X-Control-Key: <key>" "http://localhost:8080/recording/all/off?minutes=0"
+curl -X POST -H "X-Control-Key: <key>"  http://localhost:8080/recording/all/on
+curl http://localhost:8080/recording/state          # who is OFF (no key needed to read)
+```
+
+Notes: the relay's *other* HTTP routes (RECORD, delete recordings, …) are not authenticated at the relay — they rely on the dashboard login in front of them, so keep the relay's port 8080 on a trusted network. A timed OFF uses the Pi's clock; a Pi without a battery-backed clock may be off by a little right after boot until it has synchronised.
 
 ## Logging: finding out what went wrong
 

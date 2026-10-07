@@ -72,7 +72,7 @@ function startRelay(env) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
-      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY }, env),
+      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, SWITCH_FILE: path.join(os.tmpdir(), `e2e-logging-switch-${process.pid}.json`) }, env),
     });
     let out = '';
     let settled = false;

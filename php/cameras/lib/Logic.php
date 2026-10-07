@@ -230,4 +230,83 @@ class CamLogic
         }
         return $counts;
     }
+
+    // ── Recording ON/OFF switch (recording-switch.php) ──────────────────────
+    //
+    // Switching recording off is a security-relevant action — it is exactly
+    // what someone who wants to go unrecorded would try — so beyond the
+    // dashboard login it is protected twice more:
+    //   * the relay wants its own CONTROL key (relay_control_key here,
+    //     controlKey in the relay's config.js), which this server adds; the
+    //     browser never sees it, and it is not the key flashed into cameras;
+    //   * the request must carry a custom header, which a page on another
+    //     website cannot make a browser send (it would need permission via
+    //     CORS first) — so a malicious page can't trigger "OFF" using the
+    //     login the browser has cached for the dashboard.
+
+    // The value the dashboard's JavaScript sends in X-Requested-With.
+    const AJAX_HEADER_VALUE = 'camdash';
+
+    public static function isDashboardAjaxRequest(array $server): bool
+    {
+        return ($server['HTTP_X_REQUESTED_WITH'] ?? '') === self::AJAX_HEADER_VALUE;
+    }
+
+    // Checks a switch request and turns it into the URL to call on the relay.
+    //   action   on | off
+    //   scope    camera (needs cam=ID, one of the configured cameras) | all
+    //   minutes  off only, optional: a whole number, possibly 0 or negative
+    //            ("until switched ON"); left out, the relay uses 60
+    // Returns ['ok' => true, 'url' => ...] or ['ok' => false, 'status' => 4xx, 'error' => ...].
+    public static function buildSwitchRequest(array $query, array $cameras): array
+    {
+        $action = $query['action'] ?? '';
+        if ($action !== 'on' && $action !== 'off') {
+            return ['ok' => false, 'status' => 400, 'error' => 'action must be "on" or "off"'];
+        }
+        $scope = $query['scope'] ?? '';
+        if ($scope !== 'camera' && $scope !== 'all') {
+            return ['ok' => false, 'status' => 400, 'error' => 'scope must be "camera" or "all"'];
+        }
+
+        $suffix = '';
+        if ($action === 'off' && isset($query['minutes']) && $query['minutes'] !== '') {
+            if (!is_string($query['minutes']) || !preg_match('/^\s*-?\d+\s*$/', $query['minutes'])) {
+                return ['ok' => false, 'status' => 400, 'error' => 'minutes must be a whole number (0 or negative = until switched back ON)'];
+            }
+            $suffix = '?minutes=' . urlencode(trim($query['minutes']));
+        }
+
+        if ($scope === 'camera') {
+            $camera = self::findCameraById($cameras, is_string($query['cam'] ?? null) ? $query['cam'] : '');
+            if (!$camera) {
+                return ['ok' => false, 'status' => 404, 'error' => 'Camera not found'];
+            }
+            $url = rtrim($camera['url'], '/') . '/recording/camera/' . rawurlencode($camera['id']) . '/' . $action;
+        } else {
+            if (empty($cameras)) {
+                return ['ok' => false, 'status' => 404, 'error' => 'No cameras configured'];
+            }
+            $url = rtrim($cameras[0]['url'], '/') . '/recording/all/' . $action;
+        }
+        return ['ok' => true, 'url' => $url . $suffix];
+    }
+
+    // Who is acting, for the relay's log: "<dashboard user>@<their address>",
+    // reduced to harmless characters (it goes into an HTTP header and a log line).
+    public static function buildActor(string $user, string $remoteAddr): string
+    {
+        $actor = preg_replace('/[^A-Za-z0-9_.:@-]/', '_', $user . '@' . $remoteAddr);
+        return substr($actor, 0, 80);
+    }
+
+    // The request headers for the relay call. Null if the key could not be
+    // sent safely (a line break in it would let it inject extra headers).
+    public static function buildSwitchHeaders(string $controlKey, string $actor): ?string
+    {
+        if ($controlKey === '' || preg_match('/[\r\n]/', $controlKey)) {
+            return null;
+        }
+        return "Content-Length: 0\r\nX-Control-Key: " . $controlKey . "\r\nX-Actor: " . $actor . "\r\n";
+    }
 }

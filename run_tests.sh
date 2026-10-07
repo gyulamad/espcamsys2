@@ -104,6 +104,17 @@ fi
 #     alarm records for the length stored via /settings rather than a
 #     hardcoded value, that it persists across a restart, etc. Override the
 #     ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+#   - tests/e2e/test_recording_switch_e2e.js: the recording ON/OFF switch on a
+#     real relay — control-key authentication, every way a recording can start
+#     is blocked while OFF, per-camera and all-cameras, minutes semantics,
+#     persistence across restarts, timers ending, no OFF-period footage in a
+#     clip. Takes ~30 s. Override the ports with E2E_SWITCH_PORT /
+#     E2E_SWITCH_PUSH_PORT.
+#   - tests/e2e/test_dashboard_switch_e2e.js: the dashboard's recording-switch.php
+#     proxy (real php -S in front of a recording fake relay) — login, the
+#     anti-forgery header, POST only, key added server-side and never sent to
+#     the browser, input validation. Skips itself if php is missing. Override the
+#     ports with E2E_SWDASH_PORT / E2E_SWDASH_RELAY_PORT / E2E_SWDASH_DEAD_PORT.
 #   - tests/e2e/test_logging_e2e.js: the relay's log file and POST /log — key
 #     authentication, entries filed under the time they HAPPENED with the
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
@@ -128,6 +139,28 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     node "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (recording ON/OFF switch, relay) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    node "$ROOT_DIR/tests/e2e/test_recording_switch_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (recording ON/OFF switch, dashboard proxy) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    node "$ROOT_DIR/tests/e2e/test_dashboard_switch_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

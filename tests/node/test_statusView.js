@@ -15,6 +15,7 @@ test('buildCameraStatusView: idle camera that has never recorded', () => {
     recordingEndAt: null,
     preRoll: EMPTY_PREROLL,
     recordingCount: null, // not known unless the caller says
+    recordingOff: null,   // may record, unless the caller says it is switched OFF
   });
 });
 
@@ -53,6 +54,14 @@ test('buildCameraStatusView: a camera that only exists as a folder of footage (n
   assertEqual(view.recording, false);
   assertEqual(view.preRoll, EMPTY_PREROLL);
   assertEqual(view.recordingCount, 3);
+});
+
+test('buildCameraStatusView: reports whether the camera is switched OFF (for the dashboard)', () => {
+  const cam = { lastSeen: null, recording: null };
+  assertEqual(buildCameraStatusView(cam, 0, null).recordingOff, null);
+  const off = { forever: false, until: '2026-10-03T13:00:00.000Z', remainingMs: 1800000 };
+  assertEqual(buildCameraStatusView(cam, 0, off).recordingOff, off);
+  assertEqual(buildCameraStatusView(cam, 0, { forever: true, until: null, remainingMs: null }).recordingOff.forever, true);
 });
 
 summarize();

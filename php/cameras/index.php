@@ -16,6 +16,10 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
     $body = @file_get_contents($url, false, $ctx);
     return $body === false ? null : $body;
 });
+
+// Whether the recording ON/OFF buttons can work: they need the relay's control
+// key (see recording-switch.php). Without it they are shown disabled, saying why.
+$switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -127,6 +131,26 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
   }
 
   .record-controls, .alarm-controls { display: flex; align-items: center; gap: 6px; }
+
+  /* Recording ON/OFF switch — in the header (all cameras) and on each camera card */
+  .switch-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .switch-controls .lbl { font-family: var(--mono); font-size: .62rem; color: var(--muted); }
+  .switch-controls .lbl.title { color: var(--text); }
+  .switch-controls input[type=number], .cam-switch-row input[type=number] {
+    width: 56px; font-family: var(--mono); font-size: .65rem;
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    border-radius: 3px; padding: 4px 6px;
+  }
+  .switch-controls .unit, .cam-switch-row .unit { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
+  .switch-pill {
+    font-family: var(--mono); font-size: .62rem; padding: 2px 8px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  }
+  .switch-pill.on  { color: var(--accent); border-color: rgba(0,229,255,.35); }
+  .switch-pill.off { color: #ffb74d; border-color: #6b4a14; }
+  .switch-note { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
+  .switch-note.err { color: var(--accent2); }
+  .cam-btn.switched-off { opacity: .45; }
   .alarm-controls input[type=number],
   .record-controls input[type=number] {
     width: 60px; font-family: var(--mono); font-size: .7rem;
@@ -389,6 +413,19 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
       <button class="btn danger" id="btn-delete-all" onclick="deleteAllRecordingsEverywhere()"
               title="Delete every saved recording, for every camera">🗑 DELETE ALL FOOTAGE</button>
     </span>
+    <span class="switch-controls" id="switch-all"
+          title="Switch recording OFF while people are on site, so nothing is recorded for no reason. Applies to every camera the relay currently knows; each camera can then be changed on its own.">
+      <span class="lbl title">⏻ RECORDING:</span>
+      <span class="switch-pill" id="switch-all-pill">…</span>
+      <input type="number" id="switch-all-minutes" step="1" value="60"
+             title="Minutes to stay OFF. 0 or a negative number = OFF until you press ON.">
+      <span class="unit">min</span>
+      <button class="btn danger" id="btn-switch-all-off" onclick="switchRecording('all', null, 'off')"
+              title="Switch recording OFF for every camera, for this many minutes (0 or negative = until switched ON)">⏻ ALL OFF</button>
+      <button class="btn" id="btn-switch-all-on" onclick="switchRecording('all', null, 'on')"
+              title="Switch recording back ON for every camera">⏻ ALL ON</button>
+      <span class="switch-note" id="switch-all-note"></span>
+    </span>
     <span class="alarm-controls"
           title="Used when a camera's alarm input triggers. Stored on the relay and applied to every camera — no reflashing needed. Changes apply to the next alarm.">
       <span class="lbl title">🚨 ALARM:</span>
@@ -438,6 +475,20 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
         <button class="cam-btn" id="files-btn-<?= htmlspecialchars($cam['id']) ?>"
                 title="Saved recordings for this camera — click to open the list"
                 onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
+      </div>
+
+      <div class="cam-record-row cam-switch-row">
+        <span class="switch-pill" id="sw-pill-<?= htmlspecialchars($cam['id']) ?>">…</span>
+        <input type="number" id="sw-min-<?= htmlspecialchars($cam['id']) ?>" step="1" value="60"
+               title="Minutes to stay OFF. 0 or a negative number = OFF until you press ON.">
+        <span class="unit">min</span>
+        <button class="cam-btn danger" id="sw-off-<?= htmlspecialchars($cam['id']) ?>"
+                title="Switch recording OFF for this camera only, for this many minutes (0 or negative = until switched ON)"
+                onclick="switchRecording('camera', '<?= htmlspecialchars($cam['id']) ?>', 'off')">⏻ OFF</button>
+        <button class="cam-btn" id="sw-on-<?= htmlspecialchars($cam['id']) ?>"
+                title="Switch recording back ON for this camera"
+                onclick="switchRecording('camera', '<?= htmlspecialchars($cam['id']) ?>', 'on')">⏻ ON</button>
+        <span class="switch-note" id="sw-note-<?= htmlspecialchars($cam['id']) ?>"></span>
       </div>
 
       <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
@@ -596,6 +647,130 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
   // this second press, rather than adding on top of what was left. ──
   const recordCountdowns = {}; // id -> interval id
 
+
+  // ── Recording ON/OFF switch ──
+  // Switching recording OFF keeps the cameras streaming (live view is unaffected)
+  // but nothing is recorded — no alarm, no person detector, no RECORD button — and
+  // a recording in progress is stopped (what it captured is saved). OFF is for N
+  // minutes (then it switches itself back ON) or, with 0 or a negative number,
+  // until you press ON. The state lives on the relay (it survives restarts); this
+  // page only asks it to change (via recording-switch.php, which adds the secret
+  // control key — the browser never has it) and shows what the relay reports.
+  const SWITCH_ENABLED = <?= $switchConfigured ? 'true' : 'false' ?>;
+  const switchState = {};   // camera id -> { forever, untilAt } while OFF (untilAt: this browser's clock, ms); absent = recording is ON
+
+  function formatRemaining(ms) {
+    const mins = Math.ceil(ms / 60000);
+    if (ms < 60000) return `${Math.max(1, Math.ceil(ms / 1000))} s`;
+    if (mins < 60) return `${mins} min`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, '0')} min`;
+  }
+
+  function switchLabel(st) {
+    if (!st) return { text: 'REC ON', off: false };
+    if (st.forever) return { text: 'REC OFF · until switched ON', off: true };
+    const left = Math.max(0, st.untilAt - Date.now());
+    const until = new Date(st.untilAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return { text: `REC OFF · ${formatRemaining(left)} left (until ${until})`, off: true };
+  }
+
+  function renderSwitch(id) {
+    const st = switchState[id];
+    const label = switchLabel(st);
+    const pill = document.getElementById('sw-pill-' + id);
+    if (pill) { pill.textContent = label.text; pill.className = 'switch-pill ' + (label.off ? 'off' : 'on'); }
+    const rec = document.getElementById('rec-btn-' + id);
+    if (rec) {
+      rec.classList.toggle('switched-off', label.off);
+      rec.title = label.off ? 'Recording is switched OFF for this camera — press ON first'
+                            : 'Press again mid-recording to extend it by this many seconds from now';
+    }
+  }
+
+  function renderSwitchAll() {
+    const ids = getAllCameraIds();
+    const off = ids.filter(id => switchState[id]).length;
+    const pill = document.getElementById('switch-all-pill');
+    if (!pill) return;
+    if (off === 0)             { pill.textContent = 'ALL ON';                     pill.className = 'switch-pill on'; }
+    else if (off === ids.length) { pill.textContent = 'ALL OFF';                   pill.className = 'switch-pill off'; }
+    else                       { pill.textContent = `${off} of ${ids.length} OFF`; pill.className = 'switch-pill off'; }
+  }
+
+  // `off` is what the relay reports for a camera: null (may record) or { forever, until, remainingMs }.
+  function applySwitchState(id, off) {
+    if (!off) delete switchState[id];
+    else switchState[id] = { forever: !!off.forever, untilAt: off.forever ? null : Date.now() + off.remainingMs };
+    renderSwitch(id);
+    renderSwitchAll();
+  }
+
+  const switchNoteTimers = {};
+  function setSwitchNote(id, text, isError) {
+    const el = document.getElementById(id === null ? 'switch-all-note' : 'sw-note-' + id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'switch-note' + (isError ? ' err' : '');
+    clearTimeout(switchNoteTimers[id]);
+    if (text) switchNoteTimers[id] = setTimeout(() => { el.textContent = ''; }, 8000);
+  }
+
+  // scope: 'camera' (with id) or 'all'; action: 'on' or 'off'.
+  async function switchRecording(scope, id, action) {
+    const noteId = scope === 'all' ? null : id;
+    if (!SWITCH_ENABLED) {
+      setSwitchNote(noteId, 'Not set up: add relay_control_key to config.php (see INSTALL.md)', true);
+      return;
+    }
+    let url = `recording-switch.php?scope=${scope}&action=${action}`;
+    if (scope === 'camera') url += `&cam=${encodeURIComponent(id)}`;
+
+    if (action === 'off') {
+      const raw = document.getElementById(scope === 'all' ? 'switch-all-minutes' : 'sw-min-' + id).value.trim();
+      if (raw !== '' && !/^-?\d+$/.test(raw)) {
+        setSwitchNote(noteId, 'Enter a whole number of minutes (0 or negative = until switched ON)', true);
+        return;
+      }
+      const minutes = raw === '' ? 60 : parseInt(raw, 10);
+      if (scope === 'all') {
+        const forHowLong = minutes > 0 ? `for ${minutes} minutes` : 'until you switch it back ON';
+        if (!confirm(`Switch recording OFF for ALL cameras ${forHowLong}?\n\nNothing will be recorded meanwhile, and recordings in progress are stopped.`)) return;
+      }
+      url += `&minutes=${encodeURIComponent(String(minutes))}`;
+    }
+
+    const buttons = scope === 'all'
+      ? ['btn-switch-all-off', 'btn-switch-all-on'].map(b => document.getElementById(b))
+      : ['sw-off-' + id, 'sw-on-' + id].map(b => document.getElementById(b));
+    buttons.forEach(b => { if (b) b.disabled = true; });
+    try {
+      // The custom header is required by the server: a page on another website can't make a browser send it.
+      const res = await fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* not JSON */ }
+      if (res.ok && data && data.ok) {
+        for (const affectedId of data.affected) applySwitchState(affectedId, data.off[affectedId] || null);
+        const n = data.affected.length;
+        const what = scope === 'all' ? `${n} camera${n === 1 ? '' : 's'}` : 'this camera';
+        setSwitchNote(noteId, action === 'on' ? `Recording is ON for ${what}`
+          : (data.forever ? `Recording is OFF for ${what} until switched ON` : `Recording is OFF for ${what} for ${data.minutes} min`), false);
+        pollAllStatuses(); // a recording that was running has just been stopped: pick that up now
+      } else {
+        let msg = (data && data.error) || `Request failed (HTTP ${res.status})`;
+        if (res.status === 401) msg = "The relay refused the control key — relay_control_key in config.php must equal controlKey in the relay's config.js";
+        setSwitchNote(noteId, msg, true);
+      }
+    } catch (e) {
+      setSwitchNote(noteId, 'Could not reach the dashboard server', true);
+    } finally {
+      buttons.forEach(b => { if (b) b.disabled = false; });
+    }
+  }
+
+  // Keep the "N min left" text ticking between status polls.
+  setInterval(() => { getAllCameraIds().forEach(renderSwitch); }, 1000);
+
   async function recordAll() {
     const secondsInput = document.getElementById('record-seconds');
     const seconds = parseInt(secondsInput.value, 10);
@@ -613,6 +788,8 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
       btn.classList.add('recording');
       document.getElementById('btn-stop-all').style.display = '';
     }
+    const skipped = results.filter(r => r && r.suppressed).length;
+    if (skipped > 0) setSwitchNote(null, `${skipped} camera${skipped === 1 ? ' is' : 's are'} switched OFF and ${skipped === 1 ? 'was' : 'were'} not recorded`, false);
   }
 
   async function stopRecordAll() {
@@ -663,6 +840,9 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
       const data = await res.json();
       if (res.ok && data.recording) {
         beginRecordCountdown(id, seconds); // restarts the countdown, whether this was a fresh start or an extend
+      } else if (data && data.suppressed) {
+        // The camera is switched OFF: nothing was started. Say so, instead of failing silently.
+        setSwitchNote(id, 'Recording is switched OFF for this camera — press ON first', true);
       } else {
         console.warn('Record start failed for', id, data);
       }
@@ -887,10 +1067,12 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
         if (!s) {
           // Neither connected to the relay yet nor any footage on disk for it.
           setFilesCount(id, 0);
+          applySwitchState(id, null); // a camera the relay doesn't know can't be switched OFF
           continue;
         }
         applyRecordingState(id, s.recording, s.recordingEndAt);
         setFilesCount(id, s.recordingCount);
+        applySwitchState(id, s.recordingOff || null);
       }
     } catch (e) {
       // Relay unreachable this round — the next poll will try again.

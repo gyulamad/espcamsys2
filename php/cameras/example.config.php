@@ -15,6 +15,13 @@ return [
     // Base URL of the server.js relay that all cameras push frames to.
     'relay_url' => 'http://192.168.4.9:8080',
 
+    // Needed for the dashboard's recording ON/OFF buttons. Must be EXACTLY the same
+    // as `controlKey` in the relay's config.js. Use a long random value that is not
+    // the cameras' key:  openssl rand -hex 24
+    // (This server adds it when it passes your click on to the relay; the browser never
+    // sees it. Left empty, the buttons are disabled.)
+    'relay_control_key' => '',
+
     // Cameras shown on the dashboard. 'id' must exactly match the
     // CAMERA_ID configured in that device's sketch (see example.config.h).
     'cameras' => [
