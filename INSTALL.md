@@ -352,12 +352,14 @@ You need `g++`, `node` and `php` on `PATH` (and `gdb`, which gives a backtrace i
 ./run_tests.sh --coverage 90
 ```
 
-With `--coverage N` (N is a minimum percentage, 0–100) the C++ tests are rebuilt with gcov instrumentation, and the run **fails** if line coverage is below N. Without the flag nothing is instrumented and the run is exactly as before. `--coverage=90` works too, and `./run_tests.sh --help` prints the usage.
+With `--coverage N` (N is a minimum percentage, 0–100) the C++ tests are rebuilt with gcov instrumentation, the PHP tests are run with a coverage driver, and the run **fails** if line coverage is below N. Without the flag nothing is instrumented and the run is exactly as before. `--coverage=90` works too, and `./run_tests.sh --help` prints the usage.
 
-- **Each sketch is judged on its own.** N applies to the Recorder sketch and to the person detector sketch separately, so a well-tested one can't make up for a weak one.
+- **Each area is judged on its own.** N applies separately to the Recorder sketch, the person detector sketch and the dashboard's PHP logic, so a well-tested one can't make up for a weak one. Each area prints its own `ok:` or `FAIL:` line.
 - **Only code that can run on a desktop is measured.** For `ESP32_CAM_Recorder` that is `logic.h`, `remote_log.h` and the remote-logging block of the `.ino`; for `ESP32_CAM_TFLite_Person` it is the detection code of the `.ino` (`setPersonDetected()`, `detectPerson()` and `loop()`, including the hysteresis). `setup()` and the camera/WiFi/model initialisation need the real hardware and are not in the percentage, so 100% does not mean the whole sketch is covered.
+- **PHP: only `php/cameras/lib/*.php` is measured** (today `Logic.php`), which is the code the PHP unit tests in `tests/php/` run. The page scripts (`index.php`, `settings.php`, …) are web entry points that are only exercised by the end-to-end tests through a real web server, so they are not in the percentage. A new file in `lib/` that no test loads is reported as `NO DATA` and fails the check instead of being silently ignored.
 - **The report** lists every measured file with its percentage and the line numbers that no test reached. The sketch code is tested by extracting it from the `.ino` into `tests/cpp/build/*.inc`, so those line numbers refer to the extracted file, not the `.ino`.
-- **Needs `gcov` version 9 or newer, matching your `g++`** (they ship together in the same package), plus `node`, which merges the per-test reports. If `gcov` is missing the run fails with a clear message.
+- **C++ needs `gcov` version 9 or newer, matching your `g++`** (they ship together in the same package), plus `node`, which merges the per-test reports. If `gcov` is missing the run fails with a clear message.
+- **PHP needs a coverage driver: PCOV or Xdebug** (PCOV is faster and preferred). On Debian, Ubuntu or Raspberry Pi OS: `sudo apt install php-pcov` (or `php-xdebug`). It doesn't matter whether the extension is switched on in `php.ini`; `run_tests.sh` enables it for the test run only. Without a driver, `--coverage` fails with this hint. The two drivers give the same percentage.
 
 Example of the output:
 
@@ -370,6 +372,10 @@ ok: Recorder sketch (ESP32_CAM_Recorder) coverage 97.2% >= required 90%
 Person detector sketch (ESP32_CAM_TFLite_Person) — line coverage (union of all C++ test binaries):
   tests/cpp/build/person_glue.inc                      100.0%  (58/58)
 ok: Person detector sketch (ESP32_CAM_TFLite_Person) coverage 100.0% >= required 90%
+
+Dashboard PHP logic (php/cameras/lib) — line coverage (union of all PHP test processes):
+  php/cameras/lib/Logic.php                            100.0%  (92/92)
+ok: Dashboard PHP logic (php/cameras/lib) coverage 100.0% >= required 90%
 ```
 
 If you rename the section title comments in `ESP32_CAM_TFLite_Person.ino` (`// Model parameters`, `// GPIO / detection state`, `// Arduino loop()` and the headings that follow them) or the remote-logging markers in `ESP32_CAM_Recorder.ino`, the code extraction comes out incomplete and the C++ build fails loudly — keep those headings, or update the `sed` lines in `run_tests.sh` to match.

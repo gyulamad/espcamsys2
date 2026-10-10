@@ -9,13 +9,14 @@
 #
 # Usage:
 #   ./run_tests.sh                  run every suite
-#   ./run_tests.sh --coverage N     also measure gcov line coverage of both
-#                                   Arduino sketches' C++ code and FAIL if
-#                                   either is below N percent (0-100)
+#   ./run_tests.sh --coverage N     also measure line coverage and FAIL if any
+#                                   of the three areas below is under N percent
+#                                   (0-100): the two Arduino sketches (gcov)
+#                                   and the dashboard's PHP logic
 #   ./run_tests.sh -h | --help
 #
-# Coverage is measured per sketch and N applies to EACH of them, so a
-# well-tested sketch can't hide an untested one:
+# Coverage is measured per area and N applies to EACH of them, so a
+# well-tested one can't hide an untested one:
 #   Recorder:        logic.h, remote_log.h and the remote-logging block of
 #                    ESP32_CAM_Recorder.ino
 #   Person detector: the detection code of ESP32_CAM_TFLite_Person.ino
@@ -23,6 +24,9 @@
 # These are the only sketch code that can run on a desktop; setup() and the
 # camera/WiFi/model initialisation need the real hardware. Needs gcov (same
 # GCC version as g++, >= 9) and node.
+#   Dashboard PHP:   php/cameras/lib/*.php (the logic the PHP unit tests run;
+#                    the page scripts are covered by the e2e tests only and are
+#                    not measured). Needs a PHP coverage driver: PCOV or Xdebug.
 #
 # Exit code: 0 if every suite passed (and coverage, if requested, met the
 # minimum), 1 if any suite failed, coverage was too low, or something couldn't run.
@@ -282,11 +286,54 @@ if ! command -v php >/dev/null 2>&1; then
     echo "FAIL: php not found on PATH"
     overall_status=1
 else
+    # With --coverage, every test process also records which lines of
+    # php/cameras/lib/*.php it ran (tests/php/coverage_prepend.php, loaded via
+    # auto_prepend_file so the tests need no changes). Needs a PHP coverage
+    # driver: PCOV (preferred) or Xdebug. The driver may be already enabled in
+    # php.ini, or installed but switched off — both are handled; if neither is
+    # available the run fails with an install hint.
+    PHP_COV_FLAGS=()
+    PHP_COV_DIR=""
+    if [ -n "$COVERAGE_MIN" ]; then
+        if php -r 'exit(extension_loaded("pcov") ? 0 : 1);' 2>/dev/null; then
+            PHP_COV_FLAGS=(-d pcov.enabled=1 -d "pcov.directory=$ROOT_DIR/php/cameras/lib")
+        elif php -r 'exit(extension_loaded("xdebug") ? 0 : 1);' 2>/dev/null; then
+            PHP_COV_FLAGS=(-d xdebug.mode=coverage)
+            export XDEBUG_MODE=coverage    # the env var overrides php.ini
+        elif php -d extension=pcov -r 'exit(extension_loaded("pcov") ? 0 : 1);' >/dev/null 2>&1; then
+            PHP_COV_FLAGS=(-d extension=pcov -d pcov.enabled=1 -d "pcov.directory=$ROOT_DIR/php/cameras/lib")
+        elif php -d zend_extension=xdebug -r 'exit(extension_loaded("xdebug") ? 0 : 1);' >/dev/null 2>&1; then
+            PHP_COV_FLAGS=(-d zend_extension=xdebug -d xdebug.mode=coverage)
+            export XDEBUG_MODE=coverage
+        else
+            echo "FAIL: --coverage needs a PHP coverage driver (PCOV or Xdebug); neither is available."
+            echo "      e.g. Debian/Ubuntu/Raspberry Pi OS: sudo apt install php-pcov   (or php-xdebug)"
+            overall_status=1
+        fi
+        if [ ${#PHP_COV_FLAGS[@]} -gt 0 ]; then
+            PHP_COV_DIR="$(mktemp -d)"
+            export CAMTEST_COVERAGE_DIR="$PHP_COV_DIR"
+            export CAMTEST_COVERAGE_LIB="$ROOT_DIR/php/cameras/lib"
+            PHP_COV_FLAGS+=(-d "auto_prepend_file=$ROOT_DIR/tests/php/coverage_prepend.php")
+        fi
+    fi
+
     for f in "$ROOT_DIR"/tests/php/test_*.php; do
         echo "-- $(basename "$f")"
-        php "$f"
+        php ${PHP_COV_FLAGS[@]+"${PHP_COV_FLAGS[@]}"} "$f"
         [ $? -ne 0 ] && overall_status=1
     done
+
+    # ── Coverage gate (only with --coverage N) ───────────────────────────
+    if [ -n "$PHP_COV_DIR" ]; then
+        hr
+        echo "PHP coverage, minimum ${COVERAGE_MIN}%"
+        hr
+        php "$ROOT_DIR/tests/php/coverage_report.php" "$PHP_COV_DIR" "$ROOT_DIR" "$COVERAGE_MIN"
+        [ $? -ne 0 ] && overall_status=1
+        rm -rf "$PHP_COV_DIR"
+        unset CAMTEST_COVERAGE_DIR CAMTEST_COVERAGE_LIB
+    fi
 fi
 
 hr
