@@ -8,9 +8,18 @@
 # since a "test suite" nobody can run isn't actually testing anything.
 #
 # Usage:
-#   ./run_tests.sh
+#   ./run_tests.sh                  run every suite
+#   ./run_tests.sh --coverage N     also measure gcov line coverage of the
+#                                   Recorder sketch's C++ code and FAIL if it
+#                                   is below N percent (0-100)
+#   ./run_tests.sh -h | --help
 #
-# Exit code: 0 if every suite passed, 1 if any suite failed or couldn't run.
+# Coverage covers logic.h, remote_log.h and the remote-logging block of the
+# .ino (the only sketch code that can run on a desktop), merged across all
+# three C++ test binaries. Needs gcov (same GCC version as g++, >= 9) and node.
+#
+# Exit code: 0 if every suite passed (and coverage, if requested, met the
+# minimum), 1 if any suite failed, coverage was too low, or something couldn't run.
 
 set -uo pipefail
 
@@ -18,6 +27,35 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT_DIR/tests/cpp/build"
 
 overall_status=0
+
+# ── Arguments ────────────────────────────────────────────────────────────
+COVERAGE_MIN=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --coverage)
+            if [ $# -lt 2 ]; then echo "--coverage needs a number (minimum percent)" >&2; exit 2; fi
+            COVERAGE_MIN="$2"; shift 2 ;;
+        --coverage=*)
+            COVERAGE_MIN="${1#--coverage=}"; shift ;;
+        -h|--help)
+            sed -n '2,/^set -uo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *)
+            echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+    esac
+done
+
+# Instrumentation flags are only added when coverage was asked for, so a
+# normal run builds exactly as before.
+COV_FLAGS=()
+if [ -n "$COVERAGE_MIN" ]; then
+    if ! [[ "$COVERAGE_MIN" =~ ^[0-9]+([.][0-9]+)?$ ]] || \
+       ! awk -v n="$COVERAGE_MIN" 'BEGIN { exit !(n >= 0 && n <= 100) }'; then
+        echo "--coverage value must be a number between 0 and 100 (got: $COVERAGE_MIN)" >&2
+        exit 2
+    fi
+    COV_FLAGS=(--coverage -O0 -g)
+fi
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
 
@@ -32,6 +70,8 @@ echo "C++ (Arduino logic) tests"
 hr
 
 mkdir -p "$BUILD_DIR"
+# Stale coverage data from an earlier run would be merged into this one.
+rm -f "$BUILD_DIR"/*.gcda "$BUILD_DIR"/*.gcno
 
 # Compiles tests/cpp/<name>.cpp and runs it (under gdb when available, for a
 # backtrace on a crash — see the note above).
@@ -39,7 +79,7 @@ run_cpp_test() {
     local name="$1"
     local bin="$BUILD_DIR/$name"
     echo "--- $name"
-    if ! g++ -std=c++17 -Wall -Wextra -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
+    if ! g++ -std=c++17 -Wall -Wextra ${COV_FLAGS[@]+"${COV_FLAGS[@]}"} -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
         echo "FAIL: could not compile $name"
         overall_status=1
     elif command -v gdb >/dev/null 2>&1; then
@@ -77,6 +117,23 @@ else
     sed -n '/Remote logging glue ──/,/end of remote logging glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/log_glue.inc"
     run_cpp_test test_sketch_log_glue
+
+    # ── Coverage gate (only with --coverage N) ───────────────────────────
+    if [ -n "$COVERAGE_MIN" ]; then
+        hr
+        echo "C++ coverage (gcov), minimum ${COVERAGE_MIN}%"
+        hr
+        if ! command -v gcov >/dev/null 2>&1; then
+            echo "FAIL: gcov not found on PATH"
+            overall_status=1
+        elif ! command -v node >/dev/null 2>&1; then
+            echo "FAIL: node not found on PATH (needed to merge the gcov reports)"
+            overall_status=1
+        else
+            node "$ROOT_DIR/tests/coverage_report.js" "$BUILD_DIR" "$ROOT_DIR" "$COVERAGE_MIN"
+            [ $? -ne 0 ] && overall_status=1
+        fi
+    fi
 fi
 
 # ── Node.js logic tests ──────────────────────────────────────────────────
