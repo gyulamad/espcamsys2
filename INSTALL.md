@@ -336,6 +336,46 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 ---
 
+## Running the tests (and checking coverage)
+
+`run_tests.sh` in the repo root runs every test suite: the Arduino C++ logic of **both** sketches, the relay's Node.js logic, the end-to-end tests and the PHP dashboard logic. Nothing needs flashing — it all runs on your laptop or the Pi.
+
+```bash
+./run_tests.sh
+```
+
+You need `g++`, `node` and `php` on `PATH` (and `gdb`, which gives a backtrace if a C++ test crashes; without it the tests still run). The end-to-end tests also need `npm install` to have been run in `nodejs/camera-relay/`. A missing tool is reported as a failure rather than silently skipped. The exit code is `0` only if everything passed.
+
+### Failing the run when coverage is too low: `--coverage N`
+
+```bash
+./run_tests.sh --coverage 90
+```
+
+With `--coverage N` (N is a minimum percentage, 0–100) the C++ tests are rebuilt with gcov instrumentation, and the run **fails** if line coverage is below N. Without the flag nothing is instrumented and the run is exactly as before. `--coverage=90` works too, and `./run_tests.sh --help` prints the usage.
+
+- **Each sketch is judged on its own.** N applies to the Recorder sketch and to the person detector sketch separately, so a well-tested one can't make up for a weak one.
+- **Only code that can run on a desktop is measured.** For `ESP32_CAM_Recorder` that is `logic.h`, `remote_log.h` and the remote-logging block of the `.ino`; for `ESP32_CAM_TFLite_Person` it is the detection code of the `.ino` (`setPersonDetected()`, `detectPerson()` and `loop()`, including the hysteresis). `setup()` and the camera/WiFi/model initialisation need the real hardware and are not in the percentage, so 100% does not mean the whole sketch is covered.
+- **The report** lists every measured file with its percentage and the line numbers that no test reached. The sketch code is tested by extracting it from the `.ino` into `tests/cpp/build/*.inc`, so those line numbers refer to the extracted file, not the `.ino`.
+- **Needs `gcov` version 9 or newer, matching your `g++`** (they ship together in the same package), plus `node`, which merges the per-test reports. If `gcov` is missing the run fails with a clear message.
+
+Example of the output:
+
+```
+Recorder sketch (ESP32_CAM_Recorder) — line coverage (union of all C++ test binaries):
+  Arduino/ESP32_CAM_Recorder/logic.h                   100.0%  (43/43)
+  ...
+ok: Recorder sketch (ESP32_CAM_Recorder) coverage 97.2% >= required 90%
+
+Person detector sketch (ESP32_CAM_TFLite_Person) — line coverage (union of all C++ test binaries):
+  tests/cpp/build/person_glue.inc                      100.0%  (58/58)
+ok: Person detector sketch (ESP32_CAM_TFLite_Person) coverage 100.0% >= required 90%
+```
+
+If you rename the section title comments in `ESP32_CAM_TFLite_Person.ino` (`// Model parameters`, `// GPIO / detection state`, `// Arduino loop()` and the headings that follow them) or the remote-logging markers in `ESP32_CAM_Recorder.ino`, the code extraction comes out incomplete and the C++ build fails loudly — keep those headings, or update the `sed` lines in `run_tests.sh` to match.
+
+---
+
 ## Upgrading from the version with camera power on/off
 
 Cameras can no longer be switched off from the dashboard (pre-roll needs them streaming all the time), and the dashboard's "camera on" alarm setting is gone.

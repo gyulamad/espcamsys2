@@ -9,14 +9,20 @@
 #
 # Usage:
 #   ./run_tests.sh                  run every suite
-#   ./run_tests.sh --coverage N     also measure gcov line coverage of the
-#                                   Recorder sketch's C++ code and FAIL if it
-#                                   is below N percent (0-100)
+#   ./run_tests.sh --coverage N     also measure gcov line coverage of both
+#                                   Arduino sketches' C++ code and FAIL if
+#                                   either is below N percent (0-100)
 #   ./run_tests.sh -h | --help
 #
-# Coverage covers logic.h, remote_log.h and the remote-logging block of the
-# .ino (the only sketch code that can run on a desktop), merged across all
-# three C++ test binaries. Needs gcov (same GCC version as g++, >= 9) and node.
+# Coverage is measured per sketch and N applies to EACH of them, so a
+# well-tested sketch can't hide an untested one:
+#   Recorder:        logic.h, remote_log.h and the remote-logging block of
+#                    ESP32_CAM_Recorder.ino
+#   Person detector: the detection code of ESP32_CAM_TFLite_Person.ino
+#                    (setPersonDetected, detectPerson, loop)
+# These are the only sketch code that can run on a desktop; setup() and the
+# camera/WiFi/model initialisation need the real hardware. Needs gcov (same
+# GCC version as g++, >= 9) and node.
 #
 # Exit code: 0 if every suite passed (and coverage, if requested, met the
 # minimum), 1 if any suite failed, coverage was too low, or something couldn't run.
@@ -117,6 +123,19 @@ else
     sed -n '/Remote logging glue ──/,/end of remote logging glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/log_glue.inc"
     run_cpp_test test_sketch_log_glue
+
+    # The person detector's detection code is tested the same way: extract the
+    # real sections of the .ino (model constants/globals, setPersonDetected +
+    # detectPerson, loop) and build them against fake Arduino/camera/TFLite
+    # objects. The sections are found by their title comments; if one is
+    # renamed the extract is incomplete and the compile below fails loudly.
+    PERSON_INO="$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino"
+    {
+        sed -n '/^\/\/ Model parameters/,/^\/\/ Camera initialization/p' "$PERSON_INO"
+        sed -n '/^\/\/ GPIO \/ detection state/,/^\/\/ Arduino setup()/p' "$PERSON_INO"
+        sed -n '/^\/\/ Arduino loop()/,$p' "$PERSON_INO"
+    } > "$BUILD_DIR/person_glue.inc"
+    run_cpp_test test_person_detect_glue
 
     # ── Coverage gate (only with --coverage N) ───────────────────────────
     if [ -n "$COVERAGE_MIN" ]; then
