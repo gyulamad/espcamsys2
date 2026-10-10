@@ -117,6 +117,28 @@ TEST(reset_reasons_are_named_and_the_bad_ones_flagged) {
     for (int r : {0, 1, 2, 3, 8, 10}) TEST_ASSERT(!isAbnormalReset(r), "power-on, reset pin, software restart, deep sleep are not");
 }
 
+TEST(every_reset_reason_has_its_own_plain_name) {
+    // One expectation per number the ESP-IDF defines, so a swapped or deleted
+    // case shows up here rather than as a confusing line in a crash report.
+    TEST_ASSERT(strcmp(resetReasonName(2), "external reset pin") == 0, "2");
+    TEST_ASSERT(strcmp(resetReasonName(3), "software restart") == 0, "3");
+    TEST_ASSERT(strcmp(resetReasonName(5), "interrupt watchdog") == 0, "5");
+    TEST_ASSERT(strcmp(resetReasonName(7), "other watchdog") == 0, "7");
+    TEST_ASSERT(strcmp(resetReasonName(8), "deep sleep wake") == 0, "8");
+    TEST_ASSERT(strcmp(resetReasonName(10), "SDIO reset") == 0, "10");
+    TEST_ASSERT(strcmp(resetReasonName(0), "unknown") == 0, "0 is not a defined reason");
+    TEST_ASSERT(strcmp(resetReasonName(-1), "unknown") == 0, "negative is not a defined reason");
+}
+
+TEST(level_names_are_the_words_the_relay_expects) {
+    TEST_ASSERT(strcmp(logLevelName(LogLevel::Debug), "DEBUG") == 0, "debug");
+    TEST_ASSERT(strcmp(logLevelName(LogLevel::Info), "INFO") == 0, "info");
+    TEST_ASSERT(strcmp(logLevelName(LogLevel::Warn), "WARN") == 0, "warn");
+    TEST_ASSERT(strcmp(logLevelName(LogLevel::Error), "ERROR") == 0, "error");
+    // A corrupted level byte must still produce a valid word, never garbage.
+    TEST_ASSERT(strcmp(logLevelName(static_cast<LogLevel>(9)), "INFO") == 0, "out-of-range value falls back to INFO");
+}
+
 TEST(level_from_int_clamps) {
     TEST_ASSERT(logLevelFromInt(-5) == LogLevel::Debug, "below range");
     TEST_ASSERT(logLevelFromInt(0) == LogLevel::Debug, "0");
@@ -653,6 +675,8 @@ int main() {
     RUN_TEST(call_site_format);
     RUN_TEST(appendWhole_refuses_a_piece_that_does_not_fit);
     RUN_TEST(reset_reasons_are_named_and_the_bad_ones_flagged);
+    RUN_TEST(every_reset_reason_has_its_own_plain_name);
+    RUN_TEST(level_names_are_the_words_the_relay_expects);
     RUN_TEST(level_from_int_clamps);
     RUN_TEST(breadcrumbs_list_recent_events_oldest_first_with_their_age);
     RUN_TEST(breadcrumbs_keep_only_the_most_recent_few);

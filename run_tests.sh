@@ -10,9 +10,10 @@
 # Usage:
 #   ./run_tests.sh                  run every suite
 #   ./run_tests.sh --coverage N     also measure line coverage and FAIL if any
-#                                   of the three areas below is under N percent
-#                                   (0-100): the two Arduino sketches (gcov)
-#                                   and the dashboard's PHP logic
+#                                   of the five areas below is under N percent
+#                                   (0-100): the two Arduino sketches (gcov),
+#                                   the dashboard's PHP logic, the relay's
+#                                   Node.js logic and the relay's server.js
 #   ./run_tests.sh -h | --help
 #
 # Coverage is measured per area and N applies to EACH of them, so a
@@ -27,6 +28,10 @@
 #   Dashboard PHP:   php/cameras/lib/*.php (the logic the PHP unit tests run;
 #                    the page scripts are covered by the e2e tests only and are
 #                    not measured). Needs a PHP coverage driver: PCOV or Xdebug.
+#   Relay Node.js:   nodejs/camera-relay/lib/*.js (the logic the Node.js unit
+#                    tests run). Needs Node 12+; nothing to install.
+#   Relay server.js: the relay itself, as run by the end-to-end tests (the
+#                    relay processes they start record the coverage).
 #
 # Exit code: 0 if every suite passed (and coverage, if requested, met the
 # minimum), 1 if any suite failed, coverage was too low, or something couldn't run.
@@ -168,11 +173,35 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
+    # With --coverage, Node itself records V8 coverage for every unit-test
+    # process (NODE_V8_COVERAGE — built in, no nyc/c8 needed) and
+    # tests/node/coverage_report.js turns it into a line-coverage report of
+    # nodejs/camera-relay/lib/*.js. The variable is set only for these unit
+    # tests (never for the end-to-end tests below, which start relay servers).
+    NODE_COV_DIR=""
+    if [ -n "$COVERAGE_MIN" ]; then
+        NODE_COV_DIR="$(mktemp -d)"
+    fi
+
     for f in "$ROOT_DIR"/tests/node/test_*.js; do
         echo "-- $(basename "$f")"
-        node "$f"
+        if [ -n "$NODE_COV_DIR" ]; then
+            NODE_V8_COVERAGE="$NODE_COV_DIR" node "$f"
+        else
+            node "$f"
+        fi
         [ $? -ne 0 ] && overall_status=1
     done
+
+    # ── Coverage gate (only with --coverage N) ───────────────────────────
+    if [ -n "$NODE_COV_DIR" ]; then
+        hr
+        echo "Node.js coverage, minimum ${COVERAGE_MIN}%"
+        hr
+        node "$ROOT_DIR/tests/node/coverage_report.js" "$NODE_COV_DIR" "$ROOT_DIR" "$COVERAGE_MIN"
+        [ $? -ne 0 ] && overall_status=1
+        rm -rf "$NODE_COV_DIR"
+    fi
 fi
 
 # ── End-to-end tests ─────────────────────────────────────────────────────
@@ -211,6 +240,23 @@ fi
 #     pre-roll window (including in the encoded .mp4 when ffmpeg/ffprobe are
 #     installed). Takes ~20s of real time. Override the ports with
 #     E2E_PREROLL_PORT / E2E_PREROLL_PUSH_PORT.
+# With --coverage, the relay processes these tests start also record V8
+# coverage (NODE_V8_COVERAGE is inherited by the relay they spawn; the relay
+# writes it when the test stops it), which is how server.js — the relay itself —
+# gets a coverage figure. The variable is set per test run, never exported to
+# the rest of this script.
+E2E_COV_DIR=""
+if [ -n "$COVERAGE_MIN" ]; then
+    E2E_COV_DIR="$(mktemp -d)"
+fi
+run_node_e2e() {
+    if [ -n "$E2E_COV_DIR" ]; then
+        NODE_V8_COVERAGE="$E2E_COV_DIR" node "$1"
+    else
+        node "$1"
+    fi
+}
+
 hr
 echo "End-to-end (alarm settings) test"
 hr
@@ -218,7 +264,7 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -229,7 +275,7 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_recording_switch_e2e.js"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_recording_switch_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -240,7 +286,7 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_dashboard_switch_e2e.js"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_switch_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -251,7 +297,7 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_logging_e2e.js"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_logging_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -262,7 +308,7 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_dashboard_counts_e2e.js"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_counts_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -273,8 +319,34 @@ if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    node "$ROOT_DIR/tests/e2e/test_preroll_e2e.js"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_preroll_e2e.js"
     [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (relay HTTP/TCP behaviour and failure handling) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_api_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+# ── Coverage gate for server.js (only with --coverage N) ─────────────────
+if [ -n "$E2E_COV_DIR" ]; then
+    hr
+    echo "Relay server.js coverage (from the end-to-end tests), minimum ${COVERAGE_MIN}%"
+    hr
+    if ! command -v node >/dev/null 2>&1; then
+        echo "FAIL: node not found on PATH"
+        overall_status=1
+    else
+        node "$ROOT_DIR/tests/node/coverage_report.js" "$E2E_COV_DIR" "$ROOT_DIR" "$COVERAGE_MIN" server
+        [ $? -ne 0 ] && overall_status=1
+    fi
+    rm -rf "$E2E_COV_DIR"
 fi
 
 # ── PHP logic tests ───────────────────────────────────────────────────────

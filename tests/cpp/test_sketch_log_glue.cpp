@@ -76,7 +76,15 @@ static int xTaskCreatePinnedToCore(void (*fn)(void*), const char* name, uint32_t
     g_tasks.push_back({name, stack, prio, core, fn});
     return 1;
 }
-static void vTaskDelay(uint32_t) {}
+// vTaskDelay records the delays; a test can make the Nth call throw StopTask
+// so that an endless task body (for (;;) { ... }) can be run for a few turns.
+struct StopTask {};
+static std::vector<uint32_t> g_taskDelays;
+static int g_stopAfterDelays = -1;
+static void vTaskDelay(uint32_t ms) {
+    g_taskDelays.push_back(ms);
+    if (g_stopAfterDelays >= 0 && (int)g_taskDelays.size() > g_stopAfterDelays) throw StopTask();
+}
 #define pdMS_TO_TICKS(ms) (ms)
 
 // -- the HTTP client, talking to a controllable fake relay --
@@ -289,6 +297,23 @@ TEST(a_very_long_message_is_cut_cleanly) {
     TEST_ASSERT(!g_posts.empty() && g_posts[0].body.size() < 2000, "the request stays small");
 }
 
+TEST(the_background_task_sleeps_250ms_then_runs_the_uplink_and_repeats) {
+    resetWorld();
+    g_now += 100000;                       // well past everything earlier tests did
+    RLOG_ERROR("background task probe");   // urgent: due on the very next pump
+    g_taskDelays.clear();
+    g_stopAfterDelays = 2;                 // sleep, pump, sleep, pump, sleep -> stop
+    size_t postsBefore = g_posts.size();
+    bool stopped = false;
+    try { remoteLogTask(nullptr); } catch (const StopTask&) { stopped = true; }
+    g_stopAfterDelays = -1;
+    TEST_ASSERT(stopped, "the task loop is endless: it only ended because the test stopped it");
+    TEST_ASSERT_EQ((int)g_taskDelays.size(), 3, "three sleeps: it sleeps first, then pumps, every turn");
+    for (uint32_t d : g_taskDelays) TEST_ASSERT_EQ((int)d, 250, "each sleep is 250 ms");
+    TEST_ASSERT(g_posts.size() > postsBefore, "the uplink ran inside the loop and sent the entry");
+    if (g_posts.size() > postsBefore) TEST_ASSERT(has(g_posts.back().body, "background task probe"), "it is the probe entry");
+}
+
 int main() {
     RUN_TEST(starting_creates_the_mutex_and_a_background_task_pinned_to_core_0);
     RUN_TEST(an_error_is_delivered_with_the_right_url_headers_and_body);
@@ -302,5 +327,6 @@ int main() {
     RUN_TEST(when_the_relay_is_reachable_again_remote_logging_resumes_and_says_so);
     RUN_TEST(wifi_down_nothing_is_attempted_and_the_entry_keeps_its_true_age);
     RUN_TEST(a_very_long_message_is_cut_cleanly);
+    RUN_TEST(the_background_task_sleeps_250ms_then_runs_the_uplink_and_repeats);
     return test::summarize();
 }

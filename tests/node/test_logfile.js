@@ -2,7 +2,7 @@
 
 const path = require('path');
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
-const { formatEntry, eventTime, resolveLogConfig, safeToken, DEFAULTS } = require('../../nodejs/camera-relay/lib/logfile');
+const { formatEntry, eventTime, resolveLogConfig, safeToken, normalizeIp, DEFAULTS } = require('../../nodejs/camera-relay/lib/logfile');
 
 const T = new Date('2026-10-03T12:00:01.234Z');
 const lines = (s) => s.replace(/\n$/, '').split('\n');
@@ -110,6 +110,23 @@ test('resolveLogConfig: unusable values fall back WITH a warning each', () => {
 
 test('resolveLogConfig: null / empty string count as "not set"', () => {
   assertEqual(resolveLogConfig({ file: null, maxBytes: '', keep: undefined }, '/relay').warnings, []);
+});
+
+test('normalizeIp: an IPv4 peer on a dual-stack socket is shown as plain IPv4', () => {
+  assertEqual(normalizeIp('::ffff:192.168.4.20'), '192.168.4.20');
+});
+
+test('normalizeIp: plain IPv4 and real IPv6 addresses are left alone', () => {
+  assertEqual(normalizeIp('192.168.4.20'), '192.168.4.20');
+  assertEqual(normalizeIp('::1'), '::1');
+  assertEqual(normalizeIp('fe80::1c2b:3d4e'), 'fe80::1c2b:3d4e');
+});
+
+test('normalizeIp: a missing or non-string address is null, never a crash', () => {
+  assertEqual(normalizeIp(undefined), null);
+  assertEqual(normalizeIp(null), null);
+  assertEqual(normalizeIp(''), null);
+  assertEqual(normalizeIp(4), null);
 });
 
 summarize();
