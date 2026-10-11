@@ -282,8 +282,23 @@ void remoteLogRelayReachable() {
 // the remainder is enough to finish the job in that case. Only gives up if
 // nothing gets through for PUSH_WRITE_TIMEOUT_MS straight, or the socket
 // actually disconnects mid-write.
-const unsigned long PUSH_WRITE_TIMEOUT_MS = 4000;
-const unsigned long PUSH_SLOW_WARN_MS = 2000;   // a frame that takes longer than this to push is worth a warning
+//
+// Giving up costs a dropped connection and a reconnect, which on a weak link is
+// itself slow and loses the frame — so it is worth riding out a bad few seconds
+// first. (The relay's "is this a second sender?" window must stay shorter than
+// this: see LIVE_WINDOW_MS in nodejs/camera-relay/lib/connection.js.)
+const unsigned long PUSH_WRITE_TIMEOUT_MS = 8000;
+const unsigned long PUSH_SLOW_WARN_MS = 2000;   // a frame that takes longer than this to push is worth a warning —
+                                                // and is also when the frames start to be made smaller
+const unsigned long PUSH_FAST_MS = 600;         // pushes faster than this, for a while, let the picture improve again
+const unsigned long PUSH_MAX_GAP_MS = 1000;     // the pause after a push never exceeds this, however slow it was
+
+// Weak WiFi can't carry full-size frames, so the JPEG quality adapts to the
+// link (see adaptJpegQuality() in logic.h). Quality numbers: LOWER = better
+// picture, bigger file. The configured quality (set in initCamera()) is the
+// best it will ever use; this is the coarsest it will go down to.
+const int JPEG_QUALITY_WORST = 45;
+JpegQualityAdapter jpegQuality = makeJpegQualityAdapter(12, JPEG_QUALITY_WORST);
 
 size_t writePushBytes(const uint8_t *data, size_t len) {
   size_t total = 0;
@@ -468,6 +483,7 @@ bool initCamera() {
     RLOG_ERROR("camera init failed: 0x%x (%s)", (unsigned)err, esp_err_to_name(err));
     return false;
   }
+  jpegQuality = makeJpegQualityAdapter(config.jpeg_quality, JPEG_QUALITY_WORST);
 
   // Orientation: set explicitly (not left to driver defaults) and keep it
   // identical to ESP32_CAM_TFLite_Person, so the live video and the AI
@@ -655,6 +671,27 @@ void warnSlowPush(unsigned long pushMs, uint32_t len) {
   lastSlowWarn = millis();
 }
 
+// Sets the camera's JPEG quality (lower number = better picture, bigger file).
+void applyJpegQuality(int quality) {
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (!sensor) return;
+  sensor->set_quality(sensor, quality);
+}
+
+// Shrinks the frames while the link is slow and brings the picture back when
+// it recovers, so a weak WiFi signal gives a slower, coarser picture instead
+// of a connection that keeps breaking.
+void adaptJpegQualityToLink(unsigned long pushMs, bool pushOk) {
+  int before = jpegQuality.current;
+  int after = adaptJpegQuality(jpegQuality, pushMs, pushOk, PUSH_SLOW_WARN_MS, PUSH_FAST_MS);
+  if (after == before) return;
+
+  applyJpegQuality(after);
+  RLOG_INFO("%s: JPEG quality %d -> %d (lower = better picture, best %d, coarsest %d)",
+            after > before ? "link is slow, sending smaller frames" : "link recovered, improving the picture",
+            before, after, jpegQuality.best, jpegQuality.worst);
+}
+
 // Pushes one frame ([4-byte length][JPEG]) down the push connection and
 // returns how long that took. A failed write drops the connection (loop()
 // reconnects next turn).
@@ -670,7 +707,10 @@ unsigned long pushFrame(const camera_fb_t *fb) {
   }
   unsigned long pushMs = millis() - t0;
 
-  if (!pushWriteSucceeded(written, len, pushClient.connected())) {
+  bool pushOk = pushWriteSucceeded(written, len, pushClient.connected());
+  adaptJpegQualityToLink(pushMs, pushOk);
+
+  if (!pushOk) {
     RLOG_WARN("push write failed after %lu ms (wrote %u of %u bytes, %s) — dropping the connection, reconnecting",
               pushMs, (unsigned)written, (unsigned)(len + 4),
               pushClient.connected() ? "still connected" : "disconnected");
@@ -721,6 +761,8 @@ void loop() {
 
   // Gap scales with how long the last push actually took: fast/idle link ->
   // short gap -> max fps; congested link -> pushMs grows -> gap grows with
-  // it -> backs off automatically instead of adding to the jam.
-  delay(computePushDelayMs(pushMs, PUSH_INTERVAL_MUL));
+  // it -> backs off automatically instead of adding to the jam — but only up
+  // to PUSH_MAX_GAP_MS: on a weak link the push itself is already the slow
+  // part, and a long pause just makes the picture older.
+  delay(computePushDelayMs(pushMs, PUSH_INTERVAL_MUL, PUSH_MAX_GAP_MS));
 }

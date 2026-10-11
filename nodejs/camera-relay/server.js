@@ -23,6 +23,7 @@ const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
+const connection = require('./lib/connection');
 const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 
@@ -340,6 +341,15 @@ function extendRecording(cam, seconds) {
 // refused (not left open). Reading the state needs nothing.
 const SWITCH_FILE = process.env.SWITCH_FILE || path.resolve(__dirname, config.switchFile || 'recording-switch.json');
 const CONTROL_KEY = fromEnv('CONTROL_KEY', config.controlKey || '');
+
+// How long a push connection may stay completely silent before the relay
+// decides it is dead and drops it: before the camera has said who it is, and
+// once it is streaming. A camera on a very weak WiFi link can take many seconds
+// per frame, but bytes still trickle in; a full minute of nothing means the
+// connection is gone (a half-open TCP connection never tells us by itself).
+const PUSH_AUTH_TIMEOUT_MS = connection.parseTimeoutMs(fromEnv('PUSH_AUTH_TIMEOUT_MS'), 10 * 1000);
+const PUSH_IDLE_TIMEOUT_MS = connection.parseTimeoutMs(fromEnv('PUSH_IDLE_TIMEOUT_MS'), 60 * 1000);
+const PUSH_KEEPALIVE_MS = 20 * 1000;
 
 function offText(state) {
   return state.until === null ? 'until it is switched back ON' : `until ${new Date(state.until).toISOString()}`;
@@ -960,19 +970,47 @@ function logPushError(camId, what, err) {
     { trace: errorTrace(err) });
 }
 
+// When each push socket last delivered bytes, and the sockets the relay closed
+// on purpose (so closing them is not reported as a camera disconnecting).
+const lastPushData = new WeakMap();
+const retiredSockets = new WeakSet();
+
+// A camera authenticated while an older connection for the same camera id is
+// still registered. Either it is still sending — two boards share an id, and
+// both stay connected exactly as before — or it has gone quiet: the same board
+// reconnecting after its old connection died silently (typical on weak WiFi).
+// That leftover would otherwise stay open for ever, so close it.
+function handlePreviousConnection(previous, camId, now) {
+  const silentMs = now - (lastPushData.get(previous) || now);
+  const silentSeconds = (silentMs / 1000).toFixed(1);
+  const from = logfile.normalizeIp(previous.remoteAddress);
+
+  if (connection.classifyPreviousConnection(silentMs) === 'conflict') {
+    const t = eventThrottle.check(`${camId}:conflict`, now);
+    if (t.allow) {
+      camLog('WARN', camId, `another connection with the SAME camera id is still sending frames (from ${from}, last data ${silentSeconds}s ago) — is CAMERA_ID unique per board? Two boards sharing an id corrupt each other's stream${suppressedNote(t.suppressed)}`);
+    }
+    return;
+  }
+
+  retiredSockets.add(previous);
+  previous.destroy();
+  const t = eventThrottle.check(`${camId}:replaced`, now);
+  if (t.allow) {
+    camLog('INFO', camId, `the camera reconnected — closed its previous connection (from ${from}), which had been silent for ${silentSeconds}s${suppressedNote(t.suppressed)}`);
+  }
+}
+
 // Registers an authenticated camera's connection and greets it.
 function acceptPushCamera(socket, camId, peerIp) {
   const cam = getCamera(camId);
-  // Two boards flashed with the same CAMERA_ID fight over one stream: frames from both
-  // interleave and each reconnect kicks the other. Say so — it is easy to do and hard to spot.
-  const other = cam.socket && cam.socket !== socket && !cam.socket.destroyed ? cam.socket : null;
+  const previous = cam.socket && cam.socket !== socket && !cam.socket.destroyed ? cam.socket : null;
   cam.socket = socket;
   cam.ip = peerIp;
-  const t = eventThrottle.check(`${camId}:connect`, Date.now());
+  const now = Date.now();
+  const t = eventThrottle.check(`${camId}:connect`, now);
   if (t.allow) camLog('INFO', camId, `camera connected${suppressedNote(t.suppressed)}`);
-  if (other) {
-    camLog('WARN', camId, `another connection with the SAME camera id is still open (from ${logfile.normalizeIp(other.remoteAddress)}) — is CAMERA_ID unique per board? Two boards sharing an id corrupt each other's stream`);
-  }
+  if (previous) handlePreviousConnection(previous, camId, now);
   // Greet the camera with two single bytes (see lib/protocol.js):
   //  1. COMPATIBILITY SHIM — cameras can no longer be paused (pre-roll needs
   //     them streaming all the time), but a board still running the OLD
@@ -1016,6 +1054,10 @@ function handlePushPayload(camId, payload) {
 
 const pushServer = net.createServer((socket) => {
   socket.setNoDelay(true);
+  // Notice a connection that died without a goodbye instead of holding it for ever.
+  socket.setKeepAlive(true, PUSH_KEEPALIVE_MS);
+  socket.setTimeout(PUSH_AUTH_TIMEOUT_MS);
+  lastPushData.set(socket, Date.now());
 
   let buf = Buffer.alloc(0);
   let authed = false;
@@ -1048,6 +1090,7 @@ const pushServer = net.createServer((socket) => {
     camId = parsed.id;
     authed = true;
     connectedAt = Date.now();
+    socket.setTimeout(PUSH_IDLE_TIMEOUT_MS);
     acceptPushCamera(socket, camId, peerIp);
     return true;
   };
@@ -1067,15 +1110,27 @@ const pushServer = net.createServer((socket) => {
   };
 
   socket.on('data', (chunk) => {
+    lastPushData.set(socket, Date.now());
     buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
     if (!authed && !authenticate()) return;
     drainMessages();
   });
 
+  // No bytes at all for too long: the other end is gone. (An authenticated
+  // camera's close is then reported with this as the reason.)
+  socket.on('timeout', () => {
+    if (!authed) {
+      reject(null, `no first line within ${Math.round(PUSH_AUTH_TIMEOUT_MS / 1000)}s`);
+      return;
+    }
+    lastSocketError = `no data for ${Math.round(PUSH_IDLE_TIMEOUT_MS / 1000)}s`;
+    socket.destroy();
+  });
+
   socket.on('close', (hadError) => {
     const wasCurrent = camId && cameras[camId] && cameras[camId].socket === socket;
     if (wasCurrent) cameras[camId].socket = null;
-    if (!authed) return;
+    if (!authed || retiredSockets.has(socket)) return;
     const t = eventThrottle.check(`${camId}:disconnect`, Date.now());
     if (!t.allow) return;
     const secs = Math.round((Date.now() - connectedAt) / 1000);

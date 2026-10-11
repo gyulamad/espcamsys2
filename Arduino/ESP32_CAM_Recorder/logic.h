@@ -163,8 +163,70 @@ inline bool pushWriteSucceeded(size_t written, uint32_t frameLen, bool stillConn
 // Adaptive gap after each push: scales with how long the last push
 // actually took. Fast/idle link -> short gap -> max fps; congested link
 // -> pushMs grows -> gap grows with it -> backs off automatically.
-inline unsigned long computePushDelayMs(unsigned long lastPushMs, float intervalMul) {
-    return (unsigned long)((float)lastPushMs * intervalMul);
+//
+// `maxMs` caps the gap. TCP already makes a slow push wait for the link, so a
+// gap of 1.5x a 20-second push (a 30-second pause with nothing sent) only
+// makes a weak link's picture even older; the cap keeps the camera sending.
+// The default is "no cap".
+inline unsigned long computePushDelayMs(unsigned long lastPushMs, float intervalMul, unsigned long maxMs = ~0UL) {
+    unsigned long gap = (unsigned long)((float)lastPushMs * intervalMul);
+    return gap > maxMs ? maxMs : gap;
+}
+
+// ── Adaptive JPEG quality ────────────────────────────────────────────
+// A VGA frame is ~26 KB. On a strong link that is a blink; at -87 dBm it can
+// take 10-45 seconds, the write stalls, and the camera has to drop and
+// re-open its connection — over and over, so almost nothing arrives. The
+// remedy is to send SMALLER frames when the link is slow: a higher JPEG
+// quality number means heavier compression and a smaller file, and the
+// picture comes back (one step at a time) when the link does. The resolution
+// never changes, so recordings and the dashboard always see the same size.
+//
+// Quality numbers: LOWER = better picture, bigger file (the camera's own scale).
+
+const int JPEG_QUALITY_DEGRADE_STEP = 6;            // per slow frame
+const int JPEG_QUALITY_RECOVER_STEP = 2;            // per run of fast frames
+const int JPEG_QUALITY_FAST_STREAK = 5;             // fast frames in a row before improving
+const unsigned long JPEG_QUALITY_VERY_SLOW_FACTOR = 4; // this many times "slow" degrades twice as hard
+
+struct JpegQualityAdapter {
+    int best = 12;        // the configured quality: never improve beyond this
+    int worst = 45;       // never degrade beyond this
+    int current = 12;
+    int fastStreak = 0;
+};
+
+inline JpegQualityAdapter makeJpegQualityAdapter(int best, int worst) {
+    JpegQualityAdapter a;
+    a.best = best;
+    a.worst = worst < best ? best : worst;
+    a.current = best;
+    return a;
+}
+
+// Call after each frame push with how long it took and whether it got through.
+// Returns the quality to use from now on (the caller applies it when it changed).
+//   - a failed push, or one slower than `slowMs`: shrink the frames right away
+//     (twice as hard when it was VERY slow)
+//   - a run of pushes faster than `fastMs`: improve the picture a little
+//   - anything in between: hold, and restart the run
+inline int adaptJpegQuality(JpegQualityAdapter &a, unsigned long pushMs, bool pushOk,
+                            unsigned long slowMs, unsigned long fastMs) {
+    if (!pushOk || pushMs > slowMs) {
+        a.fastStreak = 0;
+        int step = JPEG_QUALITY_DEGRADE_STEP;
+        if (!pushOk || pushMs > slowMs * JPEG_QUALITY_VERY_SLOW_FACTOR) step *= 2;
+        a.current = a.current + step > a.worst ? a.worst : a.current + step;
+        return a.current;
+    }
+    if (pushMs >= fastMs) {
+        a.fastStreak = 0;
+        return a.current;
+    }
+    if (++a.fastStreak < JPEG_QUALITY_FAST_STREAK) return a.current;
+    a.fastStreak = 0;
+    a.current = a.current - JPEG_QUALITY_RECOVER_STEP < a.best ? a.best : a.current - JPEG_QUALITY_RECOVER_STEP;
+    return a.current;
 }
 
 // True once a stalled write (no forward progress at all) has gone on long

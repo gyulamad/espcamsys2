@@ -229,6 +229,12 @@ fi
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
 #     connected/dropped), an unusable log location. Override the ports with
 #     E2E_LOG_PORT / E2E_LOG_PUSH_PORT.
+#   - tests/e2e/test_push_connection_e2e.js: how the relay treats a camera's push
+#     connection on a bad WiFi link — a reconnect after the old connection went
+#     quiet is not an id clash (and the ghost is closed), two boards really
+#     sending at once still are, silent connections are dropped while slow
+#     trickling ones are kept. Override the ports with E2E_PUSHCONN_PORT /
+#     E2E_PUSHCONN_PUSH_PORT.
 #   - tests/e2e/test_dashboard_counts_e2e.js: renders the real dashboard page
 #     with php -S and checks each camera's FILES button already shows its
 #     recording count in the HTML of the FIRST load (no JavaScript involved),
@@ -298,6 +304,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_logging_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (camera push connection on a weak link) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_push_connection_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

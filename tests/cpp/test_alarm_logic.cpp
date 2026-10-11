@@ -155,6 +155,74 @@ TEST(push_delay_zero_when_push_instant) {
     TEST_ASSERT_EQ(computePushDelayMs(0, 1.5f), 0UL, "no gap needed when the push took no measurable time");
 }
 
+TEST(push_delay_is_capped_so_a_slow_link_is_not_made_slower) {
+    TEST_ASSERT_EQ(computePushDelayMs(20000, 1.5f, 1000), 1000UL, "a 20 s push must not be followed by a 30 s pause");
+    TEST_ASSERT_EQ(computePushDelayMs(400, 1.5f, 1000), 600UL, "under the cap the gap is unchanged");
+}
+
+// ── adaptJpegQuality ─────────────────────────────────────────────────
+
+static const unsigned long SLOW_MS = 2000, FAST_MS = 600;
+
+TEST(jpeg_quality_starts_at_the_configured_best) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    TEST_ASSERT_EQ(a.current, 12, "starts at the configured quality");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 300, true, SLOW_MS, FAST_MS), 12, "a good link changes nothing");
+}
+
+TEST(jpeg_quality_shrinks_frames_right_after_a_slow_push) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS), 18, "one slow frame = one step coarser");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS), 24, "and again");
+}
+
+TEST(jpeg_quality_shrinks_twice_as_hard_when_very_slow) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 24, "a 25 s push (the real -87 dBm case) takes a double step");
+}
+
+TEST(jpeg_quality_treats_a_failed_push_as_very_slow) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 100, false, SLOW_MS, FAST_MS), 24, "even if the failed attempt was quick");
+}
+
+TEST(jpeg_quality_never_goes_past_the_worst_allowed) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    for (int i = 0; i < 20; i++) adaptJpegQuality(a, 30000, false, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(a.current, 45, "stops at the worst quality");
+}
+
+TEST(jpeg_quality_recovers_slowly_after_a_run_of_fast_pushes) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS); // 18
+    for (int i = 0; i < JPEG_QUALITY_FAST_STREAK - 1; i++) {
+        TEST_ASSERT_EQ(adaptJpegQuality(a, 200, true, SLOW_MS, FAST_MS), 18, "not yet: the link must stay good for a while");
+    }
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 200, true, SLOW_MS, FAST_MS), 16, "then one small step back toward the picture");
+}
+
+TEST(jpeg_quality_never_improves_past_the_configured_best) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS); // 18
+    for (int i = 0; i < 100; i++) adaptJpegQuality(a, 100, true, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(a.current, 12, "back to, and not beyond, the configured quality");
+}
+
+TEST(jpeg_quality_holds_in_the_middle_band_and_restarts_the_run) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS); // 18
+    for (int i = 0; i < JPEG_QUALITY_FAST_STREAK - 1; i++) adaptJpegQuality(a, 200, true, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 1000, true, SLOW_MS, FAST_MS), 18, "a so-so push neither degrades nor improves");
+    for (int i = 0; i < JPEG_QUALITY_FAST_STREAK - 1; i++) {
+        TEST_ASSERT_EQ(adaptJpegQuality(a, 200, true, SLOW_MS, FAST_MS), 18, "the run of fast pushes started over");
+    }
+}
+
+TEST(jpeg_quality_adapter_tolerates_a_worst_better_than_best) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(30, 10);
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 30000, false, SLOW_MS, FAST_MS), 30, "a nonsensical range pins the quality instead of misbehaving");
+}
+
 // ── writeStalled ─────────────────────────────────────────────────────
 
 TEST(write_stalled_false_while_within_timeout) {
@@ -271,6 +339,17 @@ int main() {
 
     RUN_TEST(push_delay_scales_with_last_push_time);
     RUN_TEST(push_delay_zero_when_push_instant);
+    RUN_TEST(push_delay_is_capped_so_a_slow_link_is_not_made_slower);
+
+    RUN_TEST(jpeg_quality_starts_at_the_configured_best);
+    RUN_TEST(jpeg_quality_shrinks_frames_right_after_a_slow_push);
+    RUN_TEST(jpeg_quality_shrinks_twice_as_hard_when_very_slow);
+    RUN_TEST(jpeg_quality_treats_a_failed_push_as_very_slow);
+    RUN_TEST(jpeg_quality_never_goes_past_the_worst_allowed);
+    RUN_TEST(jpeg_quality_recovers_slowly_after_a_run_of_fast_pushes);
+    RUN_TEST(jpeg_quality_never_improves_past_the_configured_best);
+    RUN_TEST(jpeg_quality_holds_in_the_middle_band_and_restarts_the_run);
+    RUN_TEST(jpeg_quality_adapter_tolerates_a_worst_better_than_best);
 
 
     RUN_TEST(write_stalled_false_while_within_timeout);
