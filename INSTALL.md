@@ -84,7 +84,7 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 
 ## 2. (Optional) Flash a person detector instead (TFLite Micro)
 
-This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that runs fully offline, on-device person detection using TensorFlow Lite Micro, and prints the result to the Serial Monitor. It does **not** stream to the relay/dashboard; it's a standalone alternative firmware image for a board, not an add-on to step 1. Flash it to a spare AI-Thinker ESP32-CAM if you want to try it.
+This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that runs fully offline, on-device person detection using TensorFlow Lite Micro, and prints the result to the Serial Monitor. It does **not** send recordings or alarms to the relay/dashboard (an optional **live view** for installation, see the end of this section, is the one exception); it's a standalone alternative firmware image for a board, not an add-on to step 1. Flash it to a spare AI-Thinker ESP32-CAM if you want to try it.
 
 1. **Install the model-inference library.** Clone Espressif's `esp-tflite-micro` component, pinned to `v1.3.3` (the version this sketch was written and tested against), into your Arduino libraries folder:
 
@@ -95,11 +95,12 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 2. In Arduino IDE, make sure you're on the **esp32 by Espressif Systems v3.x** board package (Boards Manager). Older 2.x releases don't support building an ESP-IDF component library like this one straight out of `~/Arduino/libraries`, so if you get "no such file or directory" on the `tensorflow/lite/...` includes or link errors, check this first.
 
-3. Create a sketch folder containing these four files together:
+3. Create a sketch folder containing these files together:
    - `ESP32_CAM_TFLite_Person.ino`
    - `example.config.h`
    - `person_detect_model_data.cc`
    - `person_detect_model_data.h`
+   - `stream_logic.h`
    - *(you'll create `config.h` in the next step)*
 
 4. Copy the template and adjust if you want (the defaults work out of the box):
@@ -149,7 +150,33 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
    The model expects 96×96 grayscale frames — the sketch already configures the camera for that, so there's nothing to adjust there.
 
-> This sketch is intentionally minimal (Serial + a GPIO pin) rather than wired into the relay/dashboard. If you want it to trigger a recording on another camera later, `PERSON_DETECTED_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
+### Optional: watch the detector from a browser (live view)
+
+To install and aim a detector you want to see what it sees. With `STREAM_ENABLED 1` in `config.h` (the template has it on), the detector also joins Wi-Fi, serves its picture as a **password-protected video stream**, and tells the relay which IP address it got. Nothing is registered or handled anywhere: the relay just writes a line to its log.
+
+1. Fill in the live-view block at the end of `config.h`: `WIFI_NETWORKS` (any number of networks — like the recorder, it takes the strongest one in range and fails over), `SERVER_HOST` / `HTTP_PORT` / `API_KEY` (the same values as the recorder's `config.h`), a `DETECTOR_ID` that is **not** any recorder's `CAMERA_ID`, and a `STREAM_USER` / `STREAM_PASSWORD`. The stream is **not served** while the password is empty or still `change-me`.
+2. Flash as above. In the Serial Monitor you'll see `Wi-Fi connected to '…', IP …` and `Announced http://… to the relay`.
+3. On the Pi, find the address — every time the detector gets a new IP (another network, another lease) it announces it again, and it repeats it every 10 minutes:
+
+   ```
+   grep "human detector stream" nodejs/camera-relay/logs/camera.log | tail -n 3
+   ```
+
+   ```
+   … INFO  cam2-human@192.168.4.37 …: human detector stream available at http://192.168.4.37/ — user 'viewer' (Wi-Fi 'extender-2', -61 dBm, up 42s)
+   ```
+
+4. Open that address in a browser from a device on the same network and log in. You get the picture enlarged; `http://<ip>/stream` is the raw MJPEG stream. What you see is the 96×96 grayscale frame the model itself gets, which is what you need to aim the camera.
+
+Things worth knowing:
+
+- **Detection never waits for it.** All networking runs in its own task on the other CPU core; with no Wi-Fi in range, or the relay unreachable, the detector works exactly as without a live view (the announcement is retried every 30 s).
+- **One viewer at a time**; opening the stream again replaces the previous viewer.
+- **It is plain HTTP**, so the password crosses your LAN unencrypted. Use one you don't reuse, and never forward this port to the internet. (The picture is only reachable from the network the detector is on; it does not go through the relay.)
+- **Power:** Wi-Fi transmissions draw current spikes. A detector with a marginal supply can brown out with the live view on (the relay's log would show `BROWNOUT`-style restarts on recorders; here, watch the Serial Monitor). Set `STREAM_ENABLED 0` for such a unit once it is installed.
+- An old `config.h` without the new block keeps working: the live view just stays off.
+
+> This sketch is otherwise intentionally minimal (Serial + a GPIO pin) rather than wired into the relay/dashboard. If you want it to trigger a recording on another camera later, `PERSON_DETECTED_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
 
 ---
 

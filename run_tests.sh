@@ -20,8 +20,9 @@
 # well-tested one can't hide an untested one:
 #   Recorder:        logic.h, remote_log.h and the remote-logging block of
 #                    ESP32_CAM_Recorder.ino
-#   Person detector: the detection code of ESP32_CAM_TFLite_Person.ino
-#                    (setPersonDetected, detectPerson, loop)
+#   Person detector: stream_logic.h (live view: authentication, routing, relay
+#                    announcement) and the detection code of
+#                    ESP32_CAM_TFLite_Person.ino (setPersonDetected, detectPerson, loop)
 # These are the only sketch code that can run on a desktop; setup() and the
 # camera/WiFi/model initialisation need the real hardware. Needs gcov (same
 # GCC version as g++, >= 9) and node.
@@ -122,8 +123,19 @@ else
         overall_status=1
     fi
 
+    # Same for the person detector's live-view logic (also compiled by the sketch).
+    echo "--- stream_logic.h as C++11 (the ESP32 toolchain's dialect)"
+    if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
+           -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/stream_logic.h" -x c++ /dev/null; then
+        echo "ok"
+    else
+        echo "FAIL: stream_logic.h does not compile as C++11"
+        overall_status=1
+    fi
+
     run_cpp_test test_alarm_logic
     run_cpp_test test_remote_log
+    run_cpp_test test_person_stream_logic
 
     # The sketch's remote-logging glue is tested by compiling the code it
     # ACTUALLY contains: extract the marked block from the .ino and build it

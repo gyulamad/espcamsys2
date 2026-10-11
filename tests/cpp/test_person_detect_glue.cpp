@@ -78,6 +78,11 @@ struct MicroInterpreter {
 };
 }  // namespace tflite
 
+// -- live view: the sketch offers each good frame to streamPublishFrame().
+//    The real one (Wi-Fi/FreeRTOS) cannot run here; this records what it was given.
+static std::vector<std::vector<uint8_t>> g_published;
+static void streamPublishFrame(const uint8_t* gray) { g_published.emplace_back(gray, gray + 96 * 96); }
+
 // ── the sketch's real code ──────────────────────────────────────────────
 #include "build/person_glue.inc"
 
@@ -94,6 +99,7 @@ static tflite::MicroInterpreter g_interp;
 static void reset() {
     g_serial.clear(); g_gpio.clear(); g_delays.clear();
     g_fbGets = g_fbReturns = 0;
+    g_published.clear();
     g_pixels.assign(IMAGE_SIZE, 0);
     g_fb.buf = g_pixels.data(); g_fb.width = IMAGE_WIDTH; g_fb.height = IMAGE_HEIGHT;
     g_fbAvailable = true;
@@ -316,6 +322,34 @@ TEST(loop_always_delays_by_the_configured_time) {
     TEST_ASSERT_EQ((int)g_delays[0], DETECTION_LOOP_DELAY_MS, "configured delay");
 }
 
+
+// ── live view hook ──────────────────────────────────────────────────────
+
+TEST(detect_offers_the_raw_frame_to_the_live_view_before_returning_it) {
+    reset();
+    g_pixels[0] = 0; g_pixels[1] = 200; g_pixels[IMAGE_SIZE - 1] = 255;
+    float p, n;
+    TEST_ASSERT(detectPerson(p, n), "returns true");
+    TEST_ASSERT_EQ(g_published.size(), (size_t)1, "offered exactly once");
+    TEST_ASSERT_EQ((int)g_published[0][0], 0, "first pixel is the camera's, not the XOR-ed model input");
+    TEST_ASSERT_EQ((int)g_published[0][1], 200, "second pixel is unconverted");
+    TEST_ASSERT_EQ((int)g_published[0][IMAGE_SIZE - 1], 255, "last pixel is unconverted");
+    TEST_ASSERT_EQ((int)g_inBuf[1], 72, "model input still converted as before (200 ^ 0x80)");
+}
+
+TEST(detect_offers_nothing_when_there_is_no_usable_frame) {
+    reset();
+    g_fbAvailable = false;
+    float p, n;
+    detectPerson(p, n);
+    TEST_ASSERT(g_published.empty(), "no frame, nothing offered");
+
+    reset();
+    g_fb.width = IMAGE_WIDTH + 1;
+    detectPerson(p, n);
+    TEST_ASSERT(g_published.empty(), "a wrong-sized frame is not offered either");
+}
+
 int main() {
     RUN_TEST(set_detected_true_drives_gpio_high_and_says_so);
     RUN_TEST(set_detected_false_drives_gpio_low_and_says_so);
@@ -338,6 +372,9 @@ int main() {
     RUN_TEST(loop_does_not_redetect_inside_the_band_after_clearing);
     RUN_TEST(loop_does_nothing_but_wait_when_detection_fails);
     RUN_TEST(loop_always_delays_by_the_configured_time);
+
+    RUN_TEST(detect_offers_the_raw_frame_to_the_live_view_before_returning_it);
+    RUN_TEST(detect_offers_nothing_when_there_is_no_usable_frame);
 
     return test::summarize();
 }
