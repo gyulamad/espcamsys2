@@ -2,6 +2,7 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/relay.php';
 $count = count($cameras);
 $cols  = CamLogic::computeGridColumns($count);
 
@@ -12,8 +13,7 @@ $cols  = CamLogic::computeGridColumns($count);
 // the live status poll fills them in once it's reachable). See
 // CamLogic::collectRecordingCounts() for exactly what is asked of the relay.
 $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $url): ?string {
-    $ctx = stream_context_create(['http' => ['timeout' => 2, 'ignore_errors' => true]]);
-    $body = @file_get_contents($url, false, $ctx);
+    [$body] = relay_fetch($url, 'GET', 2);
     return $body === false ? null : $body;
 });
 
@@ -442,81 +442,83 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 <main>
   <div class="grid" id="grid">
     <?php foreach ($cameras as $i => $cam):
+      $camId    = htmlspecialchars($cam['id']);
+      $camName  = htmlspecialchars($cam['name']);
       $proxyUrl = 'stream.php?cam=' . urlencode($cam['id']);
     ?>
-    <div class="cam-card" id="card-<?= htmlspecialchars($cam['id']) ?>">
+    <div class="cam-card" id="card-<?= $camId ?>">
 
       <div class="cam-header">
         <div class="cam-title">
           <span><?= $cam['icon'] ?></span>
-          <?= htmlspecialchars($cam['name']) ?>
+          <?= $camName ?>
         </div>
         <div class="cam-actions">
           <span class="rec-dot"></span>
-          <span class="status-pill connecting" id="pill-<?= htmlspecialchars($cam['id']) ?>">CONNECTING</span>
-          <span class="rec-pill" id="recpill-<?= htmlspecialchars($cam['id']) ?>"></span>
-          <button class="cam-btn" onclick="reloadStream('<?= htmlspecialchars($cam['id']) ?>')">↺ RELOAD</button>
-          <button class="cam-btn danger" id="hide-<?= htmlspecialchars($cam['id']) ?>"
-                  onclick="toggleHide('<?= htmlspecialchars($cam['id']) ?>')">✕ HIDE</button>
+          <span class="status-pill connecting" id="pill-<?= $camId ?>">CONNECTING</span>
+          <span class="rec-pill" id="recpill-<?= $camId ?>"></span>
+          <button class="cam-btn" onclick="reloadStream('<?= $camId ?>')">↺ RELOAD</button>
+          <button class="cam-btn danger" id="hide-<?= $camId ?>"
+                  onclick="toggleHide('<?= $camId ?>')">✕ HIDE</button>
         </div>
       </div>
 
       <!-- Recording + its file list live together: start/stop a recording,
            browse and download what's already been saved, all in one place. -->
       <div class="cam-record-row">
-        <input type="number" id="seconds-<?= htmlspecialchars($cam['id']) ?>" min="1" max="3600" value="60"
+        <input type="number" id="seconds-<?= $camId ?>" min="1" max="3600" value="60"
                title="Recording length in seconds">
         <span class="unit">sec</span>
-        <button class="cam-btn" id="rec-btn-<?= htmlspecialchars($cam['id']) ?>"
+        <button class="cam-btn" id="rec-btn-<?= $camId ?>"
                 title="Press again mid-recording to extend it by this many seconds from now"
-                onclick="recordOne('<?= htmlspecialchars($cam['id']) ?>')">⏺ RECORD</button>
-        <button class="cam-btn danger" id="stop-btn-<?= htmlspecialchars($cam['id']) ?>" style="display:none;"
-                onclick="stopOne('<?= htmlspecialchars($cam['id']) ?>')">⏹ STOP</button>
-        <button class="cam-btn" id="files-btn-<?= htmlspecialchars($cam['id']) ?>"
+                onclick="recordOne('<?= $camId ?>')">⏺ RECORD</button>
+        <button class="cam-btn danger" id="stop-btn-<?= $camId ?>" style="display:none;"
+                onclick="stopOne('<?= $camId ?>')">⏹ STOP</button>
+        <button class="cam-btn" id="files-btn-<?= $camId ?>"
                 title="Saved recordings for this camera — click to open the list"
-                onclick="toggleRecordingsPanel('<?= htmlspecialchars($cam['id']) ?>')"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
+                onclick="toggleRecordingsPanel('<?= $camId ?>')"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
       </div>
 
       <div class="cam-record-row cam-switch-row">
-        <span class="switch-pill" id="sw-pill-<?= htmlspecialchars($cam['id']) ?>">…</span>
-        <input type="number" id="sw-min-<?= htmlspecialchars($cam['id']) ?>" step="1" value="60"
+        <span class="switch-pill" id="sw-pill-<?= $camId ?>">…</span>
+        <input type="number" id="sw-min-<?= $camId ?>" step="1" value="60"
                title="Minutes to stay OFF. 0 or a negative number = OFF until you press ON.">
         <span class="unit">min</span>
-        <button class="cam-btn danger" id="sw-off-<?= htmlspecialchars($cam['id']) ?>"
+        <button class="cam-btn danger" id="sw-off-<?= $camId ?>"
                 title="Switch recording OFF for this camera only, for this many minutes (0 or negative = until switched ON)"
-                onclick="switchRecording('camera', '<?= htmlspecialchars($cam['id']) ?>', 'off')">⏻ OFF</button>
-        <button class="cam-btn" id="sw-on-<?= htmlspecialchars($cam['id']) ?>"
+                onclick="switchRecording('camera', '<?= $camId ?>', 'off')">⏻ OFF</button>
+        <button class="cam-btn" id="sw-on-<?= $camId ?>"
                 title="Switch recording back ON for this camera"
-                onclick="switchRecording('camera', '<?= htmlspecialchars($cam['id']) ?>', 'on')">⏻ ON</button>
-        <span class="switch-note" id="sw-note-<?= htmlspecialchars($cam['id']) ?>"></span>
+                onclick="switchRecording('camera', '<?= $camId ?>', 'on')">⏻ ON</button>
+        <span class="switch-note" id="sw-note-<?= $camId ?>"></span>
       </div>
 
-      <div class="files-panel" id="files-<?= htmlspecialchars($cam['id']) ?>"></div>
+      <div class="files-panel" id="files-<?= $camId ?>"></div>
 
-      <div class="cam-stream-wrap" id="wrap-<?= htmlspecialchars($cam['id']) ?>">
+      <div class="cam-stream-wrap" id="wrap-<?= $camId ?>">
 
         <!-- Connecting spinner (visible until image loads) -->
-        <div class="cam-overlay visible" id="overlay-<?= htmlspecialchars($cam['id']) ?>">
+        <div class="cam-overlay visible" id="overlay-<?= $camId ?>">
           <div class="spinner"></div>
           <span>CONNECTING…</span>
         </div>
 
         <img
           class="stream"
-          id="img-<?= htmlspecialchars($cam['id']) ?>"
+          id="img-<?= $camId ?>"
           src="<?= $proxyUrl ?>"
-          alt="<?= htmlspecialchars($cam['name']) ?>"
+          alt="<?= $camName ?>"
           data-src="<?= $proxyUrl ?>"
-          onload="onStreamLoad('<?= htmlspecialchars($cam['id']) ?>')"
-          onerror="onStreamError('<?= htmlspecialchars($cam['id']) ?>')"
-          onclick="toggleStreamFullscreen('<?= htmlspecialchars($cam['id']) ?>')"
+          onload="onStreamLoad('<?= $camId ?>')"
+          onerror="onStreamError('<?= $camId ?>')"
+          onclick="toggleStreamFullscreen('<?= $camId ?>')"
           title="Click to view full screen"
         >
 
       </div>
 
       <div class="cam-footer">
-        <span>PROXY → stream.php?cam=<?= htmlspecialchars($cam['id']) ?></span>
+        <span>PROXY → stream.php?cam=<?= $camId ?></span>
         <span>CAM <?= str_pad($i + 1, 2, '0', STR_PAD_LEFT) ?></span>
       </div>
 
@@ -579,9 +581,9 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     if (img.dataset.hidden === '1') return;
 
     setStatus(id, 'connecting', 'CONNECTING');
-    document.getElementById('overlay-' + id).innerHTML =
-      '<div class="spinner"></div><span>CONNECTING…</span>';
-    document.getElementById('overlay-' + id).classList.add('visible');
+    const overlay = document.getElementById('overlay-' + id);
+    overlay.innerHTML = '<div class="spinner"></div><span>CONNECTING…</span>';
+    overlay.classList.add('visible');
 
     // Cache-bust so the browser actually re-requests
     img.src = img.dataset.src + '&_=' + Date.now();
@@ -771,13 +773,18 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   // Keep the "N min left" text ticking between status polls.
   setInterval(() => { getAllCameraIds().forEach(renderSwitch); }, 1000);
 
+  // The recording length typed into a duration field, or null (after telling
+  // the user) when it is not a whole number of at least 1.
+  function readRecordSeconds(inputId) {
+    const seconds = parseInt(document.getElementById(inputId).value, 10);
+    if (Number.isFinite(seconds) && seconds >= 1) return seconds;
+    alert('Enter a valid number of seconds');
+    return null;
+  }
+
   async function recordAll() {
-    const secondsInput = document.getElementById('record-seconds');
-    const seconds = parseInt(secondsInput.value, 10);
-    if (!Number.isFinite(seconds) || seconds < 1) {
-      alert('Enter a valid number of seconds');
-      return;
-    }
+    const seconds = readRecordSeconds('record-seconds');
+    if (seconds === null) return;
 
     const btn = document.getElementById('btn-record-all');
     btn.disabled = true;
@@ -802,12 +809,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   // Same start/extend behaviour as "RECORD ALL", just scoped to one camera
   // using that card's own duration field instead of the header's.
   async function recordOne(id) {
-    const secondsInput = document.getElementById('seconds-' + id);
-    const seconds = parseInt(secondsInput.value, 10);
-    if (!Number.isFinite(seconds) || seconds < 1) {
-      alert('Enter a valid number of seconds');
-      return;
-    }
+    const seconds = readRecordSeconds('seconds-' + id);
+    if (seconds === null) return;
     const btn = document.getElementById('rec-btn-' + id);
     btn.disabled = true;
     await startRecording(id, seconds);
@@ -987,34 +990,29 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     container.dataset.open = '1';
   }
 
-  async function deleteRecording(id, filename) {
-    if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
+  // POSTs a delete request to recordings.php and refreshes the camera's list.
+  // `query` is the part after cam=...; failures are shown to the user.
+  async function postRecordingsDelete(id, query, failureText) {
     try {
-      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&delete=${encodeURIComponent(filename)}`, {
-        method: 'POST',
-      });
+      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&${query}`, { method: 'POST' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || ('HTTP ' + res.status));
       }
       await refreshRecordingsList(id);
     } catch (e) {
-      alert('Could not delete recording: ' + e.message);
+      alert(`${failureText}: ${e.message}`);
     }
+  }
+
+  async function deleteRecording(id, filename) {
+    if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
+    await postRecordingsDelete(id, `delete=${encodeURIComponent(filename)}`, 'Could not delete recording');
   }
 
   async function deleteAllRecordings(id) {
     if (!confirm('Delete ALL recordings for this camera? This cannot be undone.')) return;
-    try {
-      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || ('HTTP ' + res.status));
-      }
-      await refreshRecordingsList(id);
-    } catch (e) {
-      alert('Could not delete recordings: ' + e.message);
-    }
+    await postRecordingsDelete(id, 'deleteAll=1', 'Could not delete recordings');
   }
 
   // Global "DELETE ALL FOOTAGE" button — fans out a deleteAll request to

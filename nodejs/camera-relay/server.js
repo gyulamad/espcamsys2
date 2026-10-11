@@ -23,6 +23,7 @@ const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
+const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 
 const app = express();
@@ -43,16 +44,16 @@ const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timi
 // BEFORE the trigger instead of whenever the (possibly slow) request got here.
 // Set in config.js (preRollSeconds, default 5; 0 disables). The PREROLL_*
 // env vars override it, the same way PORT / CAM_KEY / SETTINGS_FILE do.
+const fromEnv = (name, fallback) => envOr(process.env, name, fallback);
 const preRollCfg = preroll.resolvePreRollConfig({
-  seconds: process.env.PREROLL_SECONDS !== undefined ? process.env.PREROLL_SECONDS : config.preRollSeconds,
-  maxBytes: process.env.PREROLL_MAX_BYTES !== undefined ? process.env.PREROLL_MAX_BYTES : config.preRollMaxBytes,
+  seconds: fromEnv('PREROLL_SECONDS', config.preRollSeconds),
+  maxBytes: fromEnv('PREROLL_MAX_BYTES', config.preRollMaxBytes),
 });
 for (const w of preRollCfg.warnings) console.warn(`[config] ${w}`);
 console.log(preRollCfg.seconds > 0
   ? `Pre-roll: every recording starts with the last ${preRollCfg.seconds}s of footage (up to ${Math.round(preRollCfg.maxBytes / 1048576)} MiB per camera)`
   : 'Pre-roll: disabled (preRollSeconds = 0)');
 
-// ── Persistent settings ──
 // ── Logging ──
 // One plain-text log file (see lib/logfile.js for the format) that collects:
 //   - what the CAMERAS report, sent to POST /log (their serial output, moved
@@ -65,9 +66,9 @@ console.log(preRollCfg.seconds > 0
 // LOG_MAX_BYTES / LOG_KEEP_FILES env vars override them). The file rotates, so
 // it can never fill the SD card (see lib/logwriter.js).
 const logCfg = logfile.resolveLogConfig({
-  file: process.env.LOG_FILE !== undefined ? process.env.LOG_FILE : config.logFile,
-  maxBytes: process.env.LOG_MAX_BYTES !== undefined ? process.env.LOG_MAX_BYTES : config.logMaxBytes,
-  keep: process.env.LOG_KEEP_FILES !== undefined ? process.env.LOG_KEEP_FILES : config.logKeepFiles,
+  file: fromEnv('LOG_FILE', config.logFile),
+  maxBytes: fromEnv('LOG_MAX_BYTES', config.logMaxBytes),
+  keep: fromEnv('LOG_KEEP_FILES', config.logKeepFiles),
 }, __dirname);
 for (const w of logCfg.warnings) console.warn(`[config] ${w}`);
 
@@ -91,9 +92,7 @@ function reportLogWriteFailure(err) {
 //   via     'relay' = observed by the relay rather than reported by the camera
 //   trace   extra detail on indented lines (a stack trace, usually)
 function relayLog(level, message, { sender = 'relay', ip, via, trace, extras, time } = {}) {
-  const echo = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
-  if (trace) echo(`[${sender}] ${message}\n${trace}`);
-  else echo(`[${sender}] ${message}`);
+  console[consoleMethodFor(level)](trace ? `[${sender}] ${message}\n${trace}` : `[${sender}] ${message}`);
   if (!logWriter) return;
   const text = logfile.formatEntry({ time: time || new Date(), level, sender, ip, via, extras, message, trace });
   logWriter.append(text).catch(reportLogWriteFailure);
@@ -122,6 +121,8 @@ const eventThrottle = new Throttle(10 * 1000);   // connect / disconnect of a ca
 const authFailThrottle = new Throttle(60 * 1000); // rejected connections / requests
 const pushErrThrottle = new Throttle(5 * 1000);   // errors while handling a camera's messages
 const writeErrThrottle = new Throttle(10 * 1000); // failing to write recording files
+const suppressedThrottle = new Throttle(60 * 1000); // "ignored a recording request while OFF": once a minute per camera
+const switchAuthThrottle = new Throttle(60 * 1000); // recording on/off requests with a missing or wrong control key
 function suppressedNote(n) {
   return n > 0 ? ` (${n} similar event${n === 1 ? '' : 's'} not logged since the last one)` : '';
 }
@@ -141,11 +142,7 @@ function loadSettings() {
 }
 
 function saveSettings(next) {
-  // Write to a temp file then rename, so a crash/power loss mid-write can
-  // never leave a half-written settings.json behind.
-  const tmp = SETTINGS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
-  fs.renameSync(tmp, SETTINGS_FILE);
+  writeFileAtomic(SETTINGS_FILE, JSON.stringify(next, null, 2));
 }
 
 let settings = loadSettings();
@@ -317,10 +314,6 @@ function extendRecording(cam, seconds) {
   return rec;
 }
 
-// Starts a recording of `seconds`, or — if one is already running —
-// extends it to `seconds` from now. The one place the alarm, "record all"
-// and per-camera record routes get that behaviour, so they can't diverge.
-// Returns the JSON-ready summary those routes respond with.
 // ── Recording ON/OFF switch ──
 // Each camera can be switched OFF, so that nothing records while people are at
 // the surveilled place (otherwise every movement is recorded and somebody has
@@ -346,7 +339,7 @@ function extendRecording(cam, seconds) {
 // switch the whole system off. With no controlKey configured the switch is
 // refused (not left open). Reading the state needs nothing.
 const SWITCH_FILE = process.env.SWITCH_FILE || path.resolve(__dirname, config.switchFile || 'recording-switch.json');
-const CONTROL_KEY = process.env.CONTROL_KEY !== undefined ? process.env.CONTROL_KEY : (config.controlKey || '');
+const CONTROL_KEY = fromEnv('CONTROL_KEY', config.controlKey || '');
 
 function offText(state) {
   return state.until === null ? 'until it is switched back ON' : `until ${new Date(state.until).toISOString()}`;
@@ -369,13 +362,11 @@ function loadSwitch() {
 }
 const recSwitch = loadSwitch();
 
-// Written to a temp file and renamed, like settings.json, so a crash mid-write
-// can't leave a half-written file (which would silently turn every OFF back ON).
+// Written atomically, like settings.json: a half-written file would silently
+// turn every OFF back ON.
 function saveSwitch() {
-  const tmp = SWITCH_FILE + '.tmp';
   try {
-    fs.writeFileSync(tmp, recSwitch.serialize());
-    fs.renameSync(tmp, SWITCH_FILE);
+    writeFileAtomic(SWITCH_FILE, recSwitch.serialize());
     return true;
   } catch (err) {
     relayLog('ERROR', `could not save the recording switch to ${SWITCH_FILE}: ${err.message} — the change applies now but will be forgotten if the relay restarts`);
@@ -406,8 +397,10 @@ function refreshSwitch(now = Date.now()) {
 }
 setInterval(refreshSwitch, 5000).unref();
 
-const suppressedThrottle = new Throttle(60 * 1000); // "ignored a recording request while OFF": once a minute per camera
-
+// Starts a recording of `seconds`, or — if one is already running —
+// extends it to `seconds` from now. The one place the alarm, "record all"
+// and per-camera record routes get that behaviour, so they can't diverge.
+// Returns the JSON-ready summary those routes respond with.
 function startOrExtendRecording(cam, id, seconds) {
   // The switch comes first: while a camera is OFF nothing can start a recording.
   refreshSwitch();
@@ -450,32 +443,36 @@ function finalizeRecording(rec) {
   if (rec.frameCount === 0) {
     // Camera was offline for this whole recording and had nothing buffered — nothing to encode.
     camLog('WARN', rec.id, 'recording had no frames (the camera sent nothing during it, and nothing was buffered) — nothing saved');
-    fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
+    removeTempDir(rec);
     return;
   }
+  rec.preRollWritten.then(() => encodeRecording(rec));
+}
 
-  rec.preRollWritten.then(() => {
-    const fps = video.computeFps(rec.frameCount, rec.firstFrameAt, rec.lastFrameAt, DEFAULT_FPS);
+function removeTempDir(rec) {
+  fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
+}
 
-    const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
-    const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
+function encodeRecording(rec) {
+  const fps = video.computeFps(rec.frameCount, rec.firstFrameAt, rec.lastFrameAt, DEFAULT_FPS);
+  const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
+  const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
 
-    const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath));
+  const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath));
 
-    ffmpeg.on('error', (err) => {
-      // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
-      // frames in place rather than deleting footage we can't otherwise recover.
-      camLog('ERROR', rec.id, `ffmpeg failed to start (is it installed?): ${err.message} — raw frames kept at ${rec.tempDir}`);
-    });
+  ffmpeg.on('error', (err) => {
+    // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
+    // frames in place rather than deleting footage we can't otherwise recover.
+    camLog('ERROR', rec.id, `ffmpeg failed to start (is it installed?): ${err.message} — raw frames kept at ${rec.tempDir}`);
+  });
 
-    ffmpeg.on('exit', (code) => {
-      if (code === 0) {
-        camLog('INFO', rec.id, `recording saved as ${path.basename(outputPath)}`);
-        fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
-      } else {
-        camLog('ERROR', rec.id, `ffmpeg exited with code ${code} — raw frames kept at ${rec.tempDir}`);
-      }
-    });
+  ffmpeg.on('exit', (code) => {
+    if (code !== 0) {
+      camLog('ERROR', rec.id, `ffmpeg exited with code ${code} — raw frames kept at ${rec.tempDir}`);
+      return;
+    }
+    camLog('INFO', rec.id, `recording saved as ${path.basename(outputPath)}`);
+    removeTempDir(rec);
   });
 }
 
@@ -522,11 +519,6 @@ app.get('/snapshot/:id', (req, res) => {
   res.send(cam.frame);
 });
 
-// Quick health check across all cameras — also what the dashboard polls on
-// an interval (via status.php) to pick up state changes that didn't
-// originate from a click in that browser tab: another tab, another user,
-// or a camera's alarm-trigger GPIO calling /alarm directly. Includes each
-// camera's pre-roll buffer fill, handy for checking the feature is working.
 // How many saved recordings a camera has — the same rule the file list uses
 // (see validation.countRecordingFiles). 0 if it has no folder yet; null if the
 // folder exists but couldn't be read, so one bad folder shows up as "unknown"
@@ -556,6 +548,11 @@ async function recordingFolderIds() {
 // relay run, so they get a quiet "never seen, not recording" entry.
 const NEVER_SEEN = { lastSeen: null, recording: null, preRoll: null };
 
+// Quick health check across all cameras — also what the dashboard polls on
+// an interval (via status.php) to pick up state changes that didn't
+// originate from a click in that browser tab: another tab, another user,
+// or a camera's alarm-trigger GPIO calling /alarm directly. Includes each
+// camera's pre-roll buffer fill, handy for checking the feature is working.
 app.get('/status', async (req, res) => {
   try {
     const ids = [...new Set([...Object.keys(cameras), ...(await recordingFolderIds())])].sort();
@@ -603,7 +600,6 @@ app.post('/settings', (req, res) => {
 //   POST /recording/all/on
 //   GET  /recording/state                      who is OFF (no key needed)
 // The four POSTs need `X-Control-Key: <controlKey>`; see the notes at the switch above.
-const switchAuthThrottle = new Throttle(60 * 1000);
 function requireControlKey(req, res, next) {
   if (!CONTROL_KEY) {
     return res.status(503).json({ error: 'switching is disabled: controlKey is not set in the relay config' });
@@ -622,6 +618,14 @@ function actorOf(req) {
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const raw = req.headers['x-actor'];
   return typeof raw === 'string' && raw.trim() !== '' ? `${logfile.safeToken(raw.trim())} (via ${ip || 'unknown address'})` : (ip || 'unknown address');
+}
+
+// { id: description-or-null } for each of `ids`, in the shape the API returns.
+function describeOffStates(ids) {
+  const now = Date.now();
+  const off = {};
+  for (const id of ids) off[id] = describeOff(recSwitch.offState(id, now), now);
+  return off;
 }
 
 function switchOffCameras(ids, minutes, actor) {
@@ -661,10 +665,7 @@ function switchHandler(action, target) {
     } else {
       switchOnCameras(ids, actorOf(req));
     }
-    const now = Date.now();
-    const off = {};
-    for (const id of ids) off[id] = describeOff(recSwitch.offState(id, now), now);
-    return res.json({ ok: true, action, minutes, forever: action === 'off' ? minutes === 0 : null, affected: ids, off });
+    return res.json({ ok: true, action, minutes, forever: action === 'off' ? minutes === 0 : null, affected: ids, off: describeOffStates(ids) });
   };
 }
 const oneCamera = (req, res) => {
@@ -680,10 +681,7 @@ app.post('/recording/all/on', requireControlKey, switchHandler('on', everyKnownC
 
 app.get('/recording/state', (req, res) => {
   refreshSwitch();
-  const now = Date.now();
-  const off = {};
-  for (const id of recSwitch.offIds(now)) off[id] = describeOff(recSwitch.offState(id, now), now);
-  res.json({ off, controlEnabled: CONTROL_KEY !== '', defaultMinutes: DEFAULT_OFF_MINUTES });
+  res.json({ off: describeOffStates(recSwitch.offIds(Date.now())), controlEnabled: CONTROL_KEY !== '', defaultMinutes: DEFAULT_OFF_MINUTES });
 });
 
 // ── Camera logs ──
@@ -706,6 +704,35 @@ app.get('/recording/state', (req, res) => {
 //   camera deletes them from its memory only then. Anything else (401 wrong
 //   key, 400 bad body, 413 too big, 500/503 the relay can't write the file)
 //   makes the camera keep them and retry later.
+// The log-file text for one batch from a camera: a note if the camera lost
+// entries or some were unusable, then each entry filed under the time it
+// actually happened.
+function formatCameraLogBatch(batch, rejected, ip, receivedAt) {
+  const first = logfile.eventTime(receivedAt, Math.max(...batch.entries.map((e) => e.ageMs)));
+  const note = (message) => logfile.formatEntry({ time: first, level: 'WARN', sender: batch.camera, ip, via: 'relay', message });
+
+  let text = '';
+  if (batch.dropped > 0) {
+    text += note(`the camera reports ${batch.dropped} log entries were lost before they could be delivered (its memory queue overflowed, or the relay was unreachable for too long)`);
+  }
+  if (rejected > 0) text += note(`${rejected} unusable entries in a log request were skipped`);
+  for (const e of batch.entries) {
+    text += logfile.formatEntry({
+      time: logfile.eventTime(receivedAt, e.ageMs), level: e.level, sender: batch.camera, ip,
+      extras: { uptimeMs: e.uptimeMs, heap: e.heap, rssi: e.rssi, seq: e.seq, attempt: batch.attempt, lateMs: e.ageMs, fw: batch.fw },
+      message: e.message, trace: e.trace,
+    });
+  }
+  return text;
+}
+
+// Echo to the console too (journalctl / pm2 logs), one short line each.
+function echoCameraLogBatch(batch) {
+  for (const e of batch.entries) {
+    console[consoleMethodFor(e.level)](`[${batch.camera}] ${e.level} ${e.message.split('\n')[0]}`);
+  }
+}
+
 app.post('/log',
   (req, res, next) => {
     if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
@@ -721,40 +748,13 @@ app.post('/log',
     if (!logWriter) return res.status(503).json({ error: 'the relay cannot write its log file' });
 
     const { batch } = parsed;
-    const receivedAt = Date.now();
-    const ip = logfile.normalizeIp(req.socket.remoteAddress);
-    const first = logfile.eventTime(receivedAt, Math.max(...batch.entries.map((e) => e.ageMs)));
-    let text = '';
-    if (batch.dropped > 0) {
-      text += logfile.formatEntry({
-        time: first, level: 'WARN', sender: batch.camera, ip, via: 'relay',
-        message: `the camera reports ${batch.dropped} log entries were lost before they could be delivered (its memory queue overflowed, or the relay was unreachable for too long)`,
-      });
-    }
-    if (parsed.rejected > 0) {
-      text += logfile.formatEntry({
-        time: first, level: 'WARN', sender: batch.camera, ip, via: 'relay',
-        message: `${parsed.rejected} unusable entries in a log request were skipped`,
-      });
-    }
-    for (const e of batch.entries) {
-      text += logfile.formatEntry({
-        time: logfile.eventTime(receivedAt, e.ageMs), level: e.level, sender: batch.camera, ip,
-        extras: { uptimeMs: e.uptimeMs, heap: e.heap, rssi: e.rssi, seq: e.seq, attempt: batch.attempt, lateMs: e.ageMs, fw: batch.fw },
-        message: e.message, trace: e.trace,
-      });
-    }
     try {
-      await logWriter.append(text);
+      await logWriter.append(formatCameraLogBatch(batch, parsed.rejected, logfile.normalizeIp(req.socket.remoteAddress), Date.now()));
     } catch (err) {
       reportLogWriteFailure(err);
       return res.status(500).json({ error: 'could not write the log file' });
     }
-    // Echo to the console too (journalctl / pm2 logs), one short line each.
-    for (const e of batch.entries) {
-      const echo = e.level === 'ERROR' ? console.error : e.level === 'WARN' ? console.warn : console.log;
-      echo(`[${batch.camera}] ${e.level} ${e.message.split('\n')[0]}`);
-    }
+    echoCameraLogBatch(batch);
     return res.json({ ok: true, accepted: batch.entries.length, rejected: parsed.rejected });
   });
 
@@ -801,6 +801,17 @@ app.post('/alarm/:id', (req, res) => {
   res.json(triggerAlarm(req.params.id));
 });
 
+// Reads ?seconds=N for the two record routes into req.recordSeconds, or
+// answers 400 when it is missing or out of range.
+function requireRecordSeconds(req, res, next) {
+  const seconds = validation.parseIntInRange(req.query.seconds, 1, MAX_RECORD_SECONDS);
+  if (seconds === null) {
+    return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
+  }
+  req.recordSeconds = seconds;
+  return next();
+}
+
 // Start/extend a recording on every camera the relay currently knows about
 // at once — same start/extend semantics as /record/:id below, just looped
 // over every registered camera id. This is what ALARM_RECORD_ALL_CAMERAS in
@@ -809,14 +820,8 @@ app.post('/alarm/:id', (req, res) => {
 // camera that has connected/registered at least once since this process
 // started — same set /status reports on.) Registered before /record/:id so
 // Express doesn't try to match "all" as a literal camera id.
-app.post('/record/all', (req, res) => {
-  const seconds = validation.parseIntInRange(req.query.seconds, 1, MAX_RECORD_SECONDS);
-  if (seconds === null) {
-    return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
-  }
-
-  const results = Object.keys(cameras).map((id) => startOrExtendRecording(cameras[id], id, seconds));
-
+app.post('/record/all', requireRecordSeconds, (req, res) => {
+  const results = Object.keys(cameras).map((id) => startOrExtendRecording(cameras[id], id, req.recordSeconds));
   res.json({ cameras: results });
 });
 
@@ -827,12 +832,8 @@ app.post('/record/all', (req, res) => {
 // dashboard's RECORD button) and now also directly by camera boards
 // themselves, over the LAN, when their alarm-trigger GPIO fires — see the
 // ESP32 sketch's ALARM_* constants and sendRecordRequest().
-app.post('/record/:id', (req, res) => {
-  const seconds = validation.parseIntInRange(req.query.seconds, 1, MAX_RECORD_SECONDS);
-  if (seconds === null) {
-    return res.status(400).json({ error: `seconds must be an integer between 1 and ${MAX_RECORD_SECONDS}` });
-  }
-  const result = startOrExtendRecording(getCamera(req.params.id), req.params.id, seconds);
+app.post('/record/:id', requireRecordSeconds, (req, res) => {
+  const result = startOrExtendRecording(getCamera(req.params.id), req.params.id, req.recordSeconds);
   // A person pressing RECORD must be told it did not happen; a camera's alarm (below) just gets the summary.
   if (result.suppressed) return res.status(409).json(Object.assign({ error: 'recording is switched OFF for this camera' }, result));
   res.json(result);
@@ -863,12 +864,28 @@ app.get('/record/:id', (req, res) => {
   });
 });
 
+// Names of the saved recordings in a camera's folder (none if it has no folder yet).
+function recordingFileNames(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => validation.isSafeFilename(f));
+}
+
+// Resolves /recordings/:id/:filename to req.recordingPath, or answers 400 (not a
+// name the relay would have generated — which rules out path traversal too)
+// or 404 (no such file).
+function requireExistingRecording(req, res, next) {
+  const { id, filename } = req.params;
+  if (!validation.isSafeFilename(filename)) return res.sendStatus(400);
+  const filePath = path.join(RECORDINGS_DIR, id, filename);
+  if (!fs.existsSync(filePath)) return res.sendStatus(404);
+  req.recordingPath = filePath;
+  return next();
+}
+
 // List saved recordings for a camera, newest first.
 app.get('/recordings/:id', (req, res) => {
   const dir = path.join(RECORDINGS_DIR, req.params.id);
-  if (!fs.existsSync(dir)) return res.json([]);
-  const files = fs.readdirSync(dir)
-    .filter((f) => validation.isSafeFilename(f))
+  const files = recordingFileNames(dir)
     .map((f) => {
       const stat = fs.statSync(path.join(dir, f));
       return { filename: f, sizeBytes: stat.size, createdAt: stat.birthtime };
@@ -883,13 +900,8 @@ app.get('/recordings/:id', (req, res) => {
 // single-file delete route below.
 app.delete('/recordings/:id', (req, res) => {
   const dir = path.join(RECORDINGS_DIR, req.params.id);
-  if (!fs.existsSync(dir)) return res.json({ deleted: [] });
-  const deleted = fs.readdirSync(dir)
-    .filter((f) => validation.isSafeFilename(f))
-    .map((f) => {
-      fs.unlinkSync(path.join(dir, f));
-      return f;
-    });
+  const deleted = recordingFileNames(dir);
+  for (const f of deleted) fs.unlinkSync(path.join(dir, f));
   res.json({ deleted });
 });
 
@@ -899,29 +911,21 @@ app.delete('/recordings/:id', (req, res) => {
 // Express's res.download()/sendFile() — that's what lets the dashboard's
 // inline <video> player seek/scrub instead of only ever playing from the
 // start, as long as recordings.php forwards the Range header through.
-app.get('/recordings/:id/:filename', (req, res) => {
-  const { id, filename } = req.params;
-  if (!validation.isSafeFilename(filename)) return res.sendStatus(400); // rules out any path traversal too
-  const filePath = path.join(RECORDINGS_DIR, id, filename);
-  if (!fs.existsSync(filePath)) return res.sendStatus(404);
-  res.download(filePath);
+app.get('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
+  res.download(req.recordingPath);
 });
 
 // Delete one recording.
-app.delete('/recordings/:id/:filename', (req, res) => {
-  const { id, filename } = req.params;
-  if (!validation.isSafeFilename(filename)) return res.sendStatus(400);
-  const filePath = path.join(RECORDINGS_DIR, id, filename);
-  if (!fs.existsSync(filePath)) return res.sendStatus(404);
-  fs.unlinkSync(filePath);
-  res.json({ deleted: filename });
+app.delete('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
+  fs.unlinkSync(req.recordingPath);
+  res.json({ deleted: req.params.filename });
 });
 
 // Any error a route doesn't handle itself ends up here: recorded with its stack
 // trace (Express's default handler would only print it to the console), and
 // answered with a plain 500.
 app.use((err, req, res, next) => {
-  relayLog('ERROR', `unhandled error in ${req.method} ${req.path}: ${err && err.message ? err.message : err}`, { trace: err && err.stack });
+  relayLog('ERROR', `unhandled error in ${req.method} ${req.path}: ${errorMessage(err)}`, { trace: err && err.stack });
   if (res.headersSent) return next(err);
   return res.sendStatus(500);
 });
@@ -952,8 +956,62 @@ app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`))
 function logPushError(camId, what, err) {
   const t = pushErrThrottle.check(`${camId}:${what}`, Date.now());
   if (!t.allow) return;
-  camLog('ERROR', camId, `error handling a ${what} from the push connection (camera stays connected): ${err && err.message ? err.message : err}${suppressedNote(t.suppressed)}`,
-    { trace: err && err.stack ? err.stack : String(err) });
+  camLog('ERROR', camId, `error handling a ${what} from the push connection (camera stays connected): ${errorMessage(err)}${suppressedNote(t.suppressed)}`,
+    { trace: errorTrace(err) });
+}
+
+// Registers an authenticated camera's connection and greets it.
+function acceptPushCamera(socket, camId, peerIp) {
+  const cam = getCamera(camId);
+  // Two boards flashed with the same CAMERA_ID fight over one stream: frames from both
+  // interleave and each reconnect kicks the other. Say so — it is easy to do and hard to spot.
+  const other = cam.socket && cam.socket !== socket && !cam.socket.destroyed ? cam.socket : null;
+  cam.socket = socket;
+  cam.ip = peerIp;
+  const t = eventThrottle.check(`${camId}:connect`, Date.now());
+  if (t.allow) camLog('INFO', camId, `camera connected${suppressedNote(t.suppressed)}`);
+  if (other) {
+    camLog('WARN', camId, `another connection with the SAME camera id is still open (from ${logfile.normalizeIp(other.remoteAddress)}) — is CAMERA_ID unique per board? Two boards sharing an id corrupt each other's stream`);
+  }
+  // Greet the camera with two single bytes (see lib/protocol.js):
+  //  1. COMPATIBILITY SHIM — cameras can no longer be paused (pre-roll needs
+  //     them streaming all the time), but a board still running the OLD
+  //     firmware that was paused when this relay was upgraded would stay
+  //     paused until power-cycled. "Resume" (0x01) un-sticks it; firmware
+  //     without a pause feature just discards it. Safe to delete once
+  //     every camera is reflashed.
+  //  2. CAPABILITY — "I understand in-band alarm messages". Firmware only
+  //     sends those after seeing this on the current connection, so a
+  //     camera can never feed an alarm message to a relay that would
+  //     mistake it for a video frame.
+  socket.write(protocol.encodeRelayGreeting());
+}
+
+// Handles one [length][payload] message from an authenticated camera. A failure
+// here is logged and swallowed: it must never take the relay down (see above).
+function handlePushPayload(camId, payload) {
+  let kind = 'message';
+  try {
+    const msg = protocol.classifyPayload(payload);
+    kind = msg.kind;
+    if (msg.kind === 'frame') {
+      ingestFrame(getCamera(camId), payload); // pre-roll buffer, latest frame, live viewers and any active recording
+    } else if (msg.kind === 'alarm') {
+      // Handled right here, in order with the frames: every frame the camera
+      // sent before this message is already in its pre-roll buffer, and
+      // nothing it sends afterwards can be missed. The camera is
+      // authenticated (this socket passed the key check), so unlike the
+      // keyless HTTP route this can only be triggered by a real camera.
+      // (Each camera's own "alarm received" / "recording started|extended" lines
+      // are written by triggerAlarm() and the recording code.)
+      if (msg.all) triggerAlarmAll('in-band, all cameras');
+      else triggerAlarm(camId, 'in-band');
+    }
+    // msg.kind === 'unknown': a control message from newer firmware than this
+    // relay — ignore it rather than mistake it for a frame or drop the camera.
+  } catch (err) {
+    logPushError(camId, kind === 'frame' ? 'video frame' : kind === 'alarm' ? 'alarm' : 'message', err);
+  }
 }
 
 const pushServer = net.createServer((socket) => {
@@ -972,85 +1030,46 @@ const pushServer = net.createServer((socket) => {
     const t = authFailThrottle.check(`push:${peerIp}`, Date.now());
     if (t.allow) relayLog('WARN', `rejected a push connection from ${peerIp || 'unknown address'}: ${why}${suppressedNote(t.suppressed)}`, { sender: who || 'unknown' });
     socket.destroy();
+    return false;
   };
 
-  socket.on('data', (chunk) => {
-    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
-
-    if (!authed) {
-      const nl = protocol.findAuthLineEnd(buf);
-      if (nl === -1) {
-        if (protocol.isAuthLineTooLong(buf.length)) reject(null, 'oversized or malformed first line'); // malformed/oversized auth line
-        return;
-      }
-      const parsed = protocol.parseAuthLine(buf.slice(0, nl));
-      buf = buf.slice(nl + 1);
-      if (!parsed) return reject(null, 'malformed first line');
-      if (!auth.safeEqual(parsed.key, API_KEY)) return reject(parsed.id, 'wrong key');
-      camId = parsed.id;
-      authed = true;
-      connectedAt = Date.now();
-
-      const cam = getCamera(camId);
-      // Two boards flashed with the same CAMERA_ID fight over one stream: frames from both
-      // interleave and each reconnect kicks the other. Say so — it is easy to do and hard to spot.
-      const other = cam.socket && cam.socket !== socket && !cam.socket.destroyed ? cam.socket : null;
-      cam.socket = socket;
-      cam.ip = peerIp;
-      const t = eventThrottle.check(`${camId}:connect`, connectedAt);
-      if (t.allow) camLog('INFO', camId, `camera connected${suppressedNote(t.suppressed)}`);
-      if (other) {
-        camLog('WARN', camId, `another connection with the SAME camera id is still open (from ${logfile.normalizeIp(other.remoteAddress)}) — is CAMERA_ID unique per board? Two boards sharing an id corrupt each other's stream`);
-      }
-      // Greet the camera with two single bytes (see lib/protocol.js):
-      //  1. COMPATIBILITY SHIM — cameras can no longer be paused (pre-roll needs
-      //     them streaming all the time), but a board still running the OLD
-      //     firmware that was paused when this relay was upgraded would stay
-      //     paused until power-cycled. "Resume" (0x01) un-sticks it; firmware
-      //     without a pause feature just discards it. Safe to delete once
-      //     every camera is reflashed.
-      //  2. CAPABILITY — "I understand in-band alarm messages". Firmware only
-      //     sends those after seeing this on the current connection, so a
-      //     camera can never feed an alarm message to a relay that would
-      //     mistake it for a video frame.
-      socket.write(protocol.encodeRelayGreeting());
+  // Reads the one-time auth line from the buffer. True once the camera is
+  // authenticated; false while the line is incomplete or the connection was refused.
+  const authenticate = () => {
+    const nl = protocol.findAuthLineEnd(buf);
+    if (nl === -1) {
+      if (protocol.isAuthLineTooLong(buf.length)) return reject(null, 'oversized or malformed first line');
+      return false; // the line has not fully arrived yet
     }
+    const parsed = protocol.parseAuthLine(buf.slice(0, nl));
+    buf = buf.slice(nl + 1);
+    if (!parsed) return reject(null, 'malformed first line');
+    if (!auth.safeEqual(parsed.key, API_KEY)) return reject(parsed.id, 'wrong key');
+    camId = parsed.id;
+    authed = true;
+    connectedAt = Date.now();
+    acceptPushCamera(socket, camId, peerIp);
+    return true;
+  };
 
-    // Drain as many complete [length][payload] frames as are buffered
+  // Handles as many complete [length][payload] messages as are buffered.
+  const drainMessages = () => {
     let drained;
     try {
       drained = protocol.drainFrames(buf);
     } catch (err) {
       camLog('WARN', camId, `dropped the connection: ${err.message} (a corrupt or out-of-step video stream)`);
-      socket.destroy(); // malformed/oversized length prefix — same guard the inline loop used
+      socket.destroy(); // malformed/oversized length prefix
       return;
     }
     buf = drained.rest;
+    for (const payload of drained.frames) handlePushPayload(camId, payload);
+  };
 
-    for (const payload of drained.frames) {
-      let kind = 'message';
-      try {
-        const msg = protocol.classifyPayload(payload);
-        kind = msg.kind;
-        if (msg.kind === 'frame') {
-          ingestFrame(getCamera(camId), payload); // pre-roll buffer, latest frame, live viewers and any active recording
-        } else if (msg.kind === 'alarm') {
-          // Handled right here, in order with the frames: every frame the camera
-          // sent before this message is already in its pre-roll buffer, and
-          // nothing it sends afterwards can be missed. The camera is
-          // authenticated (this socket passed the key check), so unlike the
-          // keyless HTTP route this can only be triggered by a real camera.
-          // (Each camera's own "alarm received" / "recording started|extended" lines
-          // are written by triggerAlarm() and the recording code.)
-          if (msg.all) triggerAlarmAll('in-band, all cameras');
-          else triggerAlarm(camId, 'in-band');
-        }
-        // msg.kind === 'unknown': a control message from newer firmware than this
-        // relay — ignore it rather than mistake it for a frame or drop the camera.
-      } catch (err) {
-        logPushError(camId, kind === 'frame' ? 'video frame' : kind === 'alarm' ? 'alarm' : 'message', err);
-      }
-    }
+  socket.on('data', (chunk) => {
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+    if (!authed && !authenticate()) return;
+    drainMessages();
   });
 
   socket.on('close', (hadError) => {
@@ -1077,7 +1096,7 @@ pushServer.listen(PUSH_PORT, () => console.log(`Camera relay (raw push) listenin
 relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file}; recording on/off switch ${CONTROL_KEY ? 'enabled' : 'DISABLED (no controlKey in config.js)'})`);
 
 process.on('uncaughtException', (err) => {
-  relayLogSync('ERROR', `FATAL: uncaught exception — the relay is stopping: ${err && err.message ? err.message : err}`, { trace: err && err.stack });
+  relayLogSync('ERROR', `FATAL: uncaught exception — the relay is stopping: ${errorMessage(err)}`, { trace: err && err.stack });
   console.error(err);
   process.exit(1);
 });

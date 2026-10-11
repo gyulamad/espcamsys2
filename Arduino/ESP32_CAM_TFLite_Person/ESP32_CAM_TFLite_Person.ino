@@ -272,18 +272,53 @@ void setPersonDetected(bool detected)
         personDetected ? HIGH : LOW
     );
 
-    if (personDetected)
+    Serial.println(
+        personDetected
+            ? ">>> PERSON DETECTED - GPIO HIGH <<<"
+            : ">>> NO PERSON - GPIO LOW <<<"
+    );
+}
+
+// Text printed after a cycle's score line (only with PRINT_DETECTION_SCORES).
+void printVerdict(const char *text)
+{
+#if PRINT_DETECTION_SCORES
+    Serial.println(text);
+#else
+    (void)text;
+#endif
+}
+
+// Detection hysteresis
+//
+// If currently OFF:
+//     turn ON at >= PERSON_DETECTION_THRESHOLD
+//
+// If currently ON:
+//     stay ON until the score falls below PERSON_CLEAR_THRESHOLD
+void updateDetectionState(float personScore)
+{
+    if (!personDetected)
     {
-        Serial.println(
-            ">>> PERSON DETECTED - GPIO HIGH <<<"
-        );
+        if (!(personScore >= PERSON_DETECTION_THRESHOLD))
+        {
+            printVerdict("");
+            return;
+        }
+
+        printVerdict("   -> DETECT");
+        setPersonDetected(true);
+        return;
     }
-    else
+
+    if (!(personScore < PERSON_CLEAR_THRESHOLD))
     {
-        Serial.println(
-            ">>> NO PERSON - GPIO LOW <<<"
-        );
+        printVerdict("   -> PERSON");
+        return;
     }
+
+    printVerdict("   -> CLEAR");
+    setPersonDetected(false);
 }
 
 
@@ -291,15 +326,12 @@ void setPersonDetected(bool detected)
 // Run one camera + inference cycle
 // ============================================================
 
-bool detectPerson(
-    float &personScore,
-    float &noPersonScore
-)
+// Captures a frame and copies it into the model's input tensor,
+// converting camera uint8 pixels to model int8 the way the v1.3.3
+// implementation does: by flipping the high bit.
+// The frame buffer is always handed back before returning.
+bool captureFrameIntoInput()
 {
-    // --------------------------------------------------------
-    // Capture camera frame
-    // --------------------------------------------------------
-
     camera_fb_t *fb = esp_camera_fb_get();
 
     if (!fb)
@@ -310,11 +342,6 @@ bool detectPerson(
 
         return false;
     }
-
-
-    // --------------------------------------------------------
-    // Verify frame dimensions
-    // --------------------------------------------------------
 
     if (
         fb->width != IMAGE_WIDTH ||
@@ -332,31 +359,34 @@ bool detectPerson(
         return false;
     }
 
-
-    // --------------------------------------------------------
-    // Convert camera uint8 pixels to model int8 input.
-    //
-    // This follows the v1.3.3 implementation:
-    //
-    //     uint8 -> int8
-    //
-    // by flipping the high bit.
-    // --------------------------------------------------------
-
     for (int i = 0; i < IMAGE_SIZE; i++)
     {
         input->data.int8[i] =
             ((uint8_t *)fb->buf)[i] ^ 0x80;
     }
 
-
-    // Frame buffer is no longer needed.
     esp_camera_fb_return(fb);
 
+    return true;
+}
 
-    // --------------------------------------------------------
-    // Run neural network
-    // --------------------------------------------------------
+// Converts one quantized model output value to a floating point
+// score — the same calculation Espressif's v1.3.3 example uses.
+float dequantize(const TfLiteTensor *output, int8_t value)
+{
+    return (value - output->params.zero_point)
+        * output->params.scale;
+}
+
+bool detectPerson(
+    float &personScore,
+    float &noPersonScore
+)
+{
+    if (!captureFrameIntoInput())
+    {
+        return false;
+    }
 
     if (interpreter->Invoke() != kTfLiteOk)
     {
@@ -367,42 +397,17 @@ bool detectPerson(
         return false;
     }
 
-
-    // --------------------------------------------------------
-    // Get output
-    //
-    // v1.3.3 model:
-    //
+    // v1.3.3 model output:
     //   index 0 = no person
     //   index 1 = person
-    // --------------------------------------------------------
-
     TfLiteTensor *output =
         interpreter->output(0);
 
-
-    int8_t person =
-        output->data.int8[1];
-
-    int8_t noPerson =
-        output->data.int8[0];
-
-
-    // --------------------------------------------------------
-    // Convert quantized values to floating point scores.
-    //
-    // This is the same quantization calculation used by
-    // Espressif's v1.3.3 example.
-    // --------------------------------------------------------
-
     personScore =
-        (person - output->params.zero_point)
-        * output->params.scale;
+        dequantize(output, output->data.int8[1]);
 
     noPersonScore =
-        (noPerson - output->params.zero_point)
-        * output->params.scale;
-
+        dequantize(output, output->data.int8[0]);
 
     return true;
 }
@@ -521,93 +526,33 @@ void setup()
 // Arduino loop()
 // ============================================================
 
+// Score as a rounded percentage, for the serial output.
+int toPercent(float score)
+{
+    return (int)(score * 100.0f + 0.5f);
+}
+
 void loop()
 {
     float personScore = 0.0f;
     float noPersonScore = 0.0f;
-
 
     if (detectPerson(
         personScore,
         noPersonScore
     ))
     {
-
 #if PRINT_DETECTION_SCORES
-
         Serial.printf(
             "Person: %3d%%   "
             "No person: %3d%%",
-            (int)(
-                personScore * 100.0f + 0.5f
-            ),
-            (int)(
-                noPersonScore * 100.0f + 0.5f
-            )
+            toPercent(personScore),
+            toPercent(noPersonScore)
         );
-
 #endif
 
-
-        // ----------------------------------------------------
-        // Detection hysteresis
-        //
-        // If currently OFF:
-        //     turn ON at >= PERSON_DETECTION_THRESHOLD
-        //
-        // If currently ON:
-        //     stay ON until score falls below
-        //     PERSON_CLEAR_THRESHOLD
-        // ----------------------------------------------------
-
-        if (!personDetected)
-        {
-            if (
-                personScore >=
-                PERSON_DETECTION_THRESHOLD
-            )
-            {
-#if PRINT_DETECTION_SCORES
-                Serial.println(
-                    "   -> DETECT"
-                );
-#endif
-
-                setPersonDetected(true);
-            }
-            else
-            {
-#if PRINT_DETECTION_SCORES
-                Serial.println();
-#endif
-            }
-        }
-        else
-        {
-            if (
-                personScore <
-                PERSON_CLEAR_THRESHOLD
-            )
-            {
-#if PRINT_DETECTION_SCORES
-                Serial.println(
-                    "   -> CLEAR"
-                );
-#endif
-
-                setPersonDetected(false);
-            }
-            else
-            {
-#if PRINT_DETECTION_SCORES
-                Serial.println(
-                    "   -> PERSON"
-                );
-#endif
-            }
-        }
+        updateDetectionState(personScore);
     }
-
 
     // Give FreeRTOS a little breathing room.
     delay(DETECTION_LOOP_DELAY_MS);

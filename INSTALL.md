@@ -236,7 +236,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    sudo a2enmod headers
    ```
 
-2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `record.php`, `recordings.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
+2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `relay.php`, `record.php`, `recordings.php`, `recording-switch.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
 3. Create the real config:
 
    ```
@@ -458,7 +458,7 @@ tail -f nodejs/camera-relay/logs/camera.log
 2026-10-03T12:00:01.234Z INFO  cam2@192.168.4.20 [relay]: camera connected
 2026-10-03T12:00:05.012Z INFO  cam2@192.168.4.20 up=12.8s heap=121004 rssi=-62 seq=3: connected to WiFi 'upstairs', IP 192.168.4.20, RSSI -62 dBm
 2026-10-03T12:41:17.680Z WARN  cam2@192.168.4.20 up=2476.2s heap=98112 rssi=-81 seq=57 late=312.4s fw="Oct  3 2026 11:02:44": push write failed after 4000 ms (wrote 5120 of 31244 bytes, disconnected) — dropping the connection, reconnecting
-    at ESP32_CAM_Recorder.ino:612 loop()
+    at ESP32_CAM_Recorder.ino:612 pushFrame()
     recent events (oldest first):
       -310.1s INFO heartbeat: uptime 2166s, RSSI -79 dBm, free heap 98300 (lowest ever 91220), push connection up
       -4.2s WARN slow frame push: 3900 ms for 31244 bytes — weak WiFi, or the relay is congested

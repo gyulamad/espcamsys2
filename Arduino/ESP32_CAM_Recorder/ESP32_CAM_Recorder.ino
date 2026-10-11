@@ -408,12 +408,11 @@ void triggerAlarmRecording() {
 // only extends the recording anyway.
 void checkAlarmTrigger() {
   if (ALARM_GPIO_PIN < 0) return; // feature turned off — see ALARM_GPIO_PIN in config.h
+  if (!alarmPending) return;
 
-  if (alarmPending) {
-    alarmPending = false;
-    RLOG_INFO("alarm input triggered");
-    triggerAlarmRecording();
-  }
+  alarmPending = false;
+  RLOG_INFO("alarm input triggered");
+  triggerAlarmRecording();
 }
 
 // Configures and initializes the OV2640 camera driver. Split out of setup()
@@ -482,25 +481,21 @@ bool initCamera() {
   return true;
 }
 
-void setup() {
-  Serial.begin(115200);
-  delay(200); // give the serial monitor a moment to attach
-
-  // Print identity FIRST, before camera/WiFi init even runs — so this is
-  // visible even if init fails, and you can confirm which physical board
-  // this is before re-flashing it.
+// Prints this board's identity FIRST, before camera/WiFi init even runs — so
+// it is visible even if init fails, and you can confirm which physical board
+// this is before re-flashing it.
+void printIdentityBanner() {
   Serial.println();
   Serial.println("========================================");
   Serial.printf("  CAMERA_ID: %s\n", CAMERA_ID);
   Serial.println("========================================");
   Serial.println();
+}
 
-  // Remote logging starts here, so everything below can report to the relay
-  // (entries wait in memory until WiFi is up and are filed under the time they
-  // really happened). The reset reason is the first thing to look at when a
-  // camera "just rebooted": a BROWNOUT means the power supply dipped, a
-  // watchdog means something hung, a PANIC means the firmware crashed.
-  remoteLogStart();
+// The reset reason is the first thing to look at when a camera "just
+// rebooted": a BROWNOUT means the power supply dipped, a watchdog means
+// something hung, a PANIC means the firmware crashed.
+void logBootInfo() {
   int resetReason = (int)esp_reset_reason();
   if (isAbnormalReset(resetReason)) {
     RLOG_ERROR("booted after an abnormal restart: %s", resetReasonName(resetReason));
@@ -509,30 +504,25 @@ void setup() {
   }
   RLOG_INFO("firmware built %s, camera id %s, free heap %u bytes, PSRAM %s",
             FW_BUILD, CAMERA_ID, (unsigned)ESP.getFreeHeap(), psramFound() ? "yes" : "no");
+}
 
-  // Internal pull-up so the default push-button wiring (pin -> button ->
-  // GND) reads a clean HIGH when idle and LOW when pressed with no extra
-  // hardware. A future alarm sensor with its own active-driven output can
-  // still be read fine through the pull-up; swap to plain INPUT here if
-  // its datasheet calls for it. Skipped entirely when the feature is off
-  // (ALARM_GPIO_PIN < 0) — no pin claimed, nothing to configure.
-  if (ALARM_GPIO_PIN >= 0) {
-    pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(ALARM_GPIO_PIN), onAlarmEdge,
-                    ALARM_ACTIVE_STATE == LOW ? FALLING : RISING);
-    alarmPending = false;
-  }
+// Internal pull-up so the default push-button wiring (pin -> button ->
+// GND) reads a clean HIGH when idle and LOW when pressed with no extra
+// hardware. A future alarm sensor with its own active-driven output can
+// still be read fine through the pull-up; swap to plain INPUT here if
+// its datasheet calls for it. Skipped entirely when the feature is off
+// (ALARM_GPIO_PIN < 0) — no pin claimed, nothing to configure.
+void setupAlarmInput() {
+  if (ALARM_GPIO_PIN < 0) return;
 
-  // Camera MUST be initialized before WiFi comes up, not after: the WiFi
-  // driver claims a large chunk of internal DRAM for its buffers as soon as
-  // it starts, and the camera's DMA frame buffers need a big contiguous
-  // block of that same internal RAM. Camera-after-WiFi is exactly what
-  // produces "cam_dma_config: frame buffer malloc failed" even on boards
-  // that work fine otherwise. If it does fail, we don't return early
-  // though — WiFi still needs to come up regardless (see cameraReady above
-  // for why), so the failure is only logged here, not fatal to setup().
-  cameraReady = initCamera();
+  pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ALARM_GPIO_PIN), onAlarmEdge,
+                  ALARM_ACTIVE_STATE == LOW ? FALLING : RISING);
+  alarmPending = false;
+}
 
+// Brings WiFi up and blocks until one of the configured networks connects.
+void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
                           // big source of added latency on ESP32 WiFi
@@ -551,98 +541,124 @@ void setup() {
             WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
-void loop() {
-  // Periodic identity reminder — so opening the Serial Monitor at any point
-  // (not just right at boot) still tells you which camera this is.
+void setup() {
+  Serial.begin(115200);
+  delay(200); // give the serial monitor a moment to attach
+
+  printIdentityBanner();
+
+  // Remote logging starts here, so everything below can report to the relay
+  // (entries wait in memory until WiFi is up and are filed under the time they
+  // really happened).
+  remoteLogStart();
+  logBootInfo();
+
+  setupAlarmInput();
+
+  // Camera MUST be initialized before WiFi comes up, not after: the WiFi
+  // driver claims a large chunk of internal DRAM for its buffers as soon as
+  // it starts, and the camera's DMA frame buffers need a big contiguous
+  // block of that same internal RAM. Camera-after-WiFi is exactly what
+  // produces "cam_dma_config: frame buffer malloc failed" even on boards
+  // that work fine otherwise. If it does fail, we don't return early
+  // though — WiFi still needs to come up regardless (see cameraReady above
+  // for why), so the failure is only logged here, not fatal to setup().
+  cameraReady = initCamera();
+
+  connectWifi();
+}
+
+// Periodic identity reminder — so opening the Serial Monitor at any point
+// (not just right at boot) still tells you which camera this is.
+void logIdentityReminder() {
   static unsigned long lastIdentityPrint = 0;
-  if (millis() - lastIdentityPrint > 10000) {
-    RLOG_DEBUG("[%s] RSSI: %d dBm, uptime: %lus%s",
-               CAMERA_ID, WiFi.RSSI(), millis() / 1000,
-               cameraReady ? "" : " (camera not ready)");
-    if (ESP.getFreeHeap() < REMOTE_LOG_LOW_HEAP_BYTES) {
-      RLOG_WARN("low free heap (below %u bytes) — a memory leak or fragmentation can end in a crash",
-                (unsigned)REMOTE_LOG_LOW_HEAP_BYTES);
-    }
-    lastIdentityPrint = millis();
-  }
+  if (millis() - lastIdentityPrint <= 10000) return;
 
-  // A status line in the relay's log every REMOTE_LOG_HEARTBEAT_SECONDS. A gap
-  // in these shows when a camera went quiet; the numbers show whether memory
-  // was shrinking or the signal weakening beforehand.
+  RLOG_DEBUG("[%s] RSSI: %d dBm, uptime: %lus%s",
+             CAMERA_ID, WiFi.RSSI(), millis() / 1000,
+             cameraReady ? "" : " (camera not ready)");
+  if (ESP.getFreeHeap() < REMOTE_LOG_LOW_HEAP_BYTES) {
+    RLOG_WARN("low free heap (below %u bytes) — a memory leak or fragmentation can end in a crash",
+              (unsigned)REMOTE_LOG_LOW_HEAP_BYTES);
+  }
+  lastIdentityPrint = millis();
+}
+
+// A status line in the relay's log every REMOTE_LOG_HEARTBEAT_SECONDS. A gap
+// in these shows when a camera went quiet; the numbers show whether memory
+// was shrinking or the signal weakening beforehand.
+void logHeartbeat() {
   static unsigned long lastHeartbeat = millis();
-  if (millis() - lastHeartbeat > (unsigned long)REMOTE_LOG_HEARTBEAT_SECONDS * 1000UL) {
-    RLOG_INFO("heartbeat: uptime %lus, RSSI %d dBm, free heap %u (lowest ever %u), push connection %s",
-              millis() / 1000, WiFi.RSSI(), (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
-              pushClient.connected() ? "up" : "down");
-    lastHeartbeat = millis();
-  }
+  if (millis() - lastHeartbeat <= (unsigned long)REMOTE_LOG_HEARTBEAT_SECONDS * 1000UL) return;
 
-  // Cheap when already connected — only scans/reconnects if the link dropped,
-  // and will fail over to a different extender if the current one is gone.
+  RLOG_INFO("heartbeat: uptime %lus, RSSI %d dBm, free heap %u (lowest ever %u), push connection %s",
+            millis() / 1000, WiFi.RSSI(), (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+            pushClient.connected() ? "up" : "down");
+  lastHeartbeat = millis();
+}
+
+// Cheap when already connected — only scans/reconnects if the link dropped,
+// and will fail over to a different extender if the current one is gone.
+// Logs each transition once, not every loop. Returns whether WiFi is up.
+bool checkWifi() {
   static bool wifiWasUp = true;        // setup() only returns once WiFi is connected
   static unsigned long wifiLostAt = 0;
   bool wifiUp = wifiMulti.run() == WL_CONNECTED;
-  if (wifiUp != wifiWasUp) {           // log the transition once, not every loop
-    wifiWasUp = wifiUp;
-    if (!wifiUp) {
-      wifiLostAt = millis();
-      RLOG_WARN("WiFi connection lost — reconnecting");
-    } else {
-      RLOG_INFO("WiFi reconnected to '%s' after %lus, RSSI %d dBm",
-                WiFi.SSID().c_str(), (millis() - wifiLostAt) / 1000, WiFi.RSSI());
-    }
-  }
+  if (wifiUp == wifiWasUp) return wifiUp;
+
+  wifiWasUp = wifiUp;
   if (!wifiUp) {
-    delay(500);
-    return;
+    wifiLostAt = millis();
+    RLOG_WARN("WiFi connection lost — reconnecting");
+  } else {
+    RLOG_INFO("WiFi reconnected to '%s' after %lus, RSSI %d dBm",
+              WiFi.SSID().c_str(), (millis() - wifiLostAt) / 1000, WiFi.RSSI());
   }
+  return wifiUp;
+}
 
-  // Polled every loop, independent of push-connection/camera state below,
-  // so the alarm keeps working even while this camera is mid-reconnect or
-  // waiting on the camera to come up.
-  checkAlarmTrigger();
+// Retry periodically rather than being stuck forever. This can only
+// recover a genuinely transient failure (e.g. a one-off timing/power
+// glitch at boot) — if the camera failed because WiFi already claimed
+// the internal DRAM it needs (see the ordering note in setup()), these
+// retries will keep failing for the same reason every time, since WiFi
+// is already up by the time loop() runs. That's a "camera never came up
+// at all" problem to fix at the setup()/hardware level, not something a
+// retry can paper over — but retrying here is still strictly better
+// than crash-looping ever did.
+void retryCameraInit() {
+  static unsigned long lastCameraRetry = 0;
+  if (millis() - lastCameraRetry <= 5000) return;
 
-  if (!cameraReady) {
-    // Retry periodically rather than being stuck forever. This can only
-    // recover a genuinely transient failure (e.g. a one-off timing/power
-    // glitch at boot) — if the camera failed because WiFi already claimed
-    // the internal DRAM it needs (see the ordering note in setup()), these
-    // retries will keep failing for the same reason every time, since WiFi
-    // is already up by the time loop() runs. That's a "camera never came up
-    // at all" problem to fix at the setup()/hardware level, not something a
-    // retry can paper over — but retrying here is still strictly better
-    // than crash-looping ever did.
-    static unsigned long lastCameraRetry = 0;
-    if (millis() - lastCameraRetry > 5000) {
-      RLOG_WARN("camera not ready — retrying init");
-      cameraReady = initCamera();
-      if (cameraReady) RLOG_INFO("camera init succeeded on retry");
-      lastCameraRetry = millis();
-    }
-    delay(200);
-    return;
-  }
+  RLOG_WARN("camera not ready — retrying init");
+  cameraReady = initCamera();
+  if (cameraReady) RLOG_INFO("camera init succeeded on retry");
+  lastCameraRetry = millis();
+}
 
-  if (!ensurePushConnection()) {
-    RLOG_WARN("push connection to %s:%d failed — will keep retrying", SERVER_HOST, PUSH_PORT);
-    delay(500);
-    return;
-  }
-
-  // Read what the relay wrote to us. Right after we authenticate it sends two
-  // single bytes: a legacy "resume" (for old firmware that could be paused —
-  // nothing to do here) and the capability announcement, which is what
-  // switches alarms over to the in-band message. Everything is consumed so
-  // the receive buffer can't slowly fill up; unknown bytes are ignored.
+// Read what the relay wrote to us. Right after we authenticate it sends two
+// single bytes: a legacy "resume" (for old firmware that could be paused —
+// nothing to do here) and the capability announcement, which is what
+// switches alarms over to the in-band message. Everything is consumed so
+// the receive buffer can't slowly fill up; unknown bytes are ignored.
+void readRelayBytes() {
   while (pushClient.available()) applyRelayByte(pushClient.read(), relaySupportsInBandAlarm);
+}
 
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    RLOG_ERROR("frame capture failed (the camera returned no frame) — the camera or its power supply may be faulty");
-    delay(200);
-    return;
-  }
+// At most once per 30 s: a weak link is slow on every frame.
+void warnSlowPush(unsigned long pushMs, uint32_t len) {
+  static unsigned long lastSlowWarn = 0;
+  if (millis() - lastSlowWarn <= 30000UL) return;
 
+  RLOG_WARN("slow frame push: %lu ms for %u bytes — weak WiFi, or the relay is congested",
+            pushMs, (unsigned)len);
+  lastSlowWarn = millis();
+}
+
+// Pushes one frame ([4-byte length][JPEG]) down the push connection and
+// returns how long that took. A failed write drops the connection (loop()
+// reconnects next turn).
+unsigned long pushFrame(const camera_fb_t *fb) {
   uint32_t len = fb->len;
   uint8_t lenPrefix[4];
   encodeFrameLengthPrefix(len, lenPrefix);
@@ -659,16 +675,48 @@ void loop() {
               pushMs, (unsigned)written, (unsigned)(len + 4),
               pushClient.connected() ? "still connected" : "disconnected");
     pushClient.stop();
-  } else if (pushMs > PUSH_SLOW_WARN_MS) {
-    // At most once per 30 s: a weak link is slow on every frame.
-    static unsigned long lastSlowWarn = 0;
-    if (millis() - lastSlowWarn > 30000UL) {
-      RLOG_WARN("slow frame push: %lu ms for %u bytes — weak WiFi, or the relay is congested",
-                pushMs, (unsigned)len);
-      lastSlowWarn = millis();
-    }
+    return pushMs;
+  }
+  if (pushMs > PUSH_SLOW_WARN_MS) warnSlowPush(pushMs, len);
+  return pushMs;
+}
+
+void loop() {
+  logIdentityReminder();
+  logHeartbeat();
+
+  if (!checkWifi()) {
+    delay(500);
+    return;
   }
 
+  // Polled every loop, independent of push-connection/camera state below,
+  // so the alarm keeps working even while this camera is mid-reconnect or
+  // waiting on the camera to come up.
+  checkAlarmTrigger();
+
+  if (!cameraReady) {
+    retryCameraInit();
+    delay(200);
+    return;
+  }
+
+  if (!ensurePushConnection()) {
+    RLOG_WARN("push connection to %s:%d failed — will keep retrying", SERVER_HOST, PUSH_PORT);
+    delay(500);
+    return;
+  }
+
+  readRelayBytes();
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    RLOG_ERROR("frame capture failed (the camera returned no frame) — the camera or its power supply may be faulty");
+    delay(200);
+    return;
+  }
+
+  unsigned long pushMs = pushFrame(fb);
   esp_camera_fb_return(fb);
 
   // Gap scales with how long the last push actually took: fast/idle link ->

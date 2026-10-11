@@ -30,59 +30,35 @@
 require_once __DIR__ . '/auth.php';      // dashboard login; also defines $config
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/relay.php';
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
-function fail($status, $message) {
-    http_response_code($status);
-    echo json_encode(['error' => $message]);
-    exit;
-}
-
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Allow: POST');
-    fail(405, 'POST only');
+    json_fail(405, 'POST only');
 }
 if (!CamLogic::isDashboardAjaxRequest($_SERVER)) {
-    fail(403, 'This request must come from the dashboard page itself');
+    json_fail(403, 'This request must come from the dashboard page itself');
 }
 
 $controlKey = (string) ($config['relay_control_key'] ?? '');
 if ($controlKey === '') {
-    fail(503, 'Recording on/off is not set up: add relay_control_key to config.php (and the same value as controlKey in the relay config)');
+    json_fail(503, 'Recording on/off is not set up: add relay_control_key to config.php (and the same value as controlKey in the relay config)');
 }
 
 $request = CamLogic::buildSwitchRequest($_GET, $cameras);
 if (!$request['ok']) {
-    fail($request['status'], $request['error']);
+    json_fail($request['status'], $request['error']);
 }
 
 $actor = CamLogic::buildActor((string) ($_SERVER['PHP_AUTH_USER'] ?? ''), (string) ($_SERVER['REMOTE_ADDR'] ?? ''));
 $headers = CamLogic::buildSwitchHeaders($controlKey, $actor);
 if ($headers === null) {
-    fail(500, 'relay_control_key in config.php contains a line break');
-}
-
-$ctx = stream_context_create([
-    'http' => [
-        'method'        => 'POST',
-        'header'        => $headers,
-        'timeout'       => 5,
-        'ignore_errors' => true,
-    ],
-]);
-$result = @file_get_contents($request['url'], false, $ctx);
-$responseHeaders = $http_response_header ?? [];
-
-if ($result === false) {
-    fail(502, 'Could not reach the relay');
+    json_fail(500, 'relay_control_key in config.php contains a line break');
 }
 
 // Forward the relay's actual answer — 401 (wrong key), 400, 503 ... — so the
 // dashboard can tell the user what really happened.
-$statusCode = CamLogic::extractStatusCode($responseHeaders);
-if ($statusCode !== null) {
-    http_response_code($statusCode);
-}
-echo $result;
+relay_proxy_json($request['url'], 'POST', 5, $headers, 'Could not reach the relay');

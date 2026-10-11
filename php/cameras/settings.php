@@ -18,63 +18,35 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/relay.php';
 
 header('Content-Type: application/json');
 
 if (empty($cameras)) {
-    http_response_code(404);
-    echo json_encode(['error' => 'No cameras configured']);
-    exit;
+    json_fail(404, 'No cameras configured');
 }
 
 $relayUrl = rtrim($cameras[0]['url'], '/') . '/settings';
-$method = $_SERVER['REQUEST_METHOD'];
 
-if ($method === 'POST') {
-    $record = null;
-
-    if (isset($_GET['alarmRecordSeconds']) && $_GET['alarmRecordSeconds'] !== '') {
-        $record = CamLogic::validatePositiveIntParam($_GET['alarmRecordSeconds']);
-        if ($record === null) {
-            http_response_code(400);
-            echo json_encode(['error' => 'alarmRecordSeconds must be a positive integer']);
-            exit;
-        }
-    }
-
-    $query = CamLogic::buildSettingsQuery($record);
-    if ($query === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'provide alarmRecordSeconds']);
-        exit;
-    }
-
-    $ctx = stream_context_create([
-        'http' => [
-            'method'        => 'POST',
-            'header'        => "Content-Length: 0\r\n",
-            'timeout'       => 5,
-            'ignore_errors' => true,
-        ],
-    ]);
-    $result = @file_get_contents($relayUrl . '?' . $query, false, $ctx);
-} else {
-    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
-    $result = @file_get_contents($relayUrl, false, $ctx);
-}
-$headers = $http_response_header ?? [];
-
-if ($result === false) {
-    http_response_code(502);
-    echo json_encode(['error' => 'Could not reach relay']);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    relay_proxy_json($relayUrl);
     exit;
+}
+
+$raw = $_GET['alarmRecordSeconds'] ?? '';
+$record = null;
+if ($raw !== '') {
+    $record = CamLogic::validatePositiveIntParam($raw);
+    if ($record === null) {
+        json_fail(400, 'alarmRecordSeconds must be a positive integer');
+    }
+}
+
+$query = CamLogic::buildSettingsQuery($record);
+if ($query === '') {
+    json_fail(400, 'provide alarmRecordSeconds');
 }
 
 // Forward the relay's actual status code (e.g. 400 for an out-of-range
 // value) instead of always answering 200.
-$statusCode = CamLogic::extractStatusCode($headers);
-if ($statusCode !== null) {
-    http_response_code($statusCode);
-}
-
-echo $result;
+relay_proxy_json($relayUrl . '?' . $query, 'POST', 5, RELAY_EMPTY_POST_HEADER);

@@ -18,10 +18,9 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/relay.php';
 
-$requested = $_GET['cam'] ?? '';
-$camera = CamLogic::findCameraById($cameras, $requested);
-
+$camera = CamLogic::findCameraById($cameras, $_GET['cam'] ?? '');
 if (!$camera) {
     http_response_code(404);
     exit('Camera not found');
@@ -33,76 +32,8 @@ $play = $_GET['play'] ?? null;
 $delete = $_GET['delete'] ?? null;
 $deleteAll = isset($_GET['deleteAll']);
 
-if ($deleteAll) {
-    header('Content-Type: application/json');
-
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Use POST to delete']);
-        exit;
-    }
-
-    $ctx = stream_context_create(['http' => [
-        'method'        => 'DELETE',
-        'timeout'       => 30,
-        'ignore_errors' => true,
-    ]]);
-    $result = @file_get_contents($relayBase, false, $ctx); // no filename -> DELETE /recordings/:id (all of them)
-
-    if ($result === false) {
-        http_response_code(502);
-        echo json_encode(['error' => 'Could not reach relay']);
-        exit;
-    }
-
-    $statusCode = CamLogic::extractStatusCode($http_response_header ?? []);
-    if ($statusCode !== null) {
-        http_response_code($statusCode);
-    }
-
-    echo $result;
-    exit;
-}
-
-if ($delete !== null) {
-    header('Content-Type: application/json');
-
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Use POST to delete']);
-        exit;
-    }
-    if (!CamLogic::isSafeFilename($delete)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Invalid filename']);
-        exit;
-    }
-
-    $url = $relayBase . '/' . rawurlencode($delete);
-    $ctx = stream_context_create(['http' => [
-        'method'        => 'DELETE',
-        'timeout'       => 10,
-        'ignore_errors' => true,
-    ]]);
-    $result = @file_get_contents($url, false, $ctx);
-
-    if ($result === false) {
-        http_response_code(502);
-        echo json_encode(['error' => 'Could not reach relay']);
-        exit;
-    }
-
-    $statusCode = CamLogic::extractStatusCode($http_response_header ?? []);
-    if ($statusCode !== null) {
-        http_response_code($statusCode);
-    }
-
-    echo $result;
-    exit;
-}
-
-// Shared by both $download and $play below — the only difference between
-// "download" and "play" is the Content-Disposition we send back; the byte
+// Streams a recording to the browser. Shared by $download and $play — the only
+// difference between them is the Content-Disposition we send back; the byte
 // stream from the relay is identical either way. Forwards the browser's
 // Range header (sent while scrubbing an in-progress <video>) through to
 // the relay, and forwards back whatever status/Content-Range/Accept-Ranges
@@ -142,31 +73,40 @@ function stream_recording($url, $filename, $disposition) {
     exit;
 }
 
-if ($download !== null) {
-    if (!CamLogic::isSafeFilename($download)) {
+// Streams one recording, after checking its name is one the relay would generate.
+function stream_named_recording($relayBase, $filename, $disposition) {
+    if (!CamLogic::isSafeFilename($filename)) {
         http_response_code(400);
         exit('Invalid filename');
     }
-    stream_recording($relayBase . '/' . rawurlencode($download), $download, 'attachment');
+    stream_recording($relayBase . '/' . rawurlencode($filename), $filename, $disposition);
+}
+
+if ($deleteAll || $delete !== null) {
+    header('Content-Type: application/json');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_fail(405, 'Use POST to delete');
+    }
+    if ($deleteAll) {
+        // No filename -> DELETE /recordings/:id (all of them).
+        relay_proxy_json($relayBase, 'DELETE', 30);
+        exit;
+    }
+    if (!CamLogic::isSafeFilename($delete)) {
+        json_fail(400, 'Invalid filename');
+    }
+    relay_proxy_json($relayBase . '/' . rawurlencode($delete), 'DELETE', 10);
+    exit;
+}
+
+if ($download !== null) {
+    stream_named_recording($relayBase, $download, 'attachment');
 }
 
 if ($play !== null) {
-    if (!CamLogic::isSafeFilename($play)) {
-        http_response_code(400);
-        exit('Invalid filename');
-    }
-    stream_recording($relayBase . '/' . rawurlencode($play), $play, 'inline');
+    stream_named_recording($relayBase, $play, 'inline');
 }
 
 // Otherwise: list this camera's saved recordings as JSON.
 header('Content-Type: application/json');
-$ctx = stream_context_create(['http' => ['timeout' => 10, 'ignore_errors' => true]]);
-$result = @file_get_contents($relayBase, false, $ctx);
-
-if ($result === false) {
-    http_response_code(502);
-    echo json_encode(['error' => 'Could not reach relay']);
-    exit;
-}
-
-echo $result;
+relay_proxy_json($relayBase, 'GET', 10, '', 'Could not reach relay', false);

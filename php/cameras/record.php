@@ -15,60 +15,31 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/relay.php';
 
 header('Content-Type: application/json');
 
-$requested = $_GET['cam'] ?? '';
-$camera = CamLogic::findCameraById($cameras, $requested);
-
+$camera = CamLogic::findCameraById($cameras, $_GET['cam'] ?? '');
 if (!$camera) {
-    http_response_code(404);
-    echo json_encode(['error' => 'Camera not found']);
-    exit;
+    json_fail(404, 'Camera not found');
 }
 
 $base = rtrim($camera['url'], '/') . '/record/' . rawurlencode($camera['id']);
-$method = $_SERVER['REQUEST_METHOD'];
+$unreachable = 'Could not reach relay for ' . $camera['name'];
 
-function proxy_post($url) {
-    $ctx = stream_context_create([
-        'http' => [
-            'method'        => 'POST',
-            'header'        => "Content-Length: 0\r\n",
-            'timeout'       => 5,
-            'ignore_errors' => true,
-        ],
-    ]);
-    return [@file_get_contents($url, false, $ctx), $http_response_header ?? []];
-}
-
-if ($method === 'POST' && isset($_GET['stop'])) {
-    [$result, $headers] = proxy_post($base . '/stop');
-} elseif ($method === 'POST') {
-    $seconds = CamLogic::validatePositiveIntParam($_GET['seconds'] ?? '');
-    if ($seconds === null) {
-        http_response_code(400);
-        echo json_encode(['error' => 'seconds must be a positive integer']);
-        exit;
-    }
-    [$result, $headers] = proxy_post($base . '?seconds=' . urlencode((string) $seconds));
-} else {
-    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
-    $result = @file_get_contents($base, false, $ctx);
-    $headers = $http_response_header ?? [];
-}
-
-if ($result === false) {
-    http_response_code(502);
-    echo json_encode(['error' => 'Could not reach relay for ' . $camera['name']]);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    relay_proxy_json($base, 'GET', 5, '', $unreachable);
     exit;
 }
 
-// Forward the relay's actual status code (e.g. 409 "already recording")
-// instead of always answering 200.
-$statusCode = CamLogic::extractStatusCode($headers);
-if ($statusCode !== null) {
-    http_response_code($statusCode);
+if (isset($_GET['stop'])) {
+    // Forward the relay's actual status code (e.g. 409 "already recording").
+    relay_proxy_json($base . '/stop', 'POST', 5, RELAY_EMPTY_POST_HEADER, $unreachable);
+    exit;
 }
 
-echo $result;
+$seconds = CamLogic::validatePositiveIntParam($_GET['seconds'] ?? '');
+if ($seconds === null) {
+    json_fail(400, 'seconds must be a positive integer');
+}
+relay_proxy_json($base . '?seconds=' . urlencode((string) $seconds), 'POST', 5, RELAY_EMPTY_POST_HEADER, $unreachable);
