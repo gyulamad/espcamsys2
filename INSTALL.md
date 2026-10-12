@@ -156,14 +156,14 @@ To install and aim a detector you want to see what it sees. With `STREAM_ENABLED
 
 1. Fill in the live-view block at the end of `config.h`: `WIFI_NETWORKS` (any number of networks — like the recorder, it takes the strongest one in range and fails over), `SERVER_HOST` / `HTTP_PORT` / `API_KEY` (the same values as the recorder's `config.h`), a `DETECTOR_ID` that is **not** any recorder's `CAMERA_ID`, and a `STREAM_USER` / `STREAM_PASSWORD`. The stream is **not served** while the password is empty or still `change-me`.
 2. Flash as above. In the Serial Monitor you'll see `Wi-Fi connected to '…', IP …` and `Announced http://… to the relay`.
-3. On the Pi, find the address — every time the detector gets a new IP (another network, another lease) it announces it again, and it repeats it every 10 minutes:
+3. On the Pi, find the address — the detector announces it at every (re)connection and whenever its network or IP changes, and repeats it every 10 minutes:
 
    ```
    grep "human detector stream" nodejs/camera-relay/logs/camera.log | tail -n 3
    ```
 
    ```
-   … INFO  cam2-human@192.168.4.37 …: human detector stream available at http://192.168.4.37/ — user 'viewer' (Wi-Fi 'extender-2', -61 dBm, up 42s)
+   … INFO  cam2-human@192.168.4.37 …: human detector stream available at http://192.168.4.37/ — user 'viewer' (WiFi 'extender-2', IP 192.168.4.37, -61 dBm, up 42s)
    ```
 
 4. Open that address in a browser from a device on the same network and log in. You get the picture enlarged; `http://<ip>/stream` is the raw MJPEG stream. What you see is the 96×96 grayscale frame the model itself gets, which is what you need to aim the camera.
@@ -487,7 +487,7 @@ tail -f nodejs/camera-relay/logs/camera.log
 2026-10-03T12:41:17.680Z WARN  cam2@192.168.4.20 up=2476.2s heap=98112 rssi=-81 seq=57 late=312.4s fw="Oct  3 2026 11:02:44": push write failed after 4000 ms (wrote 5120 of 31244 bytes, disconnected) — dropping the connection, reconnecting
     at ESP32_CAM_Recorder.ino:612 pushFrame()
     recent events (oldest first):
-      -310.1s INFO heartbeat: uptime 2166s, RSSI -79 dBm, free heap 98300 (lowest ever 91220), push connection up
+      -310.1s INFO heartbeat: WiFi 'upstairs', IP 192.168.4.20, RSSI -79 dBm, uptime 2166s, free heap 98300 (lowest ever 91220), push connection up
       -4.2s WARN slow frame push: 3900 ms for 31244 bytes — weak WiFi, or the relay is congested
 ```
 
@@ -495,8 +495,16 @@ tail -f nodejs/camera-relay/logs/camera.log
 - **When:** every entry is filed under the time it actually **happened**. Cameras have no clock; each entry says how long ago it happened, so one that waited in the camera's memory for minutes while the relay was unreachable still lands in the right place (`late=` shows how long it was held back).
 - **Trace:** the file, line and function it came from; for warnings and errors also the events that led up to it (the closest thing to a call stack a board with no debugger has).
 - **`[relay]`** marks what the relay itself saw rather than what the camera reported: cameras connecting and dropping (with the reason), a connection refused (wrong key), two boards flashed with the same `CAMERA_ID` (only reported when **both** are actually sending at the same moment — a camera that simply reconnected after its old connection died is not a clash), alarms, recordings started / extended / saved, errors with their stack trace, and the stack trace of a crash that killed the relay. Even a camera that cannot speak leaves a trail this way.
+- **Which camera is on which Wi-Fi, with what address:** every recorder and detector writes `WiFi '<network>', IP <address>` when it connects, on **every reconnect** (it may land on a different extender with a different address) and in its periodic heartbeat. The camera's address as the relay sees it is also in each line's `cam2@192.168.4.20`, but that's the relay's view; the network name only comes from the camera. All lines, then just the newest per camera:
+
+  ```
+  grep -E "WiFi '[^']*', IP " nodejs/camera-relay/logs/camera.log
+  grep -E "WiFi '[^']*', IP " nodejs/camera-relay/logs/camera.log | awk '{split($3,a,"@"); last[a[1]]=$0} END{for(c in last) print last[c]}'
+  ```
+
+  (Only the current `camera.log` is searched; after a rotation, older lines are in the previous file. A camera silent for longer than a heartbeat period — 10 minutes — is the thing to look at, not whatever its last line says.)
 - At boot a camera reports **why it restarted**: *BROWNOUT* means its power supply dipped (the usual culprit for random reboots), *watchdog* means something hung, *PANIC* means the firmware crashed.
-- A heartbeat line every 10 minutes (uptime, heap, signal): a gap in them shows when a camera went quiet, and the numbers show whether memory was shrinking or the signal weakening beforehand.
+- A heartbeat line every 10 minutes (the Wi-Fi network and IP address, signal, uptime, heap): a gap in them shows when a camera went quiet, and the numbers show whether memory was shrinking or the signal weakening beforehand.
 
 **If the relay can't be reached**, the camera keeps its entries in memory (the most important — errors — are kept longest) and retries after `REMOTE_LOG_RETRY_PERIOD_SECONDS` (5 minutes), up to `REMOTE_LOG_RETRY_MAX` times (3). After that it logs to its serial port only, until its connection to the relay comes back, and then reports how many entries were lost. The same message repeating (a camera failing to connect every half second) is logged once with a count, not thousands of times. All of this is configured in the camera's `config.h` — see `example.config.h`.
 
@@ -504,7 +512,7 @@ tail -f nodejs/camera-relay/logs/camera.log
 
 Cost on the camera: about 9 KB of RAM (a fixed block for 16 queued entries, no memory churn), and the HTTP delivery runs in a separate background task so it never delays the video stream.
 
-Notes: only the **recorder** firmware reports remotely — the person-detector board (`ESP32_CAM_TFLite_Person`) has no network connection at all, so it remains serial-only. Remote logging needs the new relay and new firmware; against an older relay the camera simply gives up after its retries and keeps printing to serial.
+Notes: the **recorder** firmware reports everything above. The person-detector board (`ESP32_CAM_TFLite_Person`) reports only its live-view address line (see section 2) — no queue, no retries beyond that line, no error reports — and has no network connection at all with `STREAM_ENABLED 0`. Remote logging needs the new relay and new firmware; against an older relay the camera simply gives up after its retries and keeps printing to serial.
 
 ## Troubleshooting: an alarm doesn't record, or a stream goes dark
 

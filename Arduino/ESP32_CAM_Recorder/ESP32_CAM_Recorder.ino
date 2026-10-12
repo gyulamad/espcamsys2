@@ -607,8 +607,9 @@ void logHeartbeat() {
   static unsigned long lastHeartbeat = millis();
   if (millis() - lastHeartbeat <= (unsigned long)REMOTE_LOG_HEARTBEAT_SECONDS * 1000UL) return;
 
-  RLOG_INFO("heartbeat: uptime %lus, RSSI %d dBm, free heap %u (lowest ever %u), push connection %s",
-            millis() / 1000, WiFi.RSSI(), (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+  RLOG_INFO("heartbeat: WiFi '%s', IP %s, RSSI %d dBm, uptime %lus, free heap %u (lowest ever %u), push connection %s",
+            WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+            millis() / 1000, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
             pushClient.connected() ? "up" : "down");
   lastHeartbeat = millis();
 }
@@ -627,8 +628,12 @@ bool checkWifi() {
     wifiLostAt = millis();
     RLOG_WARN("WiFi connection lost — reconnecting");
   } else {
-    RLOG_INFO("WiFi reconnected to '%s' after %lus, RSSI %d dBm",
-              WiFi.SSID().c_str(), (millis() - wifiLostAt) / 1000, WiFi.RSSI());
+    // Same "WiFi '<ssid>', IP <ip>" wording as at boot and in the heartbeat, so
+    // one grep shows which network this camera is on and what address it has —
+    // a reconnect may well land on another extender with another address.
+    RLOG_INFO("reconnected to WiFi '%s', IP %s, RSSI %d dBm after %lus",
+              WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+              (millis() - wifiLostAt) / 1000);
   }
   return wifiUp;
 }

@@ -200,13 +200,13 @@ TEST(json_strings_are_escaped) {
 }
 
 TEST(announce_message_names_the_address_and_never_the_password) {
-    std::string m = buildAnnounceMessage(AnnounceReason::NewAddress, "http://192.168.4.37/", "viewer", "extender-2", -61, 42);
+    std::string m = buildAnnounceMessage(AnnounceReason::NewAddress, "http://192.168.4.37/", "viewer", "extender-2", "192.168.4.37", -61, 42);
     TEST_ASSERT(has(m, "human detector stream available at http://192.168.4.37/"), "the address is first and greppable");
     TEST_ASSERT(has(m, "user 'viewer'"), "says which user to log in as");
-    TEST_ASSERT(has(m, "Wi-Fi 'extender-2'"), "which network");
+    TEST_ASSERT(has(m, "WiFi 'extender-2', IP 192.168.4.37,"), "which network and which address, spelled as in the recorder's log lines");
     TEST_ASSERT(has(m, "-61 dBm"), "signal strength");
     TEST_ASSERT(has(m, "up 42s"), "uptime");
-    std::string hb = buildAnnounceMessage(AnnounceReason::Heartbeat, "http://192.168.4.37/", "viewer", "x", -50, 600);
+    std::string hb = buildAnnounceMessage(AnnounceReason::Heartbeat, "http://192.168.4.37/", "viewer", "x", "192.168.4.37", -50, 600);
     TEST_ASSERT(has(hb, "human detector stream still at http://192.168.4.37/"), "a heartbeat reads differently but keeps the address");
 }
 
@@ -221,48 +221,72 @@ TEST(announce_json_has_the_shape_the_relay_expects) {
 
 TEST(announce_policy_announces_a_new_address_first) {
     AnnouncePolicy p(600000, 30000);
-    TEST_ASSERT(p.due(1000, true, "192.168.4.37") == AnnounceReason::NewAddress, "first connect after boot");
-    TEST_ASSERT(p.due(1000, false, "192.168.4.37") == AnnounceReason::None, "never while Wi-Fi is down");
-    TEST_ASSERT(p.due(1000, true, "") == AnnounceReason::None, "never without an address");
+    TEST_ASSERT(p.due(1000, true, "192.168.4.37", "extender-2") == AnnounceReason::NewAddress, "first connect after boot");
+    TEST_ASSERT(p.due(1000, false, "192.168.4.37", "extender-2") == AnnounceReason::None, "never while Wi-Fi is down");
+    TEST_ASSERT(p.due(1000, true, "", "extender-2") == AnnounceReason::None, "never without an address");
 }
 
 TEST(announce_policy_stays_quiet_until_the_heartbeat) {
     AnnouncePolicy p(600000, 30000);
-    p.onResult(1000, true, "192.168.4.37");
-    TEST_ASSERT(p.due(2000, true, "192.168.4.37") == AnnounceReason::None, "just announced");
-    TEST_ASSERT(p.due(600999, true, "192.168.4.37") == AnnounceReason::None, "1 ms before the heartbeat");
-    TEST_ASSERT(p.due(601000, true, "192.168.4.37") == AnnounceReason::Heartbeat, "heartbeat due");
-    p.onResult(601000, true, "192.168.4.37");
-    TEST_ASSERT(p.due(602000, true, "192.168.4.37") == AnnounceReason::None, "and quiet again");
+    p.onResult(1000, true, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(2000, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "just announced");
+    TEST_ASSERT(p.due(600999, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "1 ms before the heartbeat");
+    TEST_ASSERT(p.due(601000, true, "192.168.4.37", "extender-2") == AnnounceReason::Heartbeat, "heartbeat due");
+    p.onResult(601000, true, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(602000, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "and quiet again");
 }
 
 TEST(announce_policy_announces_a_changed_address_at_once) {
     AnnouncePolicy p(600000, 30000);
-    p.onResult(1000, true, "192.168.4.37");
-    TEST_ASSERT(p.due(2000, true, "192.168.5.12") == AnnounceReason::NewAddress, "another network or lease");
-    p.onResult(2000, true, "192.168.5.12");
-    TEST_ASSERT(p.due(3000, true, "192.168.5.12") == AnnounceReason::None, "now known");
-    TEST_ASSERT(p.due(4000, true, "192.168.4.37") == AnnounceReason::NewAddress, "going back is a change too");
+    p.onResult(1000, true, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(2000, true, "192.168.5.12", "extender-2") == AnnounceReason::NewAddress, "another network or lease");
+    p.onResult(2000, true, "192.168.5.12", "extender-2");
+    TEST_ASSERT(p.due(3000, true, "192.168.5.12", "extender-2") == AnnounceReason::None, "now known");
+    TEST_ASSERT(p.due(4000, true, "192.168.4.37", "extender-2") == AnnounceReason::NewAddress, "going back is a change too");
 }
 
 TEST(announce_policy_retries_a_failure_after_the_retry_period_only) {
     AnnouncePolicy p(600000, 30000);
-    p.onResult(1000, false, "192.168.4.37");
-    TEST_ASSERT(p.due(2000, true, "192.168.4.37") == AnnounceReason::None, "not straight away");
-    TEST_ASSERT(p.due(30999, true, "192.168.4.37") == AnnounceReason::None, "1 ms early");
-    TEST_ASSERT(p.due(31000, true, "192.168.4.37") == AnnounceReason::NewAddress, "retry due");
-    p.onResult(31000, false, "192.168.4.37");
-    TEST_ASSERT(p.due(32000, true, "192.168.4.37") == AnnounceReason::None, "and the period starts over after each failure");
-    p.onResult(61000, true, "192.168.4.37");
-    TEST_ASSERT(p.due(62000, true, "192.168.4.37") == AnnounceReason::None, "a success ends the retrying");
+    p.onResult(1000, false, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(2000, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "not straight away");
+    TEST_ASSERT(p.due(30999, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "1 ms early");
+    TEST_ASSERT(p.due(31000, true, "192.168.4.37", "extender-2") == AnnounceReason::NewAddress, "retry due");
+    p.onResult(31000, false, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(32000, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "and the period starts over after each failure");
+    p.onResult(61000, true, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(62000, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "a success ends the retrying");
 }
 
 TEST(announce_policy_survives_the_millis_counter_wrapping) {
     AnnouncePolicy p(600000, 30000);
     uint32_t nearWrap = 0xFFFFFFFFu - 1000u;
-    p.onResult(nearWrap, true, "192.168.4.37");
-    TEST_ASSERT(p.due(nearWrap + 5000u, true, "192.168.4.37") == AnnounceReason::None, "wrapped, but only 5 s later");
-    TEST_ASSERT(p.due(nearWrap + 600000u, true, "192.168.4.37") == AnnounceReason::Heartbeat, "wrapped, 10 min later");
+    p.onResult(nearWrap, true, "192.168.4.37", "extender-2");
+    TEST_ASSERT(p.due(nearWrap + 5000u, true, "192.168.4.37", "extender-2") == AnnounceReason::None, "wrapped, but only 5 s later");
+    TEST_ASSERT(p.due(nearWrap + 600000u, true, "192.168.4.37", "extender-2") == AnnounceReason::Heartbeat, "wrapped, 10 min later");
+}
+
+TEST(announce_policy_announces_a_changed_network_even_with_the_same_address) {
+    AnnouncePolicy p(600000, 30000);
+    p.onResult(1000, true, "192.168.4.37", "extender-1");
+    TEST_ASSERT(p.due(2000, true, "192.168.4.37", "extender-1") == AnnounceReason::None, "same network, same address: quiet");
+    TEST_ASSERT(p.due(2000, true, "192.168.4.37", "extender-2") == AnnounceReason::NewAddress, "another access point that hands out the same address is still news");
+}
+
+TEST(announce_policy_announces_every_reconnect_once_invalidated) {
+    AnnouncePolicy p(600000, 30000);
+    p.onResult(1000, true, "192.168.4.37", "extender-1");
+    p.invalidate();
+    TEST_ASSERT(p.due(5000, true, "192.168.4.37", "extender-1") == AnnounceReason::NewAddress, "a reconnect to the very same network and address is announced");
+    p.onResult(5000, true, "192.168.4.37", "extender-1");
+    TEST_ASSERT(p.due(6000, true, "192.168.4.37", "extender-1") == AnnounceReason::None, "once, not repeatedly");
+}
+
+TEST(invalidate_keeps_a_pending_retry_wait) {
+    AnnouncePolicy p(600000, 30000);
+    p.onResult(1000, false, "192.168.4.37", "extender-1");
+    p.invalidate();
+    TEST_ASSERT(p.due(2000, true, "192.168.4.37", "extender-1") == AnnounceReason::None, "a relay that just refused us is not asked again at once");
+    TEST_ASSERT(p.due(31000, true, "192.168.4.37", "extender-1") == AnnounceReason::NewAddress, "but after the retry period it is");
 }
 
 int main() {
@@ -299,6 +323,9 @@ int main() {
     RUN_TEST(announce_policy_announces_a_changed_address_at_once);
     RUN_TEST(announce_policy_retries_a_failure_after_the_retry_period_only);
     RUN_TEST(announce_policy_survives_the_millis_counter_wrapping);
+    RUN_TEST(announce_policy_announces_a_changed_network_even_with_the_same_address);
+    RUN_TEST(announce_policy_announces_every_reconnect_once_invalidated);
+    RUN_TEST(invalidate_keeps_a_pending_retry_wait);
 
     return test::summarize();
 }

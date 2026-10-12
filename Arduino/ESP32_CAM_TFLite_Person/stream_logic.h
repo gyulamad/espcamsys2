@@ -239,9 +239,11 @@ enum class AnnounceReason { None, NewAddress, Heartbeat };
 // on the relay's log file, then reading the newest line, is all it takes.
 // The password is never part of it.
 inline std::string buildAnnounceMessage(AnnounceReason reason, const std::string& url, const std::string& user,
-                                        const std::string& ssid, int rssi, uint32_t uptimeSeconds) {
-    char tail[160];
-    snprintf(tail, sizeof(tail), " (Wi-Fi '%s', %d dBm, up %us)", ssid.c_str(), rssi, (unsigned)uptimeSeconds);
+                                        const std::string& ssid, const std::string& ip, int rssi, uint32_t uptimeSeconds) {
+    // "WiFi '<ssid>', IP <ip>" is spelled exactly as in the recorder's log lines,
+    // so one grep lists both kinds of camera.
+    char tail[200];
+    snprintf(tail, sizeof(tail), " (WiFi '%s', IP %s, %d dBm, up %us)", ssid.c_str(), ip.c_str(), rssi, (unsigned)uptimeSeconds);
     std::string m = (reason == AnnounceReason::Heartbeat) ? "human detector stream still at " : "human detector stream available at ";
     m += url + " — user '" + user + "'" + tail;
     return m;
@@ -267,8 +269,11 @@ inline std::string buildAnnounceJson(const std::string& detectorId, const std::s
 }
 
 // When to tell the relay. An announcement is due when
-//   - this address hasn't been announced yet (first connect after boot, or the
-//     detector moved to another Wi-Fi network / got another DHCP lease), or
+//   - this Wi-Fi network + address pair hasn't been announced yet (first connect
+//     after boot, another network, another DHCP lease — an access point change
+//     that happens to hand out the same address still counts), or
+//   - Wi-Fi was lost and came back (invalidate()), so the log shows every
+//     reconnect the way the recorder's does, or
 //   - the last successful one is older than the heartbeat period (so the log
 //     keeps a recent line even if the relay was restarted or its log rotated).
 // A failed delivery is retried after retryMs — not every loop.
@@ -278,24 +283,28 @@ public:
     AnnouncePolicy(uint32_t heartbeatMs, uint32_t retryMs)
         : heartbeatMs_(heartbeatMs), retryMs_(retryMs), haveOk_(false), okAt_(0), haveFail_(false), failAt_(0) {}
 
-    AnnounceReason due(uint32_t now, bool wifiUp, const std::string& ip) const {
+    AnnounceReason due(uint32_t now, bool wifiUp, const std::string& ip, const std::string& ssid) const {
         if (!wifiUp || ip.empty()) return AnnounceReason::None;
         if (haveFail_ && (uint32_t)(now - failAt_) < retryMs_) return AnnounceReason::None;
-        if (!haveOk_ || ip != okIp_) return AnnounceReason::NewAddress;
+        if (!haveOk_ || ip != okIp_ || ssid != okSsid_) return AnnounceReason::NewAddress;
         if ((uint32_t)(now - okAt_) >= heartbeatMs_) return AnnounceReason::Heartbeat;
         return AnnounceReason::None;
     }
 
-    void onResult(uint32_t now, bool ok, const std::string& ip) {
-        if (ok) { haveOk_ = true; okAt_ = now; okIp_ = ip; haveFail_ = false; }
+    void onResult(uint32_t now, bool ok, const std::string& ip, const std::string& ssid) {
+        if (ok) { haveOk_ = true; okAt_ = now; okIp_ = ip; okSsid_ = ssid; haveFail_ = false; }
         else    { haveFail_ = true; failAt_ = now; }
     }
+
+    // Wi-Fi dropped and came back: whatever was announced before is stale.
+    // (A pending retry wait is kept — a relay that just refused us is not asked again at once.)
+    void invalidate() { haveOk_ = false; }
 
 private:
     uint32_t heartbeatMs_, retryMs_;
     bool haveOk_;
     uint32_t okAt_;
-    std::string okIp_;
+    std::string okIp_, okSsid_;
     bool haveFail_;
     uint32_t failAt_;
 };

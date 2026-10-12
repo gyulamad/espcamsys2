@@ -355,7 +355,7 @@ bool postAnnouncement(const std::string &ip, person_stream::AnnounceReason reaso
     int rssi = WiFi.RSSI();
 
     std::string message = person_stream::buildAnnounceMessage(
-        reason, url, STREAM_USER, ssid, rssi, millis() / 1000);
+        reason, url, STREAM_USER, ssid, ip, rssi, millis() / 1000);
     std::string body = person_stream::buildAnnounceJson(
         DETECTOR_ID, FW_BUILD, message, millis(),
         (int32_t)ESP.getFreeHeap(), rssi, ++announceSeq);
@@ -596,6 +596,10 @@ void networkTask(void *)
                 WiFi.RSSI()
             );
 
+            // Tell the relay about every (re)connection — which network, which
+            // address — the way the recorder logs each one.
+            announcePolicy.invalidate();
+
             // The address may be new (another network, another lease):
             // listen afresh rather than trust the old socket.
             if (serverStarted)
@@ -617,13 +621,15 @@ void networkTask(void *)
         {
             std::string ip = WiFi.localIP().toString().c_str();
 
+            std::string ssid = WiFi.SSID().c_str();
+
             person_stream::AnnounceReason reason =
-                announcePolicy.due(millis(), true, ip);
+                announcePolicy.due(millis(), true, ip, ssid);
 
             if (reason != person_stream::AnnounceReason::None && ip != "0.0.0.0")
             {
                 bool ok = postAnnouncement(ip, reason);
-                announcePolicy.onResult(millis(), ok, ip);
+                announcePolicy.onResult(millis(), ok, ip, ssid);
             }
 
             WiFiClient client = streamServer.available();
