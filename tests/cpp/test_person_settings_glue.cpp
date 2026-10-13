@@ -17,6 +17,9 @@
 using esp32cam_settings::PersonSettings;
 static PersonSettings g_cfg;
 
+// The glue's RelaySettingsLink is the real Wi-Fi + HTTP; here it is the scripted fake.
+#include "relay_settings_link_fake.h"
+
 // ── the code under test, extracted verbatim from the sketch ─────────────
 #include "build/person_settings_glue.inc"
 
@@ -25,6 +28,7 @@ static void powerUp() {
     g_now = 0; g_incoming.clear(); g_rx.clear(); g_serialOut.clear();
     g_restarts = 0; g_flushes = 0; g_cfg = PersonSettings();
     g_flashBeginOk = true; g_flashWriteOk = true;
+    resetLink();
 }
 
 static const char* NO_STREAM = "PERSON_GPIO=4;DETECT_THRESH=0.7;CLEAR_THRESH=0.4;LOOP_DELAY_MS=20;STREAM_ENABLED=0";
@@ -83,11 +87,69 @@ TEST(a_threshold_pair_that_breaks_the_rule_is_refused_end_to_end) {
     TEST_ASSERT(g_flash["CLEAR_THRESH"] == "0.4" && g_restarts == 0, "flash untouched, no restart");
 }
 
+// ── missing settings asked for from the relay ───────────────────────────
+
+static const char* WITH_STREAM =
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=1;"
+    "WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
+    "API_KEY=s3cret;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=hunter22;STREAM_PORT=8088;"
+    "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
+
+static void provisionFlash(const char* line) {
+    eraseFlash();
+    esp32cam_settings::CheckedLine c = esp32cam_settings::checkLine(esp32cam_settings::PERSON_SCHEMA, line);
+    for (size_t i = 0; i < c.pairs.size(); ++i) g_flash[c.pairs[i].key] = c.pairs[i].value;
+}
+
+TEST(a_detector_missing_a_setting_asks_the_relay_when_nobody_types) {
+    provisionFlash(WITH_STREAM); powerUp();
+    g_flash.erase("STREAM_MAX_FPS");                     // a firmware update added this one
+    g_link.reply(esp32cam_settings::FetchResult::Got, "STREAM_MAX_FPS=8");
+    setupSettings();
+    TEST_ASSERT_EQ(g_restarts, 1, "restarted so the new setting takes effect");
+    TEST_ASSERT_EQ(g_flash["STREAM_MAX_FPS"], std::string("8"), "the value from the relay is in flash");
+    TEST_ASSERT(g_link.fetches == 1 && g_link.needSeen[0] == "STREAM_MAX_FPS", "it told the relay what it was missing");
+    TEST_ASSERT(g_linkType == "detector" && g_linkIdKey == "DETECTOR_ID", "as a detector, identified by DETECTOR_ID");
+    TEST_ASSERT(g_now >= 5000, "the serial port had its five seconds first");
+}
+
+TEST(the_relay_can_not_change_the_detection_thresholds_of_a_working_detector) {
+    provisionFlash(WITH_STREAM); powerUp();
+    g_flash.erase("STREAM_MAX_FPS");
+    g_link.reply(esp32cam_settings::FetchResult::Got, "DETECT_THRESH=0.1;API_KEY=evil;SERVER_HOST=10.6.6.6;STREAM_MAX_FPS=8");
+    setupSettings();
+    TEST_ASSERT_EQ(g_flash["STREAM_MAX_FPS"], std::string("8"), "the missing one was filled");
+    TEST_ASSERT(g_flash["DETECT_THRESH"] == "0.6" && g_flash["API_KEY"] == "s3cret" && g_flash["SERVER_HOST"] == "192.168.4.9",
+                "everything that was already valid is untouched");
+}
+
+TEST(a_detector_without_the_live_view_has_no_network_settings_so_it_never_tries_wifi) {
+    provisionFlash(NO_STREAM); powerUp();
+    g_flash.erase("LOOP_DELAY_MS");
+    typeAt(60000, "LOOP_DELAY_MS=20\n");
+    setupSettings();
+    TEST_ASSERT_EQ(g_link.connects, 0, "no Wi-Fi");
+    TEST_ASSERT(said("Type the missing settings here"), "it said the serial port is the only way");
+    TEST_ASSERT_EQ(g_flash["LOOP_DELAY_MS"], std::string("20"), "the typed value was stored");
+}
+
+TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again) {
+    provisionFlash(WITH_STREAM); powerUp();
+    g_flash.erase("STREAM_MAX_FPS");
+    setupSettings();
+    TEST_ASSERT_EQ(g_restarts, 1, "restarted to try again");
+    TEST_ASSERT(g_flash.count("STREAM_MAX_FPS") == 0, "nothing stored");
+}
+
 int main() {
     RUN_TEST(the_first_boot_stores_the_typed_settings_in_flash_and_restarts);
     RUN_TEST(after_the_reboot_it_waits_five_seconds_then_loads_into_g_cfg);
     RUN_TEST(turning_the_live_view_on_later_asks_for_its_settings_and_restarts_when_complete);
     RUN_TEST(with_the_live_view_on_g_cfg_gets_the_wifi_list_and_stream_settings);
     RUN_TEST(a_threshold_pair_that_breaks_the_rule_is_refused_end_to_end);
+    RUN_TEST(a_detector_missing_a_setting_asks_the_relay_when_nobody_types);
+    RUN_TEST(the_relay_can_not_change_the_detection_thresholds_of_a_working_detector);
+    RUN_TEST(a_detector_without_the_live_view_has_no_network_settings_so_it_never_tries_wifi);
+    RUN_TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again);
     return test::summarize();
 }

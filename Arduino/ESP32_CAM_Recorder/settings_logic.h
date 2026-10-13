@@ -721,10 +721,238 @@ inline ParsedCommand parseCommand(const std::string& line) {
     return pc;
 }
 
+// ── Getting missing settings from the relay ─────────────────────────────
+//
+// A firmware that needs one more setting than a board has stored cannot run
+// (there are no defaults), and the board used to wait for a USB cable. If the
+// settings needed to REACH the relay (Wi-Fi, server, port, API key, own id) are
+// stored and valid, the board can ask the relay for the missing ones instead:
+// the relay hands out one line of text staged by the operator (see
+// nodejs/camera-relay/lib/devicesettings.js) in the same KEY=value;... form as
+// the serial console.
+//
+// Safety rules, because this is a way to change a board from afar:
+//   - only settings that are currently MISSING OR INVALID are ever taken from the
+//     relay. A setting that is stored and valid is never touched, so a staged line
+//     can fill a gap but can not reconfigure a working board.
+//   - the settings needed to reach the relay are valid by definition when this
+//     runs, so they can never be among those taken.
+//   - the line goes through the same validation as typed input (checkLine and the
+//     schema's cross-setting rule), all or nothing: a line with one bad value
+//     stores nothing.
+
+enum class FetchResult : uint8_t { Failed, NothingStaged, Got };
+
+// The Wi-Fi and HTTP side, as the flow sees it. The real one lives in the sketch
+// ("Relay settings link"); the tests drive a scripted fake.
+class IRemoteLink {
+public:
+    virtual ~IRemoteLink() {}
+    virtual void startConnecting() = 0;   // begin joining Wi-Fi (returns at once, or quickly)
+    virtual bool online() = 0;            // joined; may wait a few seconds for the answer
+    // One request to the relay. `needKeys` is "KEY1,KEY2" (what is missing; only
+    // for the relay's log). Got: `line` holds the staged text. May block for the
+    // request's own timeout.
+    virtual FetchResult fetch(const std::string& needKeys, std::string& line) = 0;
+};
+
+// True when every one of `prerequisites` is stored and valid — i.e. the board has
+// what it needs to reach the relay. An empty list means "can't".
+inline bool remoteFillPossible(const Schema& schema, ISettingsStore& store,
+                               const std::vector<std::string>& prerequisites) {
+    if (prerequisites.empty()) return false;
+    for (size_t i = 0; i < prerequisites.size(); ++i) {
+        const KeyDef* def = findKey(schema, prerequisites[i]);
+        if (!def || !store.has(def->name)) return false;
+        std::string err;
+        if (!validateStored(*def, store.get(def->name), err)) return false;
+    }
+    return true;
+}
+
+struct RemoteApplyResult {
+    size_t stored;                       // settings written to flash
+    std::vector<std::string> keys;       // which ones, in the order of the line
+    std::vector<std::string> errors;     // why nothing was stored (empty when fine, or when nothing applied)
+    std::vector<std::string> ignored;    // names in the line that were left alone (not missing, or unknown)
+    RemoteApplyResult() : stored(0) {}
+};
+
+// Takes the settings that are missing or invalid out of a staged line, checks
+// them as if they had been typed, and stores them — or stores nothing, with the
+// reasons in `errors`. Everything else in the line is ignored (and named).
+inline RemoteApplyResult applyRemoteLine(const Schema& schema, ISettingsStore& store, const std::string& line) {
+    RemoteApplyResult out;
+    ParsedLine parsed = parseLine(line);
+    if (!parsed.errors.empty()) { out.errors = parsed.errors; return out; }
+
+    std::vector<Problem> problems = findProblems(schema, store);
+    std::string usable;
+    for (size_t i = 0; i < parsed.pairs.size(); ++i) {
+        const Pair& p = parsed.pairs[i];
+        bool wanted = false;
+        for (size_t j = 0; j < problems.size(); ++j) if (problems[j].key == p.key) wanted = true;
+        if (!wanted) { out.ignored.push_back(p.key); continue; }
+        if (!usable.empty()) usable += ';';
+        usable += p.key + "=" + p.value;     // the value is still in its escaped form, exactly as received
+    }
+    if (usable.empty()) return out;
+
+    CheckedLine cl = checkLine(schema, usable);
+    if (cl.ok()) checkCrossRules(schema, store, cl.pairs, cl.errors);
+    if (!cl.ok()) { out.errors = cl.errors; return out; }
+
+    for (size_t i = 0; i < cl.pairs.size(); ++i) {
+        if (store.set(cl.pairs[i].key, cl.pairs[i].value)) {
+            out.stored++;
+            out.keys.push_back(cl.pairs[i].key);
+        } else {
+            out.errors.push_back("could not write " + cl.pairs[i].key + " to flash");
+        }
+    }
+    return out;
+}
+
+// Asks the relay for the missing settings: join Wi-Fi (connectTimeoutMs), then
+// ask every pollGapMs for up to windowMs. Never blocks except inside the link's
+// own calls; drive it with step(millis()) until it stops returning Running.
+//   Filled        settings were stored — restart so they take effect
+//   GiveUp        Wi-Fi didn't come up, or nothing usable arrived in time — restart and try again
+//   NotPossible   the settings needed to reach the relay are not all there — only the serial console can help
+class RemoteFill {
+public:
+    enum Status { Running, Filled, GiveUp, NotPossible };
+
+    RemoteFill(const Schema& schema, ISettingsStore& store, IRemoteLink& link, IConsole& console,
+               const std::vector<std::string>& prerequisites,
+               uint32_t connectTimeoutMs, uint32_t windowMs, uint32_t pollGapMs)
+        : schema_(schema), store_(store), link_(link), console_(console), prerequisites_(prerequisites),
+          connectTimeoutMs_(connectTimeoutMs), windowMs_(windowMs), pollGapMs_(pollGapMs),
+          phase_(Begin), result_(Running), deadline_(0), nextPoll_(0) {}
+
+    Status step(uint32_t nowMs) {
+        switch (phase_) {
+            case Begin:      return begin(nowMs);
+            case Connecting: return stepConnecting(nowMs);
+            case Polling:    return stepPolling(nowMs);
+            case Done:       return result_;
+        }
+        return result_;
+    }
+
+private:
+    enum Phase { Begin, Connecting, Polling, Done };
+
+    void say(const std::string& s) { console_.println(s); }
+    // Says it unless it is what was said last — a board waiting for the operator asks every
+    // few seconds, and the serial log shouldn't scroll with the same line.
+    void note(const std::string& s) { if (s != lastNote_) { lastNote_ = s; say(s); } }
+    Status finish(Status s) { result_ = s; phase_ = Done; return s; }
+    static bool reached(uint32_t nowMs, uint32_t deadline) { return static_cast<int32_t>(nowMs - deadline) >= 0; }
+    std::string seconds(uint32_t ms) const { return numText(ms / 1000.0) + " s"; }
+
+    std::string missingKeys() const {
+        std::vector<Problem> problems = findProblems(schema_, store_);
+        std::string out;
+        for (size_t i = 0; i < problems.size(); ++i) { if (i) out += ','; out += problems[i].key; }
+        return out;
+    }
+
+    Status begin(uint32_t nowMs) {
+        if (!remoteFillPossible(schema_, store_, prerequisites_)) {
+            say("The relay can't be asked for the missing settings: the Wi-Fi / server / port / key / id settings it needs "
+                "are not all stored and valid. Type the missing settings here.");
+            return finish(NotPossible);
+        }
+        say("Asking the relay for the missing settings (joining Wi-Fi first, up to " + seconds(connectTimeoutMs_) + ")...");
+        link_.startConnecting();
+        deadline_ = nowMs + connectTimeoutMs_;
+        phase_ = Connecting;
+        return Running;
+    }
+
+    Status stepConnecting(uint32_t nowMs) {
+        if (link_.online()) {
+            say("Wi-Fi connected. Waiting up to " + seconds(windowMs_) + " for the relay to supply the missing settings.");
+            phase_ = Polling;
+            nextPoll_ = nowMs;
+            deadline_ = nowMs + windowMs_;
+            return Running;
+        }
+        if (reached(nowMs, deadline_)) {
+            say("Wi-Fi did not connect in " + seconds(connectTimeoutMs_) + ". Restarting to try again.");
+            return finish(GiveUp);
+        }
+        return Running;
+    }
+
+    Status stepPolling(uint32_t nowMs) {
+        if (reached(nowMs, deadline_)) {
+            say("No usable settings arrived from the relay in " + seconds(windowMs_) + ". Restarting to try again.");
+            return finish(GiveUp);
+        }
+        if (!reached(nowMs, nextPoll_)) return Running;
+
+        std::string line;
+        FetchResult r = link_.fetch(missingKeys(), line);
+        nextPoll_ = nowMs + pollGapMs_;
+        if (r == FetchResult::Failed) {
+            note("The relay could not be reached - still trying.");
+            return Running;
+        }
+        if (r == FetchResult::NothingStaged) {
+            note("The relay has no settings staged for this board yet - still waiting.");
+            return Running;
+        }
+
+        RemoteApplyResult ar = applyRemoteLine(schema_, store_, line);
+        if (!ar.errors.empty()) {
+            std::string msg = "The settings from the relay were refused, nothing was stored:";
+            for (size_t i = 0; i < ar.errors.size(); ++i) msg += " " + ar.errors[i] + ";";
+            note(msg);
+            return Running;
+        }
+        if (ar.stored == 0) {
+            note("The relay's settings contain none of the missing ones (" + missingKeys() + ") - still waiting.");
+            return Running;
+        }
+
+        say("Stored " + numText(static_cast<double>(ar.stored)) + " setting(s) received from the relay:");
+        for (size_t i = 0; i < ar.keys.size(); ++i) {
+            const KeyDef* def = findKey(schema_, ar.keys[i]);
+            if (def) say("  " + renderSetting(*def, store_, true));
+        }
+        std::string still = missingKeys();
+        if (still.empty()) {
+            say("All settings are stored. Restarting...");
+            return finish(Filled);
+        }
+        say("Still missing: " + still + ". Waiting for more.");
+        lastNote_.clear();
+        deadline_ = nowMs + windowMs_;   // progress was made: allow a full window for the rest
+        return Running;
+    }
+
+    const Schema& schema_;
+    ISettingsStore& store_;
+    IRemoteLink& link_;
+    IConsole& console_;
+    std::vector<std::string> prerequisites_;
+    uint32_t connectTimeoutMs_;
+    uint32_t windowMs_;
+    uint32_t pollGapMs_;
+    Phase phase_;
+    Status result_;
+    uint32_t deadline_;
+    uint32_t nextPoll_;
+    std::string lastNote_;
+};
+
 // ── The start-up conversation ───────────────────────────────────────────
 //
 //   show all settings
 //   anything missing/invalid?  yes -> list them, read lines until all are stored, restart
+//                                  (if a RemoteFill is attached and nobody types: ask the relay, see above)
 //                              no  -> "Change settings? [y/N]", wait windowMs:
 //                                       y + Enter -> read lines until an empty line / EXIT
 //                                       anything else, or silence -> carry on booting
@@ -739,19 +967,30 @@ public:
     BootConfigFlow(const Schema& schema, ISettingsStore& store, IConsole& console, uint32_t windowMs)
         : schema_(schema), store_(store), console_(console), windowMs_(windowMs),
           phase_(Begin), result_(Running), deadline_(0), changed_(false), mustComplete_(false),
-          eraseArmed_(false), lastWasCR_(false), overflow_(false) {}
+          eraseArmed_(false), lastWasCR_(false), overflow_(false),
+          remote_(0), remoteDelayMs_(0), editingSince_(0), touched_(false), remoteOver_(false) {}
 
     Status step(uint32_t nowMs) {
         switch (phase_) {
             case Begin:    begin(nowMs); return Running;
             case Asking:   return stepAsking(nowMs);
-            case Editing:  return stepEditing();
+            case Editing:  return stepEditing(nowMs);
             case Finished: return result_;
         }
         return result_;
     }
 
     bool changed() const { return changed_; }
+
+    // Lets a board that is missing settings ask the relay for them. Only used when
+    // settings are missing or invalid (never in the "Change settings?" window), and
+    // only if nobody types: the first byte from the serial port means a person is
+    // there, and then the relay is left alone (and the board doesn't restart under
+    // their hands). `startAfterMs` is how long the serial port gets to itself first.
+    void attachRemote(RemoteFill* remote, uint32_t startAfterMs) {
+        remote_ = remote;
+        remoteDelayMs_ = startAfterMs;
+    }
 
 private:
     enum Phase { Begin, Asking, Editing, Finished };
@@ -772,6 +1011,11 @@ private:
             mustComplete_ = true;
             printProblems(problems);
             printEditHelp();
+            if (remote_) {
+                say("If nobody types within " + numText(remoteDelayMs_ / 1000.0) +
+                    " s, the board asks the relay for these (when its Wi-Fi settings are stored).");
+            }
+            editingSince_ = nowMs;
             phase_ = Editing;
             return;
         }
@@ -849,14 +1093,22 @@ private:
         return Running;
     }
 
-    Status stepEditing() {
+    Status stepEditing(uint32_t nowMs) {
         int c;
         while ((c = console_.read()) >= 0) {
+            touched_ = true;   // a person is at the serial port: no relay, no restart behind their back
             if (!feedChar(c)) continue;
             bool overflow = false;
             std::string line = takeLine(overflow);
             Status s = handleLine(line, overflow);
             if (s != Running) return finish(s);
+        }
+        if (remote_ && mustComplete_ && !touched_ && !remoteOver_ &&
+            static_cast<int32_t>(nowMs - editingSince_ - remoteDelayMs_) >= 0) {
+            RemoteFill::Status rs = remote_->step(nowMs);
+            if (rs == RemoteFill::Filled) { changed_ = true; return finish(Restart); }
+            if (rs == RemoteFill::GiveUp) return finish(Restart);
+            if (rs == RemoteFill::NotPossible) remoteOver_ = true;   // serial is the only way; stay here
         }
         return Running;
     }
@@ -1000,6 +1252,11 @@ private:
     bool eraseArmed_;
     bool lastWasCR_;
     bool overflow_;
+    RemoteFill* remote_;
+    uint32_t remoteDelayMs_;
+    uint32_t editingSince_;
+    bool touched_;
+    bool remoteOver_;
     std::string line_;
 };
 

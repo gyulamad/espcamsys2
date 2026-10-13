@@ -24,6 +24,9 @@
 using esp32cam_settings::RecorderSettings;
 static RecorderSettings g_cfg;
 
+// The glue's RelaySettingsLink is the real Wi-Fi + HTTP; here it is the scripted fake.
+#include "relay_settings_link_fake.h"
+
 // ── the code under test, extracted verbatim from the sketch ─────────────
 #include "build/settings_glue.inc"
 
@@ -40,6 +43,7 @@ static void powerUp() {
     g_now = 0; g_incoming.clear(); g_rx.clear(); g_serialOut.clear();
     g_restarts = 0; g_flushes = 0; g_cfg = RecorderSettings();
     g_flashBeginOk = true; g_flashWriteOk = true;
+    resetLink();
 }
 // ── tests ───────────────────────────────────────────────────────────────
 
@@ -148,6 +152,64 @@ TEST(the_serial_console_reports_no_input_without_blocking) {
     TEST_ASSERT(!g_serialOut.empty() && g_serialOut.back() == "hello", "lines go to the serial port");
 }
 
+// ── missing settings asked for from the relay ───────────────────────────
+
+// A complete board, as flash would hold it after the first provisioning.
+static void provisionFlash() {
+    eraseFlash();
+    esp32cam_settings::CheckedLine c = esp32cam_settings::checkLine(esp32cam_settings::RECORDER_SCHEMA, TYPICAL);
+    for (size_t i = 0; i < c.pairs.size(); ++i) g_flash[c.pairs[i].key] = c.pairs[i].value;
+}
+
+TEST(a_board_missing_a_setting_asks_the_relay_when_nobody_types) {
+    provisionFlash(); powerUp();
+    g_flash.erase("LOG_LOW_HEAP");                       // a firmware update added this one
+    g_link.reply(esp32cam_settings::FetchResult::Got, "LOG_LOW_HEAP=20000");
+    setupSettings();
+    TEST_ASSERT_EQ(g_restarts, 1, "restarted so the new setting takes effect");
+    TEST_ASSERT_EQ(g_flash["LOG_LOW_HEAP"], std::string("20000"), "the value from the relay is in flash");
+    TEST_ASSERT(g_link.fetches == 1 && g_link.needSeen[0] == "LOG_LOW_HEAP", "it told the relay what it was missing");
+    TEST_ASSERT(g_linkType == "recorder" && g_linkIdKey == "CAMERA_ID", "as a recorder, identified by CAMERA_ID");
+    TEST_ASSERT(g_now >= 5000, "the serial port had its five seconds first");
+    TEST_ASSERT(said("Asking the relay") && said("Stored 1 setting(s)"), "and the serial log says what happened");
+    TEST_ASSERT_EQ(g_prefsOpen, 0, "the flash was closed again");
+}
+
+TEST(a_relay_with_nothing_staged_makes_the_board_restart_and_try_again) {
+    provisionFlash(); powerUp();
+    g_flash.erase("LOG_LOW_HEAP");
+    setupSettings();
+    TEST_ASSERT_EQ(g_restarts, 1, "restarted to try again");
+    TEST_ASSERT(g_flash.count("LOG_LOW_HEAP") == 0, "nothing was stored");
+    TEST_ASSERT(g_now >= 35000 && g_now <= 36000, "after 5 s of serial and 30 s of waiting");
+    TEST_ASSERT(said("no settings staged"), "it said what it was waiting for");
+}
+
+TEST(typing_a_value_on_serial_means_the_relay_is_not_asked) {
+    provisionFlash(); powerUp();
+    g_flash.erase("LOG_LOW_HEAP");
+    typeAt(1000, "LOG_LOW_HEAP=25000\n");
+    setupSettings();
+    TEST_ASSERT_EQ(g_flash["LOG_LOW_HEAP"], std::string("25000"), "the typed value is stored");
+    TEST_ASSERT(g_link.connects == 0 && g_link.fetches == 0, "Wi-Fi was never started");
+}
+
+TEST(a_blank_board_never_tries_wifi_it_has_no_wifi_settings_to_try) {
+    eraseFlash(); powerUp();
+    typeAt(60000, std::string(TYPICAL) + "\n");           // a person arrives a minute later
+    setupSettings();
+    TEST_ASSERT_EQ(g_link.connects, 0, "no Wi-Fi");
+    TEST_ASSERT(said("Type the missing settings here"), "it told the person it can only be done here");
+    TEST_ASSERT_EQ(g_restarts, 1, "and restarted once, after they typed the settings in");
+}
+
+TEST(a_board_that_is_complete_never_touches_the_relay) {
+    provisionFlash(); powerUp();
+    setupSettings();
+    TEST_ASSERT(g_link.connects == 0 && g_link.fetches == 0 && g_restarts == 0, "just the window, then it carries on");
+    TEST_ASSERT(g_cfg.cameraId == "cam2", "settings loaded");
+}
+
 int main() {
     RUN_TEST(the_first_boot_of_a_blank_board_stores_what_is_typed_in_flash_and_restarts);
     RUN_TEST(after_the_reboot_it_waits_five_seconds_then_loads_the_settings_and_carries_on);
@@ -159,5 +221,10 @@ int main() {
     RUN_TEST(a_flash_write_that_fails_is_reported_and_does_not_restart);
     RUN_TEST(erasing_clears_the_flash_namespace);
     RUN_TEST(the_serial_console_reports_no_input_without_blocking);
+    RUN_TEST(a_board_missing_a_setting_asks_the_relay_when_nobody_types);
+    RUN_TEST(a_relay_with_nothing_staged_makes_the_board_restart_and_try_again);
+    RUN_TEST(typing_a_value_on_serial_means_the_relay_is_not_asked);
+    RUN_TEST(a_blank_board_never_tries_wifi_it_has_no_wifi_settings_to_try);
+    RUN_TEST(a_board_that_is_complete_never_touches_the_relay);
     return test::summarize();
 }

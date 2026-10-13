@@ -25,6 +25,8 @@
 #                    announcement), settings_schema.h, and the detection and
 #                    settings code of ESP32_CAM_TFLite_Person.ino
 #                    (setPersonDetected, detectPerson, loop, the settings block)
+# (The "Relay settings link" class in each sketch — the real Wi-Fi + HTTP half of asking
+# the relay for missing settings — needs a radio; the glue tests run against a fake of it.)
 # These are the only sketch code that can run on a desktop; setup() and the
 # camera/WiFi/model initialisation need the real hardware. Needs gcov (same
 # GCC version as g++, >= 9) and node.
@@ -175,6 +177,7 @@ else
     run_cpp_test test_remote_log
     run_cpp_test test_person_stream_logic
     run_cpp_test test_settings_logic
+    run_cpp_test test_settings_remote
     run_cpp_test test_person_settings
 
     # The sketch's remote-logging glue is tested by compiling the code it
@@ -292,6 +295,12 @@ fi
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
 #     connected/dropped), an unusable log location. Override the ports with
 #     E2E_LOG_PORT / E2E_LOG_PUSH_PORT.
+#   - tests/e2e/test_device_settings_e2e.js: the settings the relay stages for
+#     boards that are missing some (GET/PUT /device-settings) — camera key to
+#     ask, control key to stage, a device's own line beating the fleet line, the
+#     exact text kept, names (never values) in the log, bad ids/types/bodies and
+#     path traversal refused. Override the ports with E2E_DEVSET_PORT /
+#     E2E_DEVSET_PUSH_PORT.
 #   - tests/e2e/test_push_connection_e2e.js: how the relay treats a camera's push
 #     connection on a bad WiFi link — a reconnect after the old connection went
 #     quiet is not an id clash (and the ghost is closed), two boards really
@@ -400,6 +409,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_preroll_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (settings staged on the relay for boards missing some) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_device_settings_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

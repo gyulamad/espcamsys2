@@ -306,6 +306,56 @@ bool initTFLite()
 }
 
 
+// ── Relay settings link ─────────────────────────────────────────────────
+// The Wi-Fi and HTTP half of "ask the relay for the settings this board is
+// missing" (see RemoteFill in settings_logic.h, which makes every decision; this
+// only joins Wi-Fi and makes one request). It reads what it needs straight from
+// flash, because g_cfg can't be loaded yet — that is the whole situation. It runs
+// before the camera and the live view start, so nothing else competes
+// for the radio or the heap. It needs real Wi-Fi, so the desktop tests don't run
+// it; the settings glue below is tested against a fake of this class.
+class RelaySettingsLink : public esp32cam_settings::IRemoteLink {
+public:
+  RelaySettingsLink(esp32cam_settings::ISettingsStore& store, const char* type, const char* idKey)
+      : store_(store), type_(type), idKey_(idKey) {}
+
+  void startConnecting() override {
+    std::vector<esp32cam_settings::WifiNet> nets;
+    std::string err;
+    esp32cam_settings::parseWifiList(store_.get("WIFI"), nets, err);
+    WiFi.mode(WIFI_STA);
+    for (size_t i = 0; i < nets.size(); i++) multi_.addAP(nets[i].ssid.c_str(), nets[i].pass.c_str());
+  }
+
+  bool online() override { return multi_.run(4000) == WL_CONNECTED; }
+
+  esp32cam_settings::FetchResult fetch(const std::string& needKeys, std::string& line) override {
+    // Every value read here was checked by RemoteFill (remoteFillPossible) before it started.
+    std::string url = "http://" + store_.get("SERVER_HOST") + ":" + store_.get("HTTP_PORT") +
+                      "/device-settings/" + type_ + "/" + store_.get(idKey_) + "?need=" + needKeys;
+    HTTPClient http;
+    http.begin(String(url.c_str()));
+    http.setTimeout(5000);
+    http.addHeader("X-Api-Key", store_.get("API_KEY").c_str());
+    int code = http.GET();
+    esp32cam_settings::FetchResult result = esp32cam_settings::FetchResult::Failed;
+    if (code == 200) {
+      line = http.getString().c_str();
+      result = esp32cam_settings::FetchResult::Got;
+    } else if (code == 404) {
+      result = esp32cam_settings::FetchResult::NothingStaged;   // nothing staged on the relay (yet)
+    }
+    http.end();
+    return result;
+  }
+
+private:
+  esp32cam_settings::ISettingsStore& store_;
+  std::string type_;
+  std::string idKey_;
+  WiFiMulti multi_;   // its own: the sketch's global one is for the camera's normal connection
+};
+
 // ── Settings glue ───────────────────────────────────────────────────────
 // Connects the settings engine (settings_logic.h) to the real flash storage and
 // the real serial port, and runs the start-up conversation. All the decisions —
@@ -317,9 +367,18 @@ using esp32cam_settings::BootConfigFlow;
 using esp32cam_settings::IConsole;
 using esp32cam_settings::ISettingsStore;
 using esp32cam_settings::PERSON_SCHEMA;
+using esp32cam_settings::RemoteFill;
 using esp32cam_settings::loadPersonSettings;
+using esp32cam_settings::personRemotePrerequisites;
 
 const uint32_t SETTINGS_WINDOW_MS = 5000;          // how long boot waits for a "y" before starting normally
+// A board that is MISSING settings (typically after a firmware update added one) first gives the
+// serial port SETTINGS_WINDOW_MS to itself, then asks the relay for them (RemoteFill). Only possible
+// when the live-view settings (Wi-Fi, server, key, id) are stored: a detector run without the
+// live view has no network settings and is configured over serial only.
+const uint32_t REMOTE_CONNECT_MS = 20000;          // how long it gets to join Wi-Fi before restarting to try again
+const uint32_t REMOTE_WINDOW_MS = 30000;           // how long it then waits for the relay to supply them
+const uint32_t REMOTE_POLL_MS = 5000;              // and how often it asks meanwhile
 const char* const SETTINGS_NAMESPACE = "espcam";   // flash (NVS) namespace the settings live in
 
 // The settings in flash, via the core's Preferences library (NVS). Survives
@@ -369,6 +428,13 @@ void setupSettings() {
   }
 
   BootConfigFlow flow(PERSON_SCHEMA, store, console, SETTINGS_WINDOW_MS);
+  // Missing settings can also come from the relay (staged there by the operator), so a firmware
+  // update that needs one more setting doesn't need a USB cable. Only gaps are ever filled, and
+  // only if nobody types: see RemoteFill in settings_logic.h.
+  RelaySettingsLink link(store, "detector", "DETECTOR_ID");
+  RemoteFill remote(PERSON_SCHEMA, store, link, console, personRemotePrerequisites(),
+                    REMOTE_CONNECT_MS, REMOTE_WINDOW_MS, REMOTE_POLL_MS);
+  flow.attachRemote(&remote, SETTINGS_WINDOW_MS);
   BootConfigFlow::Status status;
   while ((status = flow.step(millis())) == BootConfigFlow::Running) delay(5);
 

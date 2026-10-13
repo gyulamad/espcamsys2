@@ -21,6 +21,7 @@ const preroll = require('./lib/preroll');
 const auth = require('./lib/auth');
 const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
+const devicesettings = require('./lib/devicesettings');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const connection = require('./lib/connection');
@@ -773,6 +774,114 @@ app.use('/log', (err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 32 KB)' });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'body is not valid JSON' });
+  return next(err);
+});
+
+// ── Settings staged for boards that are missing some ──
+// A board keeps its settings in its own flash and has no defaults, so a new
+// firmware that needs one more setting would leave the board waiting for a USB
+// cable. Instead, a board whose Wi-Fi and relay settings are fine asks here for
+// the ones it lacks. The relay only stores and hands out ONE line of text in the
+// serial console's KEY=value;KEY=value form — the board validates it, and uses
+// only the settings it is actually missing (see lib/devicesettings.js and
+// RemoteFill in the sketches' settings_logic.h).
+//   GET /device-settings/:type/:id   camera key: the line staged for that device,
+//                                    else for the whole type; 404 if none
+//   PUT /device-settings/:type/:id   control key: stage a line for one device
+//   PUT /device-settings/:type       control key: stage a line for every device of the type
+// (an empty PUT body removes what was staged). :type is recorder or detector.
+// Files live in config.deviceSettingsDir (default device-settings/ next to server.js;
+// DEVICE_SETTINGS_DIR overrides it).
+const DEVICE_SETTINGS_DIR = path.resolve(__dirname, fromEnv('DEVICE_SETTINGS_DIR', config.deviceSettingsDir || 'device-settings'));
+const deviceSettingsAuthThrottle = new Throttle(60 * 1000);
+const deviceSettingsLogGate = new devicesettings.FetchLogGate(10 * 60 * 1000);
+
+function readStagedFile(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+app.get('/device-settings/:type/:id',
+  (req, res, next) => {
+    if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+    const ip = logfile.normalizeIp(req.socket.remoteAddress);
+    const t = deviceSettingsAuthThrottle.check(`get:${ip}`, Date.now());
+    if (t.allow) relayLog('WARN', `rejected a GET ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
+    return res.status(401).json({ error: 'missing or wrong key' });
+  },
+  (req, res) => {
+    const { type, id } = req.params;
+    if (!devicesettings.isType(type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
+    if (!devicesettings.isId(id)) return res.status(400).json({ error: 'not a valid device id' });
+    const need = devicesettings.parseNeed(req.query.need);
+    let staged;
+    try {
+      staged = devicesettings.pickStaged(
+        readStagedFile(devicesettings.fileFor(DEVICE_SETTINGS_DIR, type, id)),
+        readStagedFile(devicesettings.fileFor(DEVICE_SETTINGS_DIR, type, null)));
+    } catch (err) {
+      relayLog('ERROR', `could not read the staged settings for ${id}: ${errorMessage(err)}`, { sender: id });
+      return res.status(500).json({ error: 'could not read the staged settings' });
+    }
+    const ip = logfile.normalizeIp(req.socket.remoteAddress);
+    const needText = need.length ? need.join(', ') : '(not stated)';
+    if (deviceSettingsLogGate.check(id, `${staged ? staged.source : 'none'}|${need.join(',')}`, Date.now())) {
+      relayLog(staged ? 'INFO' : 'WARN',
+        staged
+          ? `${id} (${type}) is missing settings (${needText}) and was sent the ${staged.source} line staged for it (${devicesettings.keyNames(staged.line).join(', ') || 'no settings'})`
+          : `${id} (${type}) is missing settings (${needText}) and nothing is staged for it - PUT /device-settings/${type}/${id} (or /device-settings/${type} for all of them)`,
+        { sender: id, ip, via: 'relay' });
+    }
+    if (!staged) return res.status(404).type('text/plain').send('nothing staged');
+    return res.type('text/plain').send(staged.line);
+  });
+
+app.put(['/device-settings/:type', '/device-settings/:type/:id'],
+  (req, res, next) => {
+    if (!CONTROL_KEY) return res.status(503).json({ error: 'staging settings is disabled: controlKey is not set in the relay config' });
+    const provided = req.headers['x-control-key'];
+    if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+    const ip = logfile.normalizeIp(req.socket.remoteAddress);
+    const t = deviceSettingsAuthThrottle.check(`put:${ip}`, Date.now());
+    if (t.allow) relayLog('WARN', `REJECTED a PUT ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
+    return res.status(401).json({ error: 'missing or wrong control key' });
+  },
+  express.text({ type: '*/*', limit: '4kb' }),
+  (req, res) => {
+    const { type } = req.params;
+    const id = req.params.id === undefined ? null : req.params.id;
+    if (!devicesettings.isType(type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
+    if (id !== null && !devicesettings.isId(id)) return res.status(400).json({ error: 'not a valid device id' });
+    const checked = devicesettings.checkStagedLine(typeof req.body === 'string' ? req.body : '');
+    if (!checked.ok) return res.status(400).json({ error: checked.error });
+
+    const file = devicesettings.fileFor(DEVICE_SETTINGS_DIR, type, id);
+    const scope = id === null ? `every ${type}` : `${type} ${id}`;
+    try {
+      if (checked.line === '') {
+        fs.rmSync(file, { force: true });
+        relayLog('INFO', `${actorOf(req)} removed the settings staged for ${scope}`);
+        return res.json({ ok: true, removed: true });
+      }
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      writeFileAtomic(file, `${checked.line}\n`);
+    } catch (err) {
+      relayLog('ERROR', `could not stage settings for ${scope}: ${errorMessage(err)}`);
+      return res.status(500).json({ error: 'could not write the staged settings' });
+    }
+    // Names only: the values can be Wi-Fi passwords and API keys.
+    relayLog('INFO', `${actorOf(req)} staged settings for ${scope}: ${devicesettings.keyNames(checked.line).join(', ') || 'none'}`);
+    return res.json({ ok: true, scope, settings: devicesettings.keyNames(checked.line) });
+  });
+
+// An oversized or unreadable staging body gets a clear answer, not Express's HTML error page.
+app.use('/device-settings', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 4 KB)' });
   return next(err);
 });
 

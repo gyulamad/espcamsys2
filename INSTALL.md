@@ -445,6 +445,37 @@ The person detector no longer has a `config.h` either. After reflashing it asks 
 
 ---
 
+## Missing settings after a firmware update (no USB cable needed)
+
+Settings have no defaults, so a firmware that needs **one more setting** than a board has stored can't run: at boot the board lists what is missing and waits. You used to need a USB cable for that. If the board's **Wi-Fi, server, port, API key and id** are stored (so it can reach the relay), it now asks the relay for the missing settings instead — you stage them on the relay once, ideally *before* you roll the new firmware out.
+
+**What the board does.** After printing what is missing it gives the serial port **5 seconds** to itself (a person who types — anything at all — always wins, and then the board never restarts behind their back). Then it joins Wi-Fi (up to 20 s), asks the relay every 5 s for up to **30 s**, and:
+
+- a staged line arrives -> the missing settings in it are stored and the board restarts, complete;
+- nothing arrives -> it restarts and tries again (about once a minute), until you stage something.
+
+**What you do on the relay.** Send the missing settings as one line, in the same `KEY=value;KEY=value` form the serial console takes (control key in `X-Control-Key`, the `controlKey` from `config.js`). `<type>` is `recorder` or `detector`:
+
+```bash
+# for every recorder:
+curl -X PUT -H "X-Control-Key: YOUR_CONTROL_KEY" --data-binary 'LOG_NEW_SETTING=30' \
+     http://PI:8080/device-settings/recorder
+# for one board only (its own line wins over the one for the type):
+curl -X PUT -H "X-Control-Key: YOUR_CONTROL_KEY" --data-binary 'LOG_NEW_SETTING=60' \
+     http://PI:8080/device-settings/recorder/cam2
+# remove what is staged (an empty body):
+curl -X PUT -H "X-Control-Key: YOUR_CONTROL_KEY" --data-binary '' http://PI:8080/device-settings/recorder
+```
+
+The relay log shows what happened, with the setting **names only** (values can be passwords): `... staged settings for every recorder: LOG_NEW_SETTING` and, when a board asks, `cam2 (recorder) is missing settings (LOG_NEW_SETTING) and was sent the fleet line ...` — or a warning that nothing is staged for it, which is your cue to stage something. Staged files live in `nodejs/camera-relay/device-settings/` (`<type>/_fleet.txt` and `<type>/<id>.txt`; the folder is not in git — change it with `deviceSettingsDir` in `config.js`).
+
+**Safety rules** (the relay can't reconfigure a working board):
+
+- Only settings that are **missing or invalid** are taken from the relay. A setting that is stored and valid is never changed by it, whatever the staged line says. So you can't use this to change the Wi-Fi password, server or key of a board that works — that stays a serial job.
+- The line is checked like typed input and is **all or nothing**: one bad value and nothing is stored (the serial log says why).
+- It doesn't help when the settings needed to *reach* the relay are the ones missing or wrong (Wi-Fi, server, port, API key, id), nor a detector run without its live view (it has no Wi-Fi settings): those still need the serial port.
+- The line travels over plain HTTP together with the camera key, like everything else between the cameras and the relay. Don't stage anything you wouldn't be happy to have on your LAN.
+
 ## Upgrading from the version with camera power on/off
 
 Cameras can no longer be switched off from the dashboard (pre-roll needs them streaming all the time), and the dashboard's "camera on" alarm setting is gone.

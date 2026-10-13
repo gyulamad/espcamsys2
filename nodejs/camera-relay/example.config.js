@@ -25,6 +25,11 @@ module.exports = {
   // logKeepFiles: 2,                // rotated files kept: camera.log.1, camera.log.2 (default 2)
   //                                 // => at most (keep + 1) * maxBytes of disk, ever
 
+  // Settings staged for boards that are missing one (see "Missing settings after a
+  // firmware update" in INSTALL.md). A relative path is relative to this folder; optional.
+  // Staging them needs controlKey above.
+  // deviceSettingsDir: 'device-settings',   // default
+
   // Recording ON/OFF switch (dashboard buttons: switch recording OFF per camera, or for every
   // camera at once, for N minutes or until switched back ON — e.g. while people are on site).
   // Changing it needs this key, sent by the dashboard's server as an X-Control-Key header.

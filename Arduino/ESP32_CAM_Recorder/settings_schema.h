@@ -97,6 +97,15 @@ struct RecorderSettings {
     uint32_t logLowHeapBytes = 30000;
 };
 
+// The settings this board needs before it can ask the relay for the OTHERS
+// (RemoteFill in settings_logic.h): how to join the network, where the relay is,
+// the key it wants, and which board is asking. When one of these is missing the
+// serial console is the only way in. Keep in sync with the schema above.
+inline std::vector<std::string> recorderRemotePrerequisites() {
+    static const char* const keys[] = { "WIFI", "SERVER_HOST", "HTTP_PORT", "API_KEY", "CAMERA_ID" };
+    return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
+}
+
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.
 inline bool loadRecorderSettings(ISettingsStore& store, RecorderSettings& out, std::string& err) {

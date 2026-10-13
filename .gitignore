@@ -12,6 +12,7 @@ Arduino/templates/*.txt
 node_modules/
 nodejs/camera-relay/recordings/
 nodejs/camera-relay/logs/
+nodejs/camera-relay/device-settings/
 nodejs/camera-relay/recording-switch.json
 nodejs/camera-relay/recording-switch.json.tmp
 
