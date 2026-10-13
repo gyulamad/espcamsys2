@@ -23,8 +23,12 @@
 //                    <build-dir>/log_glue.inc       (remote-logging block of the .ino)
 //                    <build-dir>/settings_glue.inc  (settings block of the .ino)
 //   Person detector: Arduino/ESP32_CAM_TFLite_Person/stream_logic.h
+//                    Arduino/ESP32_CAM_TFLite_Person/settings_schema.h
 //                    <build-dir>/person_glue.inc  (model constants, setPersonDetected,
 //                                                  detectPerson and loop of the .ino)
+//                    <build-dir>/person_settings_glue.inc  (settings block of the .ino)
+//                    (The Person copy of settings_logic.h is byte-identical to the
+//                    Recorder's, which is measured above, so it is not counted twice.)
 //
 // Exit code: 0 if every sketch meets min-percent, 1 if any is below it or has no data.
 
@@ -57,7 +61,9 @@ const groups = [
         name: 'Person detector sketch (ESP32_CAM_TFLite_Person)',
         files: [
             path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'stream_logic.h'),
+            path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'settings_schema.h'),
             path.join(buildDir, 'person_glue.inc'),
+            path.join(buildDir, 'person_settings_glue.inc'),
         ],
     },
 ].map((g) => ({ ...g, files: g.files.map((p) => path.resolve(p)) }));

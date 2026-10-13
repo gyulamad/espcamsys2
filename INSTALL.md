@@ -97,37 +97,42 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    git clone --branch v1.3.3 https://github.com/espressif/esp-tflite-micro.git
    ```
 
-2. In Arduino IDE, make sure you're on the **esp32 by Espressif Systems v3.x** board package (Boards Manager). Older 2.x releases don't support building an ESP-IDF component library like this one straight out of `~/Arduino/libraries`, so if you get "no such file or directory" on the `tensorflow/lite/...` includes or link errors, check this first.
+2. In Arduino IDE, make sure you're on the **esp32 by Espressif Systems v3.x** board package (Boards Manager: Tools → Board → Boards Manager, search "esp32"; `arduino-cli core list` shows it too). Older 2.x releases don't support building an ESP-IDF component library like this one straight out of `~/Arduino/libraries`, so if you get "no such file or directory" on the `tensorflow/lite/...` includes or link errors, check this first.
 
 3. Create a sketch folder containing these files together:
    - `ESP32_CAM_TFLite_Person.ino`
-   - `example.config.h`
    - `person_detect_model_data.cc`
    - `person_detect_model_data.h`
    - `stream_logic.h`
-   - *(you'll create `config.h` in the next step)*
+   - `settings_logic.h`
+   - `settings_schema.h`
 
-4. Copy the template and adjust if you want (the defaults work out of the box):
+   There is **no config file to edit any more**: like the recorder, the detector keeps its settings in the board's flash and you type them in over the serial port after the first flash (step 7).
 
-   ```
-   cp example.config.h config.h
-   ```
-
-   `config.h` controls:
-
-   ```cpp
-   #define PERSON_DETECTED_GPIO 13        // goes HIGH while a person is detected, LOW otherwise
-   #define PERSON_DETECTION_THRESHOLD 0.60f  // score needed to declare "person" (Espressif's default)
-   #define PERSON_CLEAR_THRESHOLD 0.50f      // score must drop below this before it clears (hysteresis)
-   #define DETECTION_LOOP_DELAY_MS 10
-   #define TENSOR_ARENA_SIZE (100 * 1024)
-   #define PRINT_DETECTION_SCORES 1       // print a person/no-person % every inference cycle
-   #define PRINT_STARTUP_INFO 1
-   ```
+4. *(Developer switches.)* Three things are not per-board settings but compile-time switches at the top of `ESP32_CAM_TFLite_Person.ino`, to edit only if you are developing: `PRINT_DETECTION_SCORES` (print a person/no-person % every inference cycle), `PRINT_STARTUP_INFO`, and `TENSOR_ARENA_SIZE` (tied to the model).
 
 5. Board settings: **AI Thinker ESP32-CAM**, same as step 1. If you hit a "sketch too big" error at compile time, switch **Tools → Partition Scheme** to **Huge APP (3MB No OTA)** — the TFLite Micro runtime is large.
 6. Wire the FTDI programmer the same way as step 1 (GPIO0 to GND to flash), select the port, and **Upload**. Disconnect GPIO0 from GND and power-cycle.
-7. Open the Serial Monitor at **115200 baud**. Point the camera at yourself (or a photo of a person) — you should see something like:
+7. Open the Serial Monitor at **115200 baud** and set its line ending to **Newline**. The boot messages start with the **Arduino-ESP32 core** version that built the firmware (it must be 3.x; the sketch refuses to compile on a known-old core). A new board has no settings yet, so it lists what is missing and waits. Type them as `KEY=value`, several at once separated by `;`, and press Enter:
+
+   ```
+   PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0
+   ```
+
+   That is all a detector **without** the live view needs (no Wi-Fi is started at all). When everything is stored it restarts by itself. `HELP` lists every setting with what it means and the allowed values.
+
+   | Setting | Meaning |
+   |---|---|
+   | `PERSON_GPIO` | GPIO that goes HIGH while a person is detected (`2`, `4`, `13`, `14` or `15`; 4 is the on-board flash LED) |
+   | `DETECT_THRESH` | Score needed to declare "person", `0.01`–`1` (`0.6` = Espressif's default) |
+   | `CLEAR_THRESH` | The score must fall **below** this before the GPIO clears (hysteresis). Not higher than `DETECT_THRESH` — to change both, send them in one line |
+   | `LOOP_DELAY_MS` | Pause between detections, `0`–`1000` ms |
+   | `STREAM_ENABLED` | `1`: join Wi-Fi and serve the live view (see below); `0`: no Wi-Fi at all. With `0`, none of the settings below are asked for |
+   | `WIFI`, `SERVER_HOST`, `HTTP_PORT`, `API_KEY`, `DETECTOR_ID`, `STREAM_USER`, `STREAM_PASS`, `STREAM_PORT`, `STREAM_MAX_FPS`, `STREAM_JPEG_Q`, `STREAM_WR_TMO_S`, `ANN_HEARTBEAT`, `ANN_RETRY` | The live view — only asked for while `STREAM_ENABLED=1`; see the live-view section below |
+
+   Everything about typing settings works as for the recorder (step 1, item 5): `;` / `:` / `\` inside a value are written `\;` / `\:` / `\\`; a line with any mistake stores nothing; every boot prints the settings (secrets masked) and waits **5 seconds** for a `y` to change them; `SHOW`, `SHOW <KEY>`, `EXPORT`, `ERASE`, `EXIT` work the same. Templates for `EXPORT` lines: `Arduino/templates/example.person.template.txt` (live view on) and `example.person-no-wifi.template.txt`. Settings survive uploading a new sketch and are wiped by **Erase All Flash Before Sketch Upload**.
+
+   Point the camera at yourself (or a photo of a person) — you should see something like:
 
    ```
    ==============================
@@ -156,9 +161,15 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 ### Optional: watch the detector from a browser (live view)
 
-To install and aim a detector you want to see what it sees. With `STREAM_ENABLED 1` in `config.h` (the template has it on), the detector also joins Wi-Fi, serves its picture as a **password-protected video stream**, and tells the relay which IP address it got. Nothing is registered or handled anywhere: the relay just writes a line to its log.
+To install and aim a detector you want to see what it sees. With `STREAM_ENABLED=1`, the detector also joins Wi-Fi, serves its picture as a **password-protected video stream**, and tells the relay which IP address it got. Nothing is registered or handled anywhere: the relay just writes a line to its log.
 
-1. Fill in the live-view block at the end of `config.h`: `WIFI_NETWORKS` (any number of networks — like the recorder, it takes the strongest one in range and fails over), `SERVER_HOST` / `HTTP_PORT` / `API_KEY` (the same values as the recorder's `config.h`), a `DETECTOR_ID` that is **not** any recorder's `CAMERA_ID`, and a `STREAM_USER` / `STREAM_PASSWORD`. The stream is **not served** while the password is empty or still `change-me`.
+1. Enter the live-view settings (type `y` within the 5-second window at boot, then send a line like this one — the full example is `Arduino/templates/example.person.template.txt`):
+
+   ```
+   STREAM_ENABLED=1;WIFI=extender-1-ssid:password1:extender-2-ssid:password2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=<camKey from the Pi's config.js>;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=<a real password>;STREAM_PORT=80;STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30
+   ```
+
+   `WIFI` takes any number of networks (like the recorder, it takes the strongest one in range and fails over); `SERVER_HOST` / `HTTP_PORT` / `API_KEY` are the same values as the recorder's; `DETECTOR_ID` must **not** be any recorder's `CAMERA_ID`; `STREAM_USER` is letters, digits and `_ . -`; the stream is **not served** with an empty password or the placeholder `change-me` (it is refused when typed). `STREAM_PORT` `80` means no port in the address; `STREAM_MAX_FPS` / `STREAM_JPEG_Q` tune the picture; `STREAM_WR_TMO_S` drops a viewer that stops reading after that many seconds; `ANN_HEARTBEAT` repeats the address in the relay's log every that many seconds, `ANN_RETRY` waits that long after the relay could not be reached.
 2. Flash as above. In the Serial Monitor you'll see `Wi-Fi connected to '…', IP …` and `Announced http://… to the relay`.
 3. On the Pi, find the address — the detector announces it at every (re)connection and whenever its network or IP changes, and repeats it every 10 minutes:
 
@@ -177,10 +188,9 @@ Things worth knowing:
 - **Detection never waits for it.** All networking runs in its own task on the other CPU core; with no Wi-Fi in range, or the relay unreachable, the detector works exactly as without a live view (the announcement is retried every 30 s).
 - **One viewer at a time**; opening the stream again replaces the previous viewer.
 - **It is plain HTTP**, so the password crosses your LAN unencrypted. Use one you don't reuse, and never forward this port to the internet. (The picture is only reachable from the network the detector is on; it does not go through the relay.)
-- **Power:** Wi-Fi transmissions draw current spikes. A detector with a marginal supply can brown out with the live view on (the relay's log would show `BROWNOUT`-style restarts on recorders; here, watch the Serial Monitor). Set `STREAM_ENABLED 0` for such a unit once it is installed.
-- An old `config.h` without the new block keeps working: the live view just stays off.
+- **Power:** Wi-Fi transmissions draw current spikes. A detector with a marginal supply can brown out with the live view on (the relay's log would show `BROWNOUT`-style restarts on recorders; here, watch the Serial Monitor). Set `STREAM_ENABLED=0` for such a unit once it is installed (it then starts no Wi-Fi at all).
 
-> This sketch is otherwise intentionally minimal (Serial + a GPIO pin) rather than wired into the relay/dashboard. If you want it to trigger a recording on another camera later, `PERSON_DETECTED_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
+> This sketch is otherwise intentionally minimal (Serial + a GPIO pin) rather than wired into the relay/dashboard. If you want it to trigger a recording on another camera later, `PERSON_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
 
 ---
 
@@ -362,7 +372,7 @@ Things worth knowing:
 
 - Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js`, and re-flash every camera's `config.h` with the same value.
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
-- Keep `config.php`, `config.js`, and the person detector's `config.h` out of git — they're already listed in `.gitignore`; just don't force-add them.
+- Keep `config.php`, `config.js` and your real settings templates (`Arduino/templates/*.txt`) out of git — they're already listed in `.gitignore`; just don't force-add them.
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
 
 ---
@@ -429,7 +439,9 @@ If you rename the section title comments in `ESP32_CAM_TFLite_Person.ino` (`// M
 
 The recorder no longer has a `config.h`: its settings are stored in the board's flash. A camera that already runs the old firmware keeps running until you reflash it. After you do, it has no settings yet: open the Serial Monitor (115200, line ending **Newline**) and type them in (step 1, item 5) — keep the old `config.h` values at hand. A few names changed because flash keys are limited to 15 characters: `ALARM_ACTIVE_STATE` → `ALARM_ACTIVE`, `ALARM_RECORD_ALL_CAMERAS` → `ALARM_ALL_CAMS`, `PUSH_INTERVAL_MUL` → `PUSH_GAP_MUL`, and `REMOTE_LOG_*` → `LOG_*` (`REMOTE_LOG_ENABLED` → `LOG_ENABLED`, `…_MIN_LEVEL` → `LOG_MIN_LEVEL`, `…_ECHO_TO_SERIAL` → `LOG_ECHO`, `…_RETRY_MAX` → `LOG_RETRY_MAX`, `…_RETRY_PERIOD_SECONDS` → `LOG_RETRY_SEC`, `…_FLUSH_SECONDS` → `LOG_FLUSH_SEC`, `…_REPEAT_WINDOW_SECONDS` → `LOG_REPEAT_SEC`, `…_HEARTBEAT_SECONDS` → `LOG_HEARTBEAT`, `…_LOW_HEAP_BYTES` → `LOG_LOW_HEAP`). The old `config.h` can be deleted. Later firmware that adds a new setting asks only for that one.
 
-The person detector (`ESP32_CAM_TFLite_Person`) still uses `config.h` for now.
+## Upgrading a person detector to flash-stored settings
+
+The person detector no longer has a `config.h` either. After reflashing it asks for its settings over serial (section 2, step 7) — keep the old `config.h` values at hand. Renamed settings (flash keys are limited to 15 characters): `PERSON_DETECTED_GPIO` → `PERSON_GPIO`, `PERSON_DETECTION_THRESHOLD` → `DETECT_THRESH`, `PERSON_CLEAR_THRESHOLD` → `CLEAR_THRESH`, `DETECTION_LOOP_DELAY_MS` → `LOOP_DELAY_MS`, `STREAM_PASSWORD` → `STREAM_PASS`, `STREAM_JPEG_QUALITY` → `STREAM_JPEG_Q`, `STREAM_WRITE_TIMEOUT_S` → `STREAM_WR_TMO_S`, `ANNOUNCE_HEARTBEAT_SECONDS` → `ANN_HEARTBEAT`, `ANNOUNCE_RETRY_SECONDS` → `ANN_RETRY`. `TENSOR_ARENA_SIZE`, `PRINT_DETECTION_SCORES` and `PRINT_STARTUP_INFO` are now developer switches at the top of the `.ino`. The old `config.h` can be deleted.
 
 ---
 

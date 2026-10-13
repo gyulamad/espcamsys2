@@ -20,46 +20,7 @@
 
 using namespace esp32cam_settings;
 
-// ── fakes ───────────────────────────────────────────────────────────────
-
-// The real flash logs an error whenever a key that doesn't exist is read, so
-// the engine must only ever get() a key it has checked with has() — counted.
-struct MemoryStore : ISettingsStore {
-    std::map<std::string, std::string> m;
-    bool failWrites = false;
-    int badGets = 0;
-    int clears = 0;
-    bool has(const std::string& k) override { return m.count(k) > 0; }
-    std::string get(const std::string& k) override {
-        std::map<std::string, std::string>::iterator it = m.find(k);
-        if (it == m.end()) { badGets++; return ""; }
-        return it->second;
-    }
-    bool set(const std::string& k, const std::string& v) override {
-        if (failWrites) return false;
-        m[k] = v;
-        return true;
-    }
-    void clearAll() override { m.clear(); clears++; }
-};
-
-struct ScriptConsole : IConsole {
-    std::string in;
-    size_t pos = 0;
-    std::vector<std::string> out;
-    int read() override { return pos < in.size() ? static_cast<unsigned char>(in[pos++]) : -1; }
-    void println(const std::string& s) override { out.push_back(s); }
-    bool said(const std::string& part) const {
-        for (size_t i = 0; i < out.size(); ++i) if (out[i].find(part) != std::string::npos) return true;
-        return false;
-    }
-    int count(const std::string& part) const {
-        int n = 0;
-        for (size_t i = 0; i < out.size(); ++i) if (out[i].find(part) != std::string::npos) n++;
-        return n;
-    }
-    void clear() { out.clear(); }
-};
+#include "settings_fakes.h"
 
 static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
 
@@ -193,15 +154,15 @@ TEST(a_line_over_the_limit_is_refused_whole) {
 
 // ── the WIFI list ───────────────────────────────────────────────────────
 
-TEST(wifi_list_one_three_and_eight_networks) {
+TEST(wifi_list_one_three_and_sixteen_networks) {
     std::vector<WifiNet> n;
     std::string err;
     TEST_ASSERT(parseWifiList("home:password1", n, err) && n.size() == 1 && n[0].ssid == "home" && n[0].pass == "password1", "one");
     TEST_ASSERT(parseWifiList("a:password1:b:password2:c:password3", n, err) && n.size() == 3 && n[2].ssid == "c", "three");
-    std::string eight;
-    for (int i = 0; i < 8; i++) eight += (i ? ":" : "") + std::string("net") + std::to_string(i) + ":password" + std::to_string(i);
-    TEST_ASSERT(parseWifiList(eight, n, err) && n.size() == 8, "eight is the limit");
-    TEST_ASSERT(!parseWifiList(eight + ":net9:password9", n, err) && has(err, "more than 8"), "nine is refused");
+    std::string most;
+    for (int i = 0; i < 16; i++) most += (i ? ":" : "") + std::string("net") + std::to_string(i) + ":password" + std::to_string(i);
+    TEST_ASSERT(parseWifiList(most, n, err) && n.size() == 16, "sixteen is the limit");
+    TEST_ASSERT(!parseWifiList(most + ":net16:password16", n, err) && has(err, "more than 16"), "seventeen is refused");
 }
 
 TEST(wifi_list_errors) {
@@ -527,13 +488,74 @@ TEST(text_and_plain_pin_kinds_validate_too) {
         { "NOTE", Kind::Text, 0, 0, Cond::Always, nullptr, nullptr, "free text" },
         { "OUT_PIN", Kind::Pin, 0, 0, Cond::Always, nullptr, nullptr, "an output pin" },
     };
-    Schema toy = { keys, 2 };
+    Schema toy = { keys, 2, nullptr };
     CheckedLine c = checkLine(toy, "NOTE=hello world;OUT_PIN=13");
     TEST_ASSERT(c.ok() && valueOf(c, "NOTE") == "hello world" && valueOf(c, "OUT_PIN") == "13", "valid values");
     TEST_ASSERT(anyError(checkLine(toy, "NOTE="), "must not be empty"), "text may not be empty");
     CheckedLine bad = checkLine(toy, "OUT_PIN=-1");
     TEST_ASSERT(anyError(bad, "GPIO -1 can't be used") && !anyError(bad, "or -1 for off"), "a plain pin has no 'off' value");
     TEST_ASSERT(kindText(keys[0]) == "text" && kindText(keys[1]) == "GPIO 2, 4, 13, 14 or 15", "described");
+}
+
+// ── rules that span several settings ────────────────────────────────────
+
+// Toy schema: LOW_V must not be higher than HIGH_V (like CLEAR_THRESH / DETECT_THRESH).
+static bool lowNotAboveHigh(const IValues& v, std::string& err) {
+    std::string lo, hi;
+    if (!v.get("LOW_V", lo) || !v.get("HIGH_V", hi)) return true;   // not both known yet
+    long long l = 0, h = 0;
+    if (!parseInt(lo, l) || !parseInt(hi, h)) return true;
+    if (l > h) { err = "LOW_V (" + lo + ") must not be higher than HIGH_V (" + hi + ")"; return false; }
+    return true;
+}
+static const KeyDef TOY_KEYS[] = {
+    { "HIGH_V", Kind::Int, 1, 100, Cond::Always, nullptr, nullptr, "upper value" },
+    { "LOW_V",  Kind::Int, 1, 100, Cond::Always, nullptr, nullptr, "lower value" },
+};
+static const Schema TOY_RULE_SCHEMA = { TOY_KEYS, 2, lowNotAboveHigh };
+
+static std::vector<std::string> crossErrors(MemoryStore& st, const std::string& line) {
+    CheckedLine c = checkLine(TOY_RULE_SCHEMA, line);
+    checkCrossRules(TOY_RULE_SCHEMA, st, c.pairs, c.errors);
+    return c.errors;
+}
+
+TEST(a_rule_over_several_settings_judges_the_line_together_with_what_is_stored) {
+    MemoryStore st;
+    TEST_ASSERT(crossErrors(st, "HIGH_V=10;LOW_V=5").empty(), "both in one line, consistent");
+    TEST_ASSERT(crossErrors(st, "HIGH_V=5;LOW_V=10").size() == 1, "both in one line, inconsistent: refused");
+    TEST_ASSERT(crossErrors(st, "LOW_V=50").empty(), "one setting alone: the other isn't known yet, so no complaint");
+    st.m["HIGH_V"] = "20"; st.m["LOW_V"] = "10";
+    TEST_ASSERT(crossErrors(st, "LOW_V=15").empty(), "a change that keeps the rule is fine");
+    std::vector<std::string> e = crossErrors(st, "LOW_V=30");
+    TEST_ASSERT(e.size() == 1 && has(e[0], "LOW_V (30) must not be higher than HIGH_V (20)"), "against the STORED other value");
+    TEST_ASSERT(crossErrors(st, "HIGH_V=5").size() == 1, "lowering the other one breaks it too");
+    TEST_ASSERT(crossErrors(st, "HIGH_V=40;LOW_V=30").empty(), "a rule broken by one can be fixed by sending both together");
+    TEST_ASSERT(crossErrors(st, "HIGH_V=5;LOW_V=3").empty(), "even when each alone would clash with what is stored");
+    TEST_ASSERT_EQ(st.badGets, 0, "never read an absent key");
+}
+
+TEST(the_rule_is_not_asked_about_lines_that_already_have_errors_and_a_schema_without_one_is_fine) {
+    MemoryStore st;
+    CheckedLine c = checkLine(TOY_RULE_SCHEMA, "HIGH_V=abc;LOW_V=5");
+    TEST_ASSERT(!c.ok() && c.errors.size() == 1, "just the ordinary error");
+    CheckedLine ok = checkLine(RECORDER_SCHEMA, "CAMERA_ID=cam2");
+    checkCrossRules(RECORDER_SCHEMA, st, ok.pairs, ok.errors);
+    TEST_ASSERT(ok.ok(), "no rule, no complaint");
+}
+
+TEST(the_boot_conversation_refuses_a_line_that_breaks_a_rule_and_stores_nothing) {
+    MemoryStore st;
+    ScriptConsole con;
+    BootConfigFlow flow(TOY_RULE_SCHEMA, st, con, 5000);
+    con.in = "HIGH_V=5;LOW_V=10\n";
+    BootConfigFlow::Status s = BootConfigFlow::Running;
+    for (uint32_t t = 0; t < 100 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
+    TEST_ASSERT(s == BootConfigFlow::Running && st.m.empty(), "refused, nothing stored");
+    TEST_ASSERT(con.said("ERROR: LOW_V (10) must not be higher than HIGH_V (5)") && con.said("Nothing was stored"), "and says why");
+    con.in += "HIGH_V=10;LOW_V=5\n";
+    for (uint32_t t = 100; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
+    TEST_ASSERT(s == BootConfigFlow::Restart && st.m["HIGH_V"] == "10" && st.m["LOW_V"] == "5", "the corrected line is stored and completes the set");
 }
 
 // ── the schema itself ───────────────────────────────────────────────────
@@ -976,7 +998,7 @@ int main() {
     RUN_TEST(an_escaped_semicolon_stays_in_its_value);
     RUN_TEST(syntax_errors_are_reported_with_the_offending_piece);
     RUN_TEST(a_line_over_the_limit_is_refused_whole);
-    RUN_TEST(wifi_list_one_three_and_eight_networks);
+    RUN_TEST(wifi_list_one_three_and_sixteen_networks);
     RUN_TEST(wifi_list_errors);
     RUN_TEST(wifi_open_network_has_an_empty_password);
     RUN_TEST(wifi_passwords_and_names_may_contain_semicolons_colons_and_backslashes);
@@ -1010,6 +1032,9 @@ int main() {
     RUN_TEST(describeKey_gives_what_it_is_what_to_type_and_when_it_applies);
     RUN_TEST(commands_are_recognised_in_any_case);
     RUN_TEST(text_and_plain_pin_kinds_validate_too);
+    RUN_TEST(a_rule_over_several_settings_judges_the_line_together_with_what_is_stored);
+    RUN_TEST(the_rule_is_not_asked_about_lines_that_already_have_errors_and_a_schema_without_one_is_fine);
+    RUN_TEST(the_boot_conversation_refuses_a_line_that_breaks_a_rule_and_stores_nothing);
     RUN_TEST(the_recorder_schema_is_consistent);
     RUN_TEST(the_typical_line_covers_every_recorder_setting);
     RUN_TEST(the_committed_example_template_is_a_valid_complete_configuration);

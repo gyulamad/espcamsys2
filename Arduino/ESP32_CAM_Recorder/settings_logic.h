@@ -206,9 +206,23 @@ struct KeyDef {
     const char* help;       // one line shown when the setting is asked for
 };
 
+// The values as they WOULD be once a typed line is applied: what the line sets,
+// else what is in flash. Used by rules that involve more than one setting.
+class IValues {
+public:
+    virtual ~IValues() {}
+    virtual bool get(const std::string& key, std::string& out) const = 0;   // false: not set
+};
+
+// A rule over several settings (e.g. "the clear threshold must not exceed the
+// detect threshold"). Return true when the rule holds OR when the settings it
+// needs aren't all known yet; false with `err` set to refuse the line.
+typedef bool (*CrossCheckFn)(const IValues& values, std::string& err);
+
 struct Schema {
     const KeyDef* keys;
     size_t count;
+    CrossCheckFn crossCheck;   // nullptr: no such rule
 };
 
 inline const KeyDef* findKey(const Schema& schema, const std::string& upperName) {
@@ -510,6 +524,32 @@ inline CheckedLine checkLine(const Schema& schema, const std::string& line) {
     return out;
 }
 
+// Applies the schema's cross-setting rule to a line that passed checkLine():
+// the line's own values take precedence over what is stored, so a rule broken
+// by changing one setting can be fixed by changing both in the same line.
+class PendingValues : public IValues {
+public:
+    PendingValues(const std::vector<Pair>& pairs, ISettingsStore& store) : pairs_(pairs), store_(store) {}
+    bool get(const std::string& key, std::string& out) const override {
+        for (size_t i = 0; i < pairs_.size(); ++i) {
+            if (pairs_[i].key == key) { out = pairs_[i].value; return true; }
+        }
+        if (store_.has(key)) { out = store_.get(key); return true; }
+        return false;
+    }
+private:
+    const std::vector<Pair>& pairs_;
+    ISettingsStore& store_;
+};
+
+inline void checkCrossRules(const Schema& schema, ISettingsStore& store, const std::vector<Pair>& pairs,
+                            std::vector<std::string>& errors) {
+    if (!schema.crossCheck) return;
+    PendingValues values(pairs, store);
+    std::string err;
+    if (!schema.crossCheck(values, err)) errors.push_back(err);
+}
+
 // ── What is missing? ────────────────────────────────────────────────────
 
 // Is `def` needed right now? Settings controlled by another one are needed
@@ -548,6 +588,13 @@ inline std::vector<Problem> findProblems(const Schema& schema, ISettingsStore& s
         }
     }
     return out;
+}
+
+// A stored whole number (call only for a setting that is stored and valid).
+inline long long storedInt(ISettingsStore& store, const char* key) {
+    long long v = 0;
+    parseInt(store.get(key), v);
+    return v;
 }
 
 // ── Showing settings ────────────────────────────────────────────────────
@@ -827,6 +874,7 @@ private:
 
         eraseArmed_ = false;
         CheckedLine cl = checkLine(schema_, line);
+        if (cl.ok()) checkCrossRules(schema_, store_, cl.pairs, cl.errors);
         if (!cl.ok()) {
             for (size_t i = 0; i < cl.errors.size(); ++i) say("ERROR: " + cl.errors[i]);
             say("Nothing was stored. Fix the line and send it again (HELP lists the settings).");

@@ -65,7 +65,8 @@ static const KeyDef RECORDER_KEYS[] = {
 
 static const Schema RECORDER_SCHEMA = {
     RECORDER_KEYS,
-    sizeof(RECORDER_KEYS) / sizeof(RECORDER_KEYS[0])
+    sizeof(RECORDER_KEYS) / sizeof(RECORDER_KEYS[0]),
+    nullptr   // no rule spanning several settings
 };
 
 // The settings as the sketch uses them. Values of settings that are "not
@@ -95,12 +96,6 @@ struct RecorderSettings {
     uint32_t logHeartbeatSec = 600;
     uint32_t logLowHeapBytes = 30000;
 };
-
-inline long long storedInt(ISettingsStore& store, const char* key) {
-    long long v = 0;
-    parseInt(store.get(key), v);
-    return v;
-}
 
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.

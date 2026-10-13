@@ -2,48 +2,61 @@
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
 
-#include "config.h"
-
-// ── Live view (optional) ────────────────────────────────────────────────
-// With STREAM_ENABLED the detector also joins Wi-Fi (any of several networks,
-// like the recorder), serves its picture as an authenticated MJPEG stream, and
-// tells the relay its IP address via POST /log — so a freshly installed
-// detector can be found and watched from a browser. Detection never waits for
-// any of it: all networking runs in its own task, and with no Wi-Fi the
-// detector works exactly as before. A config.h written before this feature has
-// no STREAM_ENABLED, so it keeps compiling and the feature stays off.
-#ifndef STREAM_ENABLED
-#define STREAM_ENABLED 0
-#endif
-#ifndef STREAM_PORT
-#define STREAM_PORT 80
-#endif
-#ifndef STREAM_MAX_FPS
-#define STREAM_MAX_FPS 10                // upper limit; the real rate is the detection rate
-#endif
-#ifndef STREAM_JPEG_QUALITY
-#define STREAM_JPEG_QUALITY 80           // 1-100, higher = better (frames are only 96x96, so small either way)
-#endif
-#ifndef STREAM_WRITE_TIMEOUT_S
-#define STREAM_WRITE_TIMEOUT_S 3         // a viewer that stops reading is dropped after this long
-#endif
-#ifndef ANNOUNCE_HEARTBEAT_SECONDS
-#define ANNOUNCE_HEARTBEAT_SECONDS 600  // repeat the address in the relay's log this often
-#endif
-#ifndef ANNOUNCE_RETRY_SECONDS
-#define ANNOUNCE_RETRY_SECONDS 30        // after a failed delivery
-#endif
-
-#define FW_BUILD __DATE__ " " __TIME__   // which firmware build wrote a log line
-
-#if STREAM_ENABLED
 #include <string>
+#include <Preferences.h>   // flash storage for the settings (part of the ESP32 core)
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <HTTPClient.h>
 #include "img_converters.h"              // fmt2jpg()
-#include "stream_logic.h"
+
+#if __has_include(<esp_arduino_version.h>)
+#include <esp_arduino_version.h>        // ESP_ARDUINO_VERSION_MAJOR/MINOR/PATCH
 #endif
+
+// This sketch needs the esp32 Arduino core 3.x (the esp-tflite-micro component
+// it uses does not build on 2.x). Better a clear message than pages of errors.
+// (Check yours: Arduino IDE > Tools > Board > Boards Manager > "esp32", or
+// `arduino-cli core list`; the version is also printed at boot.)
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR < 3
+#error "ESP32_CAM_TFLite_Person needs the esp32 Arduino core 3.x - update it in the Boards Manager"
+#endif
+
+// Every per-camera setting (the GPIO, the thresholds, and the optional live
+// view: Wi-Fi, relay, stream password, ...) lives in the board's FLASH, not in
+// the source. A freshly flashed board has none and asks for them on the serial
+// port; after that, each boot shows them and waits 5 s for a "y" to change them.
+// What the settings are: settings_schema.h. How they are typed, checked and
+// stored: settings_logic.h (plain C++, unit-tested on a desktop — see tests/cpp/).
+// The glue to the real flash and serial port is the "Settings glue" block below.
+#include "settings_logic.h"
+#include "settings_schema.h"
+#include "stream_logic.h"
+
+// ── Live view (optional) ────────────────────────────────────────────────
+// With the STREAM_ENABLED setting on, the detector also joins Wi-Fi (any of
+// several networks, like the recorder), serves its picture as an authenticated
+// MJPEG stream, and tells the relay its IP address via POST /log — so a freshly
+// installed detector can be found and watched from a browser. Detection never
+// waits for any of it: all networking runs in its own task, and with no Wi-Fi
+// the detector works exactly as before. With STREAM_ENABLED=0 no Wi-Fi is
+// started at all.
+
+#define FW_BUILD __DATE__ " " __TIME__   // which firmware build wrote a log line
+
+// ── Developer switches (not per-camera settings: edit here and re-flash) ──
+// Print person/no-person scores for every inference.
+#define PRINT_DETECTION_SCORES 1
+// Print startup and initialization information.
+#define PRINT_STARTUP_INFO 1
+// Tensor arena size: the base size used by the Espressif v1.3.3
+// person-detection example. Tied to the model compiled in below.
+#define TENSOR_ARENA_SIZE (100 * 1024)
+
+using esp32cam_settings::PersonSettings;
+
+// The camera's settings, filled in by setupSettings() at the very start of
+// setup() and only read afterwards.
+PersonSettings g_cfg;
 
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
@@ -293,6 +306,99 @@ bool initTFLite()
 }
 
 
+// ── Settings glue ───────────────────────────────────────────────────────
+// Connects the settings engine (settings_logic.h) to the real flash storage and
+// the real serial port, and runs the start-up conversation. All the decisions —
+// what is missing, what is valid, what to print, the 5 s window — are made in
+// settings_logic.h and unit-tested there; this block only supplies the flash,
+// the serial port and the clock, and is itself tested against fakes of them
+// (tests/cpp/test_person_settings_glue.cpp compiles this very block).
+using esp32cam_settings::BootConfigFlow;
+using esp32cam_settings::IConsole;
+using esp32cam_settings::ISettingsStore;
+using esp32cam_settings::PERSON_SCHEMA;
+using esp32cam_settings::loadPersonSettings;
+
+const uint32_t SETTINGS_WINDOW_MS = 5000;          // how long boot waits for a "y" before starting normally
+const char* const SETTINGS_NAMESPACE = "espcam";   // flash (NVS) namespace the settings live in
+
+// The settings in flash, via the core's Preferences library (NVS). Survives
+// uploading a new sketch; wiped by "Erase All Flash Before Sketch Upload".
+class PreferencesStore : public ISettingsStore {
+public:
+  PreferencesStore() : ok_(prefs_.begin(SETTINGS_NAMESPACE, false)) {}
+  ~PreferencesStore() { prefs_.end(); }
+  bool ok() const { return ok_; }
+
+  bool has(const std::string& key) override { return prefs_.isKey(key.c_str()); }
+  std::string get(const std::string& key) override {
+    String v = prefs_.getString(key.c_str(), "");
+    return std::string(v.c_str());
+  }
+  bool set(const std::string& key, const std::string& value) override {
+    return prefs_.putString(key.c_str(), value.c_str()) == value.size();
+  }
+  void clearAll() override { prefs_.clear(); }
+
+private:
+  Preferences prefs_;
+  bool ok_;
+};
+
+// The serial port: bytes in without waiting, lines out.
+class SerialConsole : public IConsole {
+public:
+  int read() override { return Serial.available() > 0 ? Serial.read() : -1; }
+  void println(const std::string& line) override { Serial.println(line.c_str()); }
+};
+
+void restartBoard() {
+  Serial.flush();
+  delay(500);
+  ESP.restart();   // does not return
+}
+
+// Shows the settings, asks for any that are missing (or lets the user change
+// them within the 5 s window), then loads them into g_cfg. If settings were
+// changed the board restarts instead of returning, so the new values start clean.
+void setupSettings() {
+  PreferencesStore store;
+  SerialConsole console;
+  if (!store.ok()) {
+    Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
+  }
+
+  BootConfigFlow flow(PERSON_SCHEMA, store, console, SETTINGS_WINDOW_MS);
+  BootConfigFlow::Status status;
+  while ((status = flow.step(millis())) == BootConfigFlow::Running) delay(5);
+
+  if (status == BootConfigFlow::Restart) {
+    restartBoard();
+    return;
+  }
+
+  std::string err;
+  if (!loadPersonSettings(store, g_cfg, err)) {
+    // Not reachable after the conversation above (it only lets the boot go on
+    // when everything is valid), but the detector must never run on bad settings.
+    Serial.printf("The stored settings can't be used (%s). Restarting so they can be fixed...\n", err.c_str());
+    restartBoard();
+  }
+}
+// ── end of settings glue ────────────────────────────────────────────────
+
+// Which Arduino-ESP32 core and ESP-IDF built this firmware — the first thing to
+// know when something behaves differently from another board.
+void printCoreVersion() {
+#ifdef ESP_ARDUINO_VERSION_MAJOR
+  Serial.printf("Arduino-ESP32 core %d.%d.%d, ESP-IDF %s\n", ESP_ARDUINO_VERSION_MAJOR,
+                ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH, ESP.getSdkVersion());
+#else
+  Serial.printf("Arduino-ESP32 core 1.x (very old), ESP-IDF %s\n", ESP.getSdkVersion());
+#endif
+}
+
+
 // ============================================================
 // Wi-Fi, live view and relay announcement
 // ============================================================
@@ -303,20 +409,17 @@ bool initTFLite()
 // viewer or an unreachable relay cannot delay a detection.
 //
 // The task:
-//   1. keeps Wi-Fi connected, choosing among WIFI_NETWORKS (as the recorder does);
+//   1. keeps Wi-Fi connected, choosing among the WIFI setting's networks (as the recorder does);
 //   2. tells the relay (POST /log) the stream's address — on every new IP, then
 //      repeated as a heartbeat — so you can see in the relay's log where it is;
 //   3. serves  /  (a page showing the picture enlarged)  and  /stream (MJPEG),
 //      both behind HTTP Basic authentication. One viewer at a time: opening
 //      /stream again replaces the previous viewer.
 
-#if STREAM_ENABLED
-
 WiFiMulti wifiMulti;
-WiFiServer streamServer(STREAM_PORT);
-person_stream::AnnouncePolicy announcePolicy(
-    (uint32_t)ANNOUNCE_HEARTBEAT_SECONDS * 1000UL,
-    (uint32_t)ANNOUNCE_RETRY_SECONDS * 1000UL);
+WiFiServer *streamServer = nullptr;       // created in startNetwork(), once the port setting is known
+// Timing placeholders; startNetwork() replaces it with the configured one.
+person_stream::AnnouncePolicy announcePolicy(600000UL, 30000UL);
 
 std::string expectedAuth;                 // the Authorization header value that is let in
 volatile bool streamWanted = false;       // a viewer is connected: the detector should share frames
@@ -350,23 +453,23 @@ void streamPublishFrame(const uint8_t *gray)
 
 bool postAnnouncement(const std::string &ip, person_stream::AnnounceReason reason)
 {
-    std::string url = person_stream::buildStreamUrl(ip, STREAM_PORT);
+    std::string url = person_stream::buildStreamUrl(ip, g_cfg.streamPort);
     std::string ssid = WiFi.SSID().c_str();
     int rssi = WiFi.RSSI();
 
     std::string message = person_stream::buildAnnounceMessage(
-        reason, url, STREAM_USER, ssid, ip, rssi, millis() / 1000);
+        reason, url, g_cfg.streamUser, ssid, ip, rssi, millis() / 1000);
     std::string body = person_stream::buildAnnounceJson(
-        DETECTOR_ID, FW_BUILD, message, millis(),
+        g_cfg.detectorId, FW_BUILD, message, millis(),
         (int32_t)ESP.getFreeHeap(), rssi, ++announceSeq);
 
-    std::string logUrl = person_stream::buildLogUrl(SERVER_HOST, HTTP_PORT);
+    std::string logUrl = person_stream::buildLogUrl(g_cfg.serverHost, g_cfg.httpPort);
 
     HTTPClient http;
     http.begin(String(logUrl.c_str()));
     http.setTimeout(5000);
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("X-Api-Key", API_KEY);
+    http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
     int code = http.POST((uint8_t *)body.data(), body.size());
     http.end();
 
@@ -378,7 +481,7 @@ bool postAnnouncement(const std::string &ip, person_stream::AnnounceReason reaso
 
     Serial.printf(
         "Could not announce %s to the relay (HTTP %d) - retrying in %d s\n",
-        url.c_str(), code, ANNOUNCE_RETRY_SECONDS
+        url.c_str(), code, (int)g_cfg.announceRetrySec
     );
     return false;
 }
@@ -426,7 +529,7 @@ bool sendString(WiFiClient &client, const std::string &text)
 // else is answered here and the connection closed.
 bool answerRequest(WiFiClient &client, uint32_t readTimeoutMs)
 {
-    client.setTimeout(STREAM_WRITE_TIMEOUT_S);   // seconds
+    client.setTimeout(g_cfg.streamWriteTimeoutSec);   // seconds
 
     std::string head = readRequestHead(client, readTimeoutMs);
 
@@ -475,7 +578,7 @@ bool answerRequest(WiFiClient &client, uint32_t readTimeoutMs)
 // request, say) are answered without interrupting the stream.
 void serveStream(WiFiClient client)
 {
-    const uint32_t minGapMs = 1000UL / STREAM_MAX_FPS;
+    const uint32_t minGapMs = 1000UL / g_cfg.streamMaxFps;
     uint32_t lastSeq = 0;
     uint32_t lastSentAt = 0;
     bool needHead = true;
@@ -500,7 +603,7 @@ void serveStream(WiFiClient client)
             break;
         }
 
-        WiFiClient next = streamServer.available();
+        WiFiClient next = streamServer->available();
 
         if (next && answerRequest(next, 200))
         {
@@ -540,7 +643,7 @@ void serveStream(WiFiClient client)
         size_t jpegLength = 0;
 
         if (!fmt2jpg(viewerFrame, IMAGE_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT,
-                     PIXFORMAT_GRAYSCALE, STREAM_JPEG_QUALITY,
+                     PIXFORMAT_GRAYSCALE, g_cfg.streamJpegQuality,
                      &jpeg, &jpegLength))
         {
             delay(50);
@@ -573,9 +676,9 @@ void networkTask(void *)
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);   // modem-sleep adds latency to every request
 
-    for (int i = 0; i < WIFI_NETWORK_COUNT; i++)
+    for (size_t i = 0; i < g_cfg.wifi.size(); i++)
     {
-        wifiMulti.addAP(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password);
+        wifiMulti.addAP(g_cfg.wifi[i].ssid.c_str(), g_cfg.wifi[i].pass.c_str());
     }
 
     bool wasUp = false;
@@ -604,10 +707,10 @@ void networkTask(void *)
             // listen afresh rather than trust the old socket.
             if (serverStarted)
             {
-                streamServer.end();
+                streamServer->end();
             }
 
-            streamServer.begin();
+            streamServer->begin();
             serverStarted = true;
         }
         else if (!up && wasUp)
@@ -632,7 +735,7 @@ void networkTask(void *)
                 announcePolicy.onResult(millis(), ok, ip, ssid);
             }
 
-            WiFiClient client = streamServer.available();
+            WiFiClient client = streamServer->available();
 
             if (client && answerRequest(client, 1000))
             {
@@ -650,10 +753,11 @@ void networkTask(void *)
 // detector running without a live view, if it can't start.
 bool startNetwork()
 {
-    if (!person_stream::credentialsUsable(STREAM_USER, STREAM_PASSWORD))
+    if (!person_stream::credentialsUsable(g_cfg.streamUser.c_str(), g_cfg.streamPass.c_str()))
     {
+        // (The settings checks already refuse these, so this is only a safety net.)
         Serial.println(
-            "Live view OFF: set STREAM_USER and a real STREAM_PASSWORD in config.h"
+            "Live view OFF: STREAM_USER and STREAM_PASS are not usable - check the STREAM_ settings"
         );
 
         return false;
@@ -670,23 +774,22 @@ bool startNetwork()
         return false;
     }
 
-    expectedAuth = person_stream::expectedAuthHeader(STREAM_USER, STREAM_PASSWORD);
+    expectedAuth = person_stream::expectedAuthHeader(g_cfg.streamUser.c_str(), g_cfg.streamPass.c_str());
+
+    streamServer = new WiFiServer(g_cfg.streamPort);
+    announcePolicy = person_stream::AnnouncePolicy(
+        (uint32_t)g_cfg.announceHeartbeatSec * 1000UL,
+        (uint32_t)g_cfg.announceRetrySec * 1000UL);
 
     xTaskCreatePinnedToCore(networkTask, "network", 12288, nullptr, 1, nullptr, 0);
 
     Serial.printf(
         "Live view starting - watch the relay's log for its address (user '%s')\n",
-        STREAM_USER
+        g_cfg.streamUser.c_str()
     );
 
     return true;
 }
-
-#else   // live view not compiled in
-
-inline void streamPublishFrame(const uint8_t *) {}
-
-#endif  // STREAM_ENABLED
 
 
 // ============================================================
@@ -705,7 +808,7 @@ void setPersonDetected(bool detected)
     personDetected = detected;
 
     digitalWrite(
-        PERSON_DETECTED_GPIO,
+        g_cfg.personGpio,
         personDetected ? HIGH : LOW
     );
 
@@ -729,15 +832,15 @@ void printVerdict(const char *text)
 // Detection hysteresis
 //
 // If currently OFF:
-//     turn ON at >= PERSON_DETECTION_THRESHOLD
+//     turn ON at >= the DETECT_THRESH setting
 //
 // If currently ON:
-//     stay ON until the score falls below PERSON_CLEAR_THRESHOLD
+//     stay ON until the score falls below the CLEAR_THRESH setting
 void updateDetectionState(float personScore)
 {
     if (!personDetected)
     {
-        if (!(personScore >= PERSON_DETECTION_THRESHOLD))
+        if (!(personScore >= g_cfg.detectThreshold))
         {
             printVerdict("");
             return;
@@ -748,7 +851,7 @@ void updateDetectionState(float personScore)
         return;
     }
 
-    if (!(personScore < PERSON_CLEAR_THRESHOLD))
+    if (!(personScore < g_cfg.clearThreshold))
     {
         printVerdict("   -> PERSON");
         return;
@@ -860,9 +963,20 @@ bool detectPerson(
 
 void setup()
 {
+    // The settings conversation can be fed a long pasted line (a camera's whole
+    // configuration); the default 256-byte receive buffer would lose part of it.
+    // Must be set before Serial.begin().
+    Serial.setRxBufferSize(2048);
     Serial.begin(115200);
 
     delay(2000);
+
+    printCoreVersion();
+
+    // First of all, before the camera, the model or Wi-Fi start: show the
+    // settings, ask for missing ones, or offer to change them. Returns only when
+    // the boot should go on, with g_cfg filled in.
+    setupSettings();
 
     Serial.println();
     Serial.println("==============================");
@@ -885,17 +999,17 @@ void setup()
 
     Serial.printf(
         "Detection GPIO: %d\n",
-        PERSON_DETECTED_GPIO
+        g_cfg.personGpio
     );
 
     Serial.printf(
         "Detection threshold: %.0f%%\n",
-        PERSON_DETECTION_THRESHOLD * 100.0f
+        g_cfg.detectThreshold * 100.0f
     );
 
     Serial.printf(
         "Clear threshold: %.0f%%\n",
-        PERSON_CLEAR_THRESHOLD * 100.0f
+        g_cfg.clearThreshold * 100.0f
     );
 
 #endif
@@ -906,13 +1020,13 @@ void setup()
     // --------------------------------------------------------
 
     pinMode(
-        PERSON_DETECTED_GPIO,
+        g_cfg.personGpio,
         OUTPUT
     );
 
     // Start in the safe "no person" state.
     digitalWrite(
-        PERSON_DETECTED_GPIO,
+        g_cfg.personGpio,
         LOW
     );
 
@@ -955,9 +1069,10 @@ void setup()
     }
 
 
-#if STREAM_ENABLED
-    startNetwork();
-#endif
+    if (g_cfg.streamEnabled)
+    {
+        startNetwork();
+    }
 
     Serial.println();
     Serial.println(
@@ -1000,5 +1115,5 @@ void loop()
     }
 
     // Give FreeRTOS a little breathing room.
-    delay(DETECTION_LOOP_DELAY_MS);
+    delay(g_cfg.loopDelayMs);
 }

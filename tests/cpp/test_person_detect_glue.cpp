@@ -12,7 +12,8 @@
 // into build/person_glue.inc just before compiling (see run_tests.sh for the
 // exact sections), so this always tests the code that will really be flashed —
 // and fails to compile, loudly, if those sections or the functions disappear.
-// Thresholds etc. come from example.config.h, the file users copy to config.h.
+// Thresholds etc. are the sketch's settings (settings_schema.h): g_cfg below holds
+// what setup() would have read from flash.
 //
 // Build & run (also done by run_tests.sh):
 //   g++ -std=c++17 -Wall -Wextra -o build/test_person_detect_glue test_person_detect_glue.cpp
@@ -27,7 +28,18 @@
 #include <string>
 #include <vector>
 
-#include "../../Arduino/ESP32_CAM_TFLite_Person/example.config.h"
+#include "../../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
+using esp32cam_settings::PersonSettings;
+
+// What setup() has read from flash. PersonSettings' defaults are the typical
+// values the tests below are written around: GPIO 13, detect at 0.60, clear
+// below 0.50, 10 ms between detections.
+static PersonSettings g_cfg;
+
+// The developer switches at the top of the sketch.
+#define PRINT_DETECTION_SCORES 1
+#define PRINT_STARTUP_INFO 1
+#define TENSOR_ARENA_SIZE (100 * 1024)
 
 // ── fake Arduino / camera / TFLite Micro environment ────────────────────
 
@@ -136,7 +148,7 @@ TEST(set_detected_true_drives_gpio_high_and_says_so) {
     setPersonDetected(true);
     TEST_ASSERT(personDetected, "state is now detected");
     TEST_ASSERT_EQ(g_gpio.size(), (size_t)1, "exactly one GPIO write");
-    TEST_ASSERT_EQ(g_gpio[0].pin, PERSON_DETECTED_GPIO, "written to the configured pin");
+    TEST_ASSERT_EQ(g_gpio[0].pin, g_cfg.personGpio, "written to the configured pin");
     TEST_ASSERT_EQ(g_gpio[0].level, HIGH, "pin driven HIGH");
     TEST_ASSERT(has(g_serial, "PERSON DETECTED - GPIO HIGH"), "serial reports detection");
 }
@@ -319,7 +331,7 @@ TEST(loop_always_delays_by_the_configured_time) {
     reset();
     loopWith(100);
     TEST_ASSERT_EQ(g_delays.size(), (size_t)1, "one delay per iteration");
-    TEST_ASSERT_EQ((int)g_delays[0], DETECTION_LOOP_DELAY_MS, "configured delay");
+    TEST_ASSERT_EQ((int)g_delays[0], g_cfg.loopDelayMs, "configured delay");
 }
 
 

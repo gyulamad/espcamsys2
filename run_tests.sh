@@ -22,8 +22,9 @@
 #                    and the remote-logging and settings blocks of
 #                    ESP32_CAM_Recorder.ino
 #   Person detector: stream_logic.h (live view: authentication, routing, relay
-#                    announcement) and the detection code of
-#                    ESP32_CAM_TFLite_Person.ino (setPersonDetected, detectPerson, loop)
+#                    announcement), settings_schema.h, and the detection and
+#                    settings code of ESP32_CAM_TFLite_Person.ino
+#                    (setPersonDetected, detectPerson, loop, the settings block)
 # These are the only sketch code that can run on a desktop; setup() and the
 # camera/WiFi/model initialisation need the real hardware. Needs gcov (same
 # GCC version as g++, >= 9) and node.
@@ -136,10 +137,11 @@ else
 
     # The settings engine and the Recorder's key table (flash-stored settings,
     # see settings_logic.h): also compiled by the sketch, so also C++11.
-    for h in settings_logic.h settings_schema.h; do
+    for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
+             ESP32_CAM_TFLite_Person/settings_schema.h; do
         echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
-               -include "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$h" -x c++ /dev/null; then
+               -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
             echo "ok"
         else
             echo "FAIL: $h does not compile as C++11"
@@ -173,6 +175,7 @@ else
     run_cpp_test test_remote_log
     run_cpp_test test_person_stream_logic
     run_cpp_test test_settings_logic
+    run_cpp_test test_person_settings
 
     # The sketch's remote-logging glue is tested by compiling the code it
     # ACTUALLY contains: extract the marked block from the .ino and build it
@@ -187,6 +190,11 @@ else
     sed -n '/Settings glue ──/,/end of settings glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/settings_glue.inc"
     run_cpp_test test_settings_glue
+
+    # ...and the person detector's, likewise.
+    sed -n '/Settings glue ──/,/end of settings glue/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/person_settings_glue.inc"
+    run_cpp_test test_person_settings_glue
 
     # The person detector's detection code is tested the same way: extract the
     # real sections of the .ino (model constants/globals, setPersonDetected +
