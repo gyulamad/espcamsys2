@@ -29,54 +29,58 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 ## 1. Flash each ESP32-CAM (streaming/recording sketch)
 
 1. Install the ESP32 board package in Arduino IDE if you haven't already (Boards Manager → search "esp32" → install), and select **AI Thinker ESP32-CAM** as the board.
-2. On your laptop, create a sketch folder containing these three files together (this sketch used to be called `sketch_sep12a_camera2_behind_NAT` — it's since been renamed):
+2. On your laptop, create a sketch folder containing these files together (this sketch used to be called `sketch_sep12a_camera2_behind_NAT` — it's since been renamed):
    - `ESP32_CAM_Recorder.ino`
-   - `example.config.h`
    - `logic.h`
-   - *(you'll create `config.h` in the next step)*
-3. Copy the template and fill in this device's real values:
+   - `remote_log.h`
+   - `settings_logic.h`
+   - `settings_schema.h`
+
+   There is **no config file to edit any more**: the camera's settings (Wi-Fi, relay address, camera id, API key, ...) are stored in the board's flash and typed in over the serial port after the first flash — see step 5 below.
+3. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
+4. Disconnect GPIO0 from GND and power-cycle the board. Open the Serial Monitor at **115200 baud** and set its line ending to **Newline** (or Both NL & CR).
+5. **Enter the settings.** A new board has none, so it shows what is missing and waits. Type settings as `KEY=value`, and several at once separated by `;`, then press Enter:
 
    ```
-   cp example.config.h config.h
+   CAMERA_ID=cam1;SERVER_HOST=192.168.4.9;PUSH_PORT=8081;HTTP_PORT=8080;API_KEY=<same long random string as camKey in the Pi's config.js>;PUSH_GAP_MUL=1.5
+   WIFI=extender-1-ssid:extender-1-password:extender-2-ssid:extender-2-password
+   ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0
+   LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000
    ```
 
-   Edit `config.h`:
+   You can send them as one long line or several lines; each line is checked as a whole (nothing from a line with a mistake is stored) and the camera tells you what is still missing. When everything is stored it restarts by itself. `HELP` lists every setting with what it means and what values are allowed.
 
-   ```cpp
-   struct WifiNetwork { const char* ssid; const char* password; };
+   | Setting | Meaning |
+   |---|---|
+   | `WIFI` | Networks to join, as `ssid:password` pairs joined by `:` — any number up to 8 (the camera takes the strongest one in range and fails over if it drops). An open network is `ssid:` with an empty password. |
+   | `SERVER_HOST` | Your Pi's LAN IP (or hostname) |
+   | `PUSH_PORT` | The relay's raw push port — must match `pushPort` in the Pi's `config.js` |
+   | `HTTP_PORT` | The relay's HTTP port — must match `port` in the Pi's `config.js` |
+   | `CAMERA_ID` | Unique per device (`cam1`, `cam2`, ...) — must match `config.php` on the Pi. Letters, digits, `_ . -` |
+   | `API_KEY` | The same long random string as `camKey` in the Pi's `config.js` |
+   | `PUSH_GAP_MUL` | Self-adapting push-rate backoff, 0.1–10 — leave at `1.5` unless tuning |
+   | `ALARM_GPIO_PIN` | GPIO wired to an alarm input (`2`, `4`, `13`, `14` or `15`); `-1` turns the alarm feature off |
+   | `ALARM_ACTIVE` | `LOW` or `HIGH`: the pin level that means "alarm!" (only asked for when the pin isn't `-1`) |
+   | `ALARM_ALL_CAMS` | `0`: only this camera records; `1`: every camera does (only asked for when the pin isn't `-1`) |
+   | `LOG_ENABLED` | `1`: also send the camera's log to the relay; `0`: serial only. The other `LOG_*` settings are only asked for when this is `1` — see "Logging: finding out what went wrong" below |
 
-   // List every extender/AP here — the camera connects to whichever has the
-   // strongest signal and fails over automatically if one drops.
-   WifiNetwork WIFI_NETWORKS[] = {
-     { "extender-1-ssid", "extender-1-password" },
-     { "extender-2-ssid", "extender-2-password" },
-     { "extender-3-ssid", "extender-3-password" },
-   };
-   const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
+   **Special characters.** `;` separates settings and `:` separates the Wi-Fi fields, so a literal `;`, `:` or `\` inside a name or password is written `\;`, `\:` or `\\` — only when it is really there. Example: the password `pa:ss;word` is typed `pa\:ss\;word`.
 
-   const char* SERVER_HOST   = "192.168.4.9";   // your Pi's LAN IP
-   const int   PUSH_PORT     = 8081;            // relay's raw push port — must match pushPort in the Pi's config.js
-   const int   HTTP_PORT     = 8080;            // relay's HTTP port — must match port in the Pi's config.js
-   const char* CAMERA_ID     = "cam1";          // unique per device — must match config.php on the Pi
-   const char* API_KEY       = "<same long random string as camKey in the Pi's config.js>";
+   **Every boot** the camera first prints all its settings (passwords and the API key are masked), then — if nothing is missing — asks `Change settings? [y/N]` and waits **5 seconds**. Type `y` and Enter to change settings (send `KEY=value` lines; an empty line or `EXIT` saves and restarts); type anything else, or do nothing, and it starts normally. So a camera is always fixable over serial, even one that can't reach its Wi-Fi. Other commands in settings mode: `SHOW` (list again), `SHOW <KEY>` (one value, unmasked), `EXPORT`, `ERASE` (forget everything; asks to be typed twice).
 
-   const float PUSH_INTERVAL_MUL = 1.5;         // self-adapting push-rate backoff — leave as-is unless tuning
+   **Setting up several cameras:** configure one, type `EXPORT`, and save the line it prints in a text file (see `Arduino/templates/example.recorder.template.txt`). For the next camera paste that line and then a second line that overrides what differs, e.g. `CAMERA_ID=cam2`. The line contains your Wi-Fi password and API key, so keep real template files out of git (`Arduino/templates/*.txt` is already ignored, except the examples).
 
-   // ── Alarm trigger (optional hardware input) ──────────────────────────
-   const int  ALARM_GPIO_PIN           = 13;    // GPIO wired to an alarm input; -1 disables the feature entirely
-   const int  ALARM_ACTIVE_STATE       = LOW;   // pin level that means "alarm!"
-   const bool ALARM_RECORD_ALL_CAMERAS = false; // false: only this camera records; true: every camera does
-   ```
+   The settings live in flash and **survive uploading a new sketch**. They are wiped by **Tools → Erase All Flash Before Sketch Upload** (or `esptool.py erase_flash`) — then the camera asks for everything again.
 
-   How long an alarm records is **not** set in `config.h`. It is stored on the relay and edited from the dashboard's **ALARM** field (applies to every camera, takes effect on the next alarm, no reflashing needed). Every recording also starts with a few seconds of footage from *before* the trigger — see "Pre-roll" in the relay setup below.
+   The boot messages also show which **Arduino-ESP32 core** version built the firmware (`Arduino-ESP32 core 3.x.x`). You can check it yourself in Arduino IDE under **Tools → Board → Boards Manager** (search "esp32"), or with `arduino-cli core list`.
+
+   How long an alarm records is **not** a camera setting. It is stored on the relay and edited from the dashboard's **ALARM** field (applies to every camera, takes effect on the next alarm, no reflashing needed). Every recording also starts with a few seconds of footage from *before* the trigger — see "Pre-roll" in the relay setup below.
 
    When the alarm input fires, the camera reports it to the relay as a tiny message on the connection it already holds open for video frames, so it never stops streaming to make a separate HTTP request. (If that connection happens to be down, it falls back to a plain `POST /alarm/<id>`.) The relay announces to each camera, right after it connects, that it understands this message, and the camera only uses it after hearing that; against a relay that doesn't announce it (an older version), the camera keeps using the HTTP request, so mixing versions is safe.
 
    Cameras stream continuously — there is no on/off switch for a camera any more. That is what lets the relay keep the rolling pre-roll buffer.
 
-4. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
-5. Disconnect GPIO0 from GND and power-cycle the board. Open the Serial Monitor (115200 baud) — you should see it connect to Wi-Fi and print its IP.
-6. Repeat for every camera, giving each one a unique `CAMERA_ID` (`cam1`, `cam2`, `cam3`, `cam4`, ...) and its own `config.h`.
+6. Repeat for every camera, giving each one a unique `CAMERA_ID` (`cam1`, `cam2`, `cam3`, `cam4`, ...).
 
 > Since these boards only push frames outbound, they work from any Wi-Fi network that can reach the Pi's `SERVER_HOST:PUSH_PORT`/`HTTP_PORT` — including a NAT'd guest network — no port forwarding needed on the camera side.
 
@@ -281,7 +285,7 @@ Things worth knowing:
        'cameras' => [
            ['id' => 'cam1', 'name' => 'Front Door', 'icon' => '🚪'],
            ['id' => 'cam2', 'name' => 'Back Yard',  'icon' => '🌿'],
-           // ...one entry per camera, ids matching each device's config.h
+           // ...one entry per camera, ids matching each device's `CAMERA_ID` setting
        ],
    ];
    ```
@@ -358,7 +362,7 @@ Things worth knowing:
 
 - Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js`, and re-flash every camera's `config.h` with the same value.
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
-- Keep `config.php`, `config.js`, and every camera's `config.h` out of git — they're already listed in `.gitignore`; just don't force-add them.
+- Keep `config.php`, `config.js`, and the person detector's `config.h` out of git — they're already listed in `.gitignore`; just don't force-add them.
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
 
 ---
@@ -417,7 +421,15 @@ Relay server (nodejs/camera-relay/server.js, run by the end-to-end tests) — li
 ok: Relay server (nodejs/camera-relay/server.js, run by the end-to-end tests) coverage 96.3% >= required 90%
 ```
 
-If you rename the section title comments in `ESP32_CAM_TFLite_Person.ino` (`// Model parameters`, `// GPIO / detection state`, `// Arduino loop()` and the headings that follow them) or the remote-logging markers in `ESP32_CAM_Recorder.ino`, the code extraction comes out incomplete and the C++ build fails loudly — keep those headings, or update the `sed` lines in `run_tests.sh` to match.
+If you rename the section title comments in `ESP32_CAM_TFLite_Person.ino` (`// Model parameters`, `// GPIO / detection state`, `// Arduino loop()` and the headings that follow them) or the remote-logging and settings markers (`Remote logging glue` / `Settings glue` and their `end of ...` lines) in `ESP32_CAM_Recorder.ino`, the code extraction comes out incomplete and the C++ build fails loudly — keep those headings, or update the `sed` lines in `run_tests.sh` to match.
+
+---
+
+## Upgrading a recorder to flash-stored settings
+
+The recorder no longer has a `config.h`: its settings are stored in the board's flash. A camera that already runs the old firmware keeps running until you reflash it. After you do, it has no settings yet: open the Serial Monitor (115200, line ending **Newline**) and type them in (step 1, item 5) — keep the old `config.h` values at hand. A few names changed because flash keys are limited to 15 characters: `ALARM_ACTIVE_STATE` → `ALARM_ACTIVE`, `ALARM_RECORD_ALL_CAMERAS` → `ALARM_ALL_CAMS`, `PUSH_INTERVAL_MUL` → `PUSH_GAP_MUL`, and `REMOTE_LOG_*` → `LOG_*` (`REMOTE_LOG_ENABLED` → `LOG_ENABLED`, `…_MIN_LEVEL` → `LOG_MIN_LEVEL`, `…_ECHO_TO_SERIAL` → `LOG_ECHO`, `…_RETRY_MAX` → `LOG_RETRY_MAX`, `…_RETRY_PERIOD_SECONDS` → `LOG_RETRY_SEC`, `…_FLUSH_SECONDS` → `LOG_FLUSH_SEC`, `…_REPEAT_WINDOW_SECONDS` → `LOG_REPEAT_SEC`, `…_HEARTBEAT_SECONDS` → `LOG_HEARTBEAT`, `…_LOW_HEAP_BYTES` → `LOG_LOW_HEAP`). The old `config.h` can be deleted. Later firmware that adds a new setting asks only for that one.
+
+The person detector (`ESP32_CAM_TFLite_Person`) still uses `config.h` for now.
 
 ---
 
@@ -506,7 +518,7 @@ tail -f nodejs/camera-relay/logs/camera.log
 - At boot a camera reports **why it restarted**: *BROWNOUT* means its power supply dipped (the usual culprit for random reboots), *watchdog* means something hung, *PANIC* means the firmware crashed.
 - A heartbeat line every 10 minutes (the Wi-Fi network and IP address, signal, uptime, heap): a gap in them shows when a camera went quiet, and the numbers show whether memory was shrinking or the signal weakening beforehand.
 
-**If the relay can't be reached**, the camera keeps its entries in memory (the most important — errors — are kept longest) and retries after `REMOTE_LOG_RETRY_PERIOD_SECONDS` (5 minutes), up to `REMOTE_LOG_RETRY_MAX` times (3). After that it logs to its serial port only, until its connection to the relay comes back, and then reports how many entries were lost. The same message repeating (a camera failing to connect every half second) is logged once with a count, not thousands of times. All of this is configured in the camera's `config.h` — see `example.config.h`.
+**If the relay can't be reached**, the camera keeps its entries in memory (the most important — errors — are kept longest) and retries after `LOG_RETRY_SEC` (5 minutes), up to `LOG_RETRY_MAX` times (3). After that it logs to its serial port only, until its connection to the relay comes back, and then reports how many entries were lost. The same message repeating (a camera failing to connect every half second) is logged once with a count, not thousands of times. All of this is set with the camera's `LOG_*` settings (type `HELP` in settings mode for what each means; the values above are the usual ones).
 
 **The file can't fill the SD card:** it rotates (`logMaxBytes`, default 5 MiB; `logKeepFiles`, default 2, so at most 15 MiB in total). The log endpoint needs the camera key (`X-Api-Key` header), and nothing a camera sends can forge a log line.
 

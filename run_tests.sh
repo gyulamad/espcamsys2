@@ -18,7 +18,8 @@
 #
 # Coverage is measured per area and N applies to EACH of them, so a
 # well-tested one can't hide an untested one:
-#   Recorder:        logic.h, remote_log.h and the remote-logging block of
+#   Recorder:        logic.h, remote_log.h, settings_logic.h, settings_schema.h
+#                    and the remote-logging and settings blocks of
 #                    ESP32_CAM_Recorder.ino
 #   Person detector: stream_logic.h (live view: authentication, routing, relay
 #                    announcement) and the detection code of
@@ -133,9 +134,45 @@ else
         overall_status=1
     fi
 
+    # The settings engine and the Recorder's key table (flash-stored settings,
+    # see settings_logic.h): also compiled by the sketch, so also C++11.
+    for h in settings_logic.h settings_schema.h; do
+        echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
+        if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
+               -include "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$h" -x c++ /dev/null; then
+            echo "ok"
+        else
+            echo "FAIL: $h does not compile as C++11"
+            overall_status=1
+        fi
+    done
+
+    # settings_logic.h is deliberately copied into every sketch folder that uses
+    # it (an Arduino sketch can only include files from its own folder). The
+    # copies must be identical: edit one, copy it over the others.
+    echo "--- settings_logic.h copies are identical"
+    SETTINGS_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/settings_logic.h"
+    settings_copies_ok=1
+    settings_copies_found=0
+    for copy in "$ROOT_DIR"/Arduino/*/settings_logic.h; do
+        [ -e "$copy" ] || continue
+        settings_copies_found=$((settings_copies_found + 1))
+        if ! cmp -s "$SETTINGS_ORIGINAL" "$copy"; then
+            echo "FAIL: $copy differs from $SETTINGS_ORIGINAL"
+            settings_copies_ok=0
+        fi
+    done
+    if [ "$settings_copies_ok" = 1 ] && [ "$settings_copies_found" -ge 1 ]; then
+        echo "ok ($settings_copies_found copies)"
+    else
+        [ "$settings_copies_found" -ge 1 ] || echo "FAIL: no settings_logic.h found"
+        overall_status=1
+    fi
+
     run_cpp_test test_alarm_logic
     run_cpp_test test_remote_log
     run_cpp_test test_person_stream_logic
+    run_cpp_test test_settings_logic
 
     # The sketch's remote-logging glue is tested by compiling the code it
     # ACTUALLY contains: extract the marked block from the .ino and build it
@@ -144,6 +181,12 @@ else
     sed -n '/Remote logging glue ──/,/end of remote logging glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/log_glue.inc"
     run_cpp_test test_sketch_log_glue
+
+    # The Recorder's settings glue (flash storage, serial port, the 5 s window)
+    # is tested the same way, against fake Preferences/Serial/millis()/ESP.restart().
+    sed -n '/Settings glue ──/,/end of settings glue/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/settings_glue.inc"
+    run_cpp_test test_settings_glue
 
     # The person detector's detection code is tested the same way: extract the
     # real sections of the .ino (model constants/globals, setPersonDetected +

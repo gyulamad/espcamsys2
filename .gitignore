@@ -4,6 +4,10 @@ config.php
 config.js
 config.h
 
+# Camera settings templates hold Wi-Fi passwords / API keys; only the examples are committed
+Arduino/templates/*.txt
+!Arduino/templates/example.*.txt
+
 # Node
 node_modules/
 nodejs/camera-relay/recordings/

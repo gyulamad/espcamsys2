@@ -404,6 +404,15 @@ public:
         lastSite_[0] = '\0';
     }
 
+    // Applies a new configuration. The sketch builds this object at start-up,
+    // before its settings have been read from flash, and calls this once they
+    // are. Meant for that moment only (nothing logged yet): the delivery state
+    // starts over.
+    void reconfigure(const RemoteLogConfig& cfg) {
+        cfg_ = cfg;
+        uplink_ = LogUplink(cfg.flushIntervalMs, cfg.retryPeriodMs, cfg.maxRetries);
+    }
+
     // Records one message. `site` is "file:line function()".
     void log(LogLevel level, uint32_t now, const char* site, const char* msg, int32_t freeHeap, int32_t rssi) {
         if (haveLast_ && level == lastLevel_ && strcmp(msg, lastMsg_) == 0 &&

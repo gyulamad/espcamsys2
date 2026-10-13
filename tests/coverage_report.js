@@ -18,7 +18,10 @@
 // initialisation — needs real hardware and cannot run on a desktop):
 //   Recorder:        Arduino/ESP32_CAM_Recorder/logic.h
 //                    Arduino/ESP32_CAM_Recorder/remote_log.h
-//                    <build-dir>/log_glue.inc     (remote-logging block of the .ino)
+//                    Arduino/ESP32_CAM_Recorder/settings_logic.h
+//                    Arduino/ESP32_CAM_Recorder/settings_schema.h
+//                    <build-dir>/log_glue.inc       (remote-logging block of the .ino)
+//                    <build-dir>/settings_glue.inc  (settings block of the .ino)
 //   Person detector: Arduino/ESP32_CAM_TFLite_Person/stream_logic.h
 //                    <build-dir>/person_glue.inc  (model constants, setPersonDetected,
 //                                                  detectPerson and loop of the .ino)
@@ -44,7 +47,10 @@ const groups = [
         files: [
             path.join(recorderDir, 'logic.h'),
             path.join(recorderDir, 'remote_log.h'),
+            path.join(recorderDir, 'settings_logic.h'),
+            path.join(recorderDir, 'settings_schema.h'),
             path.join(buildDir, 'log_glue.inc'),
+            path.join(buildDir, 'settings_glue.inc'),
         ],
     },
     {

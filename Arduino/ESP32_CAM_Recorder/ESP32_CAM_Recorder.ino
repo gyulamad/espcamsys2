@@ -2,12 +2,20 @@
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <HTTPClient.h>
+#include <Preferences.h>   // flash storage for the settings (part of the ESP32 core)
+#if __has_include(<esp_arduino_version.h>)
+#include <esp_arduino_version.h>   // ESP_ARDUINO_VERSION_MAJOR/MINOR/PATCH
+#endif
 
-// Wi-Fi networks (one per extender), relay host, camera id and API key live
-// in config.h, a file in this same sketch folder that is gitignored (never
-// committed). Copy example.config.h to config.h and fill in your real values:
-//   cp example.config.h config.h
-#include "config.h"
+// Wi-Fi networks (one per extender), relay host, camera id, API key and every
+// other per-camera setting live in the board's FLASH, not in the source. A
+// freshly flashed board has none and asks for them on the serial port; after
+// that, each boot shows them and waits 5 s for a "y" to change them. What the
+// settings are: settings_schema.h. How they are typed, checked and stored:
+// settings_logic.h (plain C++, unit-tested on a desktop — see tests/cpp/). The
+// glue to the real flash and serial port is the "Settings glue" block below.
+#include "settings_logic.h"
+#include "settings_schema.h"
 
 // All the sketch's actual decision-making (debounce, URL/line building,
 // frame framing, etc.) lives in logic.h as plain, hardware-free C++ so it
@@ -17,6 +25,11 @@
 #include "remote_log.h"   // what the camera reports to the relay's log (see the glue block below)
 #include <esp_system.h>   // esp_reset_reason()
 using namespace esp32cam_logic;
+using esp32cam_settings::RecorderSettings;
+
+// The camera's settings, filled in by setupSettings() at the very start of
+// setup() and only read afterwards.
+RecorderSettings g_cfg;
 
 WiFiMulti wifiMulti;
 WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
@@ -52,8 +65,8 @@ bool cameraReady = false;
 // Debounced edge-detection for ALARM_GPIO_PIN (see checkAlarmTrigger()).
 // A short settle window is required before a reading is trusted, so a
 // noisy/bouncy button press doesn't fire multiple times. Kept as an
-// implementation detail here rather than in config.h, unlike the alarm
-// constants, which are the "business" parameters someone tuning the alarm
+// implementation detail here rather than a setting, unlike the ALARM_*
+// settings, which are the "business" parameters someone tuning the alarm
 // setup would actually want to change. The actual debounce state machine
 // lives in logic.h (alarmDebounceUpdate()) — this is just its persistent
 // state across loop() calls.
@@ -95,7 +108,7 @@ void IRAM_ATTR onAlarmEdge() {
 // logs is therefore ALSO sent to the relay (POST /log), which writes it into a
 // log file on the Pi — with the call site, how the board got there (the events
 // just before a warning/error), free heap, WiFi signal and uptime. The serial
-// port still gets everything too, unless REMOTE_LOG_ECHO_TO_SERIAL says
+// port still gets everything too, unless the LOG_ECHO setting says
 // otherwise, and is all that remains if the relay can't be reached.
 //
 // What to send and when, the in-memory queue, the retry/give-up policy: all in
@@ -110,35 +123,9 @@ void IRAM_ATTR onAlarmEdge() {
 // at levels RLOG_DEBUG / RLOG_INFO / RLOG_WARN / RLOG_ERROR. (Not LOG_*: the
 // ESP32 toolchain's syslog headers already define those names.)
 //
-// All settings are optional in config.h (see example.config.h); these are the
-// defaults, so a config.h written before this feature still compiles.
-#ifndef REMOTE_LOG_ENABLED
-#define REMOTE_LOG_ENABLED true          // false: serial only, nothing is sent
-#endif
-#ifndef REMOTE_LOG_MIN_LEVEL
-#define REMOTE_LOG_MIN_LEVEL 1           // sent to the relay: 0=DEBUG 1=INFO 2=WARN 3=ERROR (and above)
-#endif
-#ifndef REMOTE_LOG_ECHO_TO_SERIAL
-#define REMOTE_LOG_ECHO_TO_SERIAL true   // false: serial shows only what is NOT sent to the relay
-#endif
-#ifndef REMOTE_LOG_FLUSH_SECONDS
-#define REMOTE_LOG_FLUSH_SECONDS 10      // routine entries wait up to this long so they go out together (WARN/ERROR go at once)
-#endif
-#ifndef REMOTE_LOG_RETRY_MAX
-#define REMOTE_LOG_RETRY_MAX 3           // retries after a failed delivery, then serial only until the relay is back
-#endif
-#ifndef REMOTE_LOG_RETRY_PERIOD_SECONDS
-#define REMOTE_LOG_RETRY_PERIOD_SECONDS 300  // wait between retries (5 minutes)
-#endif
-#ifndef REMOTE_LOG_REPEAT_WINDOW_SECONDS
-#define REMOTE_LOG_REPEAT_WINDOW_SECONDS 30  // an identical message inside this window is counted, not repeated
-#endif
-#ifndef REMOTE_LOG_HEARTBEAT_SECONDS
-#define REMOTE_LOG_HEARTBEAT_SECONDS 600     // a status line (uptime, heap, signal) this often — a gap in them shows when a camera went quiet
-#endif
-#ifndef REMOTE_LOG_LOW_HEAP_BYTES
-#define REMOTE_LOG_LOW_HEAP_BYTES 30000      // warn when free heap falls below this
-#endif
+// The settings it uses are the LOG_* ones (settings_schema.h). This object is
+// built before they have been read from flash, so it starts serial-only;
+// remoteLogStart() applies the real configuration from g_cfg.
 
 #define FW_BUILD __DATE__ " " __TIME__   // identifies which firmware build wrote a log line
 
@@ -146,19 +133,33 @@ void logEcho(void*, LogLevel, const char* line) {
   Serial.println(line);
 }
 
+// The configuration the settings ask for (LOG_*).
 RemoteLogConfig buildRemoteLogConfig() {
   RemoteLogConfig c;
-  c.remoteEnabled   = REMOTE_LOG_ENABLED;
-  c.remoteMinLevel  = logLevelFromInt(REMOTE_LOG_MIN_LEVEL);
-  c.echoAlways      = REMOTE_LOG_ECHO_TO_SERIAL;
-  c.flushIntervalMs = (uint32_t)REMOTE_LOG_FLUSH_SECONDS * 1000UL;
-  c.retryPeriodMs   = (uint32_t)REMOTE_LOG_RETRY_PERIOD_SECONDS * 1000UL;
-  c.maxRetries      = (uint8_t)(REMOTE_LOG_RETRY_MAX < 0 ? 0 : (REMOTE_LOG_RETRY_MAX > 255 ? 255 : REMOTE_LOG_RETRY_MAX));
-  c.repeatWindowMs  = (uint32_t)REMOTE_LOG_REPEAT_WINDOW_SECONDS * 1000UL;
+  c.remoteEnabled   = g_cfg.logEnabled;
+  c.remoteMinLevel  = logLevelFromInt(g_cfg.logMinLevel);
+  c.echoAlways      = g_cfg.logEcho;
+  c.flushIntervalMs = (uint32_t)g_cfg.logFlushSec * 1000UL;
+  c.retryPeriodMs   = (uint32_t)g_cfg.logRetrySec * 1000UL;
+  c.maxRetries      = (uint8_t)(g_cfg.logRetryMax < 0 ? 0 : (g_cfg.logRetryMax > 255 ? 255 : g_cfg.logRetryMax));
+  c.repeatWindowMs  = (uint32_t)g_cfg.logRepeatSec * 1000UL;
   return c;
 }
 
-RemoteLog remoteLogInstance(buildRemoteLogConfig(), logEcho, nullptr);
+// What the log object is built with, before the settings exist: serial only.
+RemoteLogConfig serialOnlyLogConfig() {
+  RemoteLogConfig c;
+  c.remoteEnabled   = false;
+  c.remoteMinLevel  = LogLevel::Info;
+  c.echoAlways      = true;
+  c.flushIntervalMs = 10000;
+  c.retryPeriodMs   = 300000;
+  c.maxRetries      = 3;
+  c.repeatWindowMs  = 30000;
+  return c;
+}
+
+RemoteLog remoteLogInstance(serialOnlyLogConfig(), logEcho, nullptr);
 SemaphoreHandle_t remoteLogMutex = nullptr;   // guards remoteLogInstance: loop() logs, the uplink task sends
 
 // Holds the mutex for the duration of a scope. (A no-op before the mutex
@@ -196,11 +197,11 @@ void logWrite(LogLevel level, const char *file, int line, const char *func, cons
 // relay can't write its log) leaves them in memory for a retry.
 bool postLogBatch(const std::string &body, String &detail) {
   HTTPClient http;
-  std::string url = buildLogUrl(SERVER_HOST, HTTP_PORT);
+  std::string url = buildLogUrl(g_cfg.serverHost, g_cfg.httpPort);
   http.begin(String(url.c_str()));
   http.setTimeout(5000);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Api-Key", API_KEY);
+  http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
   int code = http.POST((uint8_t *)body.data(), body.size());
   detail = (code > 0) ? String("HTTP ") + code : http.errorToString(code);
   http.end();
@@ -219,7 +220,7 @@ void remoteLogPump() {
   {
     RemoteLogLock lock;
     remoteLogInstance.tick(now, (int32_t)ESP.getFreeHeap(), wifiUp ? (int32_t)WiFi.RSSI() : 0);
-    send = remoteLogInstance.prepareBatch(now, wifiUp, CAMERA_ID, FW_BUILD, body, lastSeq);
+    send = remoteLogInstance.prepareBatch(now, wifiUp, g_cfg.cameraId.c_str(), FW_BUILD, body, lastSeq);
   }
   if (!send) return;
 
@@ -243,7 +244,7 @@ void remoteLogPump() {
                   (unsigned)failed, detail.c_str());
   } else {
     Serial.printf("[log] could not deliver log entries (%s) — delivery %u failed, retrying in %u s\n",
-                  detail.c_str(), (unsigned)failed, (unsigned)REMOTE_LOG_RETRY_PERIOD_SECONDS);
+                  detail.c_str(), (unsigned)failed, (unsigned)g_cfg.logRetrySec);
   }
 }
 
@@ -257,8 +258,9 @@ void remoteLogTask(void *) {
 // Starts the background uplink. Call once, early in setup(). Pinned to core 0
 // (where the WiFi stack runs) so it never competes with loop() on core 1.
 void remoteLogStart() {
+  remoteLogInstance.reconfigure(buildRemoteLogConfig());   // from the settings read in setupSettings()
   remoteLogMutex = xSemaphoreCreateMutex();
-  if (!REMOTE_LOG_ENABLED || !remoteLogMutex) return;   // no mutex, no safe way to share: serial only
+  if (!g_cfg.logEnabled || !remoteLogMutex) return;   // no mutex, no safe way to share: serial only
   xTaskCreatePinnedToCore(remoteLogTask, "remoteLog", 8192, nullptr, 1, nullptr, 0);
 }
 
@@ -327,19 +329,19 @@ bool ensurePushConnection() {
   pushAuthed = false;
   relaySupportsInBandAlarm = false; // capability is per connection: wait for this relay to announce it
   pushClient.stop();
-  if (!pushClient.connect(SERVER_HOST, PUSH_PORT)) {
+  if (!pushClient.connect(g_cfg.serverHost.c_str(), g_cfg.pushPort)) {
     return false;
   }
   pushClient.setNoDelay(true);
-  std::string authLine = buildAuthLine(CAMERA_ID, API_KEY);
+  std::string authLine = buildAuthLine(g_cfg.cameraId, g_cfg.apiKey);
   pushClient.print(authLine.c_str());
   pushAuthed = true;
-  RLOG_INFO("push connection to %s:%d established", SERVER_HOST, PUSH_PORT);
+  RLOG_INFO("push connection to %s:%d established", g_cfg.serverHost.c_str(), g_cfg.pushPort);
   remoteLogRelayReachable(); // if remote logging had given up, the relay is evidently back
   return true;
 }
 
-// FALLBACK alarm report: POSTs http://SERVER_HOST:HTTP_PORT/alarm/<id>. Used
+// FALLBACK alarm report: POSTs http://<SERVER_HOST>:<HTTP_PORT>/alarm/<id>. Used
 // only when the in-band alarm can't be (see triggerAlarmRecording()). It
 // blocks loop() for up to setTimeout() while it runs — harmless when the push
 // connection is down (nothing is streaming anyway), a gap in the footage when
@@ -349,7 +351,7 @@ bool ensurePushConnection() {
 // retried — the next alarm edge gets another chance.
 void sendAlarmRequest(const String &id) {
   HTTPClient http;
-  std::string url = buildAlarmUrl(SERVER_HOST, HTTP_PORT, id.c_str());
+  std::string url = buildAlarmUrl(g_cfg.serverHost, g_cfg.httpPort, id.c_str());
   http.begin(String(url.c_str()));
   http.setTimeout(5000);
   int code = http.POST(""); // relay expects no body, same as the dashboard's proxy_post()
@@ -362,7 +364,7 @@ void sendAlarmRequest(const String &id) {
 }
 
 // Asks the relay to (re)start a recording — on just this camera, or on
-// every camera the relay currently knows about, per ALARM_RECORD_ALL_CAMERAS.
+// every camera the relay currently knows about, per the ALARM_ALL_CAMS setting.
 // If this camera isn't already recording the relay starts a fresh recording,
 // beginning with its pre-roll (the last few seconds this camera streamed
 // BEFORE the alarm); if it is, the recording is extended from now — the same
@@ -384,12 +386,12 @@ void sendAlarmRequest(const String &id) {
 // this firmware against any relay version.
 void triggerAlarmRecording() {
   bool wifiUp = WiFi.status() == WL_CONNECTED;
-  std::string targetId = alarmRecordTargetId(ALARM_RECORD_ALL_CAMERAS, CAMERA_ID);
+  std::string targetId = alarmRecordTargetId(g_cfg.alarmRecordAll, g_cfg.cameraId);
 
   switch (chooseAlarmRoute(pushClient.connected(), relaySupportsInBandAlarm, wifiUp)) {
     case AlarmRoute::InBand: {
       uint8_t msg[ALARM_MESSAGE_LEN];
-      encodeAlarmMessage(ALARM_RECORD_ALL_CAMERAS, msg);
+      encodeAlarmMessage(g_cfg.alarmRecordAll, msg);
       if (writePushBytes(msg, ALARM_MESSAGE_LEN) == ALARM_MESSAGE_LEN) {
         RLOG_INFO("alarm sent in-band on the push connection");
         return;
@@ -418,11 +420,11 @@ void triggerAlarmRecording() {
 }
 
 // Handles an alarm edge latched by onAlarmEdge(). Fires once per edge into
-// ALARM_ACTIVE_STATE; edges that arrive while a previous trigger is still
+// the ALARM_ACTIVE level; edges that arrive while a previous trigger is still
 // being processed collapse into one, which is fine since a repeat trigger
 // only extends the recording anyway.
 void checkAlarmTrigger() {
-  if (ALARM_GPIO_PIN < 0) return; // feature turned off — see ALARM_GPIO_PIN in config.h
+  if (g_cfg.alarmGpioPin < 0) return; // feature turned off — see the ALARM_GPIO_PIN setting
   if (!alarmPending) return;
 
   alarmPending = false;
@@ -503,7 +505,7 @@ bool initCamera() {
 void printIdentityBanner() {
   Serial.println();
   Serial.println("========================================");
-  Serial.printf("  CAMERA_ID: %s\n", CAMERA_ID);
+  Serial.printf("  CAMERA_ID: %s\n", g_cfg.cameraId.c_str());
   Serial.println("========================================");
   Serial.println();
 }
@@ -519,7 +521,11 @@ void logBootInfo() {
     RLOG_INFO("booted (%s)", resetReasonName(resetReason));
   }
   RLOG_INFO("firmware built %s, camera id %s, free heap %u bytes, PSRAM %s",
-            FW_BUILD, CAMERA_ID, (unsigned)ESP.getFreeHeap(), psramFound() ? "yes" : "no");
+            FW_BUILD, g_cfg.cameraId.c_str(), (unsigned)ESP.getFreeHeap(), psramFound() ? "yes" : "no");
+#ifdef ESP_ARDUINO_VERSION_MAJOR
+  RLOG_INFO("Arduino-ESP32 core %d.%d.%d, ESP-IDF %s", ESP_ARDUINO_VERSION_MAJOR,
+            ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH, ESP.getSdkVersion());
+#endif
 }
 
 // Internal pull-up so the default push-button wiring (pin -> button ->
@@ -527,13 +533,13 @@ void logBootInfo() {
 // hardware. A future alarm sensor with its own active-driven output can
 // still be read fine through the pull-up; swap to plain INPUT here if
 // its datasheet calls for it. Skipped entirely when the feature is off
-// (ALARM_GPIO_PIN < 0) — no pin claimed, nothing to configure.
+// (ALARM_GPIO_PIN = -1) — no pin claimed, nothing to configure.
 void setupAlarmInput() {
-  if (ALARM_GPIO_PIN < 0) return;
+  if (g_cfg.alarmGpioPin < 0) return;
 
-  pinMode(ALARM_GPIO_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ALARM_GPIO_PIN), onAlarmEdge,
-                  ALARM_ACTIVE_STATE == LOW ? FALLING : RISING);
+  pinMode(g_cfg.alarmGpioPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(g_cfg.alarmGpioPin), onAlarmEdge,
+                  g_cfg.alarmActiveHigh ? RISING : FALLING);
   alarmPending = false;
 }
 
@@ -543,8 +549,8 @@ void connectWifi() {
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
                           // big source of added latency on ESP32 WiFi
 
-  for (int i = 0; i < WIFI_NETWORK_COUNT; i++) {
-    wifiMulti.addAP(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password);
+  for (size_t i = 0; i < g_cfg.wifi.size(); i++) {
+    wifiMulti.addAP(g_cfg.wifi[i].ssid.c_str(), g_cfg.wifi[i].pass.c_str());
   }
 
   Serial.print("Connecting to WiFi");
@@ -557,9 +563,112 @@ void connectWifi() {
             WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
+// ── Settings glue ───────────────────────────────────────────────────────
+// Connects the settings engine (settings_logic.h) to the real flash storage and
+// the real serial port, and runs the start-up conversation. All the decisions —
+// what is missing, what is valid, what to print, the 5 s window — are made in
+// settings_logic.h and unit-tested there; this block only supplies the flash,
+// the serial port and the clock, and is itself tested against fakes of them
+// (tests/cpp/test_settings_glue.cpp compiles this very block).
+using esp32cam_settings::BootConfigFlow;
+using esp32cam_settings::IConsole;
+using esp32cam_settings::ISettingsStore;
+using esp32cam_settings::RECORDER_SCHEMA;
+using esp32cam_settings::loadRecorderSettings;
+
+const uint32_t SETTINGS_WINDOW_MS = 5000;          // how long boot waits for a "y" before starting normally
+const char* const SETTINGS_NAMESPACE = "espcam";   // flash (NVS) namespace the settings live in
+
+// The settings in flash, via the core's Preferences library (NVS). Survives
+// uploading a new sketch; wiped by "Erase All Flash Before Sketch Upload".
+class PreferencesStore : public ISettingsStore {
+public:
+  PreferencesStore() : ok_(prefs_.begin(SETTINGS_NAMESPACE, false)) {}
+  ~PreferencesStore() { prefs_.end(); }
+  bool ok() const { return ok_; }
+
+  bool has(const std::string& key) override { return prefs_.isKey(key.c_str()); }
+  std::string get(const std::string& key) override {
+    String v = prefs_.getString(key.c_str(), "");
+    return std::string(v.c_str());
+  }
+  bool set(const std::string& key, const std::string& value) override {
+    return prefs_.putString(key.c_str(), value.c_str()) == value.size();
+  }
+  void clearAll() override { prefs_.clear(); }
+
+private:
+  Preferences prefs_;
+  bool ok_;
+};
+
+// The serial port: bytes in without waiting, lines out.
+class SerialConsole : public IConsole {
+public:
+  int read() override { return Serial.available() > 0 ? Serial.read() : -1; }
+  void println(const std::string& line) override { Serial.println(line.c_str()); }
+};
+
+void restartBoard() {
+  Serial.flush();
+  delay(500);
+  ESP.restart();   // does not return
+}
+
+// Shows the settings, asks for any that are missing (or lets the user change
+// them within the 5 s window), then loads them into g_cfg. If settings were
+// changed the board restarts instead of returning, so the new values start clean.
+void setupSettings() {
+  PreferencesStore store;
+  SerialConsole console;
+  if (!store.ok()) {
+    Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
+  }
+
+  BootConfigFlow flow(RECORDER_SCHEMA, store, console, SETTINGS_WINDOW_MS);
+  BootConfigFlow::Status status;
+  while ((status = flow.step(millis())) == BootConfigFlow::Running) delay(5);
+
+  if (status == BootConfigFlow::Restart) {
+    restartBoard();
+    return;
+  }
+
+  std::string err;
+  if (!loadRecorderSettings(store, g_cfg, err)) {
+    // Not reachable after the conversation above (it only lets the boot go on
+    // when everything is valid), but the camera must never run on bad settings.
+    Serial.printf("The stored settings can't be used (%s). Restarting so they can be fixed...\n", err.c_str());
+    restartBoard();
+  }
+}
+// ── end of settings glue ────────────────────────────────────────────────
+
+// Which Arduino-ESP32 core and ESP-IDF built this firmware — the first thing to
+// know when something behaves differently from another camera.
+void printCoreVersion() {
+#ifdef ESP_ARDUINO_VERSION_MAJOR
+  Serial.printf("Arduino-ESP32 core %d.%d.%d, ESP-IDF %s\n", ESP_ARDUINO_VERSION_MAJOR,
+                ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH, ESP.getSdkVersion());
+#else
+  Serial.printf("Arduino-ESP32 core 1.x (very old), ESP-IDF %s\n", ESP.getSdkVersion());
+#endif
+}
+
 void setup() {
+  // The settings conversation can be fed a long pasted line (a camera's whole
+  // configuration); the default 256-byte receive buffer would lose part of it.
+  // Must be set before Serial.begin().
+  Serial.setRxBufferSize(2048);
   Serial.begin(115200);
   delay(200); // give the serial monitor a moment to attach
+
+  printCoreVersion();
+
+  // First of all, before the camera, WiFi or remote logging start: show the
+  // settings, ask for missing ones, or offer to change them. Returns only when
+  // the boot should go on, with g_cfg filled in.
+  setupSettings();
 
   printIdentityBanner();
 
@@ -591,21 +700,21 @@ void logIdentityReminder() {
   if (millis() - lastIdentityPrint <= 10000) return;
 
   RLOG_DEBUG("[%s] RSSI: %d dBm, uptime: %lus%s",
-             CAMERA_ID, WiFi.RSSI(), millis() / 1000,
+             g_cfg.cameraId.c_str(), WiFi.RSSI(), millis() / 1000,
              cameraReady ? "" : " (camera not ready)");
-  if (ESP.getFreeHeap() < REMOTE_LOG_LOW_HEAP_BYTES) {
+  if (ESP.getFreeHeap() < g_cfg.logLowHeapBytes) {
     RLOG_WARN("low free heap (below %u bytes) — a memory leak or fragmentation can end in a crash",
-              (unsigned)REMOTE_LOG_LOW_HEAP_BYTES);
+              (unsigned)g_cfg.logLowHeapBytes);
   }
   lastIdentityPrint = millis();
 }
 
-// A status line in the relay's log every REMOTE_LOG_HEARTBEAT_SECONDS. A gap
+// A status line in the relay's log every LOG_HEARTBEAT seconds. A gap
 // in these shows when a camera went quiet; the numbers show whether memory
 // was shrinking or the signal weakening beforehand.
 void logHeartbeat() {
   static unsigned long lastHeartbeat = millis();
-  if (millis() - lastHeartbeat <= (unsigned long)REMOTE_LOG_HEARTBEAT_SECONDS * 1000UL) return;
+  if (millis() - lastHeartbeat <= (unsigned long)g_cfg.logHeartbeatSec * 1000UL) return;
 
   RLOG_INFO("heartbeat: WiFi '%s', IP %s, RSSI %d dBm, uptime %lus, free heap %u (lowest ever %u), push connection %s",
             WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
@@ -747,7 +856,7 @@ void loop() {
   }
 
   if (!ensurePushConnection()) {
-    RLOG_WARN("push connection to %s:%d failed — will keep retrying", SERVER_HOST, PUSH_PORT);
+    RLOG_WARN("push connection to %s:%d failed — will keep retrying", g_cfg.serverHost.c_str(), g_cfg.pushPort);
     delay(500);
     return;
   }
@@ -769,5 +878,5 @@ void loop() {
   // it -> backs off automatically instead of adding to the jam — but only up
   // to PUSH_MAX_GAP_MS: on a weak link the push itself is already the slow
   // part, and a long pause just makes the picture older.
-  delay(computePushDelayMs(pushMs, PUSH_INTERVAL_MUL, PUSH_MAX_GAP_MS));
+  delay(computePushDelayMs(pushMs, g_cfg.pushGapMul, PUSH_MAX_GAP_MS));
 }

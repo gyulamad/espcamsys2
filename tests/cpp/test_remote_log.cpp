@@ -666,6 +666,32 @@ TEST(everything_works_across_the_millis_wrap_around) {
     TEST_ASSERT(has(b, "\"ageMs\":10000,"), "age is right");
 }
 
+TEST(reconfigure_applies_a_new_configuration_to_a_log_that_has_not_been_used_yet) {
+    // The sketch builds its log at start-up with remote logging off, then
+    // reconfigures it once the settings have been read from flash.
+    RemoteLogConfig off = cfg();
+    off.remoteEnabled = false;
+    Serial ser; RemoteLog rl(off, Serial::echo, &ser);
+
+    RemoteLogConfig on = cfg();
+    on.flushIntervalMs = 2000;
+    on.maxRetries = 1;
+    on.remoteMinLevel = LogLevel::Warn;
+    rl.reconfigure(on);
+
+    rl.log(LogLevel::Info, 0, "s", "below the new level", 1, 1);
+    TEST_ASSERT_EQ((int)rl.pending(), 0, "the new minimum level (WARN) keeps INFO on serial only");
+    rl.log(LogLevel::Warn, 0, "s", "queued now", 1, 1);
+    TEST_ASSERT_EQ((int)rl.pending(), 1, "remote logging is on after reconfigure (it was off)");
+
+    uint32_t seq = 0;
+    TEST_ASSERT(!batch(rl, 0, true, seq).empty(), "a WARN is urgent: due at once");
+    rl.onSendResult(0, false, seq);
+    TEST_ASSERT(rl.uplinkState() == LogUplink::Backoff, "one failure: waiting to retry");
+    rl.onSendResult(400000, false, seq);
+    TEST_ASSERT(rl.uplinkState() == LogUplink::GaveUp, "second failure: gave up (maxRetries was reconfigured to 1)");
+}
+
 int main() {
     RUN_TEST(truncation_leaves_short_text_alone);
     RUN_TEST(truncation_marks_the_cut_and_fits_the_buffer);
@@ -698,6 +724,7 @@ int main() {
     RUN_TEST(uplink_rearm_only_revives_a_board_that_gave_up);
     RUN_TEST(uplink_retry_timing_survives_the_clock_wrapping);
     RUN_TEST(json_string_escaping);
+    RUN_TEST(reconfigure_applies_a_new_configuration_to_a_log_that_has_not_been_used_yet);
     RUN_TEST(json_string_leaves_utf8_alone);
     RUN_TEST(json_batch_exact_shape);
     RUN_TEST(json_batch_with_several_entries_is_comma_separated);

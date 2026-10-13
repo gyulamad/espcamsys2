@@ -23,7 +23,7 @@ return [
     'relay_control_key' => '',
 
     // Cameras shown on the dashboard. 'id' must exactly match the
-    // CAMERA_ID configured in that device's sketch (see example.config.h).
+    // CAMERA_ID configured in that device's sketch (its CAMERA_ID setting).
     'cameras' => [
         ['id' => 'cam1', 'name' => 'Front Door', 'icon' => '🚪'],
         ['id' => 'cam2', 'name' => 'Back Yard',  'icon' => '🌿'],
