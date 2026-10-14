@@ -61,7 +61,7 @@
 // Print the scene gate's readings (average brightness and motion sum) for EVERY frame.
 // Off by default (it is a lot of output); switch it on while choosing DARK_THRESH
 // and MOTION_THRESH: watch the numbers in the dark, in daylight, and when you walk by.
-#define PRINT_SCENE_READINGS 0
+#define PRINT_SCENE_READINGS 1
 // Tensor arena size: the base size used by the Espressif v1.3.3
 // person-detection example. Tied to the model compiled in below.
 #define TENSOR_ARENA_SIZE (100 * 1024)
