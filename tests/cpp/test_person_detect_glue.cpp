@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "../../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
+#include "../../Arduino/ESP32_CAM_TFLite_Person/scene_logic.h"
 using esp32cam_settings::PersonSettings;
 
 // What setup() has read from flash. PersonSettings' defaults are the typical
@@ -39,6 +40,7 @@ static PersonSettings g_cfg;
 // The developer switches at the top of the sketch.
 #define PRINT_DETECTION_SCORES 1
 #define PRINT_STARTUP_INFO 1
+#define PRINT_SCENE_READINGS 1
 #define TENSOR_ARENA_SIZE (100 * 1024)
 
 // ── fake Arduino / camera / TFLite Micro environment ────────────────────
@@ -60,6 +62,9 @@ struct FakeSerial {
 struct GpioWrite { int pin; int level; };
 static std::vector<GpioWrite> g_gpio;
 static void digitalWrite(int pin, int level) { g_gpio.push_back({pin, level}); }
+
+static uint32_t g_millis = 0;
+static uint32_t millis() { return g_millis; }
 
 static std::vector<uint32_t> g_delays;
 static void delay(uint32_t ms) { g_delays.push_back(ms); }
@@ -126,6 +131,26 @@ static void reset() {
     input = &g_inTensor;
     interpreter = &g_interp;
     personDetected = false;
+    // The scene gate starts switched off (the settings' neutral values), as in a
+    // detector configured with DARK_THRESH=0 and MOTION_THRESH=0.
+    g_cfg = PersonSettings();
+    g_millis = 0;
+    g_sampler = person_scene::SceneSampler(IMAGE_WIDTH, IMAGE_HEIGHT);
+    configureScene();
+}
+
+// Fills the whole frame with one gray value.
+static void fillFrame(uint8_t gray) {
+    g_pixels.assign(IMAGE_SIZE, gray);
+    g_fb.buf = g_pixels.data();
+}
+
+// Switches the scene gate on the way the settings do.
+static void sceneGate(int dark, uint32_t motion, uint32_t holdSec) {
+    g_cfg.darkThreshold = dark;
+    g_cfg.motionThreshold = motion;
+    g_cfg.motionHoldSec = holdSec;
+    configureScene();
 }
 
 static bool has(const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; }
@@ -362,6 +387,139 @@ TEST(detect_offers_nothing_when_there_is_no_usable_frame) {
     TEST_ASSERT(g_published.empty(), "a wrong-sized frame is not offered either");
 }
 
+// ── scene gate: darkness and motion ─────────────────────────────────────
+
+TEST(a_dark_frame_does_not_run_the_model_and_says_so_once) {
+    reset();
+    sceneGate(40, 0, 0);
+    fillFrame(10);
+    float p = -1, n = -1;
+    TEST_ASSERT(!detectPerson(p, n), "no detection result for a dark frame");
+    TEST_ASSERT_EQ(g_interp.invokes, 0, "the model was not run");
+    TEST_ASSERT(p == -1 && n == -1, "scores left untouched");
+    TEST_ASSERT_EQ(g_fbGets, 1, "one capture");
+    TEST_ASSERT_EQ(g_fbReturns, 1, "the frame was handed back");
+    TEST_ASSERT(has(g_serial, "Scene: DARK (brightness 10 < 40)"), "serial explains why");
+    TEST_ASSERT_EQ((int)g_inBuf[0], 0, "the model input was not even filled");
+    g_serial.clear();
+    detectPerson(p, n);
+    TEST_ASSERT(!has(g_serial, "Scene:"), "the dark state is reported on the change only");
+}
+
+TEST(the_live_view_still_gets_every_frame_while_detection_is_paused) {
+    reset();
+    sceneGate(40, 300, 0);
+    fillFrame(10);
+    float p, n;
+    detectPerson(p, n);
+    detectPerson(p, n);
+    TEST_ASSERT_EQ(g_published.size(), (size_t)2, "both dark frames were offered to the live view");
+}
+
+TEST(a_light_frame_without_motion_is_idle_and_a_moving_one_runs_the_model) {
+    reset();
+    sceneGate(40, 300, 0);
+    fillFrame(120);
+    float p = 0, n = 0;
+    TEST_ASSERT(!detectPerson(p, n), "first frame: nothing to compare with yet, so idle");
+    TEST_ASSERT(has(g_serial, "Scene: still"), "serial says it is waiting for motion");
+    TEST_ASSERT(!detectPerson(p, n), "identical frame: still idle");
+    TEST_ASSERT_EQ(g_interp.invokes, 0, "model not run on a still picture");
+    fillFrame(130);                                   // every sample +10: motion 1000
+    g_serial.clear();
+    TEST_ASSERT(detectPerson(p, n), "the picture changed: run the model");
+    TEST_ASSERT_EQ(g_interp.invokes, 1, "model run once");
+    TEST_ASSERT(has(g_serial, "Scene: active"), "serial says detection is on");
+    TEST_ASSERT_EQ((int)g_inBuf[0], 2, "and the (converted: 130 ^ 0x80) frame is in the model input");
+}
+
+TEST(detection_continues_for_the_hold_time_after_the_motion_stops) {
+    reset();
+    sceneGate(0, 300, 5);                             // hold 5 s
+    float p, n;
+    fillFrame(100); g_millis = 0;    detectPerson(p, n);
+    fillFrame(150); g_millis = 1000; TEST_ASSERT(detectPerson(p, n), "motion at 1 s");
+    g_millis = 4000;                 TEST_ASSERT(detectPerson(p, n), "3 s later, picture unchanged: still detecting");
+    g_millis = 6000;                 TEST_ASSERT(detectPerson(p, n), "exactly 5 s after the motion: still detecting");
+    g_millis = 6001;                 TEST_ASSERT(!detectPerson(p, n), "after the hold: idle again");
+}
+
+TEST(a_person_that_stands_still_stays_detected_in_a_motionless_picture) {
+    reset();
+    sceneGate(40, 300, 0);
+    float p, n;
+    fillFrame(100); loopWith(100);                    // first frame: idle, nothing happens
+    TEST_ASSERT(!personDetected, "idle: the model has not run");
+    fillFrame(150); loopWith(100);                    // movement: the model sees the person
+    TEST_ASSERT(personDetected, "person detected on the moving frame");
+    g_interp.invokes = 0;
+    for (int i = 0; i < 3; ++i) loopWith(100);        // nobody moves any more
+    TEST_ASSERT(personDetected, "still detected");
+    TEST_ASSERT_EQ(g_interp.invokes, 3, "the model keeps running while a person is flagged, so it can clear");
+    loopWith(10);                                     // the model now says: gone
+    TEST_ASSERT(!personDetected, "cleared by the model, as before");
+    g_interp.invokes = 0;
+    g_millis += 1000;                                 // time passes, still nobody moves
+    loopWith(100);
+    TEST_ASSERT_EQ(g_interp.invokes, 0, "and the model rests again until something moves");
+    (void)p; (void)n;
+}
+
+TEST(when_it_goes_dark_a_flagged_person_is_dropped_without_asking_the_model) {
+    reset();
+    sceneGate(40, 0, 0);
+    fillFrame(120);
+    loopWith(100);
+    TEST_ASSERT(personDetected, "detected in the light");
+    g_gpio.clear();
+    fillFrame(10);
+    loopWith(100);                                    // the model would still say 'person' (false positive)
+    TEST_ASSERT(!personDetected, "dropped: in the dark that can only be a false positive");
+    TEST_ASSERT_EQ(g_gpio.size(), (size_t)1, "one GPIO write");
+    TEST_ASSERT_EQ(g_gpio[0].level, LOW, "GPIO LOW");
+    TEST_ASSERT_EQ(g_interp.invokes, 1, "the model ran only for the light frame");
+    TEST_ASSERT(has(g_serial, "NO PERSON - GPIO LOW") && has(g_serial, "Scene: DARK"), "and it said why");
+}
+
+TEST(no_false_positive_in_the_dark_even_if_the_model_would_report_one) {
+    reset();
+    sceneGate(40, 0, 0);
+    fillFrame(5);
+    for (int i = 0; i < 5; ++i) loopWith(120);        // model output 'person 94%' for every frame
+    TEST_ASSERT(!personDetected, "never detected");
+    TEST_ASSERT(g_gpio.empty(), "GPIO never touched");
+}
+
+TEST(with_both_checks_off_every_frame_is_detected_on_as_before) {
+    reset();
+    fillFrame(0);                                     // black and still
+    loopWith(100);
+    TEST_ASSERT(personDetected, "runs on everything");
+    TEST_ASSERT(!has(g_serial, "Scene:"), "and says nothing about the scene");
+}
+
+TEST(the_scene_readings_can_be_printed_for_every_frame_for_tuning_the_thresholds) {
+    reset();
+    sceneGate(40, 300, 0);
+    fillFrame(120);
+    float p, n;
+    detectPerson(p, n);
+    TEST_ASSERT(has(g_serial, "Brightness: 120   Motion:     0"), "brightness and motion of the frame");
+    fillFrame(130);
+    g_serial.clear();
+    detectPerson(p, n);
+    TEST_ASSERT(has(g_serial, "Brightness: 130   Motion:  1000"), "100 samples, each changed by 10");
+}
+
+TEST(a_bad_frame_never_reaches_the_scene_gate) {
+    reset();
+    sceneGate(40, 300, 0);
+    g_fb.width = IMAGE_WIDTH + 1;
+    float p, n;
+    TEST_ASSERT(!detectPerson(p, n), "rejected");
+    TEST_ASSERT(!has(g_serial, "Scene:") && !has(g_serial, "Brightness:"), "no scene readings from a wrong-sized frame");
+}
+
 int main() {
     RUN_TEST(set_detected_true_drives_gpio_high_and_says_so);
     RUN_TEST(set_detected_false_drives_gpio_low_and_says_so);
@@ -387,6 +545,17 @@ int main() {
 
     RUN_TEST(detect_offers_the_raw_frame_to_the_live_view_before_returning_it);
     RUN_TEST(detect_offers_nothing_when_there_is_no_usable_frame);
+
+    RUN_TEST(a_dark_frame_does_not_run_the_model_and_says_so_once);
+    RUN_TEST(the_live_view_still_gets_every_frame_while_detection_is_paused);
+    RUN_TEST(a_light_frame_without_motion_is_idle_and_a_moving_one_runs_the_model);
+    RUN_TEST(detection_continues_for_the_hold_time_after_the_motion_stops);
+    RUN_TEST(a_person_that_stands_still_stays_detected_in_a_motionless_picture);
+    RUN_TEST(when_it_goes_dark_a_flagged_person_is_dropped_without_asking_the_model);
+    RUN_TEST(no_false_positive_in_the_dark_even_if_the_model_would_report_one);
+    RUN_TEST(with_both_checks_off_every_frame_is_detected_on_as_before);
+    RUN_TEST(the_scene_readings_can_be_printed_for_every_frame_for_tuning_the_thresholds);
+    RUN_TEST(a_bad_frame_never_reaches_the_scene_gate);
 
     return test::summarize();
 }

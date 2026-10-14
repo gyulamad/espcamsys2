@@ -20,13 +20,13 @@ static bool has(const std::string& s, const char* part) { return s.find(part) !=
 
 // A complete configuration with the live view ON, as one line.
 static const char* WITH_STREAM =
-    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=1;"
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=1;"
     "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=hunter22;STREAM_PORT=8088;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
 // The minimal one: no live view, no Wi-Fi.
-static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0";
+static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0";
 
 // Stores a line the way the conversation does (including the cross-setting rule).
 static std::vector<std::string> storeLine(MemoryStore& st, const std::string& line) {
@@ -79,7 +79,7 @@ TEST(the_two_example_templates_are_valid_complete_configurations) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
     const char* files[] = { "example.person.template.txt", "example.person-no-wifi.template.txt" };
-    const size_t expected[] = { PERSON_SCHEMA.count, 5 };
+    const size_t expected[] = { PERSON_SCHEMA.count, 8 };
     for (size_t i = 0; i < 2; ++i) {
         std::ifstream f(dir + "../../Arduino/templates/" + files[i]);
         std::string line;
@@ -101,11 +101,11 @@ TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_val
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
-TEST(with_the_live_view_off_only_five_settings_are_needed_and_no_wifi_is_asked_for) {
+TEST(with_the_live_view_off_only_eight_settings_are_needed_and_no_wifi_is_asked_for) {
     MemoryStore st;
     TEST_ASSERT(store(st, NO_STREAM), "stored");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those five");
-    TEST_ASSERT_EQ((int)st.m.size(), 5, "exactly five stored");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those eight");
+    TEST_ASSERT_EQ((int)st.m.size(), 8, "exactly eight stored");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
@@ -132,6 +132,23 @@ TEST(thresholds_are_scores_between_0_01_and_1) {
     TEST_ASSERT(valid("DETECT_THRESH=0.6") && valid("DETECT_THRESH=1") && valid("DETECT_THRESH=0.01"), "in range");
     TEST_ASSERT(!valid("DETECT_THRESH=0") && !valid("DETECT_THRESH=1.01") && !valid("DETECT_THRESH=-0.5") && !valid("DETECT_THRESH=60%"), "outside / not numbers");
     TEST_ASSERT(!valid("CLEAR_THRESH=abc") && !valid("CLEAR_THRESH="), "garbage");
+}
+
+TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_check_off) {
+    TEST_ASSERT(valid("DARK_THRESH=0") && valid("DARK_THRESH=40") && valid("DARK_THRESH=255"), "darkness 0..255 (0 = off)");
+    TEST_ASSERT(!valid("DARK_THRESH=256") && !valid("DARK_THRESH=-1") && !valid("DARK_THRESH=dark") && !valid("DARK_THRESH=12.5"), "outside / not whole numbers");
+    TEST_ASSERT(valid("MOTION_THRESH=0") && valid("MOTION_THRESH=300") && valid("MOTION_THRESH=1000000"), "motion 0 (off) .. 1000000");
+    TEST_ASSERT(!valid("MOTION_THRESH=1000001") && !valid("MOTION_THRESH=-5") && !valid("MOTION_THRESH="), "outside / empty");
+    TEST_ASSERT(valid("MOTION_HOLD_S=0") && valid("MOTION_HOLD_S=3600") && !valid("MOTION_HOLD_S=3601") && !valid("MOTION_HOLD_S=-1"), "hold 0..3600 s");
+}
+
+TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0"), "an old five-setting configuration is stored");
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
+    TEST_ASSERT_EQ((int)ps.size(), 3, "exactly the three new ones are missing (what a firmware update to this version leaves behind)");
+    TEST_ASSERT(listed(ps, "DARK_THRESH") && listed(ps, "MOTION_THRESH") && listed(ps, "MOTION_HOLD_S"), "namely these");
+    TEST_ASSERT(ps[0].missing && ps[1].missing && ps[2].missing, "reported as not set, not as invalid");
 }
 
 TEST(loop_delay_and_stream_tuning_ranges) {
@@ -205,8 +222,8 @@ TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
     con.in = std::string(NO_STREAM) + "\n";
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (uint32_t t = 0; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
-    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the five settings");
-    TEST_ASSERT(con.said("These settings need a value (" + std::to_string(PERSON_SCHEMA.count) + ")"), "first it asked for all 18");
+    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the eight settings");
+    TEST_ASSERT(con.said("These settings need a value (" + std::to_string(PERSON_SCHEMA.count) + ")"), "first it asked for all of them");
     TEST_ASSERT(con.said("STREAM_ENABLED - ") && con.said("DETECT_THRESH - "), "with their help text");
 }
 
@@ -240,6 +257,7 @@ TEST(settings_load_into_typed_fields_with_the_live_view_on) {
     std::string err;
     TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
     TEST_ASSERT(s.personGpio == 13 && s.detectThreshold == 0.6f && s.clearThreshold == 0.5f && s.loopDelayMs == 10, "detection");
+    TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10, "scene gate");
     TEST_ASSERT(s.streamEnabled && s.wifi.size() == 2 && s.wifi[1].pass == "pass;word2", "wifi, decoded");
     TEST_ASSERT(s.serverHost == "192.168.4.9" && s.httpPort == 8080 && s.apiKey == "s3cret" && s.detectorId == "detector-1", "relay");
     TEST_ASSERT(s.streamUser == "viewer" && s.streamPass == "hunter22" && s.streamPort == 8088, "stream login and port");
@@ -263,6 +281,8 @@ TEST(the_documented_typical_values_are_the_defaults_of_the_struct_the_glue_test_
     PersonSettings s;
     TEST_ASSERT(s.personGpio == 13 && s.detectThreshold == 0.60f && s.clearThreshold == 0.50f && s.loopDelayMs == 10,
                 "test_person_detect_glue.cpp is written around these values");
+    TEST_ASSERT(s.darkThreshold == 0 && s.motionThreshold == 0 && s.motionHoldSec == 0,
+                "and with the scene gate off, so that test sees every frame");
 }
 
 TEST(loading_refuses_missing_or_invalid_settings_and_says_which) {
@@ -279,7 +299,9 @@ int main() {
     RUN_TEST(the_person_schema_is_consistent);
     RUN_TEST(the_two_example_templates_are_valid_complete_configurations);
     RUN_TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists);
-    RUN_TEST(with_the_live_view_off_only_five_settings_are_needed_and_no_wifi_is_asked_for);
+    RUN_TEST(with_the_live_view_off_only_eight_settings_are_needed_and_no_wifi_is_asked_for);
+    RUN_TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_check_off);
+    RUN_TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off);
     RUN_TEST(turning_the_live_view_on_asks_for_the_whole_live_view_group_and_nothing_else);
     RUN_TEST(the_output_gpio_must_be_a_pin_the_board_leaves_free);
     RUN_TEST(thresholds_are_scores_between_0_01_and_1);

@@ -22,7 +22,8 @@
 #                    and the remote-logging and settings blocks of
 #                    ESP32_CAM_Recorder.ino
 #   Person detector: stream_logic.h (live view: authentication, routing, relay
-#                    announcement), settings_schema.h, and the detection and
+#                    announcement), scene_logic.h (darkness/motion gate),
+#                    settings_schema.h, and the detection and
 #                    settings code of ESP32_CAM_TFLite_Person.ino
 #                    (setPersonDetected, detectPerson, loop, the settings block)
 # (The "Relay settings link" class in each sketch — the real Wi-Fi + HTTP half of asking
@@ -140,6 +141,16 @@ else
 
     # The settings engine and the Recorder's key table (flash-stored settings,
     # see settings_logic.h): also compiled by the sketch, so also C++11.
+    # ...and the darkness/motion gate.
+    echo "--- scene_logic.h as C++11 (the ESP32 toolchain's dialect)"
+    if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
+           -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/scene_logic.h" -x c++ /dev/null; then
+        echo "ok"
+    else
+        echo "FAIL: scene_logic.h does not compile as C++11"
+        overall_status=1
+    fi
+
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
              ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h; do
         echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
@@ -200,6 +211,7 @@ else
     run_cpp_test test_alarm_logic
     run_cpp_test test_remote_log
     run_cpp_test test_person_stream_logic
+    run_cpp_test test_person_scene_logic
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
     run_cpp_test test_person_settings

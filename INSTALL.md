@@ -106,6 +106,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    - `person_detect_model_data.cc`
    - `person_detect_model_data.h`
    - `stream_logic.h`
+   - `scene_logic.h`
    - `ota_logic.h`
    - `ota.h`
    - `settings_logic.h`
@@ -113,14 +114,14 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
    There is **no config file to edit any more**: like the recorder, the detector keeps its settings in the board's flash and you type them in over the serial port after the first flash (step 7).
 
-4. *(Developer switches.)* Three things are not per-board settings but compile-time switches at the top of `ESP32_CAM_TFLite_Person.ino`, to edit only if you are developing: `PRINT_DETECTION_SCORES` (print a person/no-person % every inference cycle), `PRINT_STARTUP_INFO`, and `TENSOR_ARENA_SIZE` (tied to the model).
+4. *(Developer switches.)* Four things are not per-board settings but compile-time switches at the top of `ESP32_CAM_TFLite_Person.ino`, to edit only if you are developing: `PRINT_DETECTION_SCORES` (print a person/no-person % every inference cycle), `PRINT_STARTUP_INFO`, `PRINT_SCENE_READINGS` (print the brightness and motion numbers of every frame — switch it on while choosing `DARK_THRESH` and `MOTION_THRESH`, see "Darkness and motion gate" below) and `TENSOR_ARENA_SIZE` (tied to the model).
 
 5. Board settings: **AI Thinker ESP32-CAM**, same as step 1, **except Tools → Partition Scheme → "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"**. The TFLite Micro runtime is large and the default scheme's app slots (1.25 MB) are too small; this scheme has two slots of 1,966,080 bytes, which is what over-the-air updates need (see "Over-the-air firmware updates" below). Do **not** use *Huge APP (3MB No OTA)*: it has no second slot, so the board could never be updated without a cable. After compiling, the IDE should say `Sketch uses ... bytes ... Maximum is 1966080 bytes`.
 6. Wire the FTDI programmer the same way as step 1 (GPIO0 to GND to flash), select the port, and **Upload**. Disconnect GPIO0 from GND and power-cycle.
 7. Open the Serial Monitor at **115200 baud** and set its line ending to **Newline**. The boot messages start with the **Arduino-ESP32 core** version that built the firmware (it must be 3.x; the sketch refuses to compile on a known-old core). A new board has no settings yet, so it lists what is missing and waits. Type them as `KEY=value`, several at once separated by `;`, and press Enter:
 
    ```
-   PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0
+   PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0
    ```
 
    That is all a detector **without** the live view needs (no Wi-Fi is started at all). When everything is stored it restarts by itself. `HELP` lists every setting with what it means and the allowed values.
@@ -131,6 +132,9 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    | `DETECT_THRESH` | Score needed to declare "person", `0.01`–`1` (`0.6` = Espressif's default) |
    | `CLEAR_THRESH` | The score must fall **below** this before the GPIO clears (hysteresis). Not higher than `DETECT_THRESH` — to change both, send them in one line |
    | `LOOP_DELAY_MS` | Pause between detections, `0`–`1000` ms |
+   | `DARK_THRESH` | Average brightness (`0`–`255`) below which the picture counts as **dark** and detection is paused; `0` = darkness check off (see below) |
+   | `MOTION_THRESH` | The model only runs after motion: summed pixel change between two frames at or above this value; `0` = motion check off (see below) |
+   | `MOTION_HOLD_S` | Seconds detection stays on after the last motion, `0`–`3600` |
    | `STREAM_ENABLED` | `1`: join Wi-Fi and serve the live view (see below); `0`: no Wi-Fi at all. With `0`, none of the settings below are asked for |
    | `WIFI`, `SERVER_HOST`, `HTTP_PORT`, `API_KEY`, `DETECTOR_ID`, `STREAM_USER`, `STREAM_PASS`, `STREAM_PORT`, `STREAM_MAX_FPS`, `STREAM_JPEG_Q`, `STREAM_WR_TMO_S`, `ANN_HEARTBEAT`, `ANN_RETRY` | The live view — only asked for while `STREAM_ENABLED=1`; see the live-view section below |
 
@@ -162,6 +166,26 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    ```
 
    The model expects 96×96 grayscale frames — the sketch already configures the camera for that, so there's nothing to adjust there.
+
+### Darkness and motion gate (fewer false positives, less work)
+
+The person model reports false positives on dark pictures (it is looking at sensor noise), and there is no point running it on a picture where nothing moves. So before every inference the detector looks at the frame with a very cheap check on **sample pixels — every 10th pixel in both directions** (on the 96×96 frame that is 10 × 10 = 100 pixels):
+
+- **Brightness** = the average gray value (0–255) of the sample pixels. Below `DARK_THRESH` the scene is *dark*: the model is **not run**, and if a person was flagged the GPIO is cleared (in the dark that can only be a false detection). The scene counts as light again only once the brightness is 5 above the threshold, so dusk does not flip it on every frame.
+- **Motion** = the sum, over the sample pixels, of the absolute difference to the same pixel in the previous frame. Motion at or above `MOTION_THRESH` switches detection on, and it stays on for `MOTION_HOLD_S` seconds after the *last* motion. While a person is flagged the model keeps running even without motion, so someone standing still is not lost, and the model itself decides when they are gone.
+- The model runs only if the scene is **light and** there was motion lately. Setting `DARK_THRESH=0` and/or `MOTION_THRESH=0` switches that check off; with both `0` the detector behaves exactly as before. The live view still shows every frame, also while detection is paused.
+
+The serial monitor says when the state changes:
+
+```
+Scene: DARK (brightness 12 < 40) - detection paused
+Scene: still (motion 7 < 300) - detection paused
+Scene: active (brightness 120, motion 812) - detecting
+```
+
+**Choosing the thresholds.** `40` / `300` / `10` in the templates are only starting points, they depend on your lens, the scene and the sensor's auto-exposure (a camera in a dim room raises its gain, which makes the picture noisier, so its "motion" in the dark is not zero). Set `PRINT_SCENE_READINGS` to `1` at the top of the `.ino`, flash, and watch `Brightness: … Motion: …` for every frame: note the brightness at night and in the dimmest light where you still want detection (put `DARK_THRESH` between the two), and the motion number of an empty still room versus someone walking through (put `MOTION_THRESH` well above the first and below the second). Set it back to `0` afterwards. The maximum possible motion value is 25500 (100 samples × 255).
+
+**Updating a board that is already configured:** the three settings are new, so such a board lists them as missing at boot and waits for them on the serial port — or, if its live-view settings are stored, fetches them from the relay's staged device settings as for any new setting (`DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10`). Use `0` for all three to keep the old behaviour.
 
 ### Optional: watch the detector from a browser (live view)
 

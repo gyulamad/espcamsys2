@@ -15,9 +15,11 @@
 //   ANNOUNCE_HEARTBEAT_SECONDS    -> ANN_HEARTBEAT
 //   ANNOUNCE_RETRY_SECONDS        -> ANN_RETRY
 //
+// New in the scene gate (scene_logic.h): DARK_THRESH, MOTION_THRESH, MOTION_HOLD_S.
+//
 // There are no defaults. Everything about the live view (Wi-Fi, relay, the
 // stream's user/password and tuning) is only asked for while STREAM_ENABLED=1,
-// so a detector that must not use Wi-Fi at all is configured with five settings.
+// so a detector that must not use Wi-Fi at all is configured with eight settings.
 //
 // What is NOT a setting (developer switches, edit and re-flash): TENSOR_ARENA_SIZE
 // (tied to the model), PRINT_DETECTION_SCORES, PRINT_STARTUP_INFO — see the top
@@ -55,6 +57,12 @@ static const KeyDef PERSON_KEYS[] = {
       "score the person must fall BELOW before the GPIO goes LOW again (not higher than DETECT_THRESH)" },
     { "LOOP_DELAY_MS",   Kind::Int,       0,    1000,    Cond::Always,     nullptr,          nullptr,
       "pause between detections, milliseconds" },
+    { "DARK_THRESH",   Kind::Int,       0,    255,     Cond::Always,     nullptr,          nullptr,
+      "average brightness (0-255) below which the picture counts as dark and detection is paused; 0 = darkness check off" },
+    { "MOTION_THRESH", Kind::Int,       0,    1000000, Cond::Always,     nullptr,          nullptr,
+      "detection runs only after motion: summed pixel change between frames at or above this (about 100-1000 is typical); 0 = motion check off" },
+    { "MOTION_HOLD_S", Kind::Int,       0,    3600,    Cond::Always,     nullptr,          nullptr,
+      "seconds detection stays on after the last motion (a person standing still stays detected anyway); 0 = only while moving" },
 
     { "STREAM_ENABLED",  Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
       "1: join Wi-Fi and serve the live view; 0: no Wi-Fi at all (everything below is then not needed)" },
@@ -99,6 +107,9 @@ struct PersonSettings {
     float detectThreshold = 0.60f;
     float clearThreshold = 0.50f;
     int loopDelayMs = 10;
+    int darkThreshold = 0;          // 0 = darkness check off
+    uint32_t motionThreshold = 0;   // 0 = motion check off
+    uint32_t motionHoldSec = 0;
 
     bool streamEnabled = false;
     std::vector<WifiNet> wifi;
@@ -142,6 +153,9 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
     s.detectThreshold = static_cast<float>(d);
     s.clearThreshold = static_cast<float>(c);
     s.loopDelayMs = static_cast<int>(storedInt(store, "LOOP_DELAY_MS"));
+    s.darkThreshold = static_cast<int>(storedInt(store, "DARK_THRESH"));
+    s.motionThreshold = static_cast<uint32_t>(storedInt(store, "MOTION_THRESH"));
+    s.motionHoldSec = static_cast<uint32_t>(storedInt(store, "MOTION_HOLD_S"));
 
     s.streamEnabled = store.get("STREAM_ENABLED") == "1";
     if (s.streamEnabled) {

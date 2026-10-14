@@ -31,6 +31,7 @@
 #include "settings_logic.h"
 #include "settings_schema.h"
 #include "stream_logic.h"
+#include "scene_logic.h"   // darkness + motion gate: when is it worth running the model?
 
 // ── Live view (optional) ────────────────────────────────────────────────
 // With the STREAM_ENABLED setting on, the detector also joins Wi-Fi (any of
@@ -57,6 +58,10 @@
 #define PRINT_DETECTION_SCORES 1
 // Print startup and initialization information.
 #define PRINT_STARTUP_INFO 1
+// Print the scene gate's readings (average brightness and motion sum) for EVERY frame.
+// Off by default (it is a lot of output); switch it on while choosing DARK_THRESH
+// and MOTION_THRESH: watch the numbers in the dark, in daylight, and when you walk by.
+#define PRINT_SCENE_READINGS 0
 // Tensor arena size: the base size used by the Espressif v1.3.3
 // person-detection example. Tied to the model compiled in below.
 #define TENSOR_ARENA_SIZE (100 * 1024)
@@ -127,6 +132,28 @@ uint8_t *tensor_arena = nullptr;
 // ============================================================
 
 bool personDetected = false;
+
+
+// ============================================================
+// Scene gate (darkness + motion)
+// ============================================================
+//
+// Every frame is sampled (every 10th pixel in both directions) for its average
+// brightness and its change since the previous frame; the model only runs on
+// frames that are bright enough and have seen motion lately — see scene_logic.h.
+
+person_scene::SceneSampler g_sampler(IMAGE_WIDTH, IMAGE_HEIGHT);
+person_scene::SceneGate g_gate;
+
+// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S settings to the gate.
+void configureScene()
+{
+    person_scene::SceneConfig scene;
+    scene.darkBelow = g_cfg.darkThreshold;
+    scene.motionAtLeast = g_cfg.motionThreshold;
+    scene.holdMs = g_cfg.motionHoldSec * 1000UL;
+    g_gate.configure(scene);
+}
 
 
 // ============================================================
@@ -955,12 +982,16 @@ void updateDetectionState(float personScore)
 // Run one camera + inference cycle
 // ============================================================
 
-// Captures a frame and copies it into the model's input tensor,
-// converting camera uint8 pixels to model int8 the way the v1.3.3
+// Captures a frame, lets the scene gate look at it (darkness, motion) and — only
+// if the gate says the model should run — copies it into the model's input
+// tensor, converting camera uint8 pixels to model int8 the way the v1.3.3
 // implementation does: by flipping the high bit.
+// `run` says whether the tensor now holds a frame to run the model on.
 // The frame buffer is always handed back before returning.
-bool captureFrameIntoInput()
+bool captureFrameIntoInput(bool &run)
 {
+    run = false;
+
     camera_fb_t *fb = esp_camera_fb_get();
 
     if (!fb)
@@ -988,14 +1019,52 @@ bool captureFrameIntoInput()
         return false;
     }
 
-    for (int i = 0; i < IMAGE_SIZE; i++)
+    // Look at the picture first: too dark (the model sees noise as people) or
+    // nothing moving (nothing to find) means the model is not run at all.
+    person_scene::SceneReading reading =
+        g_sampler.analyze((const uint8_t *)fb->buf);
+
+    person_scene::SceneVerdict verdict =
+        g_gate.update(millis(), reading, personDetected);
+
+#if PRINT_SCENE_READINGS
+    Serial.printf(
+        "Brightness: %3d   Motion: %5u\n",
+        reading.brightness,
+        (unsigned)reading.motion
+    );
+#endif
+
+    if (verdict.changed)
     {
-        input->data.int8[i] =
-            ((uint8_t *)fb->buf)[i] ^ 0x80;
+        Serial.println(
+            person_scene::describeScene(
+                verdict.state, reading, g_gate.config()
+            ).c_str()
+        );
+    }
+
+    if (verdict.clearPerson)
+    {
+        // It went dark while a person was flagged: that can only be a false
+        // detection, so don't keep the GPIO high for it.
+        setPersonDetected(false);
+    }
+
+    if (verdict.run)
+    {
+        for (int i = 0; i < IMAGE_SIZE; i++)
+        {
+            input->data.int8[i] =
+                ((uint8_t *)fb->buf)[i] ^ 0x80;
+        }
+
+        run = true;
     }
 
     // Offer the same frame to the live view (does nothing unless a viewer is
-    // connected, and never waits — see streamPublishFrame()).
+    // connected, and never waits — see streamPublishFrame()). It sees every
+    // frame, also while detection is paused, so the picture never freezes.
     streamPublishFrame((const uint8_t *)fb->buf);
 
     esp_camera_fb_return(fb);
@@ -1011,12 +1080,17 @@ float dequantize(const TfLiteTensor *output, int8_t value)
         * output->params.scale;
 }
 
+// Returns true only when the model ran and the scores are filled in. False
+// means a failure OR that the scene gate paused detection for this frame
+// (dark / nothing moving) — the caller just waits for the next frame either way.
 bool detectPerson(
     float &personScore,
     float &noPersonScore
 )
 {
-    if (!captureFrameIntoInput())
+    bool run = false;
+
+    if (!captureFrameIntoInput(run) || !run)
     {
         return false;
     }
@@ -1101,8 +1175,21 @@ void setup()
         g_cfg.clearThreshold * 100.0f
     );
 
+    Serial.printf(
+        "Dark below brightness: %d (0 = check off)\n",
+        g_cfg.darkThreshold
+    );
+
+    Serial.printf(
+        "Motion threshold: %u (0 = check off), hold %u s\n",
+        (unsigned)g_cfg.motionThreshold,
+        (unsigned)g_cfg.motionHoldSec
+    );
+
 #endif
 
+
+    configureScene();
 
     // --------------------------------------------------------
     // GPIO

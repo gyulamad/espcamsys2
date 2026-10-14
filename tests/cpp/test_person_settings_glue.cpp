@@ -31,7 +31,7 @@ static void powerUp() {
     resetLink();
 }
 
-static const char* NO_STREAM = "PERSON_GPIO=4;DETECT_THRESH=0.7;CLEAR_THRESH=0.4;LOOP_DELAY_MS=20;STREAM_ENABLED=0";
+static const char* NO_STREAM = "PERSON_GPIO=4;DETECT_THRESH=0.7;CLEAR_THRESH=0.4;LOOP_DELAY_MS=20;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0";
 
 TEST(the_first_boot_stores_the_typed_settings_in_flash_and_restarts) {
     eraseFlash(); powerUp();
@@ -39,7 +39,7 @@ TEST(the_first_boot_stores_the_typed_settings_in_flash_and_restarts) {
     setupSettings();
     TEST_ASSERT_EQ(g_restarts, 1, "restarted once");
     TEST_ASSERT(g_flash["PERSON_GPIO"] == "4" && g_flash["DETECT_THRESH"] == "0.7" && g_flash["STREAM_ENABLED"] == "0", "values are in (fake) flash");
-    TEST_ASSERT_EQ((int)g_flash.size(), 5, "just the five (no live view, so no Wi-Fi settings are asked for)");
+    TEST_ASSERT_EQ((int)g_flash.size(), 8, "just the eight (no live view, so no Wi-Fi settings are asked for)");
     TEST_ASSERT(said("These settings need a value") && said("All settings are stored. Restarting"), "the conversation happened on serial");
     TEST_ASSERT_EQ(g_prefsOpen, 0, "the flash was closed again");
     TEST_ASSERT(g_prefsNamespace == "espcam" && !g_prefsReadOnly, "the espcam namespace, opened read-write");
@@ -90,7 +90,7 @@ TEST(a_threshold_pair_that_breaks_the_rule_is_refused_end_to_end) {
 // ── missing settings asked for from the relay ───────────────────────────
 
 static const char* WITH_STREAM =
-    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=1;"
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=1;"
     "WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=hunter22;STREAM_PORT=8088;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
