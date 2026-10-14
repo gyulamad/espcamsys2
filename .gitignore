@@ -22,3 +22,6 @@ tests/cpp/build/
 
 ota.conf
 fw_version.h
+
+Arduino/ESP32_CAM_Recorder/build/
+Arduino/ESP32_CAM_TFLite_Person/build/
