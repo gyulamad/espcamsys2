@@ -22,6 +22,7 @@ const auth = require('./lib/auth');
 const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
 const devicesettings = require('./lib/devicesettings');
+const firmware = require('./lib/firmware');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const connection = require('./lib/connection');
@@ -882,6 +883,142 @@ app.put(['/device-settings/:type', '/device-settings/:type/:id'],
 app.use('/device-settings', (err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 4 KB)' });
+  return next(err);
+});
+
+// ── Firmware for the boards (server-driven OTA update) ──
+// The central machine publishes one image per sketch type; boards poll for it, and when
+// the version they run differs from the published one they download it, flash it and
+// reboot (see lib/firmware.js and ota_logic.h / ota.h in the sketches).
+//   PUT /ota/:type?version=V          control key: publish the raw .bin as the current firmware
+//   GET /ota/:type/version?id=&fw=    camera key: "<version>\n<md5>\n"; 404 if nothing published
+//                                     (&err=<token> reports why the board's last update failed)
+//   GET /ota/:type/firmware.bin?id=   camera key: the image, with Content-Length
+//   GET /ota/status                   control key: one tab-separated line per device seen
+//                                     since the relay started (id type target running state ago error)
+// Files live in config.firmwareDir (default firmware/ next to server.js; FIRMWARE_DIR overrides it).
+const FIRMWARE_DIR = path.resolve(__dirname, fromEnv('FIRMWARE_DIR', config.firmwareDir || 'firmware'));
+const firmwareAuthThrottle = new Throttle(60 * 1000);
+const firmwareDevices = new firmware.DeviceTable();
+
+function readPublished(type) {
+  try {
+    return firmware.parseMeta(fs.readFileSync(firmware.metaFile(FIRMWARE_DIR, type), 'utf8'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function requireCameraKeyForOta(req, res, next) {
+  if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = firmwareAuthThrottle.check(`get:${ip}`, Date.now());
+  if (t.allow) relayLog('WARN', `rejected a GET ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong key' });
+}
+
+function requireControlKeyForOta(req, res, next) {
+  if (!CONTROL_KEY) return res.status(503).json({ error: 'firmware publishing is disabled: controlKey is not set in the relay config' });
+  const provided = req.headers['x-control-key'];
+  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = firmwareAuthThrottle.check(`ctl:${ip}`, Date.now());
+  if (t.allow) relayLog('WARN', `REJECTED a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong control key' });
+}
+
+// /ota/status must be declared before the /ota/:type routes below it.
+app.get('/ota/status', requireControlKeyForOta, (req, res) => {
+  let targets;
+  try {
+    targets = { recorder: readPublished('recorder'), detector: readPublished('detector') };
+  } catch (err) {
+    relayLog('ERROR', `could not read the published firmware info: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not read the published firmware info' });
+  }
+  return res.type('text/plain').send(firmwareDevices.statusText(targets, Date.now()));
+});
+
+app.put('/ota/:type',
+  requireControlKeyForOta,
+  express.raw({ type: '*/*', limit: '3mb' }),
+  (req, res) => {
+    const { type } = req.params;
+    const version = req.query.version;
+    if (!firmware.isType(type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
+    if (!firmware.isVersion(version)) return res.status(400).json({ error: 'version=... is required: 1-64 characters from A-Z a-z 0-9 . _ -' });
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const checked = firmware.checkImage(body);
+    if (!checked.ok) {
+      relayLog('WARN', `${actorOf(req)} tried to publish a ${type} firmware ${version} that was refused: ${checked.error}`);
+      return res.status(400).json({ error: checked.error });
+    }
+    const meta = firmware.makeMeta(version, body, Date.now());
+    try {
+      fs.mkdirSync(FIRMWARE_DIR, { recursive: true });
+      // The image first, then the info file: a board only learns of a version once its image is in place.
+      writeFileAtomic(firmware.binFile(FIRMWARE_DIR, type), body);
+      writeFileAtomic(firmware.metaFile(FIRMWARE_DIR, type), JSON.stringify(meta));
+    } catch (err) {
+      relayLog('ERROR', `could not store the ${type} firmware ${version}: ${errorMessage(err)}`);
+      return res.status(500).json({ error: 'could not store the firmware' });
+    }
+    relayLog('INFO', `${actorOf(req)} published ${type} firmware ${meta.version} (${meta.size} bytes, md5 ${meta.md5})`);
+    return res.json(Object.assign({ ok: true, type }, meta));
+  });
+
+app.get('/ota/:type/version', requireCameraKeyForOta, (req, res) => {
+  const { type } = req.params;
+  const id = req.query.id;
+  if (!firmware.isType(type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
+  if (!firmware.isId(id)) return res.status(400).json({ error: 'id=... is required and must be a valid device id' });
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const running = firmware.cleanToken(req.query.fw, 64);
+  const err = firmware.cleanToken(req.query.err, 40);
+  for (const e of firmwareDevices.report(type, id, running, err, Date.now())) {
+    relayLog(e.level, e.message, { sender: id, ip, via: 'relay' });
+  }
+  let meta;
+  try {
+    meta = readPublished(type);
+  } catch (readErr) {
+    relayLog('ERROR', `could not read the published ${type} firmware info: ${errorMessage(readErr)}`);
+    return res.status(500).json({ error: 'could not read the published firmware info' });
+  }
+  if (!meta) return res.status(404).type('text/plain').send('no firmware published');
+  return res.type('text/plain').send(firmware.versionReply(meta));
+});
+
+app.get('/ota/:type/firmware.bin', requireCameraKeyForOta, (req, res) => {
+  const { type } = req.params;
+  if (!firmware.isType(type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
+  // The id only labels the log line; a missing or bad one is not a reason to refuse the download.
+  const id = firmware.isId(req.query.id) ? req.query.id : 'an unidentified device';
+  let meta;
+  let image;
+  try {
+    meta = readPublished(type);
+    image = meta ? fs.readFileSync(firmware.binFile(FIRMWARE_DIR, type)) : null;
+  } catch (err) {
+    relayLog('ERROR', `could not read the published ${type} firmware: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not read the published firmware' });
+  }
+  if (!meta || !image) return res.status(404).type('text/plain').send('no firmware published');
+  // The bytes sent must be the ones the version reply promised (an upload can land between the two reads).
+  if (image.length !== meta.size || firmware.md5Hex(image) !== meta.md5) {
+    return res.status(409).type('text/plain').send('firmware changed while reading, try again');
+  }
+  relayLog('INFO', `${id} is downloading ${type} firmware ${meta.version} (${meta.size} bytes)`, { sender: firmware.isId(req.query.id) ? id : 'relay', ip: logfile.normalizeIp(req.socket.remoteAddress), via: 'relay' });
+  res.set('Content-Type', 'application/octet-stream');
+  res.set('Content-Length', String(image.length));
+  return res.end(image);
+});
+
+// An oversized upload gets a clear answer, not Express's HTML error page.
+app.use('/ota', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 3 MB)' });
   return next(err);
 });
 

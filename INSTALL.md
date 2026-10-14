@@ -28,13 +28,15 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 
 ## 1. Flash each ESP32-CAM (streaming/recording sketch)
 
-1. Install the ESP32 board package in Arduino IDE if you haven't already (Boards Manager → search "esp32" → install), and select **AI Thinker ESP32-CAM** as the board.
+1. Install the ESP32 board package in Arduino IDE if you haven't already (Boards Manager → search "esp32" → install), and select **AI Thinker ESP32-CAM** as the board, and **Tools → Partition Scheme → "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"** (needed for over-the-air updates; see below).
 2. On your laptop, create a sketch folder containing these files together (this sketch used to be called `sketch_sep12a_camera2_behind_NAT` — it's since been renamed):
    - `ESP32_CAM_Recorder.ino`
    - `logic.h`
    - `remote_log.h`
    - `settings_logic.h`
    - `settings_schema.h`
+   - `ota_logic.h`
+   - `ota.h`
 
    There is **no config file to edit any more**: the camera's settings (Wi-Fi, relay address, camera id, API key, ...) are stored in the board's flash and typed in over the serial port after the first flash — see step 5 below.
 3. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
@@ -104,6 +106,8 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    - `person_detect_model_data.cc`
    - `person_detect_model_data.h`
    - `stream_logic.h`
+   - `ota_logic.h`
+   - `ota.h`
    - `settings_logic.h`
    - `settings_schema.h`
 
@@ -111,7 +115,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
 
 4. *(Developer switches.)* Three things are not per-board settings but compile-time switches at the top of `ESP32_CAM_TFLite_Person.ino`, to edit only if you are developing: `PRINT_DETECTION_SCORES` (print a person/no-person % every inference cycle), `PRINT_STARTUP_INFO`, and `TENSOR_ARENA_SIZE` (tied to the model).
 
-5. Board settings: **AI Thinker ESP32-CAM**, same as step 1. If you hit a "sketch too big" error at compile time, switch **Tools → Partition Scheme** to **Huge APP (3MB No OTA)** — the TFLite Micro runtime is large.
+5. Board settings: **AI Thinker ESP32-CAM**, same as step 1, **except Tools → Partition Scheme → "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"**. The TFLite Micro runtime is large and the default scheme's app slots (1.25 MB) are too small; this scheme has two slots of 1,966,080 bytes, which is what over-the-air updates need (see "Over-the-air firmware updates" below). Do **not** use *Huge APP (3MB No OTA)*: it has no second slot, so the board could never be updated without a cable. After compiling, the IDE should say `Sketch uses ... bytes ... Maximum is 1966080 bytes`.
 6. Wire the FTDI programmer the same way as step 1 (GPIO0 to GND to flash), select the port, and **Upload**. Disconnect GPIO0 from GND and power-cycle.
 7. Open the Serial Monitor at **115200 baud** and set its line ending to **Newline**. The boot messages start with the **Arduino-ESP32 core** version that built the firmware (it must be 3.x; the sketch refuses to compile on a known-old core). A new board has no settings yet, so it lists what is missing and waits. Type them as `KEY=value`, several at once separated by `;`, and press Enter:
 
@@ -475,6 +479,46 @@ The relay log shows what happened, with the setting **names only** (values can b
 - The line is checked like typed input and is **all or nothing**: one bad value and nothing is stored (the serial log says why).
 - It doesn't help when the settings needed to *reach* the relay are the ones missing or wrong (Wi-Fi, server, port, API key, id), nor a detector run without its live view (it has no Wi-Fi settings): those still need the serial port.
 - The line travels over plain HTTP together with the camera key, like everything else between the cameras and the relay. Don't stage anything you wouldn't be happy to have on your LAN.
+
+## Over-the-air firmware updates
+
+Recompile on one machine, run one script, and every camera updates itself. The cameras can't be reached from outside (NAT), so they **poll**: about once a minute each board asks the relay which firmware is current; if that differs from what it runs it downloads it, flashes it and reboots. The version is the **git revision** you built from, and "different" (not "newer") triggers the update, so checking out an older commit and deploying it **downgrades** the cameras the same way.
+
+### One-time preparation
+
+1. **Core 3.x, partition scheme.** Both sketches need the Arduino-ESP32 core 3.x (they print its version at boot). Compile with the **Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** scheme: two app slots of 1,966,080 bytes. The default scheme's slots (1,310,720) are too small for the person detector, and *Huge APP* has no second slot at all.
+2. **Every camera needs one USB flash** with that scheme (and the new sketch, which contains the updater): the partition table cannot be changed over the air. Upload normally from the Arduino IDE — the board's settings are kept (they live in NVS, which a normal upload leaves alone). **Don't** tick *Erase All Flash Before Sketch Upload*: that wipes the settings.
+3. **Relay:** set `controlKey` in `config.js` (the same key that protects the recording switch). Firmware is stored in `nodejs/camera-relay/firmware/` (not in git; change it with `firmwareDir`). Publishing needs the **control** key, never the camera key — the camera key is flashed into every board.
+4. **Central machine** (where you compile; may be the Pi if it has `arduino-cli` with the esp32 core): `cp ota.example.conf ota.conf`, then fill in `RELAY_URL` and `CONTROL_KEY`. Check the board options with `arduino-cli board details -b esp32:esp32:esp32cam`; if your core doesn't accept `PartitionScheme=min_spiffs` in the FQBN, set `EXTRA_COMPILE_ARGS` in `ota.conf` (the example shows the build-property form).
+
+### Deploying
+
+```bash
+./ota-deploy.sh all --wait 300      # or: recorder | detector
+```
+
+It writes the git revision into `fw_version.h` (gitignored, removed afterwards), compiles, refuses an image that doesn't fit a slot, and only when everything built publishes the binaries to the relay. With `--wait SECS` it then watches the relay until every device of the deployed type(s) runs the new version, prints a table (id, running version, state, last error) and exits non-zero if any device isn't updated. A tree with uncommitted changes deploys as `<revision>-dirty.t<time>` (with a warning), so dev builds always re-flash; commit first for a stable version.
+
+### What you will see in the relay log
+
+- `... published recorder firmware f5959f7 (1234567 bytes, md5 ...)` — the upload
+- `cam1 is downloading recorder firmware f5959f7 (...)` — a board started
+- `cam1 now runs f5959f7 (was e1c95ad)` — it rebooted into the new version; every log line also carries the version
+- `WARN cam1 firmware update failed: md5_failed` — it tried and failed (other reasons: `http_404`, `short_write`, `no_ota_partition`, `no_length`, `http_err<N>`); it retries after 5 minutes
+- A board that never shows up (weak Wi-Fi, no power) is `offline` in the status. Ask any time:
+  `curl -s -H "X-Control-Key: YOUR_CONTROL_KEY" http://PI:8080/ota/status` — one line per device: `id type target running state last-seen last-error`, state `updated` / `pending` / `offline`. The relay only knows devices that polled since it last started.
+
+### Rules and caveats
+
+- **Adding a setting? Stage it BEFORE deploying.** Settings have no defaults, so after an update a board lacking a new setting can't run. If its Wi-Fi/server/port/key/id are stored it fetches the value from the relay (previous section) — but only what you staged:
+  1. `curl -X PUT -H "X-Control-Key: ..." --data-binary 'NEW_KEY=value' http://PI:8080/device-settings/<type>`
+  2. then `./ota-deploy.sh`.
+
+  Staged first, the update is invisible (one extra restart of ~45 s). Staged afterwards, the camera restarts about once a minute until you stage it. A release that **changes the Wi-Fi / server / port / API key / id settings, renames a setting, or tightens a range** so that a stored value becomes invalid still needs a cable.
+- A detector with `STREAM_ENABLED=0` never joins Wi-Fi and **cannot be updated over the air**. While someone watches a detector's live view its network task is busy streaming, so its update check waits for the viewer to leave.
+- The camera keeps streaming during a download; the flash writes briefly stall the other CPU core. A weak power supply can brown out during the ~1.5 MB download — if a board resets mid-update, check its supply.
+- A build that boots but can't reach the relay (bad release) can't be rescued over the air: **recover by cable** (USB upload of a good build; settings are kept).
+- Plain HTTP on the relay's port for now, with the same trust as the rest of the camera traffic: anyone on the LAN who has the camera key could fetch the firmware, and the control key travels in clear to publish it. There is no signing, rollback or boot-loop protection yet; HTTPS is the planned next step.
 
 ## Upgrading from the version with camera power on/off
 

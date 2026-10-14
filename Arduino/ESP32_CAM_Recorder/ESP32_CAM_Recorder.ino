@@ -127,7 +127,16 @@ void IRAM_ATTR onAlarmEdge() {
 // built before they have been read from flash, so it starts serial-only;
 // remoteLogStart() applies the real configuration from g_cfg.
 
-#define FW_BUILD __DATE__ " " __TIME__   // identifies which firmware build wrote a log line
+// FW_GIT is the git revision this binary was built from: ota-deploy.sh writes it into
+// fw_version.h (gitignored) just before compiling. A sketch built by hand has none and says "dev".
+// The over-the-air update compares it with the version the relay publishes (see ota.h).
+#if __has_include("fw_version.h")
+#include "fw_version.h"
+#endif
+#ifndef FW_GIT
+#define FW_GIT "dev"
+#endif
+#define FW_BUILD FW_GIT " " __DATE__ " " __TIME__   // identifies which firmware build wrote a log line
 
 void logEcho(void*, LogLevel, const char* line) {
   Serial.println(line);
@@ -275,6 +284,31 @@ void remoteLogRelayReachable() {
   if (resumed) RLOG_INFO("remote logging resumed — the relay is reachable again");
 }
 // ── end of remote logging glue ──────────────────────────────────────────
+
+// ── Firmware update glue ────────────────────────────────────────────────
+// Over-the-air updates, server-driven: a background task asks the relay every minute or
+// so which firmware is current and, when it differs from FW_GIT, downloads it, flashes it
+// and restarts. What it decides: ota_logic.h (unit-tested); the HTTP and flash calls: ota.h.
+// Its messages go to the remote log, so the relay's log file shows each step. It runs in
+// its own task, never in loop() — HTTP in loop() would stall the stream.
+#define OTA_INFO(...) RLOG_INFO(__VA_ARGS__)
+#define OTA_WARN(...) RLOG_WARN(__VA_ARGS__)
+#include "ota.h"
+
+OtaUpdater otaUpdater("recorder");
+
+void otaTask(void *) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId);
+  }
+}
+
+// Call once, after the settings are loaded. Pinned to core 0 (where the WiFi stack runs).
+void otaStart() {
+  xTaskCreatePinnedToCore(otaTask, "ota", 10240, nullptr, 1, nullptr, 0);
+}
+// ── end of firmware update glue ─────────────────────────────────────────
 
 // Writes `len` bytes to the push socket, retrying partial writes instead of
 // treating one short write() as a hard failure. A single write() can
@@ -755,6 +789,9 @@ void setup() {
   cameraReady = initCamera();
 
   connectWifi();
+
+  // Last, so its stack does not take the memory the camera and the WiFi driver need.
+  otaStart();
 }
 
 // Periodic identity reminder — so opening the Serial Monitor at any point

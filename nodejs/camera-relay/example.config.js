@@ -30,6 +30,11 @@ module.exports = {
   // Staging them needs controlKey above.
   // deviceSettingsDir: 'device-settings',   // default
 
+  // Firmware for the boards (over-the-air update, see "Over-the-air updates" in INSTALL.md).
+  // ota-deploy.sh publishes the compiled sketches here with the controlKey below; the boards
+  // poll for them with the camera key. A relative path is relative to this folder; optional.
+  // firmwareDir: 'firmware',   // default
+
   // Recording ON/OFF switch (dashboard buttons: switch recording OFF per camera, or for every
   // camera at once, for N minutes or until switched back ON — e.g. while people are on site).
   // Changing it needs this key, sent by the dashboard's server as an X-Control-Key header.

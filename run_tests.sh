@@ -97,9 +97,10 @@ rm -f "$BUILD_DIR"/*.gcda "$BUILD_DIR"/*.gcno
 # backtrace on a crash — see the note above).
 run_cpp_test() {
     local name="$1"
+    shift
     local bin="$BUILD_DIR/$name"
     echo "--- $name"
-    if ! g++ -std=c++17 -Wall -Wextra ${COV_FLAGS[@]+"${COV_FLAGS[@]}"} -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
+    if ! g++ -std=c++17 -Wall -Wextra ${COV_FLAGS[@]+"${COV_FLAGS[@]}"} "$@" -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
         echo "FAIL: could not compile $name"
         overall_status=1
     elif command -v gdb >/dev/null 2>&1; then
@@ -140,7 +141,7 @@ else
     # The settings engine and the Recorder's key table (flash-stored settings,
     # see settings_logic.h): also compiled by the sketch, so also C++11.
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
-             ESP32_CAM_TFLite_Person/settings_schema.h; do
+             ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h; do
         echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
@@ -173,12 +174,38 @@ else
         overall_status=1
     fi
 
+    # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) is copied into
+    # both sketch folders the same way, and the copies must be identical too.
+    for shared in ota_logic.h ota.h; do
+        echo "--- $shared copies are identical"
+        SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
+        shared_ok=1
+        shared_found=0
+        for copy in "$ROOT_DIR"/Arduino/*/"$shared"; do
+            [ -e "$copy" ] || continue
+            shared_found=$((shared_found + 1))
+            if ! cmp -s "$SHARED_ORIGINAL" "$copy"; then
+                echo "FAIL: $copy differs from $SHARED_ORIGINAL"
+                shared_ok=0
+            fi
+        done
+        if [ "$shared_ok" = 1 ] && [ "$shared_found" -ge 2 ]; then
+            echo "ok ($shared_found copies)"
+        else
+            [ "$shared_found" -ge 2 ] || echo "FAIL: expected a $shared in both sketch folders, found $shared_found"
+            overall_status=1
+        fi
+    done
+
     run_cpp_test test_alarm_logic
     run_cpp_test test_remote_log
     run_cpp_test test_person_stream_logic
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
     run_cpp_test test_person_settings
+    run_cpp_test test_ota_logic
+    # ota.h is compiled for real against fakes of the Arduino core (tests/cpp/ota_fakes/).
+    run_cpp_test test_ota_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
 
     # The sketch's remote-logging glue is tested by compiling the code it
     # ACTUALLY contains: extract the marked block from the .ino and build it
@@ -301,6 +328,17 @@ fi
 #     exact text kept, names (never values) in the log, bad ids/types/bodies and
 #     path traversal refused. Override the ports with E2E_DEVSET_PORT /
 #     E2E_DEVSET_PUSH_PORT.
+#   - tests/e2e/test_ota_e2e.js: the firmware the relay hands to the boards (PUT/GET /ota/...) —
+#     control key to publish, camera key to ask and download, images that are not ESP32 images
+#     refused, byte-exact download with the announced md5, the log lines (published, downloading,
+#     "now runs X (was Y)", update failed), /ota/status, downgrade, restart. Override the ports
+#     with E2E_OTA_PORT / E2E_OTA_PUSH_PORT.
+#   - tests/e2e/test_ota_deploy_e2e.js: ota-deploy.sh against a real relay, with a fake arduino-cli in
+#     a throwaway git repo — the version is the git revision (dirty tree: .t<epoch>), fw_version.h
+#     written and removed, the right binary published per type, a failed build / oversized image /
+#     refused upload stops the run (and `all` publishes nothing unless every sketch built), and
+#     --wait succeeds or fails depending on whether the (simulated) cameras updated. Skips itself
+#     if bash, git or curl is missing. Override the ports with E2E_OTADEP_PORT / E2E_OTADEP_PUSH_PORT.
 #   - tests/e2e/test_push_connection_e2e.js: how the relay treats a camera's push
 #     connection on a bad WiFi link — a reconnect after the old connection went
 #     quiet is not an id clash (and the ghost is closed), two boards really
@@ -376,6 +414,28 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_logging_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (firmware over the air, relay) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_ota_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (ota-deploy.sh) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_ota_deploy_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

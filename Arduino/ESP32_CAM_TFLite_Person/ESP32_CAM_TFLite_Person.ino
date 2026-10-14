@@ -41,7 +41,16 @@
 // the detector works exactly as before. With STREAM_ENABLED=0 no Wi-Fi is
 // started at all.
 
-#define FW_BUILD __DATE__ " " __TIME__   // which firmware build wrote a log line
+// FW_GIT is the git revision this binary was built from: ota-deploy.sh writes it into
+// fw_version.h (gitignored) just before compiling. A sketch built by hand has none and says "dev".
+// The over-the-air update compares it with the version the relay publishes (see ota.h).
+#if __has_include("fw_version.h")
+#include "fw_version.h"
+#endif
+#ifndef FW_GIT
+#define FW_GIT "dev"
+#endif
+#define FW_BUILD FW_GIT " " __DATE__ " " __TIME__   // which firmware build wrote a log line
 
 // ── Developer switches (not per-camera settings: edit here and re-flash) ──
 // Print person/no-person scores for every inference.
@@ -552,6 +561,17 @@ bool postAnnouncement(const std::string &ip, person_stream::AnnounceReason reaso
     return false;
 }
 
+// ── Firmware update ─────────────────────────────────────────
+// Over-the-air updates, server-driven: networkTask (below) calls otaUpdater.tick() every
+// pass; when a check is due it asks the relay which firmware is current and, if that differs
+// from FW_GIT, downloads it, flashes it and restarts. What it decides: ota_logic.h
+// (unit-tested); the HTTP and flash calls: ota.h. Only exists with the live view / Wi-Fi on:
+// a detector with STREAM_ENABLED=0 never joins Wi-Fi, so it can only be updated by cable.
+// (While someone watches the live view the task is busy streaming; the check waits for them.)
+#include "ota.h"
+
+OtaUpdater otaUpdater("detector");
+
 // ── Serving ─────────────────────────────────────────────────
 
 // Reads the request head; returns what arrived (possibly nothing).
@@ -801,6 +821,9 @@ void networkTask(void *)
                 announcePolicy.onResult(millis(), ok, ip, ssid);
             }
 
+            // Firmware update check (does nothing unless one is due).
+            otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId);
+
             WiFiClient client = streamServer->available();
 
             if (client && answerRequest(client, 1000))
@@ -847,7 +870,7 @@ bool startNetwork()
         (uint32_t)g_cfg.announceHeartbeatSec * 1000UL,
         (uint32_t)g_cfg.announceRetrySec * 1000UL);
 
-    xTaskCreatePinnedToCore(networkTask, "network", 12288, nullptr, 1, nullptr, 0);
+    xTaskCreatePinnedToCore(networkTask, "network", 16384, nullptr, 1, nullptr, 0);   // 16 KB: the firmware update (HTTP + flash) runs on this stack too
 
     Serial.printf(
         "Live view starting - watch the relay's log for its address (user '%s')\n",
