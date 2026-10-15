@@ -359,6 +359,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .files-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .files-size { flex-shrink: 0; }
+  /* Footage nobody has played or downloaded yet is bold; seen footage is normal. */
+  .files-row.unseen .files-name, .files-row.unseen .files-size { font-weight: 700; }
   .files-empty { color: var(--muted); padding: 4px 0; }
   .files-player video {
     width: 100%; max-height: 220px; border-radius: 4px;
@@ -954,12 +956,13 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
           <button class="cam-btn danger" onclick="deleteAllRecordings('${id}')">🗑 DELETE ALL</button>
         </div>
       `;
+      // f.seen comes from the relay; an older relay that doesn't send it counts as seen, so nothing is bold by mistake.
       const rows = files.map(f => `
-        <div class="files-row">
+        <div class="files-row${f.seen === false ? ' unseen' : ''}" id="row-${id}-${f.filename}">
           <span class="files-name">${escapeHtml(f.filename)}</span>
           <span class="files-size">${formatBytes(f.sizeBytes)}</span>
-          <button class="cam-btn" onclick="togglePlayRecording('${id}', '${f.filename}')">▶ PLAY</button>
-          <a class="cam-btn" href="recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}">⬇ GET</a>
+          <button class="cam-btn" onclick="markRecordingSeen('${id}', '${f.filename}'); togglePlayRecording('${id}', '${f.filename}')">▶ PLAY</button>
+          <a class="cam-btn" href="recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}" onclick="markRecordingSeen('${id}', '${f.filename}')">⬇ GET</a>
           <button class="cam-btn danger" onclick="deleteRecording('${id}', '${f.filename}')">🗑 DEL</button>
         </div>
         <div class="files-player" id="player-${id}-${f.filename}"></div>
@@ -968,6 +971,15 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     } catch (e) {
       panel.innerHTML = '<div class="files-empty">Could not load recordings.</div>';
     }
+  }
+
+  // Playing or downloading a clip counts as seeing it: the row stops being bold
+  // right away, and the relay is told (fire and forget — if that fails the clip
+  // simply shows as unseen again the next time the list loads).
+  function markRecordingSeen(id, filename) {
+    const row = document.getElementById(`row-${id}-${filename}`);
+    if (row) row.classList.remove('unseen');
+    fetch(`recordings.php?cam=${encodeURIComponent(id)}&seen=${encodeURIComponent(filename)}`, { method: 'POST' }).catch(() => null);
   }
 
   // Toggles a plain HTML5 <video> element in place under the clicked

@@ -1126,6 +1126,22 @@ function recordingFileNames(dir) {
   return fs.readdirSync(dir).filter((f) => validation.isSafeFilename(f));
 }
 
+// A clip counts as SEEN once the dashboard has told the relay so (it does when
+// someone plays or downloads it). That is remembered as an empty sidecar file
+// next to the clip — "<clip>.mp4.seen" — which is never listed or counted as a
+// recording (it does not end in .mp4) and goes away with its clip. Kept on the
+// relay, not in the browser, so every device viewing the dashboard agrees.
+function seenMarkerPath(clipPath) {
+  return clipPath + '.seen';
+}
+function isSeen(clipPath) {
+  return fs.existsSync(seenMarkerPath(clipPath));
+}
+function removeClip(clipPath) {
+  fs.unlinkSync(clipPath);
+  fs.rmSync(seenMarkerPath(clipPath), { force: true });
+}
+
 // Resolves /recordings/:id/:filename to req.recordingPath, or answers 400 (not a
 // name the relay would have generated — which rules out path traversal too)
 // or 404 (no such file).
@@ -1138,13 +1154,14 @@ function requireExistingRecording(req, res, next) {
   return next();
 }
 
-// List saved recordings for a camera, newest first.
+// List saved recordings for a camera, newest first. `seen` says whether the
+// clip has been played or downloaded yet (see seenMarkerPath above).
 app.get('/recordings/:id', (req, res) => {
   const dir = path.join(RECORDINGS_DIR, req.params.id);
   const files = recordingFileNames(dir)
     .map((f) => {
       const stat = fs.statSync(path.join(dir, f));
-      return { filename: f, sizeBytes: stat.size, createdAt: stat.birthtime };
+      return { filename: f, sizeBytes: stat.size, createdAt: stat.birthtime, seen: isSeen(path.join(dir, f)) };
     })
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   res.json(files);
@@ -1157,7 +1174,7 @@ app.get('/recordings/:id', (req, res) => {
 app.delete('/recordings/:id', (req, res) => {
   const dir = path.join(RECORDINGS_DIR, req.params.id);
   const deleted = recordingFileNames(dir);
-  for (const f of deleted) fs.unlinkSync(path.join(dir, f));
+  for (const f of deleted) removeClip(path.join(dir, f));
   res.json({ deleted });
 });
 
@@ -1173,8 +1190,14 @@ app.get('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
 
 // Delete one recording.
 app.delete('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
-  fs.unlinkSync(req.recordingPath);
+  removeClip(req.recordingPath);
   res.json({ deleted: req.params.filename });
+});
+
+// Mark one recording as seen (played or downloaded). Harmless and repeatable.
+app.post('/recordings/:id/:filename/seen', requireExistingRecording, (req, res) => {
+  fs.writeFileSync(seenMarkerPath(req.recordingPath), '');
+  res.json({ seen: req.params.filename });
 });
 
 // Any error a route doesn't handle itself ends up here: recorded with its stack

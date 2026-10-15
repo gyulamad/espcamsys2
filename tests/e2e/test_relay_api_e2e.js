@@ -203,6 +203,18 @@ const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('
 
     r = await get(`/recordings/${cam}`);
     check('the file list shows the three clips', r.status === 200 && Array.isArray(r.json) && r.json.length === 3, r.text);
+    check('every clip in the list starts out unseen', r.json.every((f) => f.seen === false), r.text);
+    r = await post(`/recordings/${cam}/notes.txt/seen`);
+    check('marking a name that is not a recording as seen is refused (400)', r.status === 400, `got ${r.status}`);
+    r = await post(`/recordings/${cam}/${cam}_99.mp4/seen`);
+    check('marking a recording that does not exist as seen is a 404', r.status === 404, `got ${r.status}`);
+    r = await post(`/recordings/${cam}/${clipB}/seen`);
+    check('marking a clip as seen answers with its name', r.status === 200 && (r.json || {}).seen === clipB, `got ${r.status} ${r.text}`);
+    r = await post(`/recordings/${cam}/${clipB}/seen`);
+    check('...and doing it again is harmless', r.status === 200, `got ${r.status}`);
+    r = await get(`/recordings/${cam}`);
+    const seenOf = (name) => ((r.json || []).find((f) => f.filename === name) || {}).seen;
+    check('the list then shows that clip as seen and the others as unseen, still three clips', r.json.length === 3 && seenOf(clipB) === true && seenOf(clipA) === false && seenOf(clipC) === false, r.text);
     r = await get(`/recordings/${cam}/${clipA}`);
     check('a clip downloads with exactly its bytes', r.status === 200 && r.raw.equals(bytesA), `got ${r.status}`);
     r = await get(`/recordings/${cam}/notes.txt`);
@@ -217,8 +229,16 @@ const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('
     r = await del(`/recordings/${cam}/${clipA}`);
     check('deleting one clip answers with its name and removes the file', r.status === 200 && (r.json || {}).deleted === clipA && !fs.existsSync(path.join(dir, clipA)), `got ${r.status} ${r.text}`);
     check('...the other clips are untouched', fs.existsSync(path.join(dir, clipB)) && fs.existsSync(path.join(dir, clipC)));
+    await post(`/recordings/${cam}/${clipB}/seen`);
+    r = await del(`/recordings/${cam}/${clipB}`);
+    check('deleting a seen clip also removes its seen marker', r.status === 200 && !fs.existsSync(path.join(dir, clipB + '.seen')), `got ${r.status}`);
+    fs.writeFileSync(path.join(dir, clipB), 'B');
+    r = await get(`/recordings/${cam}`);
+    check('a new clip with a deleted one\'s name starts out unseen again', (r.json.find((f) => f.filename === clipB) || {}).seen === false, r.text);
+    r = await post(`/recordings/${cam}/${clipC}/seen`);
     r = await del(`/recordings/${cam}`);
     check('deleting all lists exactly the remaining clips', r.status === 200 && r.json && Array.isArray(r.json.deleted) && r.json.deleted.length === 2 && r.json.deleted.includes(clipB) && r.json.deleted.includes(clipC), r.text);
+    check('...and leaves no seen markers behind', fs.readdirSync(dir).filter((n) => n.endsWith('.seen')).length === 0, JSON.stringify(fs.readdirSync(dir)));
     r = await del('/recordings/e2e-api-no-such-camera');
     check('deleting all for a camera with no folder is an empty answer, not an error', r.status === 200 && r.json && r.json.deleted.length === 0, `got ${r.status} ${r.text}`);
 

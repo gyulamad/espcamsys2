@@ -10,6 +10,8 @@
 // GET  recordings.php?cam=ID&play=FILENAME      -> streams that file inline, for <video src="">
 // POST recordings.php?cam=ID&delete=FILENAME    -> deletes one recording
 // POST recordings.php?cam=ID&deleteAll=1        -> deletes every recording for this camera
+// POST recordings.php?cam=ID&seen=FILENAME      -> marks one recording as seen (the list's
+//                                                  "seen" flag; unseen ones are shown in bold)
 //
 // Camera lookup, filename validation, and header forwarding all live in
 // lib/Logic.php (CamLogic) so they can be unit tested without a web
@@ -31,6 +33,7 @@ $download = $_GET['download'] ?? null;
 $play = $_GET['play'] ?? null;
 $delete = $_GET['delete'] ?? null;
 $deleteAll = isset($_GET['deleteAll']);
+$seen = $_GET['seen'] ?? null;
 
 // Streams a recording to the browser. Shared by $download and $play — the only
 // difference between them is the Content-Disposition we send back; the byte
@@ -80,6 +83,18 @@ function stream_named_recording($relayBase, $filename, $disposition) {
         exit('Invalid filename');
     }
     stream_recording($relayBase . '/' . rawurlencode($filename), $filename, $disposition);
+}
+
+if ($seen !== null) {
+    header('Content-Type: application/json');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_fail(405, 'Use POST to mark a recording as seen');
+    }
+    if (!CamLogic::isSafeFilename($seen)) {
+        json_fail(400, 'Invalid filename');
+    }
+    relay_proxy_json($relayBase . '/' . rawurlencode($seen) . '/seen', 'POST', 10, RELAY_EMPTY_POST_HEADER);
+    exit;
 }
 
 if ($deleteAll || $delete !== null) {
