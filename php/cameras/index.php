@@ -361,6 +361,12 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   .files-size { flex-shrink: 0; }
   /* Footage nobody has played or downloaded yet is bold; seen footage is normal. */
   .files-row.unseen .files-name, .files-row.unseen .files-size { font-weight: 700; }
+  .files-select { flex-shrink: 0; margin: 0; cursor: pointer; accent-color: var(--accent2); }
+  /* Bulk actions for the ticked footage sit at the bottom of the list. */
+  .files-panel-footer {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--border);
+  }
   .files-empty { color: var(--muted); padding: 4px 0; }
   .files-player video {
     width: 100%; max-height: 220px; border-radius: 4px;
@@ -950,6 +956,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
         panel.innerHTML = '<div class="files-empty">No recordings yet.</div>';
         return;
       }
+      // Keep whatever was ticked across a re-render (the list refreshes itself when a recording finishes).
+      const keep = new Set(selectedRecordings(id));
       const header = `
         <div class="files-panel-header">
           <span>${files.length} recording${files.length === 1 ? '' : 's'}</span>
@@ -959,6 +967,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       // f.seen comes from the relay; an older relay that doesn't send it counts as seen, so nothing is bold by mistake.
       const rows = files.map(f => `
         <div class="files-row${f.seen === false ? ' unseen' : ''}" id="row-${id}-${f.filename}">
+          <input type="checkbox" class="files-select" value="${f.filename}" ${keep.has(f.filename) ? 'checked' : ''}
+                 aria-label="Select ${f.filename}" onchange="updateSelectionUI('${id}')">
           <span class="files-name">${escapeHtml(f.filename)}</span>
           <span class="files-size">${formatBytes(f.sizeBytes)}</span>
           <button class="cam-btn" onclick="markRecordingSeen('${id}', '${f.filename}'); togglePlayRecording('${id}', '${f.filename}')">▶ PLAY</button>
@@ -967,10 +977,33 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
         </div>
         <div class="files-player" id="player-${id}-${f.filename}"></div>
       `).join('');
-      panel.innerHTML = header + rows;
+      const footer = `
+        <div class="files-panel-footer">
+          <button class="cam-btn danger" id="files-del-selected-${id}" disabled
+                  onclick="deleteSelectedRecordings('${id}')">🗑 DELETE SELECTED (0)</button>
+        </div>
+      `;
+      panel.innerHTML = header + rows + footer;
+      updateSelectionUI(id);
     } catch (e) {
       panel.innerHTML = '<div class="files-empty">Could not load recordings.</div>';
     }
+  }
+
+  // Filenames of the footage ticked in this camera's list.
+  function selectedRecordings(id) {
+    const panel = document.getElementById('files-' + id);
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll('.files-select:checked')).map(box => box.value);
+  }
+
+  // Keeps the bottom button's label and enabled state in step with the ticks.
+  function updateSelectionUI(id) {
+    const btn = document.getElementById('files-del-selected-' + id);
+    if (!btn) return;
+    const n = selectedRecordings(id).length;
+    btn.disabled = n === 0;
+    btn.textContent = `🗑 DELETE SELECTED (${n})`;
   }
 
   // Playing or downloading a clip counts as seeing it: the row stops being bold
@@ -1004,13 +1037,17 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 
   // POSTs a delete request to recordings.php and refreshes the camera's list.
   // `query` is the part after cam=...; failures are shown to the user.
+  async function recordingsPost(id, query) {
+    const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&${query}`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || ('HTTP ' + res.status));
+    }
+  }
+
   async function postRecordingsDelete(id, query, failureText) {
     try {
-      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&${query}`, { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || ('HTTP ' + res.status));
-      }
+      await recordingsPost(id, query);
       await refreshRecordingsList(id);
     } catch (e) {
       alert(`${failureText}: ${e.message}`);
@@ -1025,6 +1062,23 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   async function deleteAllRecordings(id) {
     if (!confirm('Delete ALL recordings for this camera? This cannot be undone.')) return;
     await postRecordingsDelete(id, 'deleteAll=1', 'Could not delete recordings');
+  }
+
+  // Deletes every ticked clip with the same single-file delete the DEL button
+  // uses, then reloads the list once. Anything that fails stays in the list
+  // and stays ticked, and the user is told how many did not go.
+  async function deleteSelectedRecordings(id) {
+    const names = selectedRecordings(id);
+    if (names.length === 0) return;
+    if (!confirm(`Delete ${names.length} selected recording${names.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    const results = await Promise.allSettled(
+      names.map(name => recordingsPost(id, `delete=${encodeURIComponent(name)}`))
+    );
+    const failed = results.filter(r => r.status === 'rejected');
+    await refreshRecordingsList(id);
+    if (failed.length > 0) {
+      alert(`Could not delete ${failed.length} of ${names.length} recordings: ${failed[0].reason.message}`);
+    }
   }
 
   // Global "DELETE ALL FOOTAGE" button — fans out a deleteAll request to
