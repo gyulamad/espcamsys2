@@ -967,7 +967,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       // f.seen comes from the relay; an older relay that doesn't send it counts as seen, so nothing is bold by mistake.
       const rows = files.map(f => `
         <div class="files-row${f.seen === false ? ' unseen' : ''}" id="row-${id}-${f.filename}">
-          <input type="checkbox" class="files-select" value="${f.filename}" ${keep.has(f.filename) ? 'checked' : ''}
+          <input type="checkbox" class="files-select" value="${f.filename}" data-seen="${f.seen === false ? '0' : '1'}" ${keep.has(f.filename) ? 'checked' : ''}
                  aria-label="Select ${f.filename}" onchange="updateSelectionUI('${id}')">
           <span class="files-name">${escapeHtml(f.filename)}</span>
           <span class="files-size">${formatBytes(f.sizeBytes)}</span>
@@ -979,6 +979,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       `).join('');
       const footer = `
         <div class="files-panel-footer">
+          <button class="cam-btn" id="files-sel-all-${id}" onclick="toggleSelectAll('${id}', false)">☑ SELECT ALL</button>
+          <button class="cam-btn" id="files-sel-seen-${id}" onclick="toggleSelectAll('${id}', true)">☑ SELECT ALL SEEN</button>
           <button class="cam-btn danger" id="files-del-selected-${id}" disabled
                   onclick="deleteSelectedRecordings('${id}')">🗑 DELETE SELECTED (0)</button>
         </div>
@@ -997,13 +999,35 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     return Array.from(panel.querySelectorAll('.files-select:checked')).map(box => box.value);
   }
 
-  // Keeps the bottom button's label and enabled state in step with the ticks.
+  // The checkboxes a bulk button applies to: all of them, or only the seen clips.
+  function selectableBoxes(id, onlySeen) {
+    const panel = document.getElementById('files-' + id);
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll('.files-select')).filter(box => !onlySeen || box.dataset.seen === '1');
+  }
+
+  // "Select all" / "Select all seen": ticks every target, or — when they are
+  // all ticked already — unticks them. The seen variant leaves unseen clips alone.
+  function toggleSelectAll(id, onlySeen) {
+    const boxes = selectableBoxes(id, onlySeen);
+    const allTicked = boxes.length > 0 && boxes.every(box => box.checked);
+    boxes.forEach(box => { box.checked = !allTicked; });
+    updateSelectionUI(id);
+  }
+
+  // Keeps the bottom buttons' labels and enabled states in step with the ticks.
   function updateSelectionUI(id) {
-    const btn = document.getElementById('files-del-selected-' + id);
-    if (!btn) return;
     const n = selectedRecordings(id).length;
-    btn.disabled = n === 0;
-    btn.textContent = `🗑 DELETE SELECTED (${n})`;
+    const set = (key, disabled, text) => {
+      const btn = document.getElementById(`files-${key}-${id}`);
+      if (!btn) return;
+      btn.disabled = disabled;
+      btn.textContent = text;
+    };
+    set('del-selected', n === 0, `🗑 DELETE SELECTED (${n})`);
+    const all = selectableBoxes(id, false), seen = selectableBoxes(id, true);
+    set('sel-all', all.length === 0, all.length > 0 && all.every(b => b.checked) ? '☐ UNSELECT ALL' : '☑ SELECT ALL');
+    set('sel-seen', seen.length === 0, seen.length > 0 && seen.every(b => b.checked) ? '☐ UNSELECT ALL SEEN' : '☑ SELECT ALL SEEN');
   }
 
   // Playing or downloading a clip counts as seeing it: the row stops being bold
@@ -1011,7 +1035,12 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   // simply shows as unseen again the next time the list loads).
   function markRecordingSeen(id, filename) {
     const row = document.getElementById(`row-${id}-${filename}`);
-    if (row) row.classList.remove('unseen');
+    if (row) {
+      row.classList.remove('unseen');
+      const box = row.querySelector('.files-select');
+      if (box) box.dataset.seen = '1';
+    }
+    updateSelectionUI(id);
     fetch(`recordings.php?cam=${encodeURIComponent(id)}&seen=${encodeURIComponent(filename)}`, { method: 'POST' }).catch(() => null);
   }
 
