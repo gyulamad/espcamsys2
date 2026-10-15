@@ -981,6 +981,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
         <div class="files-panel-footer">
           <button class="cam-btn" id="files-sel-all-${id}" onclick="toggleSelectAll('${id}', false)">☑ SELECT ALL</button>
           <button class="cam-btn" id="files-sel-seen-${id}" onclick="toggleSelectAll('${id}', true)">☑ SELECT ALL SEEN</button>
+          <button class="cam-btn" id="files-dl-selected-${id}" disabled
+                  onclick="downloadSelectedRecordings('${id}')">⬇ DOWNLOAD SELECTED (0)</button>
           <button class="cam-btn danger" id="files-del-selected-${id}" disabled
                   onclick="deleteSelectedRecordings('${id}')">🗑 DELETE SELECTED (0)</button>
         </div>
@@ -1025,6 +1027,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       btn.textContent = text;
     };
     set('del-selected', n === 0, `🗑 DELETE SELECTED (${n})`);
+    set('dl-selected', n === 0, `⬇ DOWNLOAD SELECTED (${n})`);
     const all = selectableBoxes(id, false), seen = selectableBoxes(id, true);
     set('sel-all', all.length === 0, all.length > 0 && all.every(b => b.checked) ? '☐ UNSELECT ALL' : '☑ SELECT ALL');
     set('sel-seen', seen.length === 0, seen.length > 0 && seen.every(b => b.checked) ? '☐ UNSELECT ALL SEEN' : '☑ SELECT ALL SEEN');
@@ -1107,6 +1110,24 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     await refreshRecordingsList(id);
     if (failed.length > 0) {
       alert(`Could not delete ${failed.length} of ${names.length} recordings: ${failed[0].reason.message}`);
+    }
+  }
+
+  // Downloads every ticked clip. A browser only takes one download per click,
+  // so this starts them one after another through a hidden link, with a short
+  // pause between (many browsers ask once to "allow multiple downloads").
+  // Each clip counts as seen, same as the GET button.
+  async function downloadSelectedRecordings(id) {
+    const names = selectedRecordings(id);
+    for (let i = 0; i < names.length; i++) {
+      const link = document.createElement('a');
+      link.href = `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(names[i])}`;
+      link.download = names[i];
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      markRecordingSeen(id, names[i]);
+      if (i < names.length - 1) await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 
