@@ -594,6 +594,16 @@ curl http://localhost:8080/recording/state          # who is OFF (no key needed 
 
 Notes: the relay's *other* HTTP routes (RECORD, delete recordings, …) are not authenticated at the relay — they rely on the dashboard login in front of them, so keep the relay's port 8080 on a trusted network. A timed OFF uses the Pi's clock; a Pi without a battery-backed clock may be off by a little right after boot until it has synchronised.
 
+## The SETTINGS page (dashboard → ⚙ SETTINGS)
+
+Every setting of the main system can be changed from the dashboard instead of editing `config.js` / `config.php` over ssh: the relay's ports, camera key, control key, pre-roll, alarm recording length, log and folders, plus the dashboard's own login and relay address. The form is generated from the relay's list of settings, so each one comes with its description and limits.
+
+- **Saving applies the change for you.** Dashboard settings (login, relay address) apply at once. Relay settings that are read at startup are marked *restarts relay*; after saving, the dashboard asks the relay to restart itself and the page waits until it answers again. The alarm length applies immediately with no restart. Nothing needs to be redeployed.
+- **Where it is stored.** The relay keeps what you save in `system-settings.json` next to `server.js`, laid over `config.js` at startup (so `config.js` stays the starting point and is never rewritten). The dashboard rewrites `config.php` (keeping a `config.php.bak` and your cameras). Environment variables (`PORT`, `CAM_KEY`, …) still win over both; such a field is shown read-only.
+- **The relay must be started by systemd or pm2** so it comes back by itself — the unit in the relay setup above (`Restart=on-failure`) is enough, the relay exits with code 75 to be restarted. A relay started by hand refuses to restart (the page tells you) instead of just stopping; set `RELAY_SUPERVISED=1` if something else restarts it.
+- **One-time requirements:** `relay_control_key` in `config.php` and `controlKey` in `config.js` (see above) — the page uses it to talk to the relay — and `config.php` must be writable by the web server (`deploy.sh` runs `chown www-data` on it).
+- **Safety nets.** A new relay address is tested before it is saved (a wrong one would lock the dashboard out of the relay); changing the relay's HTTP port updates the dashboard's address with it; rotating the control key updates the dashboard's copy; the camera key and the camera push port are flashed into every board, so changing them asks for confirmation. If the saved settings file is ever damaged, the relay starts with `config.js` and logs a warning.
+
 ## Logging: finding out what went wrong
 
 Assembled cameras have no serial monitor attached, so **the cameras send what they would print to the relay**, and the relay writes it — together with what the relay itself observes — into one plain-text file:

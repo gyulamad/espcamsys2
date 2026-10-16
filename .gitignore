@@ -25,3 +25,8 @@ fw_version.h
 
 Arduino/ESP32_CAM_Recorder/build/
 Arduino/ESP32_CAM_TFLite_Person/build/
+
+# Written by the dashboard's settings page
+nodejs/camera-relay/system-settings.json
+nodejs/camera-relay/system-settings.json.tmp
+php/cameras/config.php.bak

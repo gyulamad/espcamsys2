@@ -5,7 +5,7 @@ const fsp = fs.promises;
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const config = require('./config'); // gitignored — see example.config.js
+const baseConfig = require('./config'); // gitignored — see example.config.js
 
 // All the relay's actual decision-making (validation, timing math, frame
 // protocol parsing, response shapes) lives in lib/ as plain, side-effect-free
@@ -28,6 +28,21 @@ const { Throttle } = require('./lib/throttle');
 const connection = require('./lib/connection');
 const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
+const sysconfig = require('./lib/sysconfig');
+
+// What the dashboard's settings page saved (ports, keys, pre-roll, log, folders) is laid
+// over config.js, so config.js itself never has to be rewritten. See lib/sysconfig.js.
+const SYSTEM_SETTINGS_FILE = process.env.SYSTEM_SETTINGS_FILE || path.join(__dirname, 'system-settings.json');
+const loadedOverrides = (() => {
+  try {
+    return sysconfig.parseOverrides(fs.readFileSync(SYSTEM_SETTINGS_FILE, 'utf8'));
+  } catch (e) {
+    return { overrides: {}, warnings: e.code === 'ENOENT' ? [] : [`could not read ${SYSTEM_SETTINGS_FILE}: ${e.message} — config.js is used`] };
+  }
+})();
+let systemOverrides = loadedOverrides.overrides;
+for (const w of loadedOverrides.warnings) console.warn(`[config] ${w}`);
+const config = sysconfig.mergeConfig(baseConfig, systemOverrides);
 
 const app = express();
 const PORT = process.env.PORT || config.port;
@@ -603,6 +618,54 @@ app.post('/settings', (req, res) => {
   }
   settings = result.settings;
   res.json(settingsView());
+});
+
+// ── System settings (what config.js used to hold) — edited from the dashboard's settings page ──
+//   GET  /system-settings   -> { fields: [...], supervised }   every setting with its current value
+//                              (secrets are never sent back, only whether they are set)
+//   POST /system-settings   body { "key": value, ... } -> { ok, changed, restartRequired }
+//                              all-or-nothing; alarmRecordSeconds applies at once, the rest after a restart
+//   POST /restart           -> 202, then the relay exits and its supervisor (systemd / pm2) starts it again
+// All three need the CONTROL key (X-Control-Key). They are declared before the recording
+// switch's requireControlKey helper is used below, which hoisting makes fine (function declaration).
+function systemSettingsState() {
+  return { base: baseConfig, overrides: systemOverrides, alarmRecordSeconds: settings.alarmRecordSeconds, env: process.env };
+}
+
+app.get('/system-settings', requireControlKey, (req, res) => {
+  res.json({ ...sysconfig.buildView(systemSettingsState()), supervised: sysconfig.isSupervised(process.env) });
+});
+
+app.post('/system-settings', requireControlKey, express.json({ limit: '16kb' }), (req, res) => {
+  const r = sysconfig.applyUpdate(systemSettingsState(), req.body);
+  if (r.error) return res.status(400).json({ error: r.error });
+  if (r.changed.length === 0) return res.json({ ok: true, changed: [], restartRequired: false });
+  try {
+    if (r.alarmRecordSeconds !== settings.alarmRecordSeconds) saveSettings({ ...settings, alarmRecordSeconds: r.alarmRecordSeconds });
+    if (r.changed.some((k) => k !== 'alarmRecordSeconds')) writeFileAtomic(SYSTEM_SETTINGS_FILE, JSON.stringify(r.overrides, null, 2));
+  } catch (err) {
+    relayLog('ERROR', `failed saving system settings: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not save the settings' });
+  }
+  settings = { ...settings, alarmRecordSeconds: r.alarmRecordSeconds };
+  systemOverrides = r.overrides;
+  // Names only — values can be keys.
+  relayLog('INFO', `system settings changed by ${actorOf(req)}: ${r.changed.join(', ')}${r.restartRequired ? ' (restart needed to apply)' : ''}`);
+  return res.json({ ok: true, changed: r.changed, restartRequired: r.restartRequired });
+});
+
+app.post('/restart', requireControlKey, (req, res) => {
+  if (!sysconfig.isSupervised(process.env)) {
+    return res.status(409).json({ error: 'the relay was not started by systemd or pm2, so it would not come back on its own — restart it by hand (or set RELAY_SUPERVISED=1 if something else restarts it)' });
+  }
+  relayLog('INFO', `restart requested by ${actorOf(req)}`);
+  res.status(202).json({ ok: true });
+  res.on('finish', () => {
+    setTimeout(() => {
+      relayLogSync('INFO', 'relay restarting (requested from the dashboard)');
+      process.exit(sysconfig.RESTART_EXIT_CODE);
+    }, 200);
+  });
 });
 
 // ── Recording switch: changing it (authenticated) and reading it ──
@@ -1418,6 +1481,8 @@ pushServer.listen(PUSH_PORT, () => console.log(`Camera relay (raw push) listenin
 // "dropped", and a crash is useless without its stack trace — so both leave a
 // line (written synchronously: the process may be about to die).
 relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file}; recording on/off switch ${CONTROL_KEY ? 'enabled' : 'DISABLED (no controlKey in config.js)'})`);
+
+for (const w of loadedOverrides.warnings) relayLog('WARN', w);
 
 process.on('uncaughtException', (err) => {
   relayLogSync('ERROR', `FATAL: uncaught exception — the relay is stopping: ${errorMessage(err)}`, { trace: err && err.stack });

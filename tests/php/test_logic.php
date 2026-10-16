@@ -356,4 +356,90 @@ camtest_test('buildSwitchHeaders: refuses an empty key or one that could inject 
     camtest_assert_equal(CamLogic::buildSwitchHeaders("key\nmore", 'a'), null);
 });
 
+// ── Settings page ────────────────────────────────────────────────────
+
+camtest_test('splitSettingsValues: separates the dashboard\'s own settings from the relay\'s', function () {
+    $r = CamLogic::splitSettingsValues(['auth_user' => 'bob', 'preRollSeconds' => 9, 'relay_url' => 'http://x:1', 'camKey' => 'abc']);
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['dashboard'], ['auth_user' => 'bob', 'relay_url' => 'http://x:1']);
+    camtest_assert_equal($r['relay'], ['preRollSeconds' => 9, 'camKey' => 'abc']);
+});
+
+camtest_test('splitSettingsValues: refuses anything that is not an object of plain values', function () {
+    foreach ([null, 'text', [1, 2], ['a' => ['nested']], ['a' => null], ['a' => true]] as $bad) {
+        camtest_assert_equal(CamLogic::splitSettingsValues($bad)['ok'], false, var_export($bad, true));
+    }
+});
+
+camtest_test('normalizeRelayUrl: accepts http(s) addresses and drops the trailing slash', function () {
+    camtest_assert_equal(CamLogic::normalizeRelayUrl(' http://192.168.4.9:8080/ '), 'http://192.168.4.9:8080');
+    camtest_assert_equal(CamLogic::normalizeRelayUrl('https://relay.local'), 'https://relay.local');
+    camtest_assert_equal(CamLogic::normalizeRelayUrl('http://[::1]:8080'), 'http://[::1]:8080');
+});
+
+camtest_test('normalizeRelayUrl: refuses anything else (no scheme, other schemes, logins, queries, junk)', function () {
+    foreach (['', 'relay:8080', 'ftp://x', 'file:///etc/passwd', 'http://u:p@x', 'http://x?a=1', 'http://x#f', 'http://', 'http://x:99999', "http://x\r\nHost: y", 'http://a b'] as $bad) {
+        camtest_assert_equal(CamLogic::normalizeRelayUrl($bad), null, $bad);
+    }
+});
+
+camtest_test('replaceUrlPort: moves the port and keeps scheme, host and path', function () {
+    camtest_assert_equal(CamLogic::replaceUrlPort('http://192.168.4.9:8080', 9000), 'http://192.168.4.9:9000');
+    camtest_assert_equal(CamLogic::replaceUrlPort('http://relay.local', 9000), 'http://relay.local:9000');
+    camtest_assert_equal(CamLogic::replaceUrlPort('https://h:1/sub/', 2), 'https://h:2/sub');
+    camtest_assert_equal(CamLogic::replaceUrlPort('http://h:1', 0), null);
+    camtest_assert_equal(CamLogic::replaceUrlPort('nonsense', 80), null);
+});
+
+camtest_test('validateDashboardUpdate: only real changes are returned', function () {
+    $cur = ['auth_user' => 'bob', 'auth_pass' => 'longenough1', 'relay_url' => 'http://x:8080'];
+    $r = CamLogic::validateDashboardUpdate(['auth_user' => 'bob', 'auth_pass' => '', 'relay_url' => 'http://x:8080/'], $cur);
+    camtest_assert_equal($r, ['ok' => true, 'changes' => []]);
+    $r = CamLogic::validateDashboardUpdate(['auth_user' => ' alice ', 'auth_pass' => 'a-new-password', 'relay_url' => 'http://y:9'], $cur);
+    camtest_assert_equal($r['changes'], ['auth_user' => 'alice', 'auth_pass' => 'a-new-password', 'relay_url' => 'http://y:9']);
+});
+
+camtest_test('validateDashboardUpdate: refuses bad logins and addresses, and unknown settings', function () {
+    $cur = ['auth_user' => 'bob', 'auth_pass' => 'longenough1', 'relay_url' => 'http://x:8080'];
+    foreach ([['auth_user' => ''], ['auth_user' => 'a:b'], ['auth_user' => str_repeat('x', 65)], ['auth_user' => "a\nb"],
+              ['auth_pass' => 'short'], ['auth_pass' => "line\nbreak-pass"], ['relay_url' => 'nope'], ['bogus' => 'x']] as $bad) {
+        camtest_assert_equal(CamLogic::validateDashboardUpdate($bad, $cur)['ok'], false, var_export($bad, true));
+    }
+});
+
+camtest_test('isValidSecret: 8-200 characters without spaces or control characters', function () {
+    camtest_assert_true(CamLogic::isValidSecret('abcdefgh'));
+    foreach (['short', 'has space123', "tab\tkey12345", "nl\nkey12345", str_repeat('x', 201), ''] as $bad) {
+        camtest_assert_true(!CamLogic::isValidSecret($bad), $bad);
+    }
+});
+
+camtest_test('buildConfigPhp: round-trips the whole config, cameras and awkward characters included', function () {
+    $cfg = [
+        'auth_user' => "o'brien", 'auth_pass' => 'p"a$s\\s{$x}', 'relay_url' => 'http://127.0.0.1:8080',
+        'relay_control_key' => 'k', 'cameras' => [['id' => 'cam1', 'name' => "Bob's door", 'icon' => '🚪']],
+    ];
+    $file = tempnam(sys_get_temp_dir(), 'cfg') . '.php';
+    file_put_contents($file, CamLogic::buildConfigPhp($cfg));
+    $loaded = require $file;
+    unlink($file);
+    camtest_assert_equal($loaded, $cfg);
+});
+
+camtest_test('buildControlHeaders: key and actor, with a JSON body or an empty one; refuses header injection', function () {
+    camtest_assert_equal(CamLogic::buildControlHeaders('k1', 'a@b'), "X-Control-Key: k1\r\nX-Actor: a@b\r\nContent-Length: 0\r\n");
+    camtest_assert_equal(CamLogic::buildControlHeaders('k1', 'a@b', true), "X-Control-Key: k1\r\nX-Actor: a@b\r\nContent-Type: application/json\r\n");
+    camtest_assert_equal(CamLogic::buildControlHeaders('', 'a'), null);
+    camtest_assert_equal(CamLogic::buildControlHeaders("k\r\nX-Evil: 1", 'a'), null);
+});
+
+camtest_test('dashboardFields: described like the relay\'s fields, and isDashboardKey agrees', function () {
+    foreach (CamLogic::dashboardFields() as $f) {
+        camtest_assert_true(isset($f['key'], $f['type'], $f['label'], $f['help'], $f['group']), $f['key'] ?? '?');
+        camtest_assert_true(CamLogic::isDashboardKey($f['key']));
+    }
+    camtest_assert_true(!CamLogic::isDashboardKey('preRollSeconds'));
+    camtest_assert_true(!CamLogic::isDashboardKey('controlKey'));
+});
+
 exit(camtest_summarize());

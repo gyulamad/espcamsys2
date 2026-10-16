@@ -20,14 +20,17 @@ function json_fail(int $status, string $message): void
 // One request to the relay. Returns [body, response headers]; the body is
 // false when the relay could not be reached. HTTP error statuses are not
 // failures here — the caller gets the body and the status line like any other.
-function relay_fetch(string $url, string $method = 'GET', int $timeout = 5, string $headers = ''): array
+function relay_fetch(string $url, string $method = 'GET', int $timeout = 5, string $headers = '', ?string $body = null): array
 {
     $http = ['method' => $method, 'timeout' => $timeout, 'ignore_errors' => true];
     if ($headers !== '') {
         $http['header'] = $headers;
     }
-    $body = @file_get_contents($url, false, stream_context_create(['http' => $http]));
-    return [$body, $http_response_header ?? []];
+    if ($body !== null) {
+        $http['content'] = $body;
+    }
+    $response = @file_get_contents($url, false, stream_context_create(['http' => $http]));
+    return [$response, $http_response_header ?? []];
 }
 
 // Passes the relay's JSON answer straight through to the browser: 502 if the

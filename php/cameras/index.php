@@ -124,6 +124,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   }
   .btn:hover, .btn.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 8px rgba(0,229,255,.2); }
   .btn:disabled { opacity: .5; cursor: default; }
+  a.btn { text-decoration: none; display: inline-block; }
   .btn.recording {
     border-color: var(--accent2); color: var(--accent2);
     box-shadow: 0 0 8px rgba(255,79,94,.3);
@@ -411,6 +412,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     <button class="btn active" id="btn-grid" onclick="setLayout('grid')">⊞ GRID</button>
     <button class="btn"        id="btn-list" onclick="setLayout('list')">☰ LIST</button>
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
+    <a class="btn" id="btn-settings" href="settings-page.php"
+       title="Settings of the whole system: relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
     <span class="record-controls">
       <input type="number" id="record-seconds" min="1" max="3600" value="60" title="Recording length in seconds">
       <span class="unit">sec</span>

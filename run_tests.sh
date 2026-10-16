@@ -506,6 +506,17 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
+hr
+echo "End-to-end (settings page: relay + dashboard, save and restart) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_system_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 # ── Coverage gate for server.js (only with --coverage N) ─────────────────
 if [ -n "$E2E_COV_DIR" ]; then
     hr

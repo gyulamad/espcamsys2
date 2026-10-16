@@ -309,4 +309,162 @@ class CamLogic
         }
         return "Content-Length: 0\r\nX-Control-Key: " . $controlKey . "\r\nX-Actor: " . $actor . "\r\n";
     }
+
+    // ── Settings page ──
+    // The dashboard's own settings (config.php) and the plumbing for saving them
+    // together with the relay's (see system-settings.php). The relay's settings are
+    // described and validated by the relay itself (lib/sysconfig.js); here is only what
+    // is the dashboard's: the login, and the address of the relay.
+
+    // Settings that make cameras unable to connect until each board is updated.
+    const CAMERA_BREAKING_KEYS = ['camKey', 'pushPort'];
+
+    // The dashboard's own settings, described the way the relay describes its own,
+    // so the page can draw both the same way.
+    public static function dashboardFields(): array
+    {
+        return [
+            ['key' => 'auth_user', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
+             'label' => 'Dashboard username', 'help' => 'The HTTP login of this dashboard. After saving, the browser asks you to log in again.'],
+            ['key' => 'auth_pass', 'type' => 'secret', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard', 'min' => 8, 'max' => 200,
+             'label' => 'Dashboard password', 'help' => 'At least 8 characters. Leave empty to keep the current one.'],
+            ['key' => 'relay_url', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
+             'label' => 'Relay address', 'help' => 'Where this dashboard reaches the relay, e.g. http://127.0.0.1:8080. A new address is tested before it is saved.'],
+        ];
+    }
+
+    public static function isDashboardKey(string $key): bool
+    {
+        foreach (self::dashboardFields() as $f) {
+            if ($f['key'] === $key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Splits the submitted { key: value } into the dashboard's own settings and the
+    // relay's. Only plain values are accepted (no arrays or objects).
+    //   -> ['ok' => true, 'dashboard' => [...], 'relay' => [...]] | ['ok' => false, 'error' => ...]
+    public static function splitSettingsValues($values): array
+    {
+        if (!is_array($values) || array_is_list($values)) {
+            return ['ok' => false, 'error' => 'values must be an object of { setting: value }'];
+        }
+        $dash = [];
+        $relay = [];
+        foreach ($values as $key => $value) {
+            if (!is_string($key) || !(is_string($value) || is_int($value) || is_float($value))) {
+                return ['ok' => false, 'error' => 'every setting must be a single text or number value'];
+            }
+            if (self::isDashboardKey($key)) {
+                $dash[$key] = (string) $value;
+            } else {
+                $relay[$key] = $value;
+            }
+        }
+        return ['ok' => true, 'dashboard' => $dash, 'relay' => $relay];
+    }
+
+    // The relay address as it is stored: http(s)://host[:port][/path] without a trailing
+    // slash, no login in it, no query. Null if it is not usable.
+    public static function normalizeRelayUrl(string $raw): ?string
+    {
+        $raw = trim($raw);
+        if ($raw === '' || strlen($raw) > 300 || preg_match('/[\x00-\x20\x7f]/', $raw)) {
+            return null;
+        }
+        $p = parse_url($raw);
+        if ($p === false || !isset($p['scheme'], $p['host'])) {
+            return null;
+        }
+        if (!in_array(strtolower($p['scheme']), ['http', 'https'], true)) {
+            return null;
+        }
+        if (isset($p['user']) || isset($p['pass']) || isset($p['query']) || isset($p['fragment'])) {
+            return null;
+        }
+        if (isset($p['port']) && ($p['port'] < 1 || $p['port'] > 65535)) {
+            return null;
+        }
+        return rtrim($raw, '/');
+    }
+
+    // The same address with another port (the relay's port changed, and the dashboard
+    // has to keep finding it). Null if the address has no usable host.
+    public static function replaceUrlPort(string $url, int $port): ?string
+    {
+        $p = parse_url($url);
+        if ($p === false || !isset($p['scheme'], $p['host']) || $port < 1 || $port > 65535) {
+            return null;
+        }
+        return $p['scheme'] . '://' . $p['host'] . ':' . $port . rtrim($p['path'] ?? '', '/');
+    }
+
+    // Checks the dashboard's part of a settings update against the current config.
+    // Only real changes are returned: a value equal to the current one, or an empty
+    // password ("keep it"), is not a change.
+    //   -> ['ok' => true, 'changes' => ['auth_user' => ..., ...]] | ['ok' => false, 'error' => ...]
+    public static function validateDashboardUpdate(array $values, array $current): array
+    {
+        $changes = [];
+        foreach ($values as $key => $value) {
+            if ($key === 'auth_user') {
+                $v = trim($value);
+                if ($v === '' || strlen($v) > 64 || preg_match('/[\x00-\x1f\x7f:]/', $v)) {
+                    return ['ok' => false, 'error' => 'auth_user must be 1-64 characters, without a colon or line breaks'];
+                }
+                if ($v !== ($current['auth_user'] ?? null)) {
+                    $changes[$key] = $v;
+                }
+            } elseif ($key === 'auth_pass') {
+                if ($value === '') {
+                    continue;
+                }
+                if (strlen($value) < 8 || strlen($value) > 200 || preg_match('/[\x00-\x1f\x7f]/', $value)) {
+                    return ['ok' => false, 'error' => 'auth_pass must be 8-200 characters, without line breaks'];
+                }
+                if ($value !== ($current['auth_pass'] ?? null)) {
+                    $changes[$key] = $value;
+                }
+            } elseif ($key === 'relay_url') {
+                $v = self::normalizeRelayUrl($value);
+                if ($v === null) {
+                    return ['ok' => false, 'error' => 'relay_url must look like http://host:port (no login, no query)'];
+                }
+                if ($v !== rtrim((string) ($current['relay_url'] ?? ''), '/')) {
+                    $changes[$key] = $v;
+                }
+            } else {
+                return ['ok' => false, 'error' => 'unknown dashboard setting: ' . $key];
+            }
+        }
+        return ['ok' => true, 'changes' => $changes];
+    }
+
+    // A shared secret (the control key) the way it will be sent in a header and stored.
+    public static function isValidSecret(string $secret): bool
+    {
+        return strlen($secret) >= 8 && strlen($secret) <= 200 && !preg_match('/[\s\x00-\x1f\x7f]/', $secret);
+    }
+
+    // The text of config.php for a config array — everything in it, `cameras` included,
+    // so saving the settings never loses a camera.
+    public static function buildConfigPhp(array $config): string
+    {
+        return "<?php\n"
+            . "// config.php — written by the dashboard's settings page. You can still edit it by hand;\n"
+            . "// see example.config.php for what each setting means.\n"
+            . 'return ' . var_export($config, true) . ";\n";
+    }
+
+    // Request headers for a call to the relay that needs the control key and carries a
+    // JSON body (PHP adds Content-Length itself). Null if the key could not be sent safely.
+    public static function buildControlHeaders(string $controlKey, string $actor, bool $json = false): ?string
+    {
+        if ($controlKey === '' || preg_match('/[\r\n]/', $controlKey)) {
+            return null;
+        }
+        return 'X-Control-Key: ' . $controlKey . "\r\nX-Actor: " . $actor . "\r\n" . ($json ? "Content-Type: application/json\r\n" : "Content-Length: 0\r\n");
+    }
 }
