@@ -297,10 +297,16 @@ void remoteLogRelayReachable() {
 
 OtaUpdater otaUpdater("recorder");
 
+// Defined after the settings glue below (it needs the flash store). Changes the dashboard's
+// settings page queued for this board are applied from here — the same background task, so
+// no second task (and its stack) is needed.
+void settingsSyncTick();
+
 void otaTask(void *) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId);
+    settingsSyncTick();
   }
 }
 
@@ -741,6 +747,29 @@ void setupSettings() {
   }
 }
 // ── end of settings glue ────────────────────────────────────────────────
+
+// ── Settings changed from the dashboard ─────────────────────────────────
+// The dashboard's settings page queues a change on the relay; this asks for it every half
+// minute (from the background task above), stores it, reports back and restarts so the new
+// values start clean. Every rule — all or nothing, the settings that reach the relay stay
+// serial-only, never leaving the board incomplete — is in settings_logic.h (unit-tested);
+// settings_sync.h is only the HTTP part. Names only in the log: values can be passwords.
+#include "settings_sync.h"
+
+static PreferencesStore* g_syncStore = nullptr;
+static SettingsSync* g_sync = nullptr;
+
+void settingsSyncTick() {
+  if (!g_sync) {   // created on first use, in the task that uses it
+    g_syncStore = new PreferencesStore();
+    g_sync = new SettingsSync(esp32cam_settings::RECORDER_SCHEMA, *g_syncStore, "recorder", esp32cam_settings::recorderLockedKeys());
+  }
+  if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId)) {
+    RLOG_INFO("settings changed from the dashboard (%s) - restarting to apply them", g_sync->changedNames().c_str());
+    restartBoard();
+  }
+}
+// ── end of settings changed from the dashboard ──────────────────────────
 
 // Which Arduino-ESP32 core and ESP-IDF built this firmware — the first thing to
 // know when something behaves differently from another camera.

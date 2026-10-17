@@ -1260,4 +1260,210 @@ private:
     std::string line_;
 };
 
+// ── Changing stored settings from the relay (the dashboard's settings page) ──
+//
+// The dashboard can change the settings stored in this board's flash. The page queues
+// one "KEY=value;KEY=value" line on the relay; the board asks for it now and then (a
+// background task, never the camera loop), checks it like typed input, stores it and
+// restarts so the new values start clean. It then tells the relay what happened, so the
+// page can show "applied" or why the board refused.
+//
+// This is a way to reconfigure a board from afar, so the rules are strict:
+//   - all or nothing: one bad value and nothing is stored (same checks as the serial
+//     console: kind, limits, the schema's cross-setting rule);
+//   - the settings needed to REACH the relay (Wi-Fi, server, ports, key, own id) can
+//     not be changed this way: a wrong value would strand a board nobody can reach
+//     without a cable. They are `locked` by the sketch;
+//   - a change may never leave the board needing a setting it does not have (switching
+//     a feature on can make other settings required): the result is checked as a whole
+//     BEFORE anything is written, and refused with the names of what must be added;
+//   - nothing is written for a value that is already stored, so repeating a change
+//     (the relay was unreachable when the board reported, the board restarted) is harmless.
+
+// The stored settings with a pending line laid over them — what the board WOULD hold.
+// Read-only: it never writes.
+class OverlayStore : public ISettingsStore {
+public:
+    OverlayStore(ISettingsStore& base, const std::vector<Pair>& pairs) : base_(base), pairs_(pairs) {}
+    bool has(const std::string& k) override { return find(k) != nullptr || base_.has(k); }
+    std::string get(const std::string& k) override {
+        const Pair* p = find(k);
+        return p ? p->value : base_.get(k);
+    }
+    bool set(const std::string&, const std::string&) override { return false; }
+    void clearAll() override {}
+private:
+    const Pair* find(const std::string& k) const {
+        for (size_t i = 0; i < pairs_.size(); ++i) if (pairs_[i].key == k) return &pairs_[i];
+        return nullptr;
+    }
+    ISettingsStore& base_;
+    const std::vector<Pair>& pairs_;
+};
+
+struct ChangeResult {
+    std::vector<std::string> changed;   // settings written to flash, in the order of the line
+    std::vector<std::string> errors;    // why nothing was written (empty when fine)
+    bool ok() const { return errors.empty(); }
+};
+
+inline ChangeResult applyChangeLine(const Schema& schema, ISettingsStore& store, const std::string& line,
+                                    const std::vector<std::string>& lockedKeys) {
+    ChangeResult out;
+    CheckedLine cl = checkLine(schema, line);
+    if (!cl.ok()) { out.errors = cl.errors; return out; }
+    if (cl.pairs.empty()) { out.errors.push_back("the change sets nothing"); return out; }
+
+    // Only real changes count: what is already stored (equal canonical value) is left alone.
+    std::vector<Pair> diff;
+    for (size_t i = 0; i < cl.pairs.size(); ++i) {
+        const Pair& p = cl.pairs[i];
+        if (store.has(p.key) && store.get(p.key) == p.value) continue;
+        diff.push_back(p);
+    }
+    for (size_t i = 0; i < diff.size(); ++i) {
+        for (size_t j = 0; j < lockedKeys.size(); ++j) {
+            if (diff[i].key == lockedKeys[j]) {
+                out.errors.push_back(diff[i].key + " can only be changed over the serial port (a wrong value would cut this board off from the relay)");
+            }
+        }
+    }
+    if (!out.errors.empty()) return out;
+    if (diff.empty()) return out;   // nothing differs: success, nothing to do
+
+    checkCrossRules(schema, store, diff, out.errors);
+    if (!out.errors.empty()) return out;
+
+    // The board must still be complete afterwards.
+    OverlayStore after(store, diff);
+    std::vector<Problem> problems = findProblems(schema, after);
+    for (size_t i = 0; i < problems.size(); ++i) {
+        out.errors.push_back(problems[i].key + (problems[i].missing ? " is needed too (it has no value yet)" : " would be invalid: " + problems[i].reason));
+    }
+    if (!out.errors.empty()) return out;
+
+    // Write; if the flash refuses one, put the earlier ones back so a half-applied change never stays.
+    std::vector<bool> hadOld(diff.size(), false);
+    std::vector<std::string> oldValue(diff.size());
+    for (size_t i = 0; i < diff.size(); ++i) {
+        hadOld[i] = store.has(diff[i].key);
+        if (hadOld[i]) oldValue[i] = store.get(diff[i].key);
+    }
+    for (size_t i = 0; i < diff.size(); ++i) {
+        if (store.set(diff[i].key, diff[i].value)) { out.changed.push_back(diff[i].key); continue; }
+        out.errors.push_back("could not write " + diff[i].key + " to flash");
+        for (size_t k = 0; k < i; ++k) if (hadOld[k]) store.set(diff[k].key, oldValue[k]);
+        out.changed.clear();
+        return out;
+    }
+    return out;
+}
+
+// What the board tells the relay it holds: KEY=value;... for every stored setting, with
+// secrets and Wi-Fi passwords masked (displayValue) — the relay and the dashboard never
+// receive a password. Values are escaped like a typed line (\; \\).
+inline std::string renderReport(const Schema& schema, ISettingsStore& store) {
+    std::string out;
+    for (size_t i = 0; i < schema.count; ++i) {
+        const KeyDef& def = schema.keys[i];
+        if (!store.has(def.name)) continue;
+        if (!out.empty()) out += ';';
+        out += def.name;
+        out += '=';
+        out += escapeText(displayValue(def, store.get(def.name), true), false);
+    }
+    return out;
+}
+
+// The relay's answer to "is a change queued?": the first line is the change's number (digits
+// only), the rest is the KEY=value;... line. false if it does not look like that.
+inline bool parseChangeReply(const std::string& body, std::string& rev, std::string& line) {
+    size_t nl = body.find('\n');
+    if (nl == std::string::npos || nl == 0 || nl > 16) return false;
+    for (size_t i = 0; i < nl; ++i) if (body[i] < '0' || body[i] > '9') return false;
+    rev = body.substr(0, nl);
+    line = body.substr(nl + 1);
+    while (!line.empty() && (line[line.size() - 1] == '\n' || line[line.size() - 1] == '\r')) line.erase(line.size() - 1);
+    return !line.empty();
+}
+
+// One line of plain text for the relay's log: no line breaks, bounded.
+inline std::string oneLine(const std::string& s, size_t max = 300) {
+    std::string out;
+    for (size_t i = 0; i < s.size() && out.size() < max; ++i) out += (s[i] == '\n' || s[i] == '\r' || s[i] == '\t') ? ' ' : s[i];
+    return out;
+}
+
+// The HTTP side, as the poller sees it. The real one is in settings_sync.h (the sketch);
+// the tests drive a scripted fake.
+class IChangeLink {
+public:
+    virtual ~IChangeLink() {}
+    virtual bool online() = 0;
+    // Asks the relay for a queued change. Got: `rev` and `line` are set.
+    virtual FetchResult fetchChange(std::string& rev, std::string& line) = 0;
+    // Tells the relay what this board holds and what became of change `rev`
+    // (result "boot" with rev "0" when nothing was asked, else "applied" or "rejected").
+    // true once the relay has it.
+    virtual bool report(const std::string& rev, const std::string& result, const std::string& message,
+                        const std::string& settingsLine) = 0;
+};
+
+// Asks now and then; applies what arrives; says so. Drive it with tick(millis()) from a
+// background task. Restart: settings were stored — restart the board so they take effect.
+class ChangePoller {
+public:
+    enum Status { Idle, Restart };
+
+    ChangePoller(const Schema& schema, ISettingsStore& store, IChangeLink& link,
+                 const std::vector<std::string>& lockedKeys, uint32_t firstDelayMs, uint32_t gapMs)
+        : schema_(schema), store_(store), link_(link), locked_(lockedKeys), firstDelayMs_(firstDelayMs),
+          gapMs_(gapMs), armed_(false), nextAt_(0), reported_(false) {}
+
+    Status tick(uint32_t nowMs) {
+        if (!armed_) { armed_ = true; nextAt_ = nowMs + firstDelayMs_; }
+        if (static_cast<int32_t>(nowMs - nextAt_) < 0) return Idle;
+        nextAt_ = nowMs + gapMs_;
+        if (!link_.online()) return Idle;
+
+        if (!reported_) reported_ = link_.report("0", "boot", "", renderReport(schema_, store_));
+
+        std::string rev, line;
+        if (link_.fetchChange(rev, line) != FetchResult::Got) return Idle;
+
+        ChangeResult r = applyChangeLine(schema_, store_, line, locked_);
+        changed_ = r.changed;
+        std::string result = r.ok() ? "applied" : "rejected";
+        std::string message;
+        if (!r.ok()) {
+            for (size_t i = 0; i < r.errors.size(); ++i) message += (i ? "; " : "") + r.errors[i];
+        } else if (r.changed.empty()) {
+            message = "nothing to change - the board already has these values";
+        } else {
+            message = "changed:";
+            for (size_t i = 0; i < r.changed.size(); ++i) message += (i ? ", " : " ") + r.changed[i];
+        }
+        lastResult_ = result;
+        lastMessage_ = oneLine(message);
+        link_.report(rev, result, lastMessage_, renderReport(schema_, store_));
+        return (r.ok() && !r.changed.empty()) ? Restart : Idle;
+    }
+
+    const std::string& lastResult() const { return lastResult_; }
+    const std::string& lastMessage() const { return lastMessage_; }
+    const std::vector<std::string>& lastChanged() const { return changed_; }
+
+private:
+    const Schema& schema_;
+    ISettingsStore& store_;
+    IChangeLink& link_;
+    std::vector<std::string> locked_;
+    uint32_t firstDelayMs_, gapMs_;
+    bool armed_;
+    uint32_t nextAt_;
+    bool reported_;
+    std::vector<std::string> changed_;
+    std::string lastResult_, lastMessage_;
+};
+
 }  // namespace esp32cam_settings

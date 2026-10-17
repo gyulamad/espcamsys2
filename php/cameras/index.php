@@ -219,6 +219,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     letter-spacing: .05em; text-transform: uppercase; color: var(--text);
   }
 
+  a.cam-btn { text-decoration: none; display: inline-block; }
   .cam-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
   .cam-btn {
@@ -461,7 +462,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 
       <div class="cam-header">
         <div class="cam-title">
-          <span><?= $cam['icon'] ?></span>
+          <span><?= htmlspecialchars($cam['icon']) ?></span>
           <?= $camName ?>
         </div>
         <div class="cam-actions">
@@ -469,6 +470,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
           <span class="status-pill connecting" id="pill-<?= $camId ?>">CONNECTING</span>
           <span class="rec-pill" id="recpill-<?= $camId ?>"></span>
           <button class="cam-btn" onclick="reloadStream('<?= $camId ?>')">↺ RELOAD</button>
+          <a class="cam-btn" id="settings-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>"
+             title="Settings of this camera: name, icon and everything stored in the board">⚙ SETTINGS</a>
           <button class="cam-btn danger" id="hide-<?= $camId ?>"
                   onclick="toggleHide('<?= $camId ?>')">✕ HIDE</button>
         </div>

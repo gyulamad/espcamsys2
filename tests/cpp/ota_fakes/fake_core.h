@@ -31,6 +31,8 @@ struct State {
   // what happened
   std::vector<std::string> requests;                           // every URL asked for
   std::vector<std::map<std::string, std::string> > headers;    // headers of each request
+  std::vector<std::string> methods;                            // GET or POST, per request
+  std::vector<std::string> bodies;                             // the body sent with each request ("" for a GET)
   std::vector<std::string> serial;                             // serial lines
   bool restarted = false;
   bool aborted = false;
@@ -98,6 +100,8 @@ class HTTPClient {
   void begin(const String& url) {
     fake::g().requests.push_back(url.c_str());
     fake::g().headers.push_back(std::map<std::string, std::string>());
+    fake::g().methods.push_back("GET");
+    fake::g().bodies.push_back("");
     url_ = url.c_str();
   }
   void setTimeout(int) {}
@@ -112,6 +116,11 @@ class HTTPClient {
       }
     }
     return -1;   // connection refused
+  }
+  int POST(const String& payload) {
+    fake::g().methods.back() = "POST";
+    fake::g().bodies.back() = payload.c_str();
+    return GET();
   }
   String getString() { return String(body_.c_str()); }
   int getSize() { return (int)stream_.bytes.size(); }

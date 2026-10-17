@@ -106,6 +106,15 @@ inline std::vector<std::string> recorderRemotePrerequisites() {
     return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
 }
 
+// The settings the dashboard's settings page may NOT change on a running board
+// (applyChangeLine in settings_logic.h): everything this board needs to reach the relay,
+// plus the push port. A wrong value there would leave a board nobody can reach without a
+// USB cable, so these stay serial-only. Keep in sync with the schema above.
+inline std::vector<std::string> recorderLockedKeys() {
+    static const char* const keys[] = { "WIFI", "SERVER_HOST", "PUSH_PORT", "HTTP_PORT", "CAMERA_ID", "API_KEY" };
+    return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
+}
+
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.
 inline bool loadRecorderSettings(ISettingsStore& store, RecorderSettings& out, std::string& err) {

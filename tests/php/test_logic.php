@@ -442,4 +442,145 @@ camtest_test('dashboardFields: described like the relay\'s fields, and isDashboa
     camtest_assert_true(!CamLogic::isDashboardKey('controlKey'));
 });
 
+// ── Cameras on the dashboard (add / rename / remove) ──────────────────
+
+camtest_test('addCamera: appends the camera and keeps the others', function () {
+    $r = CamLogic::addCamera([['id' => 'cam1', 'name' => 'A', 'icon' => '🎥']], 'cam2', ' Yard ', '🌿');
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['cameras'][1], ['id' => 'cam2', 'name' => 'Yard', 'icon' => '🌿']);
+    camtest_assert_equal(count($r['cameras']), 2);
+});
+
+camtest_test('addCamera: refuses a bad id, a duplicate (any letter case) and bad details', function () {
+    $have = [['id' => 'Cam1', 'name' => 'A', 'icon' => 'x']];
+    foreach (['', '-x', 'a b', 'a/b', '../etc', str_repeat('x', 65), 'ä'] as $bad) {
+        camtest_assert_equal(CamLogic::addCamera($have, $bad, 'n', 'i')['ok'], false, 'id ' . $bad);
+    }
+    camtest_assert_equal(CamLogic::addCamera($have, 'cam1', 'n', 'i')['ok'], false, 'duplicate in another case');
+    camtest_assert_equal(CamLogic::addCamera($have, 'cam2', '', 'i')['ok'], false, 'empty name');
+    camtest_assert_equal(CamLogic::addCamera($have, 'cam2', 'n', '')['ok'], false, 'empty icon');
+});
+
+camtest_test('validateCameraDetails: length, line breaks and markup characters in the icon', function () {
+    camtest_assert_equal(CamLogic::validateCameraDetails('Front door', '🚪'), null);
+    foreach ([['', 'x'], [str_repeat('n', 61), 'x'], ["a\nb", 'x'], ['n', '123456789'], ['n', '<b>'], ['n', 'a"b'], ['n', "a'b"], ['n', "a\nb"]] as $bad) {
+        camtest_assert_true(CamLogic::validateCameraDetails($bad[0], $bad[1]) !== null, json_encode($bad));
+    }
+});
+
+camtest_test('updateCamera: changes name and icon only; other keys and the id stay', function () {
+    $r = CamLogic::updateCamera([['id' => 'cam1', 'name' => 'A', 'icon' => 'x', 'extra' => 7]], 'cam1', 'B', 'y');
+    camtest_assert_equal($r['cameras'][0], ['id' => 'cam1', 'name' => 'B', 'icon' => 'y', 'extra' => 7]);
+    camtest_assert_equal(CamLogic::updateCamera([['id' => 'cam1', 'name' => 'A', 'icon' => 'x']], 'nope', 'B', 'y')['ok'], false);
+});
+
+camtest_test('removeCamera: removes one, keeps the order of the rest, refuses an unknown id', function () {
+    $cams = [['id' => 'a', 'name' => 'A', 'icon' => 'x'], ['id' => 'b', 'name' => 'B', 'icon' => 'x'], ['id' => 'c', 'name' => 'C', 'icon' => 'x']];
+    $r = CamLogic::removeCamera($cams, 'b');
+    camtest_assert_equal(array_column($r['cameras'], 'id'), ['a', 'c']);
+    camtest_assert_equal(CamLogic::removeCamera($cams, 'zzz')['ok'], false);
+});
+
+camtest_test('findCamera: exact id or null', function () {
+    $cams = [['id' => 'a', 'name' => 'A', 'icon' => 'x']];
+    camtest_assert_equal(CamLogic::findCamera($cams, 'a')['name'], 'A');
+    camtest_assert_equal(CamLogic::findCamera($cams, 'A'), null);
+});
+
+// ── A camera's own settings ───────────────────────────────────────────
+
+function camtest_schema(): array { return require __DIR__ . '/../../php/cameras/lib/device_schema.php'; }
+function camtest_reported(): array {
+    return ['WIFI' => 'net:********', 'SERVER_HOST' => '192.168.4.9', 'PUSH_PORT' => '8081', 'HTTP_PORT' => '8080', 'CAMERA_ID' => 'cam2',
+            'API_KEY' => '********', 'PUSH_GAP_MUL' => '1.5', 'ALARM_GPIO_PIN' => '13', 'ALARM_ACTIVE' => 'LOW', 'ALARM_ALL_CAMS' => '0',
+            'LOG_ENABLED' => '1', 'LOG_MIN_LEVEL' => '1', 'LOG_ECHO' => '1', 'LOG_RETRY_MAX' => '3', 'LOG_RETRY_SEC' => '300',
+            'LOG_FLUSH_SEC' => '10', 'LOG_REPEAT_SEC' => '30', 'LOG_HEARTBEAT' => '600', 'LOG_LOW_HEAP' => '30000'];
+}
+function camtest_change(array $reported, array $values): array {
+    $sc = camtest_schema();
+    return CamLogic::buildDeviceChange($sc['recorder']['keys'], $sc['recorder']['gpios'], $reported, $values);
+}
+
+camtest_test('the generated schema is complete and the connection settings are the locked ones', function () {
+    $sc = camtest_schema()['recorder'];
+    camtest_assert_true(count($sc['keys']) >= 15 && count($sc['gpios']) >= 3);
+    $locked = [];
+    foreach ($sc['keys'] as $k) {
+        camtest_assert_true(isset($k['name'], $k['kind'], $k['cond'], $k['help']) && array_key_exists('condKey', $k), $k['name'] ?? '?');
+        if ($k['locked']) { $locked[] = $k['name']; }
+    }
+    sort($locked);
+    camtest_assert_equal($locked, ['API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'PUSH_PORT', 'SERVER_HOST', 'WIFI']);
+});
+
+camtest_test('buildDeviceChange: a valid change becomes a line naming only what changed', function () {
+    $r = camtest_change(camtest_reported(), ['LOG_HEARTBEAT' => '900', 'PUSH_GAP_MUL' => '1.5', 'LOG_ECHO' => 'off']);
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['changed'], ['LOG_HEARTBEAT', 'LOG_ECHO']);
+    camtest_assert_equal($r['line'], 'LOG_HEARTBEAT=900;LOG_ECHO=0');
+});
+
+camtest_test('buildDeviceChange: nothing different means an empty line, not an error', function () {
+    $r = camtest_change(camtest_reported(), ['LOG_HEARTBEAT' => '600', 'ALARM_ACTIVE' => 'low']);
+    camtest_assert_equal([$r['ok'], $r['line'], $r['changed']], [true, '', []]);
+});
+
+camtest_test('buildDeviceChange: the settings that reach the relay are refused, even with their current value', function () {
+    foreach (['WIFI', 'SERVER_HOST', 'PUSH_PORT', 'HTTP_PORT', 'CAMERA_ID', 'API_KEY'] as $k) {
+        $r = camtest_change(camtest_reported(), [$k => 'anything1']);
+        camtest_assert_equal($r['ok'], false, $k);
+        camtest_assert_true(strpos($r['error'], 'serial port') !== false, $k);
+    }
+});
+
+camtest_test('buildDeviceChange: unknown settings and bad values are refused, and the error never echoes the value', function () {
+    foreach ([['NOPE' => '1'], ['LOG_HEARTBEAT' => '0'], ['LOG_HEARTBEAT' => 'abc'], ['LOG_HEARTBEAT' => '1.5'], ['LOG_ECHO' => 'maybe'],
+              ['ALARM_ACTIVE' => 'SIDEWAYS'], ['ALARM_GPIO_PIN' => '7'], ['PUSH_GAP_MUL' => '99'], ['LOG_LOW_HEAP' => "5\n6"]] as $bad) {
+        $r = camtest_change(camtest_reported(), $bad);
+        camtest_assert_equal($r['ok'], false, json_encode($bad));
+    }
+    $r = camtest_change(camtest_reported(), ['LOG_HEARTBEAT' => 'hunter2-not-a-number']);
+    camtest_assert_true(strpos($r['error'], 'hunter2') === false);
+});
+
+camtest_test('buildDeviceChange: values are normalised like the board does (bool words, level case, ints)', function () {
+    $r = camtest_change(camtest_reported(), ['LOG_ECHO' => 'No', 'ALARM_ACTIVE' => 'high', 'LOG_RETRY_MAX' => '007', 'ALARM_GPIO_PIN' => '14']);
+    camtest_assert_equal($r['line'], 'LOG_ECHO=0;ALARM_ACTIVE=HIGH;LOG_RETRY_MAX=7;ALARM_GPIO_PIN=14');
+});
+
+camtest_test('buildDeviceChange: switching a feature on needs the settings it requires', function () {
+    $rep = camtest_reported();
+    $rep['ALARM_GPIO_PIN'] = '-1';
+    unset($rep['ALARM_ACTIVE'], $rep['ALARM_ALL_CAMS']);
+    $r = camtest_change($rep, ['ALARM_GPIO_PIN' => '14']);
+    camtest_assert_equal($r['ok'], false);
+    camtest_assert_true(strpos($r['error'], 'ALARM_ACTIVE') !== false);
+    $r = camtest_change($rep, ['ALARM_GPIO_PIN' => '14', 'ALARM_ACTIVE' => 'HIGH', 'ALARM_ALL_CAMS' => '1']);
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['changed'], ['ALARM_GPIO_PIN', 'ALARM_ACTIVE', 'ALARM_ALL_CAMS']);
+});
+
+camtest_test('buildDeviceChange: switching a feature OFF does not demand its settings', function () {
+    $r = camtest_change(camtest_reported(), ['LOG_ENABLED' => '0']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'LOG_ENABLED=0']);
+    $r = camtest_change(camtest_reported(), ['ALARM_GPIO_PIN' => '-1']);
+    camtest_assert_equal($r['ok'], true);
+});
+
+camtest_test('escapeSettingValue: ; and \\ are escaped so a value can not become a second setting', function () {
+    camtest_assert_equal(CamLogic::escapeSettingValue('a;b\\c'), 'a\\;b\\\\c');
+    camtest_assert_equal(CamLogic::escapeSettingValue('plain'), 'plain');
+});
+
+camtest_test('isDeviceSettingRequired: always / equals / not_equals, and "needed" when the controlling value is missing', function () {
+    $eq = ['cond' => 'equals', 'condKey' => 'A', 'condValue' => '1'];
+    $ne = ['cond' => 'not_equals', 'condKey' => 'A', 'condValue' => '-1'];
+    camtest_assert_true(CamLogic::isDeviceSettingRequired(['cond' => 'always', 'condKey' => null], []));
+    camtest_assert_true(CamLogic::isDeviceSettingRequired($eq, ['A' => '1']));
+    camtest_assert_true(!CamLogic::isDeviceSettingRequired($eq, ['A' => '0']));
+    camtest_assert_true(CamLogic::isDeviceSettingRequired($ne, ['A' => '5']));
+    camtest_assert_true(!CamLogic::isDeviceSettingRequired($ne, ['A' => '-1']));
+    camtest_assert_true(CamLogic::isDeviceSettingRequired($eq, []));
+});
+
 exit(camtest_summarize());

@@ -122,4 +122,93 @@ test('FetchLogGate: devices are tracked separately, and memory stays bounded', (
   assertTrue(g.last.size <= 1001, 'bounded');
 });
 
+// ── changes queued from the dashboard, and what the board reports ───────
+
+test('parseSettingsLine: names and values, with the backslash escapes undone', () => {
+  assertEqual(ds.parseSettingsLine('PUSH_GAP_MUL=1.5;WIFI=my\\:net:****;NOTE=a\\;b\\\\c'), { PUSH_GAP_MUL: '1.5', WIFI: 'my:net:****', NOTE: 'a;b\\c' });
+});
+
+test('parseSettingsLine: values may hold "=", the first of a name wins, junk pieces are skipped', () => {
+  assertEqual(ds.parseSettingsLine('A=b=c;A=2;lower=1;=x;nokey;bad key=2;B=;;'), { A: 'b=c', LOWER: '1', B: '' });   // names are upper-cased, like the boards do
+  assertEqual(ds.parseSettingsLine(''), {});
+  assertEqual(ds.parseSettingsLine(null), {});
+});
+
+test('parseReportBody: number, result, message, then the settings line', () => {
+  const r = ds.parseReportBody('555\napplied\nchanged: LOG_HEARTBEAT\nLOG_HEARTBEAT=900;X=1\n');
+  assertEqual([r.ok, r.rev, r.result, r.message, r.line], [true, '555', 'applied', 'changed: LOG_HEARTBEAT', 'LOG_HEARTBEAT=900;X=1']);
+  assertEqual(ds.parseReportBody('0\nboot\n\nA=1').ok, true);
+});
+
+test('parseReportBody: refuses what is not that', () => {
+  for (const bad of [null, '', 'x', '1\napplied\nmsg', 'abc\napplied\nm\nA=1', '1\nmaybe\nm\nA=1', '12345678901234567890\napplied\nm\nA=1',
+    `1\napplied\n${'m'.repeat(501)}\nA=1`, `1\napplied\nm\n${'A'.repeat(ds.MAX_REPORT_LINE + 1)}`, '1\napplied\nm\x00\nA=1']) {
+    assertTrue(!ds.parseReportBody(bad).ok, JSON.stringify(bad).slice(0, 60));
+  }
+});
+
+test('nextRev: always larger than the last one, even if the clock stands still or goes back', () => {
+  assertEqual(ds.nextRev(0, 1000), '1000');
+  assertEqual(ds.nextRev(1000, 1000), '1001');
+  assertEqual(ds.nextRev(5000, 1000), '5001');
+});
+
+test('queueChange: queues one change, a newer one replaces it, an empty line cancels', () => {
+  const a = ds.queueChange(ds.emptyState(), 'A=1', 1000, 'alice');
+  assertEqual([a.rev, a.state.pending.line, a.state.pending.by], ['1000', 'A=1', 'alice']);
+  const b = ds.queueChange(a.state, 'B=2', 1000, 'bob');
+  assertEqual([b.rev, b.state.pending.line], ['1001', 'B=2']);
+  const c = ds.queueChange(b.state, '', 2000, 'bob');
+  assertEqual([c.rev, c.state.pending], [null, null]);
+  assertTrue(a.state !== ds.emptyState() && ds.emptyState().pending === null, 'inputs are not modified');
+});
+
+test('changeReply: "<number>\\n<line>\\n" while queued, null otherwise', () => {
+  assertEqual(ds.changeReply(ds.emptyState()), null);
+  assertEqual(ds.changeReply(ds.queueChange(ds.emptyState(), 'A=1', 7, '').state), '7\nA=1\n');
+});
+
+test('applyReport: a boot report only refreshes what the board holds', () => {
+  const q = ds.queueChange(ds.emptyState(), 'A=1', 100, '').state;
+  const s = ds.applyReport(q, { rev: '0', result: 'boot', message: '', line: 'A=0' }, 200);
+  assertEqual([s.reported, s.pending !== null, s.last], [{ line: 'A=0', at: 200 }, true, null]);
+});
+
+test('applyReport: the answer to the waiting change clears it and is remembered', () => {
+  const q = ds.queueChange(ds.emptyState(), 'A=1', 100, '').state;
+  const s = ds.applyReport(q, { rev: '100', result: 'applied', message: 'changed: A', line: 'A=1' }, 300);
+  assertEqual([s.pending, s.last], [null, { rev: '100', result: 'applied', message: 'changed: A', at: 300 }]);
+});
+
+test('applyReport: an answer to an OLDER change does not cancel the newer one', () => {
+  let st = ds.queueChange(ds.emptyState(), 'A=1', 100, '').state;
+  st = ds.queueChange(st, 'A=2', 200, '').state;
+  const s = ds.applyReport(st, { rev: '100', result: 'rejected', message: 'no', line: 'A=0' }, 300);
+  assertEqual(s.pending.line, 'A=2');
+  assertEqual(s.last.result, 'rejected');
+});
+
+test('viewState: the dashboard gets settings as an object and the queued NAMES — never the queued values', () => {
+  let st = ds.applyReport(ds.emptyState(), { rev: '0', result: 'boot', message: '', line: 'A=1;SECRET=********' }, 50);
+  st = ds.queueChange(st, 'A=2;B=hunter2', 60, 'carol').state;
+  const v = ds.viewState(st);
+  assertEqual(v.reported, { settings: { A: '1', SECRET: '********' }, at: 50 });
+  assertEqual([v.pending.keys, v.pending.by], [['A', 'B'], 'carol']);
+  assertTrue(!JSON.stringify(v).includes('hunter2'), 'no queued value');
+  assertEqual(ds.viewState(ds.emptyState()), { reported: null, pending: null, last: null });
+});
+
+test('parseState: round-trips, and anything damaged is just an empty state', () => {
+  let st = ds.queueChange(ds.emptyState(), 'A=1', 100, 'x').state;
+  st = ds.applyReport(st, { rev: '0', result: 'boot', message: '', line: 'A=0' }, 120);
+  assertEqual(ds.parseState(JSON.stringify(st)), st);
+  for (const bad of [undefined, '', '{nope', 'null', '[]', '{"pending":{"rev":"x","line":"A=1","at":1}}']) assertEqual(ds.parseState(bad).pending, null, String(bad));
+  assertEqual(ds.parseState(JSON.stringify({ lastRev: 'x' })).lastRev, 0);
+});
+
+test('stateFile: under the type, in its own folder, so it can never collide with a staged line', () => {
+  assertEqual(ds.stateFile('/d', 'recorder', 'cam1'), path.join('/d', 'recorder', 'state', 'cam1.json'));
+  assertTrue(ds.stateFile('/d', 'recorder', 'cam1') !== ds.fileFor('/d', 'recorder', 'cam1'));
+});
+
 summarize();

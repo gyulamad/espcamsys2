@@ -7,7 +7,7 @@
 //
 //   GET  system-settings.php
 //        -> { fields: [ {key, type, label, help, group, restart, value | isSet, source, ...} ],
-//             supervised, configWritable }       (secrets are never sent, only whether they are set)
+//             supervised, configWritable, cameras: [ {id, name, icon} ] }       (secrets are never sent, only whether they are set)
 //   POST system-settings.php    body: { "values": { "preRollSeconds": 10, "auth_pass": "...", ... },
 //                                       "confirm": true }   (confirm: needed for settings that
 //                                       disconnect the cameras — camKey, pushPort)
@@ -29,6 +29,7 @@
 require_once __DIR__ . '/auth.php';      // dashboard login; also defines $config
 require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/relay.php';
+require_once __DIR__ . '/config_file.php';
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
@@ -80,7 +81,10 @@ if ($method === 'GET') {
         $f['source'] = 'config.php';
         $fields[] = $f;
     }
-    echo json_encode(['fields' => $fields, 'supervised' => (bool) ($relay['supervised'] ?? false), 'configWritable' => $configWritable]);
+    $camList = array_map(function ($c) {
+        return ['id' => (string) $c['id'], 'name' => (string) ($c['name'] ?? ''), 'icon' => (string) ($c['icon'] ?? '')];
+    }, $config['cameras'] ?? []);
+    echo json_encode(['fields' => $fields, 'supervised' => (bool) ($relay['supervised'] ?? false), 'configWritable' => $configWritable, 'cameras' => $camList]);
     exit;
 }
 
@@ -162,12 +166,9 @@ if (in_array('port', $changed, true) && !isset($dashChanges['relay_url'])) {
 }
 $configChanged = $newConfig !== $config;
 if ($configChanged) {
-    @copy($configFile, $configFile . '.bak');
-    if (@file_put_contents($configFile, CamLogic::buildConfigPhp($newConfig), LOCK_EX) === false) {
-        json_fail(500, 'The relay saved its settings, but config.php could not be written — check its permissions');
-    }
-    if (function_exists('opcache_invalidate')) {
-        @opcache_invalidate($configFile, true);
+    $writeErr = camdash_write_config($configFile, $newConfig);
+    if ($writeErr !== null) {
+        json_fail(500, 'The relay saved its settings, but ' . $writeErr);
     }
 }
 foreach (array_keys($dashChanges) as $k) {

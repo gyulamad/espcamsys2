@@ -467,4 +467,227 @@ class CamLogic
         }
         return 'X-Control-Key: ' . $controlKey . "\r\nX-Actor: " . $actor . "\r\n" . ($json ? "Content-Type: application/json\r\n" : "Content-Length: 0\r\n");
     }
+
+    // ── Cameras on the dashboard (the `cameras` list of config.php) ──
+    // Add, rename and remove from the settings pages. The id is what ties an entry to a board
+    // (its CAMERA_ID setting), so it can never be edited — remove the entry and add a new one.
+
+    const CAMERA_ID_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/';
+
+    // Null when fine, else what is wrong. The icon is shown on the page (it is escaped there too).
+    // Length in characters (not bytes) without the mbstring extension; -1 if it is not valid UTF-8.
+    public static function charLength(string $s): int
+    {
+        $n = preg_match_all('/./su', $s);
+        return $n === false ? -1 : $n;
+    }
+
+    public static function validateCameraDetails(string $name, string $icon): ?string
+    {
+        $name = trim($name);
+        $nameLen = self::charLength($name);
+        $iconLen = self::charLength($icon);
+        if ($name === '' || $nameLen < 0 || $nameLen > 60 || preg_match('/[\x00-\x1f\x7f]/', $name)) {
+            return 'the name must be 1-60 characters, without line breaks';
+        }
+        if ($icon === '' || $iconLen < 0 || $iconLen > 8 || preg_match('/[\x00-\x1f\x7f<>&"\']/', $icon)) {
+            return 'the icon must be 1-8 characters (an emoji is fine), without < > & or quotes';
+        }
+        return null;
+    }
+
+    // -> ['ok' => true, 'cameras' => [...]] | ['ok' => false, 'error' => ...]. Other keys of an entry are kept.
+    public static function addCamera(array $cameras, string $id, string $name, string $icon): array
+    {
+        if (!preg_match(self::CAMERA_ID_PATTERN, $id)) {
+            return ['ok' => false, 'error' => 'the id must be 1-64 characters: letters, digits, _ . - (it starts with a letter or digit)'];
+        }
+        foreach ($cameras as $c) {
+            if (strcasecmp((string) ($c['id'] ?? ''), $id) === 0) {
+                return ['ok' => false, 'error' => 'there is already a camera with the id ' . $c['id']];
+            }
+        }
+        $err = self::validateCameraDetails($name, $icon);
+        if ($err !== null) {
+            return ['ok' => false, 'error' => $err];
+        }
+        $cameras[] = ['id' => $id, 'name' => trim($name), 'icon' => $icon];
+        return ['ok' => true, 'cameras' => array_values($cameras)];
+    }
+
+    public static function updateCamera(array $cameras, string $id, string $name, string $icon): array
+    {
+        $err = self::validateCameraDetails($name, $icon);
+        if ($err !== null) {
+            return ['ok' => false, 'error' => $err];
+        }
+        foreach ($cameras as $i => $c) {
+            if (($c['id'] ?? null) === $id) {
+                $cameras[$i]['name'] = trim($name);
+                $cameras[$i]['icon'] = $icon;
+                return ['ok' => true, 'cameras' => array_values($cameras)];
+            }
+        }
+        return ['ok' => false, 'error' => 'no camera with the id ' . $id];
+    }
+
+    public static function removeCamera(array $cameras, string $id): array
+    {
+        $kept = array_values(array_filter($cameras, function ($c) use ($id) {
+            return ($c['id'] ?? null) !== $id;
+        }));
+        if (count($kept) === count($cameras)) {
+            return ['ok' => false, 'error' => 'no camera with the id ' . $id];
+        }
+        return ['ok' => true, 'cameras' => $kept];
+    }
+
+    public static function findCamera(array $cameras, string $id): ?array
+    {
+        foreach ($cameras as $c) {
+            if (($c['id'] ?? null) === $id) {
+                return $c;
+            }
+        }
+        return null;
+    }
+
+    // ── A camera's own settings (stored in the board's flash) ──
+    // The settings page checks a change here first so a mistake is answered at once; the board
+    // checks again and has the last word (a change it refuses comes back as "rejected").
+    // $schemaKeys / $gpios come from lib/device_schema.php (generated from the firmware's table).
+
+    // -> ['ok' => true, 'value' => canonical text] | ['ok' => false, 'error' => ...]. Never echoes the value.
+    public static function normalizeDeviceValue(array $def, array $gpios, string $raw): array
+    {
+        $bad = function (string $why) use ($def): array { return ['ok' => false, 'error' => $def['name'] . ' ' . $why]; };
+        if (preg_match('/[\x00-\x1f\x7f]/', $raw)) {
+            return $bad('must not contain control characters or line breaks');
+        }
+        $isInt = function (string $v): bool { return (bool) preg_match('/^-?\d{1,15}$/', $v); };
+        switch ($def['kind']) {
+            case 'int':
+                if (!$isInt($raw) || (int) $raw < $def['min'] || (int) $raw > $def['max']) {
+                    return $bad('must be a whole number from ' . $def['min'] . ' to ' . $def['max']);
+                }
+                return ['ok' => true, 'value' => (string) (int) $raw];
+            case 'float':
+                if (!preg_match('/^-?\d+(\.\d+)?$/', $raw) || (float) $raw < $def['min'] || (float) $raw > $def['max']) {
+                    return $bad('must be a number from ' . $def['min'] . ' to ' . $def['max']);
+                }
+                return ['ok' => true, 'value' => $raw];
+            case 'bool':
+                $l = strtolower($raw);
+                if (in_array($l, ['1', 'true', 'yes', 'on'], true)) {
+                    return ['ok' => true, 'value' => '1'];
+                }
+                if (in_array($l, ['0', 'false', 'no', 'off'], true)) {
+                    return ['ok' => true, 'value' => '0'];
+                }
+                return $bad('must be 1 or 0');
+            case 'level':
+                $u = strtoupper($raw);
+                if ($u === 'LOW' || $u === '0') {
+                    return ['ok' => true, 'value' => 'LOW'];
+                }
+                if ($u === 'HIGH' || $u === '1') {
+                    return ['ok' => true, 'value' => 'HIGH'];
+                }
+                return $bad('must be LOW or HIGH');
+            case 'pin':
+            case 'pin_or_off':
+                if ($isInt($raw) && (int) $raw === -1 && $def['kind'] === 'pin_or_off') {
+                    return ['ok' => true, 'value' => '-1'];
+                }
+                if (!$isInt($raw) || !in_array((int) $raw, $gpios, true)) {
+                    return $bad('must be one of the usable GPIOs (' . implode(', ', $gpios) . ($def['kind'] === 'pin_or_off' ? ', or -1 for off' : '') . ')');
+                }
+                return ['ok' => true, 'value' => (string) (int) $raw];
+            case 'host':
+            case 'id':
+                $max = $def['kind'] === 'host' ? 253 : 64;
+                if ($raw === '' || strlen($raw) > $max || !preg_match('/^[A-Za-z0-9_.-]+$/', $raw)) {
+                    return $bad('may only contain letters, digits and _ . - (1 to ' . $max . ' characters)');
+                }
+                return ['ok' => true, 'value' => $raw];
+            case 'text':
+                if ($raw === '') {
+                    return $bad('must not be empty');
+                }
+                return ['ok' => true, 'value' => $raw];
+        }
+        return $bad('can only be changed over the serial port');   // secret, wifi
+    }
+
+    // Is this setting needed, given the values the camera would hold?
+    public static function isDeviceSettingRequired(array $def, array $values): bool
+    {
+        if ($def['cond'] === 'always' || $def['condKey'] === null) {
+            return true;
+        }
+        if (!isset($values[$def['condKey']])) {
+            return true;
+        }
+        $equal = $values[$def['condKey']] === $def['condValue'];
+        return $def['cond'] === 'equals' ? $equal : !$equal;
+    }
+
+    // A value as it goes in a "KEY=value;KEY=value" line: \ and ; are escaped.
+    public static function escapeSettingValue(string $v): string
+    {
+        $out = '';
+        for ($i = 0, $n = strlen($v); $i < $n; $i++) {
+            if ($v[$i] === '\\' || $v[$i] === ';') {
+                $out .= '\\';
+            }
+            $out .= $v[$i];
+        }
+        return $out;
+    }
+
+    // Turns the submitted { SETTING: value } into the line to queue for the camera.
+    //   $reported: what the camera says it holds ({ SETTING: text }, secrets masked).
+    //   -> ['ok' => true, 'line' => '...' ('' when nothing differs), 'changed' => [names]]
+    //    | ['ok' => false, 'error' => ...]
+    public static function buildDeviceChange(array $schemaKeys, array $gpios, array $reported, array $values): array
+    {
+        $byName = [];
+        foreach ($schemaKeys as $k) {
+            $byName[$k['name']] = $k;
+        }
+        $changes = [];
+        foreach ($values as $name => $raw) {
+            $name = (string) $name;
+            if (!isset($byName[$name])) {
+                return ['ok' => false, 'error' => 'unknown setting ' . $name];
+            }
+            $def = $byName[$name];
+            if ($def['locked'] || in_array($def['kind'], ['secret', 'wifi'], true)) {
+                return ['ok' => false, 'error' => $name . ' can only be changed over the serial port (a wrong value would cut the camera off from the relay)'];
+            }
+            $n = self::normalizeDeviceValue($def, $gpios, (string) $raw);
+            if (!$n['ok']) {
+                return $n;
+            }
+            if (isset($reported[$name]) && $reported[$name] === $n['value']) {
+                continue;
+            }
+            $changes[$name] = $n['value'];
+        }
+        if (!$changes) {
+            return ['ok' => true, 'line' => '', 'changed' => []];
+        }
+        // The camera must not be left needing a setting it does not have (the board checks this too).
+        $after = array_merge($reported, $changes);
+        foreach ($schemaKeys as $def) {
+            if (self::isDeviceSettingRequired($def, $after) && !isset($after[$def['name']])) {
+                return ['ok' => false, 'error' => $def['name'] . ' is needed too — it has no value yet'];
+            }
+        }
+        $parts = [];
+        foreach ($changes as $name => $value) {
+            $parts[] = $name . '=' . self::escapeSettingValue($value);
+        }
+        return ['ok' => true, 'line' => implode(';', $parts), 'changed' => array_keys($changes)];
+    }
 }

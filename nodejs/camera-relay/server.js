@@ -942,10 +942,113 @@ app.put(['/device-settings/:type', '/device-settings/:type/:id'],
     return res.json({ ok: true, scope, settings: devicesettings.keyNames(checked.line) });
   });
 
+// ── Changing settings that are already stored in a board (the dashboard's camera settings page) ──
+// The staging above only fills gaps. This queues a change for a board whose settings are all there; the
+// board asks for it, applies it with its own checks (it refuses anything unsafe), and reports what it
+// holds and how it went. The relay only keeps the state (see "Changes queued from the dashboard" in
+// lib/devicesettings.js) — it never validates a value.
+//   GET  /device-settings/:type/:id/change   camera key:  "<number>\n<KEY=value;...>" if a change is queued, else 404
+//   POST /device-settings/:type/:id/report   camera key:  body "<number>\n<boot|applied|rejected>\n<message>\n<KEY=value;...>"
+//   GET  /device-settings/:type/:id/state    control key: { reported, pending (names only), last }
+//   PUT  /device-settings/:type/:id/change   control key: queue the line in the body (empty body = cancel what is queued)
+function requireCameraKeyForDevice(req, res, next) {
+  if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = deviceSettingsAuthThrottle.check(`get:${ip}`, Date.now());
+  if (t.allow) relayLog('WARN', `rejected a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong key' });
+}
+function requireControlKeyForDevice(req, res, next) {
+  if (!CONTROL_KEY) return res.status(503).json({ error: 'changing device settings is disabled: controlKey is not set in the relay config' });
+  const provided = req.headers['x-control-key'];
+  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = deviceSettingsAuthThrottle.check(`put:${ip}`, Date.now());
+  if (t.allow) relayLog('WARN', `REJECTED a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong control key' });
+}
+function checkDeviceParams(req, res, next) {
+  if (!devicesettings.isType(req.params.type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
+  if (!devicesettings.isId(req.params.id)) return res.status(400).json({ error: 'not a valid device id' });
+  return next();
+}
+function loadDeviceState(type, id) {
+  return devicesettings.parseState(readStagedFile(devicesettings.stateFile(DEVICE_SETTINGS_DIR, type, id)) || '');
+}
+function saveDeviceState(type, id, state) {
+  const file = devicesettings.stateFile(DEVICE_SETTINGS_DIR, type, id);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeFileAtomic(file, JSON.stringify(state));
+}
+
+app.get('/device-settings/:type/:id/change', requireCameraKeyForDevice, checkDeviceParams, (req, res) => {
+  const { type, id } = req.params;
+  let state;
+  try {
+    state = loadDeviceState(type, id);
+  } catch (err) {
+    relayLog('ERROR', `could not read the settings state of ${id}: ${errorMessage(err)}`, { sender: id });
+    return res.status(500).json({ error: 'could not read the state' });
+  }
+  const reply = devicesettings.changeReply(state);
+  if (reply === null) return res.status(404).type('text/plain').send('nothing queued');
+  if (deviceSettingsLogGate.check(`${id}:change`, state.pending.rev, Date.now())) {
+    relayLog('INFO', `${id} (${type}) asked for its queued settings change and was sent it (${devicesettings.keyNames(state.pending.line).join(', ') || 'no settings'})`, { sender: id });
+  }
+  return res.type('text/plain').send(reply);
+});
+
+app.post('/device-settings/:type/:id/report', requireCameraKeyForDevice, checkDeviceParams, express.text({ type: '*/*', limit: '16kb' }), (req, res) => {
+  const { type, id } = req.params;
+  const rep = devicesettings.parseReportBody(typeof req.body === 'string' ? req.body : '');
+  if (!rep.ok) return res.status(400).json({ error: rep.error });
+  try {
+    saveDeviceState(type, id, devicesettings.applyReport(loadDeviceState(type, id), rep, Date.now()));
+  } catch (err) {
+    relayLog('ERROR', `could not save the settings state of ${id}: ${errorMessage(err)}`, { sender: id });
+    return res.status(500).json({ error: 'could not save the state' });
+  }
+  if (rep.result === 'boot') relayLog('INFO', `${id} (${type}) reported its settings (${Object.keys(devicesettings.parseSettingsLine(rep.line)).length} stored)`, { sender: id });
+  else relayLog(rep.result === 'applied' ? 'INFO' : 'WARN', `${id} (${type}) ${rep.result} the settings change ${rep.rev}: ${rep.message}`, { sender: id });
+  return res.json({ ok: true });
+});
+
+app.get('/device-settings/:type/:id/state', requireControlKeyForDevice, checkDeviceParams, (req, res) => {
+  try {
+    return res.json({ ...devicesettings.viewState(loadDeviceState(req.params.type, req.params.id)), now: Date.now() });
+  } catch (err) {
+    relayLog('ERROR', `could not read the settings state of ${req.params.id}: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not read the state' });
+  }
+});
+
+app.put('/device-settings/:type/:id/change', requireControlKeyForDevice, checkDeviceParams, express.text({ type: '*/*', limit: '4kb' }), (req, res) => {
+  const { type, id } = req.params;
+  const text = typeof req.body === 'string' ? req.body.trim() : '';
+  const checked = text === '' ? { ok: true, line: '' } : devicesettings.checkStagedLine(text);   // empty = cancel what is queued
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+  let queued;
+  try {
+    queued = devicesettings.queueChange(loadDeviceState(type, id), checked.line, Date.now(), actorOf(req));
+    saveDeviceState(type, id, queued.state);
+  } catch (err) {
+    relayLog('ERROR', `could not queue a settings change for ${id}: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not save the change' });
+  }
+  if (queued.rev === null) {
+    relayLog('INFO', `${actorOf(req)} cancelled the settings change queued for ${type} ${id}`);
+    return res.json({ ok: true, cancelled: true });
+  }
+  const keys = devicesettings.keyNames(checked.line);
+  // Names only: the values may be sensitive.
+  relayLog('INFO', `${actorOf(req)} queued a settings change for ${type} ${id}: ${keys.join(', ') || 'none'} (number ${queued.rev})`);
+  return res.json({ ok: true, rev: queued.rev, keys });
+});
+
 // An oversized or unreadable staging body gets a clear answer, not Express's HTML error page.
 app.use('/device-settings', (err, req, res, next) => {
   if (res.headersSent) return next(err);
-  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 4 KB)' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large' });
   return next(err);
 });
 

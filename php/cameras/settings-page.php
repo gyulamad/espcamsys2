@@ -58,6 +58,13 @@ require_once __DIR__ . '/auth.php';
   .row input:disabled { opacity: .5; }
   .row input.changed { border-color: var(--warn); }
   .help { grid-column: 2; font-size: .75rem; color: var(--muted); line-height: 1.4; }
+  .cams .cam-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .cams .cam-row:first-of-type { border-top: 0; }
+  .cams .cam-row .nm { flex: 1; min-width: 160px; font-size: .95rem; }
+  .cams .cam-row .nm small { font-family: var(--mono); color: var(--muted); margin-left: 6px; }
+  .cams .add { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 0 6px; border-top: 1px solid var(--border); }
+  .cams .add input { flex: 1; min-width: 120px; font-family: var(--mono); font-size: .85rem; padding: 7px 9px; border-radius: var(--radius); border: 1px solid var(--border-light); background: var(--bg); color: var(--text); }
+  .cams .add input.icon { flex: 0 0 80px; min-width: 60px; text-align: center; }
   .savebar {
     position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--border);
     padding: 12px 32px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
@@ -82,6 +89,17 @@ require_once __DIR__ . '/auth.php';
 <main>
   <div id="banners"></div>
   <form id="form" onsubmit="return false;"></form>
+  <fieldset class="cams" id="cameras" hidden>
+    <legend>Cameras on the dashboard</legend>
+    <div id="cam-list"></div>
+    <div class="add">
+      <input id="c-id" placeholder="id (= the board's CAMERA_ID)" maxlength="64" autocomplete="off" aria-label="New camera id">
+      <input id="c-name" placeholder="name" maxlength="60" autocomplete="off" aria-label="New camera name">
+      <input id="c-icon" class="icon" placeholder="🎥" maxlength="8" autocomplete="off" aria-label="New camera icon">
+      <button class="btn" id="c-add">+ ADD CAMERA</button>
+    </div>
+    <div class="help" style="padding-bottom:8px">Adding or removing only changes what this dashboard shows — no board is touched and no recording is deleted. A new camera's board must have the same value as its CAMERA_ID setting.</div>
+  </fieldset>
 </main>
 
 <div class="savebar">
@@ -125,8 +143,40 @@ require_once __DIR__ . '/auth.php';
       for (const f of groups[g]) fs.append(renderField(f));
       form.append(fs);
     }
+    renderCameras(data.cameras || []);
     updateButtons();
   }
+
+  // ── cameras: list, add, remove (each acts at once — they are not part of the SAVE bar) ──
+  function renderCameras(cams) {
+    $('cameras').hidden = false;
+    const list = $('cam-list');
+    list.textContent = '';
+    if (!cams.length) list.append(el('div', { className: 'help', textContent: 'No cameras yet — add one below.' }));
+    for (const c of cams) {
+      const rm = el('button', { className: 'btn', textContent: '🗑 REMOVE' });
+      rm.addEventListener('click', () => removeCamera(c));
+      list.append(el('div', { className: 'cam-row' },
+        el('div', { className: 'nm' }, c.icon + ' ' + c.name, el('small', { textContent: c.id })),
+        el('a', { className: 'btn', href: 'camera-settings-page.php?cam=' + encodeURIComponent(c.id), textContent: '⚙ SETTINGS' }), rm));
+    }
+  }
+  async function cameraAction(body) {
+    const res = await fetch('camera-admin.php', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, AJAX), body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) { setStatus(data.error || ('Error ' + res.status), 'err'); return false; }
+    renderCameras(data.cameras);
+    setStatus(data.message, 'ok');
+    return true;
+  }
+  async function removeCamera(c) {
+    if (!confirm('Remove ' + c.name + ' (' + c.id + ') from the dashboard?\n\nIts recordings are kept and the board is not touched.')) return;
+    await cameraAction({ action: 'remove', id: c.id });
+  }
+  $('c-add').addEventListener('click', async () => {
+    const ok = await cameraAction({ action: 'add', id: $('c-id').value.trim(), name: $('c-name').value, icon: $('c-icon').value.trim() || '🎥' });
+    if (ok) { $('c-id').value = ''; $('c-name').value = ''; $('c-icon').value = ''; }
+  });
 
   function renderField(f) {
     const id = 'f-' + f.key;

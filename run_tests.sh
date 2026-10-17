@@ -214,10 +214,19 @@ else
     run_cpp_test test_person_scene_logic
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
+    run_cpp_test test_settings_change
     run_cpp_test test_person_settings
     run_cpp_test test_ota_logic
     # ota.h is compiled for real against fakes of the Arduino core (tests/cpp/ota_fakes/).
     run_cpp_test test_ota_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
+    # settings_sync.h (changing a board's stored settings from the dashboard) the same way.
+    run_cpp_test test_settings_sync_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
+
+    # The dashboard's copy of the Recorder's settings table is generated from the firmware's own.
+    echo "--- the dashboard's settings table is up to date with the firmware's"
+    if ! "$ROOT_DIR/tools/gen_device_schema.sh" --check; then
+        overall_status=1
+    fi
 
     # The sketch's remote-logging glue is tested by compiling the code it
     # ACTUALLY contains: extract the marked block from the .ino and build it
@@ -232,6 +241,12 @@ else
     sed -n '/Settings glue ──/,/end of settings glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/settings_glue.inc"
     run_cpp_test test_settings_glue
+
+    # The sketch's few lines that join settings_sync.h to its flash store, schema and restart:
+    # extracted from the .ino and compiled against fakes (fails loudly if a name or marker changes).
+    sed -n '/Settings changed from the dashboard ──/,/end of settings changed from the dashboard/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/sync_glue.inc"
+    run_cpp_test test_settings_sync_sketch -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
 
     # ...and the person detector's, likewise.
     sed -n '/Settings glue ──/,/end of settings glue/p' \
@@ -514,6 +529,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_system_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (camera settings page: change queued on the relay, simulated board, cameras add/remove) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_camera_settings_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

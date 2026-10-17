@@ -499,7 +499,7 @@ The relay log shows what happened, with the setting **names only** (values can b
 
 **Safety rules** (the relay can't reconfigure a working board):
 
-- Only settings that are **missing or invalid** are taken from the relay. A setting that is stored and valid is never changed by it, whatever the staged line says. So you can't use this to change the Wi-Fi password, server or key of a board that works — that stays a serial job.
+- Only settings that are **missing or invalid** are taken from the relay. A setting that is stored and valid is never changed by it, whatever the staged line says. So you can't use this to change the Wi-Fi password, server or key of a board that works — that stays a serial job. (Changing the other stored settings of a working camera has its own mechanism: see *Camera settings page* below.)
 - The line is checked like typed input and is **all or nothing**: one bad value and nothing is stored (the serial log says why).
 - It doesn't help when the settings needed to *reach* the relay are the ones missing or wrong (Wi-Fi, server, port, API key, id), nor a detector run without its live view (it has no Wi-Fi settings): those still need the serial port.
 - The line travels over plain HTTP together with the camera key, like everything else between the cameras and the relay. Don't stage anything you wouldn't be happy to have on your LAN.
@@ -603,6 +603,23 @@ Every setting of the main system can be changed from the dashboard instead of ed
 - **The relay must be started by systemd or pm2** so it comes back by itself — the unit in the relay setup above (`Restart=on-failure`) is enough, the relay exits with code 75 to be restarted. A relay started by hand refuses to restart (the page tells you) instead of just stopping; set `RELAY_SUPERVISED=1` if something else restarts it.
 - **One-time requirements:** `relay_control_key` in `config.php` and `controlKey` in `config.js` (see above) — the page uses it to talk to the relay — and `config.php` must be writable by the web server (`deploy.sh` runs `chown www-data` on it).
 - **Safety nets.** A new relay address is tested before it is saved (a wrong one would lock the dashboard out of the relay); changing the relay's HTTP port updates the dashboard's address with it; rotating the control key updates the dashboard's copy; the camera key and the camera push port are flashed into every board, so changing them asks for confirmation. If the saved settings file is ever damaged, the relay starts with `config.js` and logs a warning.
+
+## Camera settings page (a camera's ⚙ SETTINGS button)
+
+Every camera card on the dashboard has a **⚙ SETTINGS** button. Its page has two parts:
+
+- **On the dashboard:** the camera's name and icon, and a button to remove it from the dashboard. The camera *id* can't be edited (it is what ties the entry to the board's `CAMERA_ID`): remove and add again. **Adding** a camera is on the main ⚙ SETTINGS page (Cameras section). Adding or removing only changes what the dashboard shows: no board is touched and no recording is deleted.
+- **Stored in the camera:** every setting in the board's flash (alarm input, push gap, remote log ...), as a form generated from the firmware's own settings table. Press **APPLY TO CAMERA** and the change is queued on the relay; within about 30 seconds the camera asks for it, checks it, stores it, **restarts by itself** and reports back, and the page shows *applied* (or the reason it refused). No cable, no ssh.
+
+**How it works.** The dashboard checks your change first (so a typo is answered at once), then queues it on the relay (`PUT /device-settings/<type>/<id>/change`, control key). The board's background task (the same one that checks for firmware updates) asks `GET .../change` every 30 s, applies it with the same all-or-nothing checks as the serial console, and posts what it holds and how it went to `POST .../report` (camera key). The page's picture of the camera comes from that report, so it only fills in after the camera has booted once with this firmware.
+
+**Safety rules**
+- **The settings that connect the camera to the relay stay serial-only** — Wi-Fi, server, ports, API key, camera id — shown on the page as *serial only*. A wrong value there would leave a board nobody can reach without a USB cable. (If you want to change them remotely too, that needs a "try it, and go back if the relay can't be reached" feature; ask for it.)
+- A change is **all or nothing** and may **never leave the board needing a setting it doesn't have**: switching a feature on (for example the alarm GPIO) requires its other settings in the same change.
+- Secrets never leave the board: the report carries the Wi-Fi *name* and a masked password, and the key as `********`.
+- The queue holds one change per camera; a newer one replaces it, and a queued one can be withdrawn on the page. The relay log shows setting **names only**.
+
+**Rolling it out.** Publish the new firmware to the cameras once with `ota-deploy.sh` (they pick it up over the air) and copy the new `nodejs/camera-relay/` to the Pi. After that no camera needs a cable for a settings change. When you change the firmware's settings table (`settings_schema.h`), regenerate the page's copy with `tools/gen_device_schema.sh` (`./run_tests.sh` fails if you forget). The person detector is not a dashboard camera and has no remote settings.
 
 ## Logging: finding out what went wrong
 
