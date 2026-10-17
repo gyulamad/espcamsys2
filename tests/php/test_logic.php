@@ -583,4 +583,48 @@ camtest_test('isDeviceSettingRequired: always / equals / not_equals, and "needed
     camtest_assert_true(CamLogic::isDeviceSettingRequired($eq, []));
 });
 
+camtest_test('detectorIdOf: only a well-formed string counts', function () {
+    camtest_assert_equal(CamLogic::detectorIdOf(['id' => 'cam1', 'detector' => 'detector-1']), 'detector-1');
+    camtest_assert_equal(CamLogic::detectorIdOf(['id' => 'cam1']), null);
+    camtest_assert_equal(CamLogic::detectorIdOf(['id' => 'cam1', 'detector' => '']), null);
+    camtest_assert_equal(CamLogic::detectorIdOf(['id' => 'cam1', 'detector' => 5]), null);
+    camtest_assert_equal(CamLogic::detectorIdOf(['id' => 'cam1', 'detector' => '../x']), null);
+});
+
+camtest_test('setCameraDetector: pairs, unpairs, keeps other keys', function () {
+    $cams = [['id' => 'cam1', 'name' => 'A', 'icon' => 'x', 'extra' => 7], ['id' => 'cam2', 'name' => 'B', 'icon' => 'y']];
+    $r = CamLogic::setCameraDetector($cams, 'cam1', ' detector-1 ');
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['cameras'][0], ['id' => 'cam1', 'name' => 'A', 'icon' => 'x', 'extra' => 7, 'detector' => 'detector-1']);
+    camtest_assert_equal(isset($r['cameras'][1]['detector']), false);
+    $u = CamLogic::setCameraDetector($r['cameras'], 'cam1', '');
+    camtest_assert_equal($u['ok'], true);
+    camtest_assert_equal(isset($u['cameras'][0]['detector']), false);
+    camtest_assert_equal($u['cameras'][0]['extra'], 7);
+    $again = CamLogic::setCameraDetector($r['cameras'], 'cam1', 'detector-1');   // re-saving the same pairing is fine
+    camtest_assert_equal($again['ok'], true);
+});
+
+camtest_test('setCameraDetector: refuses a bad id, a taken detector, a camera id, an unknown camera', function () {
+    $cams = [['id' => 'cam1', 'name' => 'A', 'icon' => 'x', 'detector' => 'det-1'], ['id' => 'cam2', 'name' => 'B', 'icon' => 'y']];
+    foreach (['bad id', '../x', str_repeat('a', 65), '-x'] as $bad) {
+        camtest_assert_equal(CamLogic::setCameraDetector($cams, 'cam2', $bad)['ok'], false, $bad);
+    }
+    $taken = CamLogic::setCameraDetector($cams, 'cam2', 'det-1');
+    camtest_assert_equal($taken['ok'], false);
+    camtest_assert_true(strpos($taken['error'], 'cam1') !== false);
+    camtest_assert_equal(CamLogic::setCameraDetector($cams, 'cam2', 'CAM1')['ok'], false);
+    camtest_assert_equal(CamLogic::setCameraDetector($cams, 'nope', 'det-2')['ok'], false);
+});
+
+camtest_test('buildDetectorStatus: only paired cameras, offline when the relay has not heard of the detector', function () {
+    $cams = [['id' => 'cam1', 'detector' => 'det-1'], ['id' => 'cam2'], ['id' => 'cam3', 'detector' => 'det-3']];
+    $relay = ['det-1' => ['online' => true, 'ageMs' => 120, 'report' => ['scene' => ['brightness' => 90]]]];
+    $s = CamLogic::buildDetectorStatus($cams, $relay);
+    camtest_assert_equal(array_keys($s), ['cam1', 'cam3']);
+    camtest_assert_equal($s['cam1'], ['detector' => 'det-1', 'online' => true, 'ageMs' => 120, 'report' => ['scene' => ['brightness' => 90]]]);
+    camtest_assert_equal($s['cam3'], ['detector' => 'det-3', 'online' => false, 'ageMs' => null, 'report' => null]);
+    camtest_assert_equal(CamLogic::buildDetectorStatus([], $relay), []);
+});
+
 exit(camtest_summarize());

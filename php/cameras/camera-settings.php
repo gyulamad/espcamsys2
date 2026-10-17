@@ -72,7 +72,7 @@ function camera_state(string $base, string $headers): array
 
 if ($method === 'GET') {
     echo json_encode([
-        'camera' => ['id' => (string) $camera['id'], 'name' => (string) ($camera['name'] ?? ''), 'icon' => (string) ($camera['icon'] ?? '')],
+        'camera' => ['id' => (string) $camera['id'], 'name' => (string) ($camera['name'] ?? ''), 'icon' => (string) ($camera['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($camera) ?? '')],
         'keys' => $keys,
         'gpios' => $gpios,
         'state' => camera_state($base, $headers),

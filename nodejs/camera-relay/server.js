@@ -23,6 +23,7 @@ const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
 const devicesettings = require('./lib/devicesettings');
 const firmware = require('./lib/firmware');
+const detectorstate = require('./lib/detectorstate');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const connection = require('./lib/connection');
@@ -536,6 +537,76 @@ app.get('/stream/:id', (req, res) => {
   cam.emitter.on('frame', onFrame);
 
   req.on('close', () => cam.emitter.off('frame', onFrame));
+});
+
+// ── Person detectors (ESP32_CAM_TFLite_Person) ──
+// A detector reports its latest 96x96 grayscale frame and the numbers behind its alarm
+// line (brightness, motion, person score, thresholds, GPIO level) with POST /detector/:id
+// (camera key). The dashboard shows them under the paired camera's picture, to aim the
+// detector and tune its thresholds. Detectors live in their own map: they are not
+// cameras, so they are never recorded, never in /status and not hit by "alarm all".
+// Reading needs nothing, like /stream — only the PHP layer should reach this port.
+const detectors = {}; // id -> { report, receivedAt, frame, emitter, ip }
+
+function getDetector(id) {
+  if (!detectors[id]) {
+    detectors[id] = { report: null, receivedAt: 0, frame: null, emitter: new EventEmitter() };
+    detectors[id].emitter.setMaxListeners(50);
+  }
+  return detectors[id];
+}
+
+const detectorBadThrottle = new Throttle(60 * 1000);
+
+app.post('/detector/:id', express.json({ limit: '32kb' }), (req, res) => {
+  const key = req.get('X-Api-Key') || req.query.key;
+  if (key !== API_KEY) {
+    if (authFailThrottle.check(`detector:${req.ip}`, Date.now()).allow) relayLog('WARN', `detector report rejected: wrong or missing key (${req.ip})`, { sender: String(req.params.id).slice(0, 40), via: 'relay' });
+    return res.sendStatus(403);
+  }
+  if (!logentry.CAMERA_ID_RE.test(req.params.id)) return res.status(400).json({ error: 'invalid detector id' });
+  const parsed = detectorstate.parseReport(req.body);
+  if (!parsed.ok) {
+    if (detectorBadThrottle.check(req.params.id, Date.now()).allow) relayLog('WARN', `detector report refused: ${parsed.error}`, { sender: req.params.id, via: 'relay' });
+    return res.status(400).json({ error: parsed.error });
+  }
+  const det = getDetector(req.params.id);
+  det.report = parsed.report;
+  det.receivedAt = Date.now();
+  if (parsed.jpeg) {
+    det.frame = parsed.jpeg;
+    det.emitter.emit('frame', parsed.jpeg);
+  }
+  res.sendStatus(200);
+});
+
+// Every detector the relay has heard from: { id: { online, ageMs, report } }
+app.get('/detectors', (req, res) => {
+  const now = Date.now();
+  const out = {};
+  for (const id of Object.keys(detectors).sort()) out[id] = detectorstate.buildView(detectors[id], now);
+  res.json(out);
+});
+
+// The detector's picture as MJPEG (works as <img src>), same behaviour as /stream/:id.
+app.get('/detector/:id/stream', (req, res) => {
+  const det = getDetector(req.params.id);
+  res.writeHead(200, {
+    'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+    'Cache-Control': 'no-cache',
+    Connection: 'close',
+  });
+  let ready = true;
+  res.on('drain', () => { ready = true; });
+  const onFrame = (frame) => {
+    if (!ready) return;
+    ready = res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+    ready = res.write(frame) && ready;
+    ready = res.write('\r\n') && ready;
+  };
+  if (det.frame) onFrame(det.frame);
+  det.emitter.on('frame', onFrame);
+  req.on('close', () => det.emitter.off('frame', onFrame));
 });
 
 // Single still image, handy for thumbnails/testing

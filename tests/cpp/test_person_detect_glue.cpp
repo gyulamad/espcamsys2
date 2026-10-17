@@ -100,6 +100,18 @@ struct MicroInterpreter {
 static std::vector<std::vector<uint8_t>> g_published;
 static void streamPublishFrame(const uint8_t* gray) { g_published.emplace_back(gray, gray + 96 * 96); }
 
+// -- dashboard report: the sketch hands its readings to three small hooks (their real versions
+//    keep a snapshot for a Wi-Fi task and cannot run here); these record the calls.
+struct SceneCall { int brightness; uint32_t motion; person_scene::SceneState state; std::vector<uint8_t> frame; };
+static std::vector<SceneCall> g_sceneCalls;
+static std::vector<float> g_scoreCalls;
+static std::vector<bool> g_pinCalls;
+static void reportSceneFrame(const uint8_t* gray, int brightness, uint32_t motion, person_scene::SceneState state) {
+    g_sceneCalls.push_back({brightness, motion, state, std::vector<uint8_t>(gray, gray + 96 * 96)});
+}
+static void reportScore(float score) { g_scoreCalls.push_back(score); }
+static void reportPersonState(bool detected) { g_pinCalls.push_back(detected); }
+
 // ── the sketch's real code ──────────────────────────────────────────────
 #include "build/person_glue.inc"
 
@@ -117,6 +129,8 @@ static void reset() {
     g_serial.clear(); g_gpio.clear(); g_delays.clear();
     g_fbGets = g_fbReturns = 0;
     g_published.clear();
+    g_sceneCalls.clear(); g_scoreCalls.clear(); g_pinCalls.clear();
+    g_sceneCalls.clear(); g_scoreCalls.clear(); g_pinCalls.clear();
     g_pixels.assign(IMAGE_SIZE, 0);
     g_fb.buf = g_pixels.data(); g_fb.width = IMAGE_WIDTH; g_fb.height = IMAGE_HEIGHT;
     g_fbAvailable = true;
@@ -387,6 +401,71 @@ TEST(detect_offers_nothing_when_there_is_no_usable_frame) {
     TEST_ASSERT(g_published.empty(), "a wrong-sized frame is not offered either");
 }
 
+// ── dashboard report hooks ──────────────────────────────────────────────
+
+TEST(every_good_frame_is_reported_with_its_readings_and_gate_state) {
+    reset();
+    sceneGate(40, 300, 10);
+    fillFrame(120);
+    float p, n;
+    detectPerson(p, n);                                   // first frame: bright, no motion yet -> still
+    TEST_ASSERT_EQ(g_sceneCalls.size(), (size_t)1, "reported once");
+    TEST_ASSERT_EQ(g_sceneCalls[0].brightness, 120, "brightness of the samples");
+    TEST_ASSERT_EQ((int)g_sceneCalls[0].motion, 0, "no motion on the very first frame");
+    TEST_ASSERT(g_sceneCalls[0].state == person_scene::SceneState::Idle, "gate verdict handed over");
+    TEST_ASSERT_EQ((int)g_sceneCalls[0].frame[0], 120, "the raw camera frame, not the XOR-ed model input");
+
+    fillFrame(0);
+    detectPerson(p, n);
+    TEST_ASSERT(g_sceneCalls[1].state == person_scene::SceneState::Dark, "dark frame reported as dark");
+    TEST_ASSERT_EQ(g_sceneCalls[1].brightness, 0, "its brightness");
+    TEST_ASSERT_EQ((int)g_sceneCalls[1].motion, 100 * 120, "motion = 100 samples x 120 change");
+}
+
+TEST(frames_paused_by_the_gate_are_still_reported) {
+    reset();
+    sceneGate(40, 300, 10);
+    fillFrame(10);                                        // dark: the model is not run
+    float p, n;
+    TEST_ASSERT(!detectPerson(p, n), "model paused");
+    TEST_ASSERT_EQ(g_sceneCalls.size(), (size_t)1, "the dashboard still sees the picture and numbers");
+    TEST_ASSERT(g_scoreCalls.empty(), "but there is no score");
+}
+
+TEST(nothing_is_reported_for_a_frame_that_cannot_be_used) {
+    reset();
+    g_fbAvailable = false;
+    float p, n;
+    detectPerson(p, n);
+    reset();
+    g_fb.width = IMAGE_WIDTH + 1;
+    detectPerson(p, n);
+    TEST_ASSERT(g_sceneCalls.empty() && g_scoreCalls.empty(), "no frame, no report");
+}
+
+TEST(the_person_score_is_reported_after_every_inference) {
+    reset();
+    g_outBuf[1] = 96;                                     // 0.75
+    float p, n;
+    detectPerson(p, n);
+    TEST_ASSERT_EQ(g_scoreCalls.size(), (size_t)1, "one score");
+    TEST_ASSERT(g_scoreCalls[0] == 0.75f, "the dequantised person score");
+
+    reset();
+    g_interp.status = kTfLiteError;
+    detectPerson(p, n);
+    TEST_ASSERT(g_scoreCalls.empty(), "a failed inference reports no score");
+}
+
+TEST(the_alarm_pin_level_is_reported_when_it_changes) {
+    reset();
+    setPersonDetected(true);
+    setPersonDetected(true);                              // no change: not reported again
+    setPersonDetected(false);
+    TEST_ASSERT_EQ(g_pinCalls.size(), (size_t)2, "once per change");
+    TEST_ASSERT(g_pinCalls[0] == true && g_pinCalls[1] == false, "HIGH then LOW");
+}
+
 // ── scene gate: darkness and motion ─────────────────────────────────────
 
 TEST(a_dark_frame_does_not_run_the_model_and_says_so_once) {
@@ -521,6 +600,11 @@ TEST(a_bad_frame_never_reaches_the_scene_gate) {
 }
 
 int main() {
+    RUN_TEST(every_good_frame_is_reported_with_its_readings_and_gate_state);
+    RUN_TEST(frames_paused_by_the_gate_are_still_reported);
+    RUN_TEST(nothing_is_reported_for_a_frame_that_cannot_be_used);
+    RUN_TEST(the_person_score_is_reported_after_every_inference);
+    RUN_TEST(the_alarm_pin_level_is_reported_when_it_changes);
     RUN_TEST(set_detected_true_drives_gpio_high_and_says_so);
     RUN_TEST(set_detected_false_drives_gpio_low_and_says_so);
     RUN_TEST(set_detected_same_state_does_nothing);

@@ -322,6 +322,37 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* ── Person detector row: what the detector sees + the numbers behind its alarm line ── */
+  .det-row {
+    display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap;
+    padding: 10px 14px; border-top: 1px solid var(--border);
+    background: rgba(0,0,0,.15);
+  }
+  .det-pic { position: relative; flex: 0 0 auto; width: 192px; height: 192px; background: #000; border: 1px solid var(--border); }
+  .det-pic img { width: 100%; height: 100%; display: block; image-rendering: pixelated; object-fit: contain; }
+  .det-pic .det-off {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(6,8,16,.85); color: var(--muted); font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
+  }
+  .det-row.offline .det-off { display: flex; }
+  .det-vals { flex: 1 1 200px; min-width: 200px; display: flex; flex-direction: column; gap: 7px; font-family: var(--mono); font-size: .65rem; }
+  .det-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .det-line .k { color: var(--muted); letter-spacing: .06em; }
+  .det-line .v { color: var(--text); text-align: right; }
+  .det-bar { position: relative; height: 8px; background: #060810; border: 1px solid var(--border); border-radius: 2px; }
+  .det-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: .75; transition: width .25s; }
+  .det-bar .fill.hit { background: #2dd67b; }
+  .det-bar .fill.warn { background: #f0a500; }
+  .det-bar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent2); }
+  .det-bar .mark.soft { background: #f0a500; }
+  .det-sub { color: var(--muted); font-size: .58rem; }
+  .det-chip { padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .det-chip.active { color: #2dd67b; border-color: #1a4d3a; }
+  .det-chip.still  { color: #f0a500; border-color: #4d3a00; }
+  .det-chip.dark   { color: var(--accent2); border-color: #4d1a1a; }
+  .det-chip.high   { color: var(--accent2); border-color: var(--accent2); box-shadow: 0 0 6px rgba(255,79,94,.35); }
+  .det-chip.low    { color: #2dd67b; border-color: #1a4d3a; }
+
   .cam-footer {
     padding: 7px 14px; border-top: 1px solid var(--border);
     background: rgba(0,0,0,.15);
@@ -531,6 +562,39 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 
       </div>
 
+      <?php if (CamLogic::detectorIdOf($cam) !== null): ?>
+      <!-- The paired person detector: its 96x96 picture (what the model sees) and the numbers behind
+           its alarm line, to aim it and tune its thresholds (DARK_THRESH, MOTION_THRESH, DETECT_THRESH...)
+           with visual confirmation. Filled in by pollDetectors(). -->
+      <div class="det-row offline" id="det-<?= $camId ?>" data-cam="<?= $camId ?>">
+        <div class="det-pic">
+          <img id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
+               data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>"
+               onerror="onDetectorImgError('<?= $camId ?>')">
+          <div class="det-off">DETECTOR OFFLINE</div>
+        </div>
+        <div class="det-vals">
+          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span></div>
+          <div>
+            <div class="det-line"><span class="k">BRIGHTNESS</span><span class="v" id="detbright-<?= $camId ?>">–</span></div>
+            <div class="det-bar"><div class="fill" id="detbrightbar-<?= $camId ?>"></div><div class="mark" id="detbrightmark-<?= $camId ?>" style="display:none"></div></div>
+            <div class="det-sub" id="detbrightsub-<?= $camId ?>"></div>
+          </div>
+          <div>
+            <div class="det-line"><span class="k">MOTION</span><span class="v" id="detmotion-<?= $camId ?>">–</span></div>
+            <div class="det-bar"><div class="fill" id="detmotionbar-<?= $camId ?>"></div><div class="mark" id="detmotionmark-<?= $camId ?>" style="display:none"></div></div>
+            <div class="det-sub" id="detmotionsub-<?= $camId ?>"></div>
+          </div>
+          <div>
+            <div class="det-line"><span class="k">HUMAN</span><span class="v" id="detperson-<?= $camId ?>">–</span></div>
+            <div class="det-bar"><div class="fill" id="detpersonbar-<?= $camId ?>"></div><div class="mark" id="detpersondetect-<?= $camId ?>" style="display:none"></div><div class="mark soft" id="detpersonclear-<?= $camId ?>" style="display:none"></div></div>
+            <div class="det-sub" id="detpersonsub-<?= $camId ?>"></div>
+          </div>
+          <div class="det-line"><span class="k" id="detpinlabel-<?= $camId ?>">ALARM PIN</span><span class="det-chip" id="detpin-<?= $camId ?>">–</span></div>
+        </div>
+      </div>
+      <?php endif; ?>
+
       <div class="cam-footer">
         <span>PROXY → stream.php?cam=<?= $camId ?></span>
         <span>CAM <?= str_pad($i + 1, 2, '0', STR_PAD_LEFT) ?></span>
@@ -639,6 +703,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     if (hidden) {
       // Restore
       img.dataset.hidden = '0';
+      const di = document.getElementById('detimg-' + id);
+      if (di) di.src = di.dataset.src + '&_=' + Date.now();
       btn.textContent = '✕ HIDE';
       btn.classList.remove('danger');
       reloadStream(id);
@@ -646,6 +712,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       // Hide — stop the stream by clearing src
       img.dataset.hidden = '1';
       img.src = '';
+      const di = document.getElementById('detimg-' + id);
+      if (di) di.src = '';
       btn.textContent = '▶ SHOW';
       btn.classList.add('danger');
       setStatus(id, 'hidden', 'HIDDEN');
@@ -1198,6 +1266,97 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       // Relay unreachable this round — the next poll will try again.
     }
   }
+  // ── Person detector rows (cameras with a 'detector' in config.php) ──
+  // The detector reports its 96x96 grayscale picture and the numbers behind its alarm line to
+  // the relay. The picture is a normal MJPEG <img>; the numbers are polled about once a second
+  // so you can aim the detector and tune DARK_THRESH / MOTION_THRESH / DETECT_THRESH /
+  // CLEAR_THRESH per camera and SEE the effect: a bar per value, a red mark at the threshold
+  // the value has to cross, and the alarm pin level the detector is driving.
+  const DETECTOR_POLL_MS = 1000;
+  const detEl = (k, id) => document.getElementById('det' + k + '-' + id);
+  const setW = (e, frac) => { e.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%'; };
+  function placeMark(e, frac) {
+    if (frac === null) { e.style.display = 'none'; return; }
+    e.style.display = ''; e.style.left = 'calc(' + Math.max(0, Math.min(1, frac)) * 100 + '% - 1px)';
+  }
+
+  function renderDetector(id, d) {
+    const row = document.getElementById('det-' + id);
+    if (!row) return;
+    const r = d && d.report;
+    const online = !!(d && d.online && r);
+    row.classList.toggle('offline', !online);
+    if (!r) return;   // never heard from: keep the dashes
+    const sc = r.scene, pe = r.person;
+
+    const gate = detEl('gate', id);
+    gate.textContent = { dark: 'DARK — paused', still: 'STILL — paused', active: 'ACTIVE — detecting', off: 'GATE OFF' }[sc.state] || sc.state.toUpperCase();
+    gate.className = 'det-chip ' + (sc.state === 'off' ? '' : sc.state);
+
+    // Brightness 0..255, mark = DARK_THRESH (below it the picture counts as dark)
+    detEl('bright', id).textContent = sc.brightness;
+    setW(detEl('brightbar', id), sc.brightness / 255);
+    const darkOn = sc.darkBelow > 0;
+    placeMark(detEl('brightmark', id), darkOn ? sc.darkBelow / 255 : null);
+    detEl('brightbar', id).className = 'fill' + (darkOn && sc.brightness < sc.darkBelow ? ' warn' : '');
+    detEl('brightsub', id).textContent = darkOn ? 'dark below ' + sc.darkBelow + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)';
+
+    // Motion; the bar's scale follows the threshold so the mark stays in a readable place
+    const mOn = sc.motionAtLeast > 0;
+    const mScale = Math.max(mOn ? sc.motionAtLeast * 2 : 0, sc.motion * 1.1, 100);
+    detEl('motion', id).textContent = sc.motion;
+    setW(detEl('motionbar', id), sc.motion / mScale);
+    placeMark(detEl('motionmark', id), mOn ? sc.motionAtLeast / mScale : null);
+    detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= sc.motionAtLeast ? ' hit' : '');
+    detEl('motionsub', id).textContent = mOn
+      ? 'moving at ≥ ' + sc.motionAtLeast + ' (MOTION_THRESH), detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
+      : 'motion check off (MOTION_THRESH=0)';
+
+    // Human score (null while the model is paused: dark / still)
+    const hasScore = pe.score !== null && pe.score !== undefined;
+    detEl('person', id).textContent = hasScore ? Math.round(pe.score * 100) + ' %' + (pe.detected ? '  — PERSON' : '') : 'model paused';
+    setW(detEl('personbar', id), hasScore ? pe.score : 0);
+    detEl('personbar', id).className = 'fill' + (pe.detected ? ' hit' : '');
+    placeMark(detEl('persondetect', id), pe.detectAt);
+    placeMark(detEl('personclear', id), pe.clearAt);
+    detEl('personsub', id).textContent = 'person at ≥ ' + Math.round(pe.detectAt * 100) + ' % (DETECT_THRESH, red), clears below ' + Math.round(pe.clearAt * 100) + ' % (CLEAR_THRESH, amber)';
+
+    // The alarm line the detector drives (its PERSON_GPIO, wired to the camera's alarm input)
+    detEl('pinlabel', id).textContent = 'ALARM PIN (GPIO ' + r.gpio.pin + ')';
+    const pin = detEl('pin', id);
+    pin.textContent = r.gpio.high ? 'HIGH' : 'LOW';
+    pin.className = 'det-chip ' + (r.gpio.high ? 'high' : 'low');
+  }
+
+  let detectorsPolling = false;
+  async function pollDetectors() {
+    if (detectorsPolling || document.hidden) return;
+    detectorsPolling = true;
+    try {
+      const res = await fetch('detector-status.php', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) return;
+      document.querySelectorAll('.det-row').forEach(row => renderDetector(row.dataset.cam, data[row.dataset.cam]));
+    } catch (e) {
+      // relay unreachable this round — the next poll tries again
+    } finally {
+      detectorsPolling = false;
+    }
+  }
+  function onDetectorImgError(id) {
+    // The relay's stream ended (relay restart, network blip): reconnect shortly.
+    setTimeout(() => {
+      const img = document.getElementById('detimg-' + id);
+      const cam = document.getElementById('img-' + id);
+      if (img && !document.hidden && !(cam && cam.dataset.hidden === '1')) img.src = img.dataset.src + '&_=' + Date.now();
+    }, 5000);
+  }
+  if (document.querySelector('.det-row')) {
+    pollDetectors();
+    setInterval(pollDetectors, DETECTOR_POLL_MS);
+  }
+
   const STATUS_POLL_MS = 4000;
   pollAllStatuses();
   setInterval(pollAllStatuses, STATUS_POLL_MS);

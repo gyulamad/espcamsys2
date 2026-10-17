@@ -32,6 +32,7 @@
 #include "settings_schema.h"
 #include "stream_logic.h"
 #include "scene_logic.h"   // darkness + motion gate: when is it worth running the model?
+#include "report_logic.h"  // what is reported to the relay for the dashboard (picture, values, thresholds, pin level)
 
 // ── Live view (optional) ────────────────────────────────────────────────
 // With the STREAM_ENABLED setting on, the detector also joins Wi-Fi (any of
@@ -551,6 +552,161 @@ void streamPublishFrame(const uint8_t *gray)
     xSemaphoreGive(frameMutex);
 }
 
+// ── Report to the relay (for the dashboard) ─────────────────
+// The dashboard shows, under the camera this detector is wired to, what the detector sees and
+// the numbers behind its alarm line (brightness, motion, person score, thresholds, GPIO level),
+// so the camera can be aimed and the thresholds chosen with visual confirmation. The detection
+// loop only drops its latest readings and frame into a snapshot (three tiny functions below, none
+// of which ever waits for long); a task on core 0 turns the snapshot into a report about four
+// times a second and POSTs it to the relay (POST /detector/<DETECTOR_ID>). What the report says
+// and when one is due: report_logic.h (unit-tested). Runs whenever the live view is on
+// (STREAM_ENABLED=1), because it needs the same Wi-Fi / relay settings.
+
+person_report::Snapshot reportSnap;           // guarded by reportMutex
+uint8_t *reportFrame = nullptr;               // the frame that belongs to reportSnap
+SemaphoreHandle_t reportMutex = nullptr;      // created in startReporter(); until then the hooks do nothing
+
+// Called by the detection loop for every good frame.
+void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, person_scene::SceneState state)
+{
+    if (!reportMutex || !reportFrame || xSemaphoreTake(reportMutex, pdMS_TO_TICKS(2)) != pdTRUE)
+    {
+        return;
+    }
+
+    memcpy(reportFrame, gray, IMAGE_SIZE);
+    reportSnap.valid = true;
+    reportSnap.seq++;
+    reportSnap.brightness = brightness;
+    reportSnap.motion = motion;
+    reportSnap.gate = person_report::gateFor(state, g_cfg.darkThreshold, g_cfg.motionThreshold);
+    reportSnap.detected = personDetected;
+    xSemaphoreGive(reportMutex);
+}
+
+// Called after every inference.
+void reportScore(float score)
+{
+    if (!reportMutex || xSemaphoreTake(reportMutex, pdMS_TO_TICKS(2)) != pdTRUE)
+    {
+        return;
+    }
+
+    reportSnap.hasScore = true;
+    reportSnap.score = score;
+    reportSnap.scoreAtMs = millis();
+    xSemaphoreGive(reportMutex);
+}
+
+// Called whenever the alarm GPIO changes.
+void reportPersonState(bool detected)
+{
+    if (!reportMutex || xSemaphoreTake(reportMutex, pdMS_TO_TICKS(2)) != pdTRUE)
+    {
+        return;
+    }
+
+    reportSnap.detected = detected;
+    xSemaphoreGive(reportMutex);
+}
+
+void reportTask(void *)
+{
+    person_report::Config cfg;
+    cfg.detectorId = g_cfg.detectorId;
+    cfg.fw = FW_BUILD;
+    cfg.gpioPin = g_cfg.personGpio;
+    cfg.darkBelow = g_cfg.darkThreshold;
+    cfg.motionAtLeast = g_cfg.motionThreshold;
+    cfg.holdSec = g_cfg.motionHoldSec;
+    cfg.detectAt = g_cfg.detectThreshold;
+    cfg.clearAt = g_cfg.clearThreshold;
+
+    const std::string url = person_report::buildReportUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId);
+    person_report::ReportPolicy policy;
+    uint8_t *frame = (uint8_t *)malloc(IMAGE_SIZE);
+    bool lastOk = true;   // so a failure is printed once, and the recovery too
+
+    for (;;)
+    {
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        person_report::Snapshot snap;
+        bool have = false;
+
+        if (frame && xSemaphoreTake(reportMutex, pdMS_TO_TICKS(20)) == pdTRUE)
+        {
+            snap = reportSnap;
+            memcpy(frame, reportFrame, IMAGE_SIZE);
+            xSemaphoreGive(reportMutex);
+            have = true;
+        }
+
+        if (!have || !policy.due(millis(), WiFi.status() == WL_CONNECTED, snap))
+        {
+            continue;
+        }
+
+        uint8_t *jpeg = nullptr;
+        size_t jpegLength = 0;
+
+        if (!fmt2jpg(frame, IMAGE_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT, PIXFORMAT_GRAYSCALE,
+                     g_cfg.streamJpegQuality, &jpeg, &jpegLength))
+        {
+            jpeg = nullptr;       // report the numbers without a picture
+            jpegLength = 0;
+        }
+
+        std::string body = person_report::buildReportJson(
+            cfg, snap, millis(), WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis(), jpeg, jpegLength);
+
+        if (jpeg)
+        {
+            free(jpeg);
+        }
+
+        HTTPClient http;
+        http.setReuse(true);      // one connection for all the reports, not one per report
+        http.begin(String(url.c_str()));
+        http.setTimeout(3000);
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
+        int code = http.POST((uint8_t *)body.data(), body.size());
+        http.end();
+
+        bool ok = code >= 200 && code < 300;
+        policy.onResult(millis(), ok, snap.seq);
+
+        if (!ok && lastOk)
+        {
+            Serial.printf("Could not report to the relay (HTTP %d) - retrying every few seconds\n", code);
+        }
+        else if (ok && !lastOk)
+        {
+            Serial.println("Reporting to the relay again");
+        }
+
+        lastOk = ok;
+    }
+}
+
+// Starts the reporting task. Called from startNetwork() once the live view's memory is set.
+bool startReporter()
+{
+    reportFrame = (uint8_t *)malloc(IMAGE_SIZE);
+    reportMutex = xSemaphoreCreateMutex();
+
+    if (!reportFrame || !reportMutex)
+    {
+        reportMutex = nullptr;    // the hooks stay inert
+        Serial.println("Dashboard report OFF: out of memory");
+        return false;
+    }
+
+    xTaskCreatePinnedToCore(reportTask, "report", 8192, nullptr, 1, nullptr, 0);
+    return true;
+}
+
 // ── Relay announcement ──────────────────────────────────────
 
 bool postAnnouncement(const std::string &ip, person_stream::AnnounceReason reason)
@@ -897,6 +1053,8 @@ bool startNetwork()
         (uint32_t)g_cfg.announceHeartbeatSec * 1000UL,
         (uint32_t)g_cfg.announceRetrySec * 1000UL);
 
+    startReporter();
+
     xTaskCreatePinnedToCore(networkTask, "network", 16384, nullptr, 1, nullptr, 0);   // 16 KB: the firmware update (HTTP + flash) runs on this stack too
 
     Serial.printf(
@@ -927,6 +1085,9 @@ void setPersonDetected(bool detected)
         g_cfg.personGpio,
         personDetected ? HIGH : LOW
     );
+
+    // The dashboard shows the level of this pin.
+    reportPersonState(personDetected);
 
     Serial.println(
         personDetected
@@ -1067,6 +1228,10 @@ bool captureFrameIntoInput(bool &run)
     // frame, also while detection is paused, so the picture never freezes.
     streamPublishFrame((const uint8_t *)fb->buf);
 
+    // ...and to the relay's report for the dashboard: the same picture plus the numbers the gate
+    // just worked out. Never waits either.
+    reportSceneFrame((const uint8_t *)fb->buf, reading.brightness, reading.motion, verdict.state);
+
     esp_camera_fb_return(fb);
 
     return true;
@@ -1115,6 +1280,8 @@ bool detectPerson(
 
     noPersonScore =
         dequantize(output, output->data.int8[0]);
+
+    reportScore(personScore);
 
     return true;
 }

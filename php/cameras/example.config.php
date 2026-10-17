@@ -24,8 +24,12 @@ return [
 
     // Cameras shown on the dashboard. 'id' must exactly match the
     // CAMERA_ID configured in that device's sketch (its CAMERA_ID setting).
+    // Optional 'detector' => '<DETECTOR_ID>' pairs the camera with the person detector board wired to
+    // its alarm input: the dashboard then shows that detector's 96x96 picture and its brightness /
+    // motion / person values, thresholds and alarm pin level under the camera's picture. (Also
+    // settable on the camera's SETTINGS page.) One detector per camera.
     'cameras' => [
-        ['id' => 'cam1', 'name' => 'Front Door', 'icon' => '🚪'],
+        ['id' => 'cam1', 'name' => 'Front Door', 'icon' => '🚪', 'detector' => 'detector-1'],
         ['id' => 'cam2', 'name' => 'Back Yard',  'icon' => '🌿'],
         ['id' => 'cam3', 'name' => 'Garage',     'icon' => '🏠'],
         ['id' => 'cam4', 'name' => 'Hallway',    'icon' => '💡'],

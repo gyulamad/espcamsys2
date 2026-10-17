@@ -531,6 +531,79 @@ class CamLogic
         return ['ok' => false, 'error' => 'no camera with the id ' . $id];
     }
 
+    // ── The person detector paired with a camera ──
+    // A camera entry may carry 'detector' => '<DETECTOR_ID of its person detector board>'. The
+    // dashboard then shows that detector's 96x96 picture and sensor numbers under the camera's
+    // picture. Optional; the pairing lives only here (no board is touched, so re-pairing needs no
+    // reflash). A detector belongs to one camera.
+
+    // The paired detector id of a camera entry, or null.
+    public static function detectorIdOf(array $cam): ?string
+    {
+        $d = $cam['detector'] ?? null;
+        return is_string($d) && preg_match(self::CAMERA_ID_PATTERN, $d) ? $d : null;
+    }
+
+    // Pairs ($detectorId) or unpairs ('') a camera. Other keys of the entry stay.
+    // -> ['ok' => true, 'cameras' => [...]] | ['ok' => false, 'error' => ...]
+    public static function setCameraDetector(array $cameras, string $id, string $detectorId): array
+    {
+        $detectorId = trim($detectorId);
+        if ($detectorId !== '' && !preg_match(self::CAMERA_ID_PATTERN, $detectorId)) {
+            return ['ok' => false, 'error' => 'the detector id must be 1-64 characters: letters, digits, _ . - (it starts with a letter or digit)'];
+        }
+        $found = false;
+        foreach ($cameras as $i => $c) {
+            $cid = (string) ($c['id'] ?? '');
+            if ($cid === $id) {
+                $found = true;
+                continue;
+            }
+            if ($detectorId !== '' && self::detectorIdOf($c) === $detectorId) {
+                return ['ok' => false, 'error' => 'the detector ' . $detectorId . ' is already paired with the camera ' . $cid];
+            }
+            if ($detectorId !== '' && strcasecmp($cid, $detectorId) === 0) {
+                return ['ok' => false, 'error' => 'the detector id must not be the id of a camera (' . $cid . ')'];
+            }
+        }
+        if (!$found) {
+            return ['ok' => false, 'error' => 'no camera with the id ' . $id];
+        }
+        foreach ($cameras as $i => $c) {
+            if (($c['id'] ?? null) === $id) {
+                if ($detectorId === '') {
+                    unset($cameras[$i]['detector']);
+                } else {
+                    $cameras[$i]['detector'] = $detectorId;
+                }
+            }
+        }
+        return ['ok' => true, 'cameras' => array_values($cameras)];
+    }
+
+    // What detector-status.php answers: for every camera with a paired detector,
+    // { camId: { detector, online, ageMs, report } }, from the relay's GET /detectors answer
+    // ($relayDetectors: id => { online, ageMs, report }). A detector the relay has not heard from
+    // is offline with no numbers.
+    public static function buildDetectorStatus(array $cameras, array $relayDetectors): array
+    {
+        $out = [];
+        foreach ($cameras as $c) {
+            $d = self::detectorIdOf($c);
+            if ($d === null) {
+                continue;
+            }
+            $v = $relayDetectors[$d] ?? null;
+            $out[(string) $c['id']] = [
+                'detector' => $d,
+                'online' => is_array($v) && !empty($v['online']),
+                'ageMs' => is_array($v) && isset($v['ageMs']) ? $v['ageMs'] : null,
+                'report' => is_array($v) && isset($v['report']) ? $v['report'] : null,
+            ];
+        }
+        return $out;
+    }
+
     public static function removeCamera(array $cameras, string $id): array
     {
         $kept = array_values(array_filter($cameras, function ($c) use ($id) {

@@ -77,6 +77,11 @@ require_once __DIR__ . '/auth.php';
       <button class="btn" id="e-save">SAVE NAME</button>
     </div>
     <div class="kv">Camera id: <b id="e-id"></b> — it must equal the board's CAMERA_ID setting, so it cannot be edited here.</div>
+    <div class="inline" title="The person detector board (ESP32_CAM_TFLite_Person) wired to this camera's alarm input. Its DETECTOR_ID setting. Leave empty for none.">
+      <input id="e-detector" maxlength="64" placeholder="detector-1" aria-label="Person detector id" autocomplete="off" spellcheck="false">
+      <button class="btn" id="e-detector-save">SAVE DETECTOR</button>
+    </div>
+    <div class="kv">Person detector id: its <b>DETECTOR_ID</b> setting. When set, the dashboard shows the detector's 96×96 picture, its brightness / motion / person values and its alarm pin level under this camera's picture. Empty = none.</div>
     <button class="btn danger" id="e-remove">🗑 REMOVE FROM DASHBOARD</button>
   </fieldset>
 
@@ -131,7 +136,7 @@ require_once __DIR__ . '/auth.php';
     const st = data.state; reported = st.reported ? st.reported.settings : null;
     $('title').textContent = camera.icon + ' ' + camera.name;
     document.title = camera.name + ' settings — ESP32-CAM Dashboard';
-    $('entry').hidden = false; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id;
+    $('entry').hidden = false; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id; $('e-detector').value = camera.detector || '';
     $('banners').textContent = ''; form.textContent = ''; original = {};
 
     const parts = [];
@@ -250,6 +255,11 @@ require_once __DIR__ . '/auth.php';
 
   $('e-save').addEventListener('click', async () => {
     const { res, data } = await post('camera-admin.php', { action: 'update', id: CAM, name: $('e-name').value, icon: $('e-icon').value });
+    setStatus(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'err');
+    if (res.ok) load(true);
+  });
+  $('e-detector-save').addEventListener('click', async () => {
+    const { res, data } = await post('camera-admin.php', { action: 'detector', id: CAM, detector: $('e-detector').value });
     setStatus(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'err');
     if (res.ok) load(true);
   });

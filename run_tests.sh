@@ -23,6 +23,7 @@
 #                    ESP32_CAM_Recorder.ino
 #   Person detector: stream_logic.h (live view: authentication, routing, relay
 #                    announcement), scene_logic.h (darkness/motion gate),
+#                    report_logic.h (what is reported to the dashboard),
 #                    settings_schema.h, and the detection and
 #                    settings code of ESP32_CAM_TFLite_Person.ino
 #                    (setPersonDetected, detectPerson, loop, the settings block)
@@ -139,6 +140,16 @@ else
         overall_status=1
     fi
 
+    # ...and what the detector reports to the relay for the dashboard.
+    echo "--- report_logic.h as C++11 (the ESP32 toolchain's dialect)"
+    if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
+           -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/report_logic.h" -x c++ /dev/null; then
+        echo "ok"
+    else
+        echo "FAIL: report_logic.h does not compile as C++11"
+        overall_status=1
+    fi
+
     # The settings engine and the Recorder's key table (flash-stored settings,
     # see settings_logic.h): also compiled by the sketch, so also C++11.
     # ...and the darkness/motion gate.
@@ -212,6 +223,7 @@ else
     run_cpp_test test_remote_log
     run_cpp_test test_person_stream_logic
     run_cpp_test test_person_scene_logic
+    run_cpp_test test_person_report_logic
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change
@@ -408,6 +420,28 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (person detector reports, relay) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_detector_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (dashboard person-detector row) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_detector_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

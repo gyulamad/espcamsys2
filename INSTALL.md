@@ -107,6 +107,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    - `person_detect_model_data.h`
    - `stream_logic.h`
    - `scene_logic.h`
+   - `report_logic.h`
    - `ota_logic.h`
    - `ota.h`
    - `settings_logic.h`
@@ -218,7 +219,27 @@ Things worth knowing:
 - **It is plain HTTP**, so the password crosses your LAN unencrypted. Use one you don't reuse, and never forward this port to the internet. (The picture is only reachable from the network the detector is on; it does not go through the relay.)
 - **Power:** Wi-Fi transmissions draw current spikes. A detector with a marginal supply can brown out with the live view on (the relay's log would show `BROWNOUT`-style restarts on recorders; here, watch the Serial Monitor). Set `STREAM_ENABLED=0` for such a unit once it is installed (it then starts no Wi-Fi at all).
 
-> This sketch is otherwise intentionally minimal (Serial + a GPIO pin) rather than wired into the relay/dashboard. If you want it to trigger a recording on another camera later, `PERSON_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
+### Optional: see the detector under its camera on the dashboard (aim and tune per camera)
+
+With the live view on (`STREAM_ENABLED=1`) the detector also **reports to the relay** about four times a second (`POST /detector/<DETECTOR_ID>`, same `API_KEY`, no extra settings): its 96×96 grayscale picture and the numbers behind its alarm line. The dashboard shows them **under the camera's picture**, so you can aim the detector and choose `DARK_THRESH`, `MOTION_THRESH`, `DETECT_THRESH` and `CLEAR_THRESH` per camera while watching the effect — from anywhere the dashboard is reachable, not only the LAN (unlike the detector's own password-protected stream, the relay serves any number of viewers).
+
+1. **Pair the detector with its camera.** Open the camera's **⚙ SETTINGS** page on the dashboard, type the detector's `DETECTOR_ID` into *Person detector id* and press **SAVE DETECTOR** (or add `'detector' => 'detector-1'` to that camera in `config.php`, see `example.config.php`). One detector belongs to one camera, and its id must not be a camera id. The pairing lives only in `config.php`: no board is touched, re-pairing needs no reflashing.
+2. Flash the new detector firmware (`report_logic.h` is a new file of the sketch) and copy the new `nodejs/camera-relay/` and `php/cameras/` to the Pi. A relay older than this one answers `404` to the report; the detector then prints `Could not report to the relay (HTTP 404)` and retries every few seconds.
+3. On the camera's card, below its picture, you now see on the left the detector's picture (enlarged, pixelated) and on the right:
+
+   | Line | What it shows |
+   |---|---|
+   | **DETECTOR** | The gate: `ACTIVE — detecting`, `DARK — paused`, `STILL — paused` or `GATE OFF` (both checks off) |
+   | **BRIGHTNESS** | The sample pixels' average (0–255) as a bar, a **red mark at `DARK_THRESH`**: left of it the picture counts as dark |
+   | **MOTION** | The frame-to-frame change as a bar, a **red mark at `MOTION_THRESH`**: the bar turns green once it is reached (detection then stays on for `MOTION_HOLD_S`). The bar's scale follows the threshold |
+   | **HUMAN** | The model's person score, a **red mark at `DETECT_THRESH`** (person flagged at or above it) and an **amber mark at `CLEAR_THRESH`** (cleared below it). `model paused` while the gate is dark or still |
+   | **ALARM PIN** | `HIGH` / `LOW`: the level the detector drives on its `PERSON_GPIO` — the wire into that camera's alarm input |
+
+   The numbers update every second; `DETECTOR OFFLINE` covers the picture if the relay has had no report for 5 seconds. Changing a threshold is still done on the detector (serial console, as above) — the dashboard shows the effect, it does not edit the detector's settings.
+
+Things worth knowing: a detector is **not** a recording camera — it is never recorded, never appears in the recording counts and is not touched by "alarm all"; and the report goes over plain HTTP on your LAN like the camera frames do, carrying no password (only the camera key, as the recorder's frames do).
+
+> This sketch is otherwise intentionally minimal (Serial + a GPIO pin): it does not start recordings itself. If you want it to trigger a recording on another camera later, `PERSON_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
 
 ---
 
@@ -619,7 +640,7 @@ Every camera card on the dashboard has a **⚙ SETTINGS** button. Its page has t
 - Secrets never leave the board: the report carries the Wi-Fi *name* and a masked password, and the key as `********`.
 - The queue holds one change per camera; a newer one replaces it, and a queued one can be withdrawn on the page. The relay log shows setting **names only**.
 
-**Rolling it out.** Publish the new firmware to the cameras once with `ota-deploy.sh` (they pick it up over the air) and copy the new `nodejs/camera-relay/` to the Pi. After that no camera needs a cable for a settings change. When you change the firmware's settings table (`settings_schema.h`), regenerate the page's copy with `tools/gen_device_schema.sh` (`./run_tests.sh` fails if you forget). The person detector is not a dashboard camera and has no remote settings.
+**Rolling it out.** Publish the new firmware to the cameras once with `ota-deploy.sh` (they pick it up over the air) and copy the new `nodejs/camera-relay/` to the Pi. After that no camera needs a cable for a settings change. When you change the firmware's settings table (`settings_schema.h`), regenerate the page's copy with `tools/gen_device_schema.sh` (`./run_tests.sh` fails if you forget). The person detector is not a dashboard camera and has no remote settings (its picture and values can be shown under a camera, though: see "see the detector under its camera on the dashboard" in step 2).
 
 ## Logging: finding out what went wrong
 

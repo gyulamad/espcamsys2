@@ -4,8 +4,9 @@
 //
 //   POST camera-admin.php   body: { "action": "add",    "id": "cam3", "name": "Garage", "icon": "🚗" }
 //                                 { "action": "update", "id": "cam3", "name": "Garage door", "icon": "🚪" }
+//                                 { "action": "detector", "id": "cam3", "detector": "detector-1" }   ("" = unpair)
 //                                 { "action": "remove", "id": "cam3" }
-//        -> { ok, cameras: [ {id, name, icon} ], message }
+//        -> { ok, cameras: [ {id, name, icon, detector} ], message }
 //
 // The id is what ties an entry to a board: it must equal the board's CAMERA_ID setting, so it can
 // not be edited (remove the entry and add it again). Adding an entry does not touch any board, and
@@ -31,11 +32,12 @@ if (!CamLogic::isDashboardAjaxRequest($_SERVER)) {
 
 $input = json_decode((string) file_get_contents('php://input'), true);
 if (!is_array($input) || !isset($input['action']) || !is_string($input['action'])) {
-    json_fail(400, 'send { "action": "add" | "update" | "remove", "id": ..., "name": ..., "icon": ... }');
+    json_fail(400, 'send { "action": "add" | "update" | "detector" | "remove", "id": ..., "name": ..., "icon": ... }');
 }
 $id   = isset($input['id']) && is_string($input['id']) ? trim($input['id']) : '';
 $name = isset($input['name']) && is_string($input['name']) ? $input['name'] : '';
 $icon = isset($input['icon']) && is_string($input['icon']) ? trim($input['icon']) : '';
+$detector = isset($input['detector']) && is_string($input['detector']) ? trim($input['detector']) : '';
 $cameras = $config['cameras'] ?? [];
 
 switch ($input['action']) {
@@ -46,6 +48,10 @@ switch ($input['action']) {
     case 'update':
         $r = CamLogic::updateCamera($cameras, $id, $name, $icon);
         $done = 'saved';
+        break;
+    case 'detector':
+        $r = CamLogic::setCameraDetector($cameras, $id, $detector);
+        $done = $detector === '' ? 'unpaired from its person detector' : 'paired with the person detector ' . $detector;
         break;
     case 'remove':
         $r = CamLogic::removeCamera($cameras, $id);
@@ -83,6 +89,6 @@ echo json_encode([
     'ok' => true,
     'message' => $message,
     'cameras' => array_map(function ($c) {
-        return ['id' => (string) $c['id'], 'name' => (string) ($c['name'] ?? ''), 'icon' => (string) ($c['icon'] ?? '')];
+        return ['id' => (string) $c['id'], 'name' => (string) ($c['name'] ?? ''), 'icon' => (string) ($c['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($c) ?? '')];
     }, $r['cameras']),
 ]);
