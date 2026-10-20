@@ -22,12 +22,15 @@
 //                    Arduino/ESP32_CAM_Recorder/settings_schema.h
 //                    <build-dir>/log_glue.inc       (remote-logging block of the .ino)
 //                    <build-dir>/settings_glue.inc  (settings block of the .ino)
-//   Person detector: Arduino/ESP32_CAM_TFLite_Person/stream_logic.h
+//   Person detector: Arduino/ESP32_CAM_TFLite_Person/report_logic.h
 //                    Arduino/ESP32_CAM_TFLite_Person/settings_schema.h
 //                    Arduino/ESP32_CAM_TFLite_Person/scene_logic.h
 //                    <build-dir>/person_glue.inc  (model constants, setPersonDetected,
 //                                                  detectPerson and loop of the .ino)
 //                    <build-dir>/person_settings_glue.inc  (settings block of the .ino)
+//                    <build-dir>/person_log_glue.inc  (remote-logging block of the .ino)
+//                    <build-dir>/uplink_glue.inc  (socket / JPEG / snapshot / Wi-Fi block of the .ino)
+//                    <build-dir>/network_glue.inc  (network task, start-up and boot report of the .ino)
 //                    (The Person copy of settings_logic.h is byte-identical to the
 //                    Recorder's, which is measured above, so it is not counted twice.)
 //
@@ -61,11 +64,14 @@ const groups = [
     {
         name: 'Person detector sketch (ESP32_CAM_TFLite_Person)',
         files: [
-            path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'stream_logic.h'),
+            path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'report_logic.h'),
             path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'settings_schema.h'),
             path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'scene_logic.h'),
             path.join(buildDir, 'person_glue.inc'),
             path.join(buildDir, 'person_settings_glue.inc'),
+            path.join(buildDir, 'person_log_glue.inc'),
+            path.join(buildDir, 'uplink_glue.inc'),
+            path.join(buildDir, 'network_glue.inc'),
         ],
     },
 ].map((g) => ({ ...g, files: g.files.map((p) => path.resolve(p)) }));

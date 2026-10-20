@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "../../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
-#include "../../Arduino/ESP32_CAM_TFLite_Person/stream_logic.h"
 #include "settings_fakes.h"
 
 static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
@@ -22,7 +21,7 @@ static bool has(const std::string& s, const char* part) { return s.find(part) !=
 static const char* WITH_STREAM =
     "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=1;"
     "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
-    "API_KEY=s3cret;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=hunter22;STREAM_PORT=8088;"
+    "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
 // The minimal one: no live view, no Wi-Fi.
@@ -114,8 +113,8 @@ TEST(turning_the_live_view_on_asks_for_the_whole_live_view_group_and_nothing_els
     store(st, NO_STREAM);
     store(st, "STREAM_ENABLED=1");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 13, "the 13 live-view settings");
-    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "STREAM_PASS") && listed(ps, "ANN_RETRY") && listed(ps, "DETECTOR_ID"), "including Wi-Fi and the password");
+    TEST_ASSERT_EQ((int)ps.size(), 10, "the 10 live-view settings");
+    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "API_KEY") && listed(ps, "ANN_RETRY") && listed(ps, "DETECTOR_ID") && listed(ps, "SERVER_HOST"), "including Wi-Fi, the relay and the detector's name");
     TEST_ASSERT(!listed(ps, "PERSON_GPIO") && !listed(ps, "DETECT_THRESH"), "but not the detection ones");
     store(st, "STREAM_ENABLED=0");
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "turning it off again needs nothing");
@@ -156,26 +155,37 @@ TEST(loop_delay_and_stream_tuning_ranges) {
     TEST_ASSERT(valid("STREAM_MAX_FPS=1") && valid("STREAM_MAX_FPS=30") && !valid("STREAM_MAX_FPS=0") && !valid("STREAM_MAX_FPS=31"), "fps 1..30 (0 would divide by zero)");
     TEST_ASSERT(valid("STREAM_JPEG_Q=1") && valid("STREAM_JPEG_Q=100") && !valid("STREAM_JPEG_Q=0") && !valid("STREAM_JPEG_Q=101"), "jpeg quality 1..100");
     TEST_ASSERT(valid("STREAM_WR_TMO_S=1") && !valid("STREAM_WR_TMO_S=0") && !valid("STREAM_WR_TMO_S=61"), "write timeout 1..60");
-    TEST_ASSERT(valid("STREAM_PORT=80") && valid("STREAM_PORT=65535") && !valid("STREAM_PORT=0") && !valid("STREAM_PORT=65536"), "port");
+    TEST_ASSERT(valid("HTTP_PORT=80") && valid("HTTP_PORT=65535") && !valid("HTTP_PORT=0") && !valid("HTTP_PORT=65536"), "the relay's port");
     TEST_ASSERT(valid("ANN_HEARTBEAT=1") && !valid("ANN_HEARTBEAT=0") && valid("ANN_RETRY=30") && !valid("ANN_RETRY=0"), "announce timing");
 }
 
-TEST(stream_credentials_that_the_settings_accept_are_always_usable_by_the_sketch) {
-    // The sketch refuses to serve with credentials person_stream::credentialsUsable
-    // rejects. The settings must never let such a pair in (the user would see
-    // "Live view OFF" at run time instead of an error when typing it).
-    const char* users[] = { "viewer", "a", "Cam_1.garage-2" };
-    for (size_t u = 0; u < 3; ++u) {
-        CheckedLine c = checkLine(PERSON_SCHEMA, std::string("STREAM_USER=") + users[u]);
-        TEST_ASSERT(c.ok() && person_stream::credentialsUsable(c.pairs[0].value.c_str(), "hunter22"), users[u]);
+TEST(the_lan_servers_settings_are_gone_the_live_view_is_pushed_to_the_relay) {
+    // The detector used to serve its picture to a viewer on the LAN (user, password, port). It now connects
+    // OUT to the relay, which may be behind a NAT router, and pushes the picture up — so nothing is served.
+    TEST_ASSERT(!valid("STREAM_USER=viewer"), "no stream user");
+    TEST_ASSERT(!valid("STREAM_PASS=hunter22"), "no stream password");
+    TEST_ASSERT(!valid("STREAM_PORT=8088"), "no stream port");
+    CheckedLine c = checkLine(PERSON_SCHEMA, "STREAM_PORT=8088");
+    TEST_ASSERT(!c.errors.empty() && has(c.errors[0], "STREAM_PORT"), "an old settings line says which key is no longer known");
+    for (size_t i = 0; i < PERSON_SCHEMA.count; ++i) {
+        std::string k = PERSON_SCHEMA.keys[i].name;
+        TEST_ASSERT(k != "STREAM_USER" && k != "STREAM_PASS" && k != "STREAM_PORT", ("not in the table: " + k).c_str());
     }
-    TEST_ASSERT(!valid("STREAM_USER=a:b"), "a ':' in the user name can't be sent in Basic auth: refused when typed");
-    TEST_ASSERT(!valid("STREAM_USER="), "empty user");
-    TEST_ASSERT(!valid("STREAM_PASS=change-me") && !valid("STREAM_PASS="), "the template password and an empty one");
-    TEST_ASSERT(person_stream::credentialsUsable("viewer", "hunter22"), "and an accepted pair is usable");
-    CheckedLine odd = checkLine(PERSON_SCHEMA, "STREAM_PASS=p@ss w0rd\\;\\:\\\\");
-    TEST_ASSERT(odd.ok() && odd.pairs[0].value == "p@ss w0rd;:\\", "a password may contain special characters (escaped when typed)");
-    TEST_ASSERT(person_stream::credentialsUsable("viewer", odd.pairs[0].value.c_str()), "and is usable");
+}
+
+TEST(a_board_that_still_has_the_old_server_settings_stored_is_not_asked_for_anything) {
+    // After a firmware update the flash still holds STREAM_USER/STREAM_PASS/STREAM_PORT: they must neither
+    // make the board "incomplete" (it would wait for a cable) nor be read.
+    MemoryStore st;
+    TEST_ASSERT(store(st, WITH_STREAM), "stored");
+    st.set("STREAM_USER", "viewer");
+    st.set("STREAM_PASS", "hunter22");
+    st.set("STREAM_PORT", "8088");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "still complete");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT(s.streamEnabled && s.serverHost == "192.168.4.9" && s.detectorId == "detector-1", "and loads as before");
 }
 
 // ── the threshold rule ──────────────────────────────────────────────────
@@ -233,9 +243,9 @@ TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown) {
     store(st, WITH_STREAM);
     BootConfigFlow flow(PERSON_SCHEMA, st, con, 5000);
     flow.step(1000);
-    TEST_ASSERT(con.said("STREAM_PASS=********") && con.said("API_KEY=********") && con.said("WIFI=extender-1:****:extender-2:****"), "masked");
-    TEST_ASSERT(!con.said("hunter22") && !con.said("s3cret") && !con.said("password1"), "no secret on the serial port");
-    TEST_ASSERT(con.said("STREAM_USER=viewer") && con.said("DETECT_THRESH=0.6"), "ordinary values shown");
+    TEST_ASSERT(con.said("API_KEY=********") && con.said("WIFI=extender-1:****:extender-2:****"), "masked");
+    TEST_ASSERT(!con.said("s3cret") && !con.said("password1"), "no secret on the serial port");
+    TEST_ASSERT(con.said("DETECTOR_ID=detector-1") && con.said("DETECT_THRESH=0.6"), "ordinary values shown");
 }
 
 TEST(a_detector_without_wifi_shows_the_live_view_settings_as_not_used) {
@@ -244,7 +254,7 @@ TEST(a_detector_without_wifi_shows_the_live_view_settings_as_not_used) {
     store(st, NO_STREAM);
     BootConfigFlow flow(PERSON_SCHEMA, st, con, 5000);
     flow.step(1000);
-    TEST_ASSERT(con.said("WIFI=<not set>   (not used)") && con.said("STREAM_PASS=<not set>   (not used)"), "marked as not used, not as required");
+    TEST_ASSERT(con.said("WIFI=<not set>   (not used)") && con.said("API_KEY=<not set>   (not used)"), "marked as not used, not as required");
     TEST_ASSERT(con.said("Change settings? [y/N]"), "complete, so it just offers the 5 s window");
 }
 
@@ -260,7 +270,6 @@ TEST(settings_load_into_typed_fields_with_the_live_view_on) {
     TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10, "scene gate");
     TEST_ASSERT(s.streamEnabled && s.wifi.size() == 2 && s.wifi[1].pass == "pass;word2", "wifi, decoded");
     TEST_ASSERT(s.serverHost == "192.168.4.9" && s.httpPort == 8080 && s.apiKey == "s3cret" && s.detectorId == "detector-1", "relay");
-    TEST_ASSERT(s.streamUser == "viewer" && s.streamPass == "hunter22" && s.streamPort == 8088, "stream login and port");
     TEST_ASSERT(s.streamMaxFps == 10 && s.streamJpegQuality == 80 && s.streamWriteTimeoutSec == 3, "stream tuning");
     TEST_ASSERT(s.announceHeartbeatSec == 600 && s.announceRetrySec == 30, "announce timing");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
@@ -306,7 +315,8 @@ int main() {
     RUN_TEST(the_output_gpio_must_be_a_pin_the_board_leaves_free);
     RUN_TEST(thresholds_are_scores_between_0_01_and_1);
     RUN_TEST(loop_delay_and_stream_tuning_ranges);
-    RUN_TEST(stream_credentials_that_the_settings_accept_are_always_usable_by_the_sketch);
+    RUN_TEST(the_lan_servers_settings_are_gone_the_live_view_is_pushed_to_the_relay);
+    RUN_TEST(a_board_that_still_has_the_old_server_settings_stored_is_not_asked_for_anything);
     RUN_TEST(clear_threshold_must_not_exceed_the_detect_threshold);
     RUN_TEST(the_threshold_rule_works_in_the_boot_conversation);
     RUN_TEST(a_blank_detector_is_configured_with_one_line_and_restarts);

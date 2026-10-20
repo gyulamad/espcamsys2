@@ -59,13 +59,13 @@ TEST(turning_the_live_view_on_later_asks_for_its_settings_and_restarts_when_comp
     typeAt(500, "y\n");
     typeAt(1000, "STREAM_ENABLED=1\n");
     typeAt(1500,
-        "WIFI=home:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=s3cret;DETECTOR_ID=det-1;STREAM_USER=viewer;"
-        "STREAM_PASS=hunter22;STREAM_PORT=80;STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30\n");
+        "WIFI=home:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=s3cret;DETECTOR_ID=det-1;"
+        "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30\n");
     typeAt(2000, "\n");
     setupSettings();
-    TEST_ASSERT(said("These settings need a value (13)"), "after switching it on, the 13 live-view settings were asked for");
+    TEST_ASSERT(said("These settings need a value (10)"), "after switching it on, the 10 live-view settings were asked for");
     TEST_ASSERT_EQ(g_restarts, 1, "restart once everything is stored");
-    TEST_ASSERT(g_flash["STREAM_ENABLED"] == "1" && g_flash["STREAM_USER"] == "viewer", "stored");
+    TEST_ASSERT(g_flash["STREAM_ENABLED"] == "1" && g_flash["DETECTOR_ID"] == "det-1", "stored");
 }
 
 TEST(with_the_live_view_on_g_cfg_gets_the_wifi_list_and_stream_settings) {
@@ -73,7 +73,7 @@ TEST(with_the_live_view_on_g_cfg_gets_the_wifi_list_and_stream_settings) {
     setupSettings();
     TEST_ASSERT(g_cfg.streamEnabled && g_cfg.wifi.size() == 1 && g_cfg.wifi[0].ssid == "home" && g_cfg.wifi[0].pass == "password1", "wifi");
     TEST_ASSERT(g_cfg.serverHost == "192.168.4.9" && g_cfg.httpPort == 8080 && g_cfg.apiKey == "s3cret" && g_cfg.detectorId == "det-1", "relay");
-    TEST_ASSERT(g_cfg.streamUser == "viewer" && g_cfg.streamPass == "hunter22" && g_cfg.streamPort == 80, "stream");
+    TEST_ASSERT(g_cfg.detectorId == "det-1" && g_cfg.streamMaxFps == 10 && g_cfg.streamJpegQuality == 80, "stream");
     TEST_ASSERT(!said("hunter22") && !said("s3cret") && !said("password1"), "no secret was printed");
 }
 
@@ -92,7 +92,7 @@ TEST(a_threshold_pair_that_breaks_the_rule_is_refused_end_to_end) {
 static const char* WITH_STREAM =
     "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=1;"
     "WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
-    "API_KEY=s3cret;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=hunter22;STREAM_PORT=8088;"
+    "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
 static void provisionFlash(const char* line) {

@@ -24,6 +24,7 @@ const logfile = require('./lib/logfile');
 const devicesettings = require('./lib/devicesettings');
 const firmware = require('./lib/firmware');
 const detectorstate = require('./lib/detectorstate');
+const detectorlink = require('./lib/detectorlink');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const connection = require('./lib/connection');
@@ -540,47 +541,235 @@ app.get('/stream/:id', (req, res) => {
 });
 
 // ── Person detectors (ESP32_CAM_TFLite_Person) ──
-// A detector reports its latest 96x96 grayscale frame and the numbers behind its alarm
-// line (brightness, motion, person score, thresholds, GPIO level) with POST /detector/:id
-// (camera key). The dashboard shows them under the paired camera's picture, to aim the
-// detector and tune its thresholds. Detectors live in their own map: they are not
-// cameras, so they are never recorded, never in /status and not hit by "alarm all".
+// A detector shows the dashboard what it sees (its 96x96 grayscale frame) and the numbers behind its
+// alarm line (brightness, motion, person score, thresholds, GPIO level), so the camera can be aimed and
+// the thresholds chosen with visual confirmation. Detectors are often behind a NAT router, so the relay
+// never connects to one: the detector connects OUT and keeps ONE connection open, pushing its frames up
+// it. The connection is an HTTP Upgrade on this very port (see lib/detectorlink.js for the protocol), so
+// the board needs no extra setting, and every refusal is an ordinary HTTP answer it can log.
+// Detectors live in their own map: they are not cameras, so they are never recorded, never in /status
+// and not hit by "alarm all".
+//
+//   (Upgrade) GET /detector/:id/uplink   camera key (X-Api-Key): the detector's connection (see below)
+//   GET /detectors                        every detector the relay has heard from: { id: view }
+//   GET /detector/:id/stream              its picture as MJPEG (works as <img src>). It answers AT ONCE: 200
+//                                         with frames, or 404 / 503 with JSON saying why there are none — it
+//                                         never leaves a viewer waiting for a picture that is not coming.
 // Reading needs nothing, like /stream — only the PHP layer should reach this port.
-const detectors = {}; // id -> { report, receivedAt, frame, emitter, ip }
+//
+// Everything that happens to a detector is logged (connected, refused, disconnected and why, the first
+// picture, a picture that never comes, the dashboard asking for one that does not exist): a detector
+// that "does not show up" must be explainable from the relay's log alone.
+const MAX_DETECTORS = 64;                     // a wrong or hostile id must not grow memory without bound
+const NO_PICTURE_WARN_MS = connection.parseTimeoutMs(fromEnv('DETECTOR_NO_PICTURE_WARN_MS'), 10 * 1000); // connected and reporting numbers, but no picture for this long: say so
+const MAX_BAD_MESSAGES_IN_A_ROW = 25;         // then the connection is not a detector's: drop it
+const detectors = {}; // id -> record, see getDetector()
+const detectorViewThrottle = new Throttle(5 * 60 * 1000); // the dashboard asking for a picture that is not there: once per 5 min per detector and state
 
 function getDetector(id) {
   if (!detectors[id]) {
-    detectors[id] = { report: null, receivedAt: 0, frame: null, emitter: new EventEmitter() };
+    detectors[id] = {
+      report: null, receivedAt: 0,           // the latest readings and when they arrived
+      frame: null, frameAt: 0,               // the latest picture (a JPEG) and when it arrived
+      emitter: new EventEmitter(),           // 'frame' for every picture, to the MJPEG viewers
+      socket: null, connected: false, ip: null, connectedAt: 0,
+      lastDisconnectAt: 0, lastDisconnectWhy: '',
+      connections: 0, pictures: 0, pictureLogged: false, noPictureWarned: false, badInARow: 0,
+    };
     detectors[id].emitter.setMaxListeners(50);
   }
   return detectors[id];
 }
 
-const detectorBadThrottle = new Throttle(60 * 1000);
+// An event about a detector, as seen by the relay (carries the detector's address).
+function detLog(level, id, message, opts = {}) {
+  const det = detectors[id];
+  relayLog(level, message, Object.assign({ sender: id, ip: det && det.ip, via: 'relay' }, opts));
+}
 
-app.post('/detector/:id', express.json({ limit: '32kb' }), (req, res) => {
-  const key = req.get('X-Api-Key') || req.query.key;
-  if (key !== API_KEY) {
-    if (authFailThrottle.check(`detector:${req.ip}`, Date.now()).allow) relayLog('WARN', `detector report rejected: wrong or missing key (${req.ip})`, { sender: String(req.params.id).slice(0, 40), via: 'relay' });
-    return res.sendStatus(403);
+// Why a connection ended, in words (the OS only gives a code).
+function describeSocketEnd(code) {
+  if (!code) return 'the board closed the connection';
+  if (code === 'ECONNRESET') return 'the connection was reset: the board lost power or Wi-Fi, or restarted';
+  if (code === 'ETIMEDOUT') return 'the connection timed out';
+  return code;
+}
+
+// A detector authenticated while an older connection for the same id is still registered: it is either
+// still sending (two boards share an id — both stay, and the log says so) or gone quiet (the same board
+// reconnecting after its old connection died silently, typical on weak Wi-Fi — close the leftover).
+// (lastPushData / retiredSockets are the camera push connection's, defined with it below.)
+function handlePreviousDetectorConnection(previous, id, now) {
+  const silentMs = now - (lastPushData.get(previous) || now);
+  const silentSeconds = (silentMs / 1000).toFixed(1);
+  if (connection.classifyPreviousConnection(silentMs) === 'conflict') {
+    const t = eventThrottle.check(`${id}:detector-conflict`, now);
+    if (t.allow) detLog('WARN', id, `another connection with the SAME detector id is still sending (from ${logfile.normalizeIp(previous.remoteAddress)}, last data ${silentSeconds}s ago) — is DETECTOR_ID unique per board? Two boards sharing an id corrupt each other's picture${suppressedNote(t.suppressed)}`);
+    return;
   }
-  if (!logentry.CAMERA_ID_RE.test(req.params.id)) return res.status(400).json({ error: 'invalid detector id' });
-  const parsed = detectorstate.parseReport(req.body);
-  if (!parsed.ok) {
-    if (detectorBadThrottle.check(req.params.id, Date.now()).allow) relayLog('WARN', `detector report refused: ${parsed.error}`, { sender: req.params.id, via: 'relay' });
-    return res.status(400).json({ error: parsed.error });
+  retiredSockets.add(previous);
+  previous.destroy();
+  const t = eventThrottle.check(`${id}:detector-replaced`, now);
+  if (t.allow) detLog('INFO', id, `the detector reconnected — closed its previous connection, which had been silent for ${silentSeconds}s${suppressedNote(t.suppressed)}`);
+}
+
+function noteBadDetectorMessage(id, det, socket, why) {
+  det.badInARow += 1;
+  const t = pushErrThrottle.check(`${id}:detector-bad`, Date.now());
+  if (t.allow) detLog('WARN', id, `ignored an unusable message from the detector: ${why}${suppressedNote(t.suppressed)}`);
+  if (det.badInARow >= MAX_BAD_MESSAGES_IN_A_ROW) {
+    detLog('WARN', id, `${det.badInARow} unusable messages in a row — dropping the connection`);
+    socket.destroy();
   }
-  const det = getDetector(req.params.id);
-  det.report = parsed.report;
-  det.receivedAt = Date.now();
-  if (parsed.jpeg) {
-    det.frame = parsed.jpeg;
-    det.emitter.emit('frame', parsed.jpeg);
+}
+
+// One [length][message] from a detector's connection. A failure here is logged and swallowed: like the
+// cameras' push messages it runs inside a raw socket's 'data' event, where an uncaught exception would
+// end the whole relay.
+function handleDetectorPayload(id, det, socket, payload) {
+  try {
+    const m = detectorlink.decodeMessage(payload);
+    if (!m.ok) return noteBadDetectorMessage(id, det, socket, m.error);
+    if (m.kind === 'unknown') return undefined; // a message type newer than this relay: ignore it
+    const parsed = detectorstate.parseStatus(m.status);
+    if (!parsed.ok) return noteBadDetectorMessage(id, det, socket, parsed.error);
+    det.badInARow = 0;
+    const now = Date.now();
+    det.report = parsed.report;
+    det.receivedAt = now;
+    if (m.jpeg) {
+      det.frame = m.jpeg;
+      det.frameAt = now;
+      det.pictures += 1;
+      if (!det.pictureLogged) {
+        det.pictureLogged = true;
+        detLog('INFO', id, `detector is sending pictures (the first: ${m.jpeg.length} bytes of JPEG)`);
+      }
+      det.emitter.emit('frame', m.jpeg);
+    } else if (!det.pictureLogged && !det.noPictureWarned && now - det.connectedAt >= NO_PICTURE_WARN_MS) {
+      det.noPictureWarned = true;
+      const fails = parsed.report.link.jpegFails;
+      detLog('WARN', id, `the detector has been connected for ${Math.round((now - det.connectedAt) / 1000)}s and reports its numbers, but has sent no picture${fails ? ` (it reports ${fails} failed JPEG encodings — out of memory on the board?)` : ' — see the detector\'s own log lines for why'}`);
+    }
+  } catch (err) {
+    const t = pushErrThrottle.check(`${id}:detector-error`, Date.now());
+    if (t.allow) detLog('ERROR', id, `error handling a message from the detector (it stays connected): ${errorMessage(err)}${suppressedNote(t.suppressed)}`, { trace: errorTrace(err) });
   }
-  res.sendStatus(200);
+  return undefined;
+}
+
+// An HTTP Upgrade request arrived (the only kind the relay accepts): a detector opening its uplink.
+function handleDetectorUpgrade(req, socket, head) {
+  // The HTTP server stops listening for errors on a socket once it has handed it over; without our own
+  // listener a reset connection would be an uncaught exception, which ends the relay.
+  let lastSocketError = null;
+  socket.on('error', (err) => { lastSocketError = err && err.code ? err.code : String(err); });
+
+  const peerIp = logfile.normalizeIp(socket.remoteAddress);
+  const asked = detectorlink.matchPath(req.url);
+  const sender = asked || 'unknown';
+
+  const refuse = (status, message) => {
+    socket.end(detectorlink.refusalResponse(status, message));
+    setTimeout(() => socket.destroy(), 2000).unref(); // a client that never reads must not keep the socket
+  };
+
+  const checked = detectorlink.checkUpgrade(req, (presented) => auth.safeEqual(presented, API_KEY));
+  if (!checked.ok) {
+    const t = authFailThrottle.check(`detector:${peerIp}:${checked.status}`, Date.now());
+    if (t.allow) relayLog('WARN', `refused a detector uplink request from ${peerIp || 'unknown address'} for ${JSON.stringify(String(req.url).slice(0, 100))}: HTTP ${checked.status} — ${checked.error}${suppressedNote(t.suppressed)}`, { sender, via: 'relay' });
+    return refuse(checked.status, checked.error);
+  }
+
+  const id = checked.id;
+  if (!detectors[id] && Object.keys(detectors).length >= MAX_DETECTORS) {
+    relayLog('WARN', `refused a detector uplink from ${peerIp || 'unknown address'}: already ${MAX_DETECTORS} detectors known, so ${id} is not accepted`, { sender: id, via: 'relay' });
+    return refuse(503, `the relay already knows ${MAX_DETECTORS} detectors and accepts no more`);
+  }
+
+  const det = getDetector(id);
+  const previous = det.socket && det.socket !== socket && !det.socket.destroyed ? det.socket : null;
+  const connectedAt = Date.now();
+  socket.setNoDelay(true);
+  socket.setKeepAlive(true, PUSH_KEEPALIVE_MS);
+  socket.setTimeout(PUSH_IDLE_TIMEOUT_MS);
+  lastPushData.set(socket, connectedAt);
+  det.socket = socket;
+  det.connected = true;
+  det.ip = peerIp;
+  det.connectedAt = connectedAt;
+  det.connections += 1;
+  det.pictureLogged = false;
+  det.noPictureWarned = false;
+  det.badInARow = 0;
+  const picturesBefore = det.pictures;
+  socket.write(detectorlink.acceptResponse());
+
+  const tc = eventThrottle.check(`${id}:detector-connect`, connectedAt);
+  if (tc.allow) detLog('INFO', id, `detector connected${det.connections > 1 ? ` (connection number ${det.connections} since the relay started)` : ''}${suppressedNote(tc.suppressed)}`);
+  if (previous) handlePreviousDetectorConnection(previous, id, connectedAt);
+
+  let buf = head && head.length ? Buffer.from(head) : Buffer.alloc(0);
+  const drain = () => {
+    let drained;
+    try {
+      drained = protocol.drainFrames(buf, detectorlink.MAX_MESSAGE_BYTES);
+    } catch (err) {
+      lastSocketError = `the stream is corrupt: ${err.message}`;
+      detLog('WARN', id, `dropped the connection: ${err.message} (a corrupt or out-of-step stream — is this really a detector?)`);
+      socket.destroy();
+      return;
+    }
+    buf = drained.rest;
+    for (const payload of drained.frames) handleDetectorPayload(id, det, socket, payload);
+  };
+  drain(); // whatever came with the request itself
+
+  socket.on('data', (chunk) => {
+    lastPushData.set(socket, Date.now());
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+    drain();
+  });
+
+  // The board closed its end (it restarted, say). The HTTP server creates its sockets with allowHalfOpen, so
+  // unlike the raw push port's sockets this one would otherwise stay half-open — looking connected — until the
+  // idle timeout, and then be blamed on silence.
+  socket.on('end', () => socket.end());
+
+  // No bytes at all for too long: the other end is gone (a detector sends something at least every second).
+  socket.on('timeout', () => {
+    lastSocketError = `no data for ${Math.round(PUSH_IDLE_TIMEOUT_MS / 1000)}s`;
+    socket.destroy();
+  });
+
+  socket.on('close', (hadError) => {
+    const wasCurrent = det.socket === socket;
+    const why = lastSocketError && lastSocketError.includes(' ') ? lastSocketError : describeSocketEnd(lastSocketError);
+    if (wasCurrent) {
+      det.socket = null;
+      det.connected = false;
+      det.lastDisconnectAt = Date.now();
+      det.lastDisconnectWhy = why;
+    }
+    if (retiredSockets.has(socket)) return;
+    const t = eventThrottle.check(`${id}:detector-disconnect`, Date.now());
+    if (!t.allow) return;
+    const secs = Math.round((Date.now() - connectedAt) / 1000);
+    detLog(hadError || lastSocketError ? 'WARN' : 'INFO', id, `detector disconnected after ${secs}s, ${det.pictures - picturesBefore === 1 ? '1 picture' : `${det.pictures - picturesBefore} pictures`} received (${why})${wasCurrent ? '' : ' [a newer connection had already replaced it]'}${suppressedNote(t.suppressed)}`);
+  });
+  return undefined;
+}
+
+// The uplink address reached WITHOUT the Upgrade headers (Node hands real upgrade requests to
+// handleDetectorUpgrade() instead, so this only ever sees plain ones): a browser, curl, or a board whose
+// HTTP code dropped the headers. Say what is needed rather than a bare 404.
+app.get('/detector/:id/uplink', (req, res) => {
+  res.status(426).set({ Upgrade: detectorlink.PROTOCOL, 'Cache-Control': 'no-store' }).json({
+    error: `this address only speaks the detector uplink: send "Connection: Upgrade" and "Upgrade: ${detectorlink.PROTOCOL}" together with the camera key in X-Api-Key`,
+  });
 });
 
-// Every detector the relay has heard from: { id: { online, ageMs, report } }
+// Every detector the relay has heard from: { id: view } — see detectorstate.buildView().
 app.get('/detectors', (req, res) => {
   const now = Date.now();
   const out = {};
@@ -588,14 +777,33 @@ app.get('/detectors', (req, res) => {
   res.json(out);
 });
 
-// The detector's picture as MJPEG (works as <img src>), same behaviour as /stream/:id.
+// The detector's picture as MJPEG (works as <img src>), same behaviour as /stream/:id once it flows. A viewer
+// is never left waiting: with no picture to show the answer is an error that says why (and the relay's log
+// says that the dashboard asked), instead of a response that never starts.
 app.get('/detector/:id/stream', (req, res) => {
-  const det = getDetector(req.params.id);
+  const id = req.params.id;
+  if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid detector id' });
+  const now = Date.now();
+  const det = detectors[id];
+  const view = detectorstate.buildView(det, now);
+  if (view.state !== 'online') {
+    const known = Object.keys(detectors).sort();
+    const error = view.state === 'never'
+      ? `no detector called '${id}' has connected to the relay since it started${known.length ? ` (detectors seen: ${known.join(', ')})` : ' (no detector has connected at all)'}`
+      : `detector '${id}' has no picture to show: ${view.message}`;
+    const t = detectorViewThrottle.check(`${id}:${view.state}`, now);
+    if (t.allow) {
+      detLog('WARN', id, `the dashboard asked for the picture of detector '${id}' but there is none: ${error}${view.state === 'never' ? ' — check that DETECTOR_ID on the board equals the detector paired with the camera in the dashboard\'s config.php' : ''}${suppressedNote(t.suppressed)}`);
+    }
+    return res.status(view.state === 'never' ? 404 : 503).set('Cache-Control', 'no-store').json({ error, state: view.state, known });
+  }
+
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
     'Cache-Control': 'no-cache',
     Connection: 'close',
   });
+  res.flushHeaders(); // the viewer learns at once that the stream is open, whatever the next picture takes
   let ready = true;
   res.on('drain', () => { ready = true; });
   const onFrame = (frame) => {
@@ -607,6 +815,7 @@ app.get('/detector/:id/stream', (req, res) => {
   if (det.frame) onFrame(det.frame);
   det.emitter.on('frame', onFrame);
   req.on('close', () => det.emitter.off('frame', onFrame));
+  return undefined;
 });
 
 // Single still image, handy for thumbnails/testing
@@ -1446,7 +1655,9 @@ app.use((err, req, res, next) => {
   return res.sendStatus(500);
 });
 
-app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`));
+const httpServer = app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`));
+// A person detector opens its uplink with an HTTP Upgrade (see the "Person detectors" section above).
+httpServer.on('upgrade', handleDetectorUpgrade);
 
 // ── Raw TCP push listener ──
 // Cameras open ONE connection here and keep it open, instead of a fresh

@@ -54,3 +54,25 @@ function relay_proxy_json(
     }
     echo $body;
 }
+
+// Writes to the web server's error log, but not more than once per $everySec seconds for the same $key:
+// a dashboard that re-asks for a missing picture every few seconds must leave a line, not a flood. The
+// time of the last write is the modification time of a small marker file in the temp directory (no
+// session, no database; if the directory is not writable the line is simply written every time).
+function log_throttled(string $key, string $message, int $everySec = 300): void
+{
+    $marker = sys_get_temp_dir() . '/camdash-log-' . sha1($key);
+    $last = @filemtime($marker);
+    if (!CamLogic::logDue($last === false ? null : $last, time(), $everySec)) {
+        return;
+    }
+    @touch($marker);
+    error_log('camdash: ' . $message);
+}
+
+// PHP's reason for the last failed call (what the @ in front of it swallowed), for the error log.
+function last_php_error(): string
+{
+    $e = error_get_last();
+    return $e && isset($e['message']) ? $e['message'] : '';
+}

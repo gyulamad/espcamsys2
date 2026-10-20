@@ -582,11 +582,27 @@ class CamLogic
     }
 
     // What detector-status.php answers: for every camera with a paired detector,
-    // { camId: { detector, online, ageMs, report } }, from the relay's GET /detectors answer
-    // ($relayDetectors: id => { online, ageMs, report }). A detector the relay has not heard from
-    // is offline with no numbers.
+    //   { camId: { detector, state, online, hasPicture, connected, ageMs, pictureAgeMs, ip, message, report } }
+    // from the relay's GET /detectors answer ($relayDetectors: id => the relay's view of that detector, see
+    // detectorstate.buildView()). `state` is 'online', 'no-picture' (the numbers arrive, the picture does
+    // not), 'offline' or 'never' (the relay has not heard from a detector of that id); `message` says WHY
+    // it is not (fully) showing, empty while all is well — the dashboard prints it on the picture instead of
+    // a bare "offline", because a detector that does not show up is hard enough to track down already.
     public static function buildDetectorStatus(array $cameras, array $relayDetectors): array
     {
+        $paired = [];
+        foreach ($cameras as $c) {
+            $d = self::detectorIdOf($c);
+            if ($d !== null) {
+                $paired[$d] = true;
+            }
+        }
+        // Detectors the relay hears that no camera here is paired with: the usual sign of a mistyped id.
+        $unpaired = array_values(array_filter(array_map('strval', array_keys($relayDetectors)), function ($id) use ($paired) {
+            return !isset($paired[$id]);
+        }));
+        sort($unpaired);
+
         $out = [];
         foreach ($cameras as $c) {
             $d = self::detectorIdOf($c);
@@ -594,14 +610,83 @@ class CamLogic
                 continue;
             }
             $v = $relayDetectors[$d] ?? null;
+            if (!is_array($v)) {
+                $out[(string) $c['id']] = [
+                    'detector' => $d, 'state' => 'never', 'online' => false, 'hasPicture' => false, 'connected' => false,
+                    'ageMs' => null, 'pictureAgeMs' => null, 'ip' => null,
+                    'message' => self::detectorNeverHeardMessage($d, $unpaired),
+                    'report' => null,
+                ];
+                continue;
+            }
+            $online = !empty($v['online']);
             $out[(string) $c['id']] = [
                 'detector' => $d,
-                'online' => is_array($v) && !empty($v['online']),
-                'ageMs' => is_array($v) && isset($v['ageMs']) ? $v['ageMs'] : null,
-                'report' => is_array($v) && isset($v['report']) ? $v['report'] : null,
+                'state' => is_string($v['state'] ?? null) ? $v['state'] : ($online ? 'online' : 'offline'),
+                'online' => $online,
+                // a relay that predates the picture flag: the numbers being fresh is the best available answer
+                'hasPicture' => array_key_exists('hasPicture', $v) ? !empty($v['hasPicture']) : $online,
+                'connected' => !empty($v['connected']),
+                'ageMs' => isset($v['ageMs']) ? $v['ageMs'] : null,
+                'pictureAgeMs' => isset($v['pictureAgeMs']) ? $v['pictureAgeMs'] : null,
+                'ip' => isset($v['ip']) && is_string($v['ip']) ? $v['ip'] : null,
+                'message' => isset($v['message']) && is_string($v['message']) ? $v['message'] : '',
+                'report' => isset($v['report']) ? $v['report'] : null,
             ];
         }
         return $out;
+    }
+
+    // Why a paired detector the relay has never heard from is not showing. $unpaired: the ids of the
+    // detectors the relay DOES hear that no camera is paired with.
+    public static function detectorNeverHeardMessage(string $detectorId, array $unpaired): string
+    {
+        $msg = "the relay has not heard from a detector called '" . $detectorId . "' since it started";
+        if (!empty($unpaired)) {
+            $msg .= '; it does hear ' . implode(', ', array_map(function ($id) { return "'" . $id . "'"; }, $unpaired))
+                . ', which no camera here is paired with: is DETECTOR_ID on the board or the pairing mistyped?';
+        } else {
+            $msg .= ': check that the board is powered, has joined Wi-Fi and its SERVER_HOST / HTTP_PORT / API_KEY are right (the relay log shows every refused or accepted attempt)';
+        }
+        return $msg;
+    }
+
+    // What detector-stream.php tells the browser (and the web server's error log) when the relay gives no
+    // picture: [status, message]. $relayStatus is null when the relay could not be reached at all
+    // ($transportError then carries PHP's reason); otherwise it is the relay's HTTP status and
+    // $relayBody its body — normally {"error": "..."} saying why (the relay answers at once, it does not
+    // make a viewer wait for a picture that is not coming).
+    public static function detectorStreamFailure(?int $relayStatus, string $relayBody, string $cameraName, string $transportError = ''): array
+    {
+        $who = 'the person detector of ' . $cameraName;
+        if ($relayStatus === null) {
+            return [
+                'status' => 502,
+                'message' => 'Could not reach the relay to get the picture of ' . $who . ($transportError !== '' ? ' (' . $transportError . ')' : ''),
+            ];
+        }
+        $json = json_decode($relayBody, true);
+        $why = is_array($json) && isset($json['error']) && is_string($json['error']) ? $json['error'] : null;
+        if ($why === null) {
+            // Not the relay's own answer: a relay that predates the detector stream answers an HTML 404.
+            return [
+                'status' => 502,
+                'message' => 'The relay answered HTTP ' . $relayStatus . ' without a reason when asked for the picture of ' . $who
+                    . ' — is the relay (nodejs/camera-relay on the Pi) older than this dashboard? Update and restart it.',
+            ];
+        }
+        return [
+            'status' => in_array($relayStatus, [404, 503], true) ? $relayStatus : 502,
+            'message' => ucfirst($who) . ': ' . $why,
+        ];
+    }
+
+    // Whether something that can repeat every few seconds (the dashboard re-asking for a stream that is
+    // not there) may be written to the error log again: at most once per $everySec seconds. $lastLoggedAt
+    // is when it was last written (null = never).
+    public static function logDue(?int $lastLoggedAt, int $now, int $everySec): bool
+    {
+        return $lastLoggedAt === null || $now < $lastLoggedAt || $now - $lastLoggedAt >= $everySec;
     }
 
     public static function removeCamera(array $cameras, string $id): array

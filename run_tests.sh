@@ -21,12 +21,12 @@
 #   Recorder:        logic.h, remote_log.h, settings_logic.h, settings_schema.h
 #                    and the remote-logging and settings blocks of
 #                    ESP32_CAM_Recorder.ino
-#   Person detector: stream_logic.h (live view: authentication, routing, relay
-#                    announcement), scene_logic.h (darkness/motion gate),
-#                    report_logic.h (what is reported to the dashboard),
-#                    settings_schema.h, and the detection and
-#                    settings code of ESP32_CAM_TFLite_Person.ino
-#                    (setPersonDetected, detectPerson, loop, the settings block)
+#   Person detector: report_logic.h (what is sent to the relay for the dashboard,
+#                    and the connection that carries it), scene_logic.h
+#                    (darkness/motion gate), settings_schema.h, and the detection,
+#                    settings, remote-logging and uplink code of
+#                    ESP32_CAM_TFLite_Person.ino (setPersonDetected, detectPerson,
+#                    loop, the settings block, WifiUplinkEnv, the log glue)
 # (The "Relay settings link" class in each sketch — the real Wi-Fi + HTTP half of asking
 # the relay for missing settings — needs a radio; the glue tests run against a fake of it.)
 # These are the only sketch code that can run on a desktop; setup() and the
@@ -130,17 +130,7 @@ else
         overall_status=1
     fi
 
-    # Same for the person detector's live-view logic (also compiled by the sketch).
-    echo "--- stream_logic.h as C++11 (the ESP32 toolchain's dialect)"
-    if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
-           -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/stream_logic.h" -x c++ /dev/null; then
-        echo "ok"
-    else
-        echo "FAIL: stream_logic.h does not compile as C++11"
-        overall_status=1
-    fi
-
-    # ...and what the detector reports to the relay for the dashboard.
+    # The person detector's connection to the relay and what it reports (also compiled by the sketch).
     echo "--- report_logic.h as C++11 (the ESP32 toolchain's dialect)"
     if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
            -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/report_logic.h" -x c++ /dev/null; then
@@ -196,9 +186,10 @@ else
         overall_status=1
     fi
 
-    # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) is copied into
-    # both sketch folders the same way, and the copies must be identical too.
-    for shared in ota_logic.h ota.h; do
+    # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) and the remote
+    # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
+    # must be identical too.
+    for shared in ota_logic.h ota.h remote_log.h; do
         echo "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
@@ -221,7 +212,6 @@ else
 
     run_cpp_test test_alarm_logic
     run_cpp_test test_remote_log
-    run_cpp_test test_person_stream_logic
     run_cpp_test test_person_scene_logic
     run_cpp_test test_person_report_logic
     run_cpp_test test_settings_logic
@@ -264,6 +254,18 @@ else
     sed -n '/Settings glue ──/,/end of settings glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/person_settings_glue.inc"
     run_cpp_test test_person_settings_glue
+
+    # The detector's remote-logging glue and its uplink glue (the socket, JPEG encoder, snapshot, the
+    # Wi-Fi / heartbeat lines, the network task, start-up and the boot report) are tested the same way: extract the marked blocks from the .ino and build
+    # them against fake Arduino / FreeRTOS / WiFi / HTTP objects.
+    sed -n '/Remote logging glue ──/,/end of remote logging glue/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/person_log_glue.inc"
+    run_cpp_test test_person_log_glue
+    sed -n '/Uplink glue ──/,/end of uplink glue/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/uplink_glue.inc"
+    sed -n -e '/The task ──/,/end of network task and start/p' -e '/Boot report ──/,/end of boot report/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/network_glue.inc"
+    run_cpp_test test_person_uplink_glue
 
     # The person detector's detection code is tested the same way: extract the
     # real sections of the .ino (model constants/globals, setPersonDetected +
@@ -424,13 +426,24 @@ else
 fi
 
 hr
-echo "End-to-end (person detector reports, relay) test"
+echo "End-to-end (person detector uplink, relay) test"
 hr
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_detector_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (the detector firmware's real uplink code against the real relay) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_detector_firmware_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

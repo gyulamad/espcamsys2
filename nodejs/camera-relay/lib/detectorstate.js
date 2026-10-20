@@ -9,10 +9,12 @@
 //
 // A detector is NOT a recording camera: it is kept apart from the `cameras` map in
 // server.js, so it never appears in /status, is never recorded and is not hit by
-// "alarm all". The detector POSTs one report per update (POST /detector/:id, camera
-// key); this file only validates it and shapes what the dashboard reads back.
+// "alarm all". It pushes its frames and readings up one long-lived connection (see
+// detectorlink.js for the wire protocol); this file validates the readings it sends
+// and shapes what the dashboard reads back — including, when the detector is NOT
+// showing, WHY not, in words, because "offline" with no reason is what makes a
+// missing detector so hard to track down.
 
-const MAX_JPEG_BYTES = 16 * 1024; // a 96x96 grayscale JPEG is ~1-3 KB; anything near this is wrong
 const MAX_TEXT = 64;
 const STATES = ['dark', 'still', 'active', 'off'];
 
@@ -24,16 +26,15 @@ function text(v) {
   return typeof v === 'string' ? v.slice(0, MAX_TEXT) : '';
 }
 
-// Checks one report. Returns { ok: true, report, jpeg } (jpeg is a Buffer, or null when the
-// report carries no picture) or { ok: false, error }.
-// Report shape (all numbers; thresholds are the detector's own settings):
+// Checks the readings one message carries. Returns { ok: true, report } or { ok: false, error }.
+// Shape (all numbers; thresholds are the detector's own settings):
 //   { ip, fw, uptimeMs, rssi,
 //     gpio:   { pin, high },
 //     scene:  { state, brightness, motion, darkBelow, motionAtLeast, holdS },
 //     person: { score|null, detectAt, clearAt, detected },
-//     jpeg:   "<base64>" }
-function parseReport(body) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'body must be a JSON object' };
+//     link:   { frames, jpegFails, reconnects, heap }          <- optional, diagnostics only }
+function parseStatus(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'status must be a JSON object' };
   const g = body.gpio || {};
   const s = body.scene || {};
   const p = body.person || {};
@@ -54,18 +55,11 @@ function parseReport(body) {
   const score = p.score === null || p.score === undefined ? null : num(p.score, 0, 1);
   if (p.score !== null && p.score !== undefined && score === null) return { ok: false, error: 'person.score must be 0..1 or null' };
 
-  let jpeg = null;
-  if (body.jpeg !== undefined && body.jpeg !== null && body.jpeg !== '') {
-    if (typeof body.jpeg !== 'string' || body.jpeg.length > MAX_JPEG_BYTES * 2 || !/^[A-Za-z0-9+/]+={0,2}$/.test(body.jpeg)) {
-      return { ok: false, error: 'jpeg must be a base64 string' };
-    }
-    jpeg = Buffer.from(body.jpeg, 'base64');
-    if (jpeg.length < 4 || jpeg.length > MAX_JPEG_BYTES || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return { ok: false, error: 'jpeg is not a JPEG picture' };
-  }
+  // Diagnostics only: a value that is missing or odd is left out (null), never a reason to refuse the readings.
+  const l = body.link && typeof body.link === 'object' && !Array.isArray(body.link) ? body.link : {};
 
   return {
     ok: true,
-    jpeg,
     report: {
       ip: text(body.ip),
       fw: text(body.fw),
@@ -74,19 +68,74 @@ function parseReport(body) {
       gpio: { pin, high: g.high },
       scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, holdS },
       person: { score, detectAt, clearAt, detected: p.detected },
+      link: { frames: num(l.frames, 0, 4294967295), jpegFails: num(l.jpegFails, 0, 4294967295), reconnects: num(l.reconnects, 0, 4294967295), heap: num(l.heap, 0, 16777216) },
     },
   };
 }
 
-// Reports older than this are shown as "offline" by the dashboard.
+// Nothing at all (no message) for this long = offline. A detector sends at least once a second.
 const STALE_MS = 5000;
+// Numbers arrive but no picture for this long = "no picture" (the board's JPEG encoder is failing, say).
+const PICTURE_STALE_MS = 5000;
 
-// What GET /detector/:id returns / what the dashboard reads. `det` is the relay's record
-// ({ report, receivedAt }) or undefined for a detector never heard from.
-function buildView(det, now) {
-  if (!det || !det.report) return { online: false, ageMs: null, report: null };
-  const ageMs = Math.max(0, now - det.receivedAt);
-  return { online: ageMs <= STALE_MS, ageMs, report: det.report };
+// "42 s", "3 min 5 s", "2 h 10 min" — for the messages below.
+function describeAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${s % 60} s`;
+  const h = Math.floor(m / 60);
+  return `${h} h ${m % 60} min`;
 }
 
-module.exports = { parseReport, buildView, STALE_MS, MAX_JPEG_BYTES };
+// What GET /detectors returns / what the dashboard reads, for one detector. `det` is the relay's
+// record, or undefined for one it has never heard from:
+//   { report, receivedAt, frameAt, connected, ip, connectedAt, lastDisconnectAt, lastDisconnectWhy }
+// -> { state: 'online' | 'no-picture' | 'offline' | 'never',
+//      online, hasPicture, connected, ageMs, pictureAgeMs, connectedForMs, ip,
+//      lastDisconnect: { agoMs, why } | null, message, report }
+// `message` is empty while everything is fine, otherwise says why the detector is not (fully) showing.
+function buildView(det, now) {
+  if (!det) {
+    return {
+      state: 'never', online: false, hasPicture: false, connected: false, ageMs: null, pictureAgeMs: null,
+      connectedForMs: null, ip: null, lastDisconnect: null,
+      message: 'the relay has not heard from this detector since it started', report: null,
+    };
+  }
+  const ageMs = det.receivedAt ? Math.max(0, now - det.receivedAt) : null;
+  const pictureAgeMs = det.frameAt ? Math.max(0, now - det.frameAt) : null;
+  const online = ageMs !== null && ageMs <= STALE_MS;
+  const hasPicture = pictureAgeMs !== null && pictureAgeMs <= PICTURE_STALE_MS;
+  const connected = !!det.connected;
+  const lastDisconnect = det.lastDisconnectAt ? { agoMs: Math.max(0, now - det.lastDisconnectAt), why: det.lastDisconnectWhy || '' } : null;
+
+  let state = 'online';
+  let message = '';
+  if (!online) {
+    state = 'offline';
+    if (connected) {
+      message = ageMs === null
+        ? 'the detector connected but has not sent anything yet'
+        : `the connection is open but nothing has arrived for ${describeAge(ageMs)}`;
+    } else {
+      message = ageMs === null ? 'never heard from' : `last heard ${describeAge(ageMs)} ago`;
+      if (lastDisconnect) message += `; its connection ended${lastDisconnect.why ? ` (${lastDisconnect.why})` : ''}`;
+      else message += '; it is not connected';
+    }
+  } else if (!hasPicture) {
+    state = 'no-picture';
+    const fails = det.report && det.report.link ? det.report.link.jpegFails : null;
+    if (fails) message = `the numbers arrive but there is no picture: the board reports ${fails} failed JPEG encodings (out of memory?)`;
+    else if (pictureAgeMs === null) message = 'the numbers arrive but the board has not sent a picture yet';
+    else message = `the numbers arrive but the last picture is ${describeAge(pictureAgeMs)} old`;
+  }
+
+  return {
+    state, online, hasPicture, connected, ageMs, pictureAgeMs,
+    connectedForMs: connected && det.connectedAt ? Math.max(0, now - det.connectedAt) : null,
+    ip: det.ip || null, lastDisconnect, message, report: det.report || null,
+  };
+}
+
+module.exports = { parseStatus, buildView, describeAge, STATES, STALE_MS, PICTURE_STALE_MS };

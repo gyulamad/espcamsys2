@@ -95,10 +95,27 @@ struct MicroInterpreter {
 };
 }  // namespace tflite
 
-// -- live view: the sketch offers each good frame to streamPublishFrame().
-//    The real one (Wi-Fi/FreeRTOS) cannot run here; this records what it was given.
-static std::vector<std::vector<uint8_t>> g_published;
-static void streamPublishFrame(const uint8_t* gray) { g_published.emplace_back(gray, gray + 96 * 96); }
+// -- the log: the sketch reports camera / model failures with RLOG_*() so they reach the relay's log file
+//    as well as the serial port. The real one queues them for a Wi-Fi task; this echoes to the "serial
+//    port" like the real one does and records the level, so the tests can say WHERE a failure goes.
+struct LogLine { char level; std::string text; };
+static std::vector<LogLine> g_rlog;
+static void fakeLog(char level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+static void fakeLog(char level, const char* fmt, ...) {
+    char buf[512];
+    va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    g_rlog.push_back({level, buf});
+    g_serial += buf;
+    g_serial += "\n";
+}
+#define RLOG_DEBUG(...) fakeLog('D', __VA_ARGS__)
+#define RLOG_INFO(...)  fakeLog('I', __VA_ARGS__)
+#define RLOG_WARN(...)  fakeLog('W', __VA_ARGS__)
+#define RLOG_ERROR(...) fakeLog('E', __VA_ARGS__)
+static bool logged(char level, const char* part) {
+    for (size_t i = 0; i < g_rlog.size(); i++) if (g_rlog[i].level == level && g_rlog[i].text.find(part) != std::string::npos) return true;
+    return false;
+}
 
 // -- dashboard report: the sketch hands its readings to three small hooks (their real versions
 //    keep a snapshot for a Wi-Fi task and cannot run here); these record the calls.
@@ -128,7 +145,7 @@ static tflite::MicroInterpreter g_interp;
 static void reset() {
     g_serial.clear(); g_gpio.clear(); g_delays.clear();
     g_fbGets = g_fbReturns = 0;
-    g_published.clear();
+    g_rlog.clear();
     g_sceneCalls.clear(); g_scoreCalls.clear(); g_pinCalls.clear();
     g_sceneCalls.clear(); g_scoreCalls.clear(); g_pinCalls.clear();
     g_pixels.assign(IMAGE_SIZE, 0);
@@ -374,31 +391,62 @@ TEST(loop_always_delays_by_the_configured_time) {
 }
 
 
-// ── live view hook ──────────────────────────────────────────────────────
+// ── the frame handed to the uplink ──────────────────────────────────────
 
-TEST(detect_offers_the_raw_frame_to_the_live_view_before_returning_it) {
+TEST(detect_hands_the_raw_frame_to_the_uplink_before_returning_it) {
     reset();
     g_pixels[0] = 0; g_pixels[1] = 200; g_pixels[IMAGE_SIZE - 1] = 255;
     float p, n;
     TEST_ASSERT(detectPerson(p, n), "returns true");
-    TEST_ASSERT_EQ(g_published.size(), (size_t)1, "offered exactly once");
-    TEST_ASSERT_EQ((int)g_published[0][0], 0, "first pixel is the camera's, not the XOR-ed model input");
-    TEST_ASSERT_EQ((int)g_published[0][1], 200, "second pixel is unconverted");
-    TEST_ASSERT_EQ((int)g_published[0][IMAGE_SIZE - 1], 255, "last pixel is unconverted");
+    TEST_ASSERT_EQ(g_sceneCalls.size(), (size_t)1, "handed over exactly once");
+    TEST_ASSERT_EQ((int)g_sceneCalls[0].frame[0], 0, "first pixel is the camera's, not the XOR-ed model input");
+    TEST_ASSERT_EQ((int)g_sceneCalls[0].frame[1], 200, "second pixel is unconverted");
+    TEST_ASSERT_EQ((int)g_sceneCalls[0].frame[IMAGE_SIZE - 1], 255, "last pixel is unconverted");
     TEST_ASSERT_EQ((int)g_inBuf[1], 72, "model input still converted as before (200 ^ 0x80)");
 }
 
-TEST(detect_offers_nothing_when_there_is_no_usable_frame) {
+TEST(detect_hands_over_nothing_when_there_is_no_usable_frame) {
     reset();
     g_fbAvailable = false;
     float p, n;
     detectPerson(p, n);
-    TEST_ASSERT(g_published.empty(), "no frame, nothing offered");
+    TEST_ASSERT(g_sceneCalls.empty(), "no frame, nothing handed over");
 
     reset();
     g_fb.width = IMAGE_WIDTH + 1;
     detectPerson(p, n);
-    TEST_ASSERT(g_published.empty(), "a wrong-sized frame is not offered either");
+    TEST_ASSERT(g_sceneCalls.empty(), "a wrong-sized frame is not handed over either");
+}
+
+// ── failures are reported where somebody will read them ─────────────────
+// A detector is installed where nobody can plug a cable in. A camera or a model that fails goes to the
+// log at ERROR level (which the sketch sends to the relay's log file), not only to the serial port.
+
+TEST(a_camera_that_gives_no_frame_is_reported_as_an_error_with_a_hint) {
+    reset();
+    g_fbAvailable = false;
+    float p, n;
+    detectPerson(p, n);
+    TEST_ASSERT(logged('E', "Camera capture failed"), "an ERROR line says the capture failed");
+    TEST_ASSERT(logged('E', "ribbon cable"), "and what usually causes it");
+    TEST_ASSERT(has(g_serial, "Camera capture failed"), "the serial port still gets it");
+}
+
+TEST(a_wrong_sized_frame_is_reported_with_both_sizes) {
+    reset();
+    g_fb.width = IMAGE_WIDTH + 1;
+    float p, n;
+    detectPerson(p, n);
+    TEST_ASSERT(logged('E', "Unexpected frame size: 97x96 (the model needs 96x96)"), "the real size and the needed one");
+}
+
+TEST(a_failed_inference_is_reported_as_an_error) {
+    reset();
+    g_interp.status = kTfLiteError;
+    float p, n;
+    TEST_ASSERT(!detectPerson(p, n), "reports failure");
+    TEST_ASSERT(logged('E', "TFLite Invoke() failed"), "an ERROR line says the model failed");
+    g_interp.status = kTfLiteOk;
 }
 
 // ── dashboard report hooks ──────────────────────────────────────────────
@@ -485,14 +533,14 @@ TEST(a_dark_frame_does_not_run_the_model_and_says_so_once) {
     TEST_ASSERT(!has(g_serial, "Scene:"), "the dark state is reported on the change only");
 }
 
-TEST(the_live_view_still_gets_every_frame_while_detection_is_paused) {
+TEST(the_uplink_still_gets_every_frame_while_detection_is_paused) {
     reset();
     sceneGate(40, 300, 0);
     fillFrame(10);
     float p, n;
     detectPerson(p, n);
     detectPerson(p, n);
-    TEST_ASSERT_EQ(g_published.size(), (size_t)2, "both dark frames were offered to the live view");
+    TEST_ASSERT_EQ(g_sceneCalls.size(), (size_t)2, "both dark frames were handed to the uplink");
 }
 
 TEST(a_light_frame_without_motion_is_idle_and_a_moving_one_runs_the_model) {
@@ -627,11 +675,14 @@ int main() {
     RUN_TEST(loop_does_nothing_but_wait_when_detection_fails);
     RUN_TEST(loop_always_delays_by_the_configured_time);
 
-    RUN_TEST(detect_offers_the_raw_frame_to_the_live_view_before_returning_it);
-    RUN_TEST(detect_offers_nothing_when_there_is_no_usable_frame);
+    RUN_TEST(detect_hands_the_raw_frame_to_the_uplink_before_returning_it);
+    RUN_TEST(detect_hands_over_nothing_when_there_is_no_usable_frame);
+    RUN_TEST(a_camera_that_gives_no_frame_is_reported_as_an_error_with_a_hint);
+    RUN_TEST(a_wrong_sized_frame_is_reported_with_both_sizes);
+    RUN_TEST(a_failed_inference_is_reported_as_an_error);
 
     RUN_TEST(a_dark_frame_does_not_run_the_model_and_says_so_once);
-    RUN_TEST(the_live_view_still_gets_every_frame_while_detection_is_paused);
+    RUN_TEST(the_uplink_still_gets_every_frame_while_detection_is_paused);
     RUN_TEST(a_light_frame_without_motion_is_idle_and_a_moving_one_runs_the_model);
     RUN_TEST(detection_continues_for_the_hold_time_after_the_motion_stops);
     RUN_TEST(a_person_that_stands_still_stays_detected_in_a_motionless_picture);

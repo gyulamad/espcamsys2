@@ -9,7 +9,6 @@
 //   PERSON_DETECTION_THRESHOLD    -> DETECT_THRESH
 //   PERSON_CLEAR_THRESHOLD        -> CLEAR_THRESH
 //   DETECTION_LOOP_DELAY_MS       -> LOOP_DELAY_MS
-//   STREAM_PASSWORD               -> STREAM_PASS
 //   STREAM_JPEG_QUALITY           -> STREAM_JPEG_Q
 //   STREAM_WRITE_TIMEOUT_S        -> STREAM_WR_TMO_S
 //   ANNOUNCE_HEARTBEAT_SECONDS    -> ANN_HEARTBEAT
@@ -17,9 +16,17 @@
 //
 // New in the scene gate (scene_logic.h): DARK_THRESH, MOTION_THRESH, MOTION_HOLD_S.
 //
-// There are no defaults. Everything about the live view (Wi-Fi, relay, the
-// stream's user/password and tuning) is only asked for while STREAM_ENABLED=1,
-// so a detector that must not use Wi-Fi at all is configured with eight settings.
+// There are no defaults. Everything about the live view (Wi-Fi, the relay it
+// pushes to, and the tuning of that stream) is only asked for while
+// STREAM_ENABLED=1, so a detector that must not use Wi-Fi at all is configured
+// with eight settings.
+//
+// The live view is PUSHED: the detector connects out to the relay and keeps one
+// connection open, sending its 96x96 picture and the numbers behind its alarm
+// line up it (see report_logic.h). It serves nothing, so there is no port,
+// user or password for a viewer to be given. (STREAM_USER, STREAM_PASS and
+// STREAM_PORT belonged to the LAN server this replaced; a board that still has
+// them stored in flash simply ignores them.)
 //
 // What is NOT a setting (developer switches, edit and re-flash): TENSOR_ARENA_SIZE
 // (tied to the model), PRINT_DETECTION_SCORES, PRINT_STARTUP_INFO — see the top
@@ -65,33 +72,27 @@ static const KeyDef PERSON_KEYS[] = {
       "seconds detection stays on after the last motion (a person standing still stays detected anyway); 0 = only while moving" },
 
     { "STREAM_ENABLED",  Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
-      "1: join Wi-Fi and serve the live view; 0: no Wi-Fi at all (everything below is then not needed)" },
+      "1: join Wi-Fi and send the live view (picture + values) to the relay's dashboard; 0: no Wi-Fi at all (everything below is then not needed)" },
     { "WIFI",            Kind::Wifi,      0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
       "the networks to join (strongest one in range wins, fails over if it drops)" },
     { "SERVER_HOST",     Kind::Host,      0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "the relay's IP address or hostname (your Pi), where the stream's address is announced" },
+      "the relay's IP address or hostname (your Pi): the detector connects OUT to it, so it can sit behind a NAT router" },
     { "HTTP_PORT",       Kind::Int,       1,    65535,   Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "relay's HTTP port - port in the relay's config.js" },
+      "relay's HTTP port - port in the relay's config.js (the live view uses it too, no extra port)" },
     { "API_KEY",         Kind::Secret,    0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
       "must match camKey in the relay's config.js" },
     { "DETECTOR_ID",     Kind::Id,        0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "how this detector is named in the relay's log; NOT a recorder's CAMERA_ID" },
-    { "STREAM_USER",     Kind::Id,        0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "user name the browser asks for (letters, digits, _ . - only)" },
-    { "STREAM_PASS",     Kind::Secret,    0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "password the browser asks for; plain HTTP, so don't reuse a password from elsewhere" },
-    { "STREAM_PORT",     Kind::Int,       1,    65535,   Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "port the live view is served on (80 = no port in the address)" },
+      "this detector's name: it must equal the 'detector' of its camera in the dashboard's config.php; NOT a recorder's CAMERA_ID" },
     { "STREAM_MAX_FPS",  Kind::Int,       1,    30,      Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "upper limit of the stream's frame rate (the real rate is the detection rate)" },
+      "upper limit of the pictures sent per second (the real rate is the detection rate)" },
     { "STREAM_JPEG_Q",   Kind::Int,       1,    100,     Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "JPEG quality of the stream, higher = better picture" },
+      "JPEG quality of the picture, higher = better picture" },
     { "STREAM_WR_TMO_S", Kind::Int,       1,    60,      Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "a viewer that stops reading is dropped after this many seconds" },
+      "a relay connection that accepts nothing for this many seconds is dropped and opened again" },
     { "ANN_HEARTBEAT",   Kind::Int,       1,    86400,   Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "seconds between repeats of the address in the relay's log" },
+      "seconds between status lines (Wi-Fi, link, memory) in the relay's log" },
     { "ANN_RETRY",       Kind::Int,       1,    3600,    Cond::WhenEquals, "STREAM_ENABLED", "1",
-      "seconds to wait after the relay could not be reached" },
+      "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)" },
 };
 
 static const Schema PERSON_SCHEMA = {
@@ -117,9 +118,6 @@ struct PersonSettings {
     int httpPort = 0;
     std::string apiKey;
     std::string detectorId;
-    std::string streamUser;
-    std::string streamPass;
-    int streamPort = 80;
     int streamMaxFps = 10;
     int streamJpegQuality = 80;
     int streamWriteTimeoutSec = 3;
@@ -165,9 +163,6 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
         s.httpPort = static_cast<int>(storedInt(store, "HTTP_PORT"));
         s.apiKey = store.get("API_KEY");
         s.detectorId = store.get("DETECTOR_ID");
-        s.streamUser = store.get("STREAM_USER");
-        s.streamPass = store.get("STREAM_PASS");
-        s.streamPort = static_cast<int>(storedInt(store, "STREAM_PORT"));
         s.streamMaxFps = static_cast<int>(storedInt(store, "STREAM_MAX_FPS"));
         s.streamJpegQuality = static_cast<int>(storedInt(store, "STREAM_JPEG_Q"));
         s.streamWriteTimeoutSec = static_cast<int>(storedInt(store, "STREAM_WR_TMO_S"));

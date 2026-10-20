@@ -105,9 +105,9 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    - `ESP32_CAM_TFLite_Person.ino`
    - `person_detect_model_data.cc`
    - `person_detect_model_data.h`
-   - `stream_logic.h`
    - `scene_logic.h`
    - `report_logic.h`
+   - `remote_log.h`
    - `ota_logic.h`
    - `ota.h`
    - `settings_logic.h`
@@ -136,8 +136,8 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    | `DARK_THRESH` | Average brightness (`0`–`255`) below which the picture counts as **dark** and detection is paused; `0` = darkness check off (see below) |
    | `MOTION_THRESH` | The model only runs after motion: summed pixel change between two frames at or above this value; `0` = motion check off (see below) |
    | `MOTION_HOLD_S` | Seconds detection stays on after the last motion, `0`–`3600` |
-   | `STREAM_ENABLED` | `1`: join Wi-Fi and serve the live view (see below); `0`: no Wi-Fi at all. With `0`, none of the settings below are asked for |
-   | `WIFI`, `SERVER_HOST`, `HTTP_PORT`, `API_KEY`, `DETECTOR_ID`, `STREAM_USER`, `STREAM_PASS`, `STREAM_PORT`, `STREAM_MAX_FPS`, `STREAM_JPEG_Q`, `STREAM_WR_TMO_S`, `ANN_HEARTBEAT`, `ANN_RETRY` | The live view — only asked for while `STREAM_ENABLED=1`; see the live-view section below |
+   | `STREAM_ENABLED` | `1`: join Wi-Fi and send the live view (picture + values) to the relay's dashboard (see below); `0`: no Wi-Fi at all. With `0`, none of the settings below are asked for |
+   | `WIFI`, `SERVER_HOST`, `HTTP_PORT`, `API_KEY`, `DETECTOR_ID`, `STREAM_MAX_FPS`, `STREAM_JPEG_Q`, `STREAM_WR_TMO_S`, `ANN_HEARTBEAT`, `ANN_RETRY` | The live view — only asked for while `STREAM_ENABLED=1`; see the live-view section below |
 
    Everything about typing settings works as for the recorder (step 1, item 5): `;` / `:` / `\` inside a value are written `\;` / `\:` / `\\`; a line with any mistake stores nothing; every boot prints the settings (secrets masked) and waits **5 seconds** for a `y` to change them; `SHOW`, `SHOW <KEY>`, `EXPORT`, `ERASE`, `EXIT` work the same. Templates for `EXPORT` lines: `Arduino/templates/example.person.template.txt` (live view on) and `example.person-no-wifi.template.txt`. Settings survive uploading a new sketch and are wiped by **Erase All Flash Before Sketch Upload**.
 
@@ -186,46 +186,24 @@ Scene: active (brightness 120, motion 812) - detecting
 
 **Choosing the thresholds.** `40` / `300` / `10` in the templates are only starting points, they depend on your lens, the scene and the sensor's auto-exposure (a camera in a dim room raises its gain, which makes the picture noisier, so its "motion" in the dark is not zero). Set `PRINT_SCENE_READINGS` to `1` at the top of the `.ino`, flash, and watch `Brightness: … Motion: …` for every frame: note the brightness at night and in the dimmest light where you still want detection (put `DARK_THRESH` between the two), and the motion number of an empty still room versus someone walking through (put `MOTION_THRESH` well above the first and below the second). Set it back to `0` afterwards. The maximum possible motion value is 25500 (100 samples × 255).
 
-**Updating a board that is already configured:** the three settings are new, so such a board lists them as missing at boot and waits for them on the serial port — or, if its live-view settings are stored, fetches them from the relay's staged device settings as for any new setting (`DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10`). Use `0` for all three to keep the old behaviour.
+**Updating a board that is already configured:** (this is about `DARK_THRESH` / `MOTION_THRESH` / `MOTION_HOLD_S`, added in an earlier version) the three settings are new, so such a board lists them as missing at boot and waits for them on the serial port — or, if its live-view settings are stored, fetches them from the relay's staged device settings as for any new setting (`DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10`). Use `0` for all three to keep the old behaviour.
 
-### Optional: watch the detector from a browser (live view)
+### Optional: see the detector under its camera on the dashboard (live view — aim and tune per camera)
 
-To install and aim a detector you want to see what it sees. With `STREAM_ENABLED=1`, the detector also joins Wi-Fi, serves its picture as a **password-protected video stream**, and tells the relay which IP address it got. Nothing is registered or handled anywhere: the relay just writes a line to its log.
+To aim a detector and to choose `DARK_THRESH`, `MOTION_THRESH`, `DETECT_THRESH` and `CLEAR_THRESH` per camera you want to see what the detector sees and what its numbers do. With `STREAM_ENABLED=1` the detector joins Wi-Fi and keeps **one connection open to the relay**, pushing its 96×96 grayscale picture and the numbers behind its alarm line up it (a few times a second). The relay hands them to the dashboard, which shows them **under the camera's picture** — from anywhere the dashboard is reachable, to any number of viewers.
 
-1. Enter the live-view settings (type `y` within the 5-second window at boot, then send a line like this one — the full example is `Arduino/templates/example.person.template.txt`):
+The detector connects **out**, so it can sit behind a NAT router or on another network than the Pi; it serves nothing, so there is no port, user or password to set up for a viewer. The connection is an HTTP *Upgrade* on the relay's normal HTTP port (`HTTP_PORT`), authenticated with the same `API_KEY` as everything else — **no extra setting and no extra port**. (This replaces an earlier version in which the detector served its own password-protected stream on the LAN and, separately, POSTed a picture to the relay four times a second.)
 
-   ```
-   STREAM_ENABLED=1;WIFI=extender-1-ssid:password1:extender-2-ssid:password2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=<camKey from the Pi's config.js>;DETECTOR_ID=detector-1;STREAM_USER=viewer;STREAM_PASS=<a real password>;STREAM_PORT=80;STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30
-   ```
-
-   `WIFI` takes any number of networks (like the recorder, it takes the strongest one in range and fails over); `SERVER_HOST` / `HTTP_PORT` / `API_KEY` are the same values as the recorder's; `DETECTOR_ID` must **not** be any recorder's `CAMERA_ID`; `STREAM_USER` is letters, digits and `_ . -`; the stream is **not served** with an empty password or the placeholder `change-me` (it is refused when typed). `STREAM_PORT` `80` means no port in the address; `STREAM_MAX_FPS` / `STREAM_JPEG_Q` tune the picture; `STREAM_WR_TMO_S` drops a viewer that stops reading after that many seconds; `ANN_HEARTBEAT` repeats the address in the relay's log every that many seconds, `ANN_RETRY` waits that long after the relay could not be reached.
-2. Flash as above. In the Serial Monitor you'll see `Wi-Fi connected to '…', IP …` and `Announced http://… to the relay`.
-3. On the Pi, find the address — the detector announces it at every (re)connection and whenever its network or IP changes, and repeats it every 10 minutes:
+1. **Enter the live-view settings** (type `y` within the 5-second window at boot, then send a line like this one — the full example is `Arduino/templates/example.person.template.txt`):
 
    ```
-   grep "human detector stream" nodejs/camera-relay/logs/camera.log | tail -n 3
+   STREAM_ENABLED=1;WIFI=extender-1-ssid:password1:extender-2-ssid:password2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=<camKey from the Pi's config.js>;DETECTOR_ID=detector-1;STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30
    ```
 
-   ```
-   … INFO  cam2-human@192.168.4.37 …: human detector stream available at http://192.168.4.37/ — user 'viewer' (WiFi 'extender-2', IP 192.168.4.37, -61 dBm, up 42s)
-   ```
-
-4. Open that address in a browser from a device on the same network and log in. You get the picture enlarged; `http://<ip>/stream` is the raw MJPEG stream. What you see is the 96×96 grayscale frame the model itself gets, which is what you need to aim the camera.
-
-Things worth knowing:
-
-- **Detection never waits for it.** All networking runs in its own task on the other CPU core; with no Wi-Fi in range, or the relay unreachable, the detector works exactly as without a live view (the announcement is retried every 30 s).
-- **One viewer at a time**; opening the stream again replaces the previous viewer.
-- **It is plain HTTP**, so the password crosses your LAN unencrypted. Use one you don't reuse, and never forward this port to the internet. (The picture is only reachable from the network the detector is on; it does not go through the relay.)
-- **Power:** Wi-Fi transmissions draw current spikes. A detector with a marginal supply can brown out with the live view on (the relay's log would show `BROWNOUT`-style restarts on recorders; here, watch the Serial Monitor). Set `STREAM_ENABLED=0` for such a unit once it is installed (it then starts no Wi-Fi at all).
-
-### Optional: see the detector under its camera on the dashboard (aim and tune per camera)
-
-With the live view on (`STREAM_ENABLED=1`) the detector also **reports to the relay** about four times a second (`POST /detector/<DETECTOR_ID>`, same `API_KEY`, no extra settings): its 96×96 grayscale picture and the numbers behind its alarm line. The dashboard shows them **under the camera's picture**, so you can aim the detector and choose `DARK_THRESH`, `MOTION_THRESH`, `DETECT_THRESH` and `CLEAR_THRESH` per camera while watching the effect — from anywhere the dashboard is reachable, not only the LAN (unlike the detector's own password-protected stream, the relay serves any number of viewers).
-
-1. **Pair the detector with its camera.** Open the camera's **⚙ SETTINGS** page on the dashboard, type the detector's `DETECTOR_ID` into *Person detector id* and press **SAVE DETECTOR** (or add `'detector' => 'detector-1'` to that camera in `config.php`, see `example.config.php`). One detector belongs to one camera, and its id must not be a camera id. The pairing lives only in `config.php`: no board is touched, re-pairing needs no reflashing.
-2. Flash the new detector firmware (`report_logic.h` is a new file of the sketch) and copy the new `nodejs/camera-relay/` and `php/cameras/` to the Pi. A relay older than this one answers `404` to the report; the detector then prints `Could not report to the relay (HTTP 404)` and retries every few seconds.
-3. On the camera's card, below its picture, you now see on the left the detector's picture (enlarged, pixelated) and on the right:
+   `WIFI` takes any number of networks (like the recorder, it takes the strongest one in range and fails over); `SERVER_HOST` / `HTTP_PORT` / `API_KEY` are the same values as the recorder's. **`DETECTOR_ID` must equal the detector id you pair with the camera in step 2** (it is how the dashboard finds this board's picture) and must **not** be any recorder's `CAMERA_ID`. `STREAM_MAX_FPS` / `STREAM_JPEG_Q` tune the picture; `STREAM_WR_TMO_S` drops the connection and opens it again if the relay accepts nothing for that many seconds; `ANN_HEARTBEAT` is how often the detector writes a status line (Wi-Fi, signal, memory, the state of the link) to the relay's log, `ANN_RETRY` the longest wait between attempts to reach the relay (the first retries come after 2, 4, 8 … seconds, so a relay restart costs seconds, not half a minute).
+2. **Pair the detector with its camera.** Open the camera's **⚙ SETTINGS** page on the dashboard, type the detector's `DETECTOR_ID` into *Person detector id* and press **SAVE DETECTOR** (or add `'detector' => 'detector-1'` to that camera in `config.php`, see `example.config.php`). One detector belongs to one camera, and its id must not be a camera id. The pairing lives only in `config.php`: no board is touched, re-pairing needs no reflashing.
+3. **Update the Pi first, then the board.** Copy the new `nodejs/camera-relay/` over the old one and **restart the relay process** (copying files does not change the running one), run `deploy.sh` for the dashboard, then flash the detector (or `./ota-deploy.sh detector`; `remote_log.h` is a new file of the sketch). A board that is already configured needs **no new setting** — `STREAM_USER`, `STREAM_PASS` and `STREAM_PORT` of the old version are simply ignored if they are still stored in its flash. A detector running the new firmware against an old relay says so in its log (see below); an old detector against the new relay gets a plain `404`.
+4. On the camera's card, below its picture, you now see on the left the detector's picture (enlarged, pixelated) and on the right:
 
    | Line | What it shows |
    |---|---|
@@ -235,9 +213,53 @@ With the live view on (`STREAM_ENABLED=1`) the detector also **reports to the re
    | **HUMAN** | The model's person score, a **red mark at `DETECT_THRESH`** (person flagged at or above it) and an **amber mark at `CLEAR_THRESH`** (cleared below it). `model paused` while the gate is dark or still |
    | **ALARM PIN** | `HIGH` / `LOW`: the level the detector drives on its `PERSON_GPIO` — the wire into that camera's alarm input |
 
-   The numbers update every second; `DETECTOR OFFLINE` covers the picture if the relay has had no report for 5 seconds. Changing a threshold is still done on the detector (serial console, as above) — the dashboard shows the effect, it does not edit the detector's settings.
+   Below them a small line says where the board is and how it is doing: its IP, Wi-Fi signal, uptime, free memory, the firmware it runs (did the update reach it?) and any reconnects or JPEG failures it counted. The numbers update every second. Changing a threshold is still done on the detector (serial console, as above) — the dashboard shows the effect, it does not edit the detector's settings.
 
-Things worth knowing: a detector is **not** a recording camera — it is never recorded, never appears in the recording counts and is not touched by "alarm all"; and the report goes over plain HTTP on your LAN like the camera frames do, carrying no password (only the camera key, as the recorder's frames do).
+Things worth knowing:
+
+- **Detection never waits for it.** All networking runs in its own tasks on the other CPU core; with no Wi-Fi in range, or the relay unreachable, the detector works exactly as without a live view and keeps trying in the background.
+- A detector is **not** a recording camera — it is never recorded, never appears in the recording counts and is not touched by "alarm all".
+- **It is plain HTTP** on your LAN like the camera frames are; the only secret on the wire is the camera key, as with the recorder.
+- **Power:** Wi-Fi transmissions draw current spikes. A detector with a marginal supply can brown out with the live view on; the relay's log then shows `booted after an abnormal restart: BROWNOUT` for it. Set `STREAM_ENABLED=0` for such a unit once it is installed (it then starts no Wi-Fi at all, and cannot report to the relay or be updated over the air).
+
+**When the detector does not show up — where to look.** Every step reports what it finds, so you should not need a serial cable:
+
+- **On the dashboard** the picture says *why* it is not showing instead of a bare "offline":
+
+  | The picture says | It means | Do this |
+  |---|---|---|
+  | `the relay has not heard from a detector called 'X' since it started` (and, if some other detector *is* heard: `it does hear 'Y', which no camera here is paired with: is DETECTOR_ID on the board or the pairing mistyped?`) | No board has ever connected under that id | Compare `DETECTOR_ID` on the board (`SHOW` on the serial console) with the id paired in the camera's ⚙ SETTINGS. Otherwise the board is off, not on Wi-Fi or cannot reach the relay: read its lines in the relay log (below) |
+  | `last heard 42 s ago; its connection ended (…)` | It was there and went away; the reason is the connection's | Power or Wi-Fi of the board; its own log lines (below) say more |
+  | `the numbers arrive but there is no picture: the board reports N failed JPEG encodings` | The model runs but the board cannot encode its picture (out of memory) | Lower `STREAM_JPEG_Q`; check the board's free-heap line |
+  | `NO DATA` … `The dashboard cannot reach the relay` | The dashboard's PHP cannot talk to the relay | The relay is down, or `relay_url` in `config.php` is wrong; the web server's error log has the reason |
+
+  Opening `detector-stream.php?cam=<camera id>` in a browser shows the same text, and the web server's error log gets a `camdash: detector-stream.php: …` line (at most one per detector every 5 minutes).
+- **In the relay's log** every step of every detector is recorded, under the `DETECTOR_ID` — both what the relay saw (`[relay]`) and what the board itself reports (the same remote logging the recorders use, with no settings: always on with the live view, `INFO` and above):
+
+  ```
+  grep detector-1 nodejs/camera-relay/logs/camera.log | tail -n 30
+  ```
+
+  | A line like | Means |
+  |---|---|
+  | `[relay]: detector connected` / `detector is sending pictures (the first: 1256 bytes of JPEG)` | The uplink is up and the board has a working camera and JPEG encoder |
+  | `[relay]: refused a detector uplink request from 192.168.4.37 … HTTP 401 — wrong key` | `API_KEY` on the board is not the relay's `camKey` |
+  | `[relay]: the dashboard asked for the picture of detector 'X' but there is none: …` | The dashboard asked and there was nothing; the line says why and lists the detectors the relay does know |
+  | `[relay]: detector disconnected after 3m 5s, 1234 pictures received (…)` | How long it was up and why it ended: `the board closed the connection`, `the connection was reset: the board lost power or Wi-Fi, or restarted`, `no data for 60s` |
+  | `[relay]: the detector has been connected for 10s and reports its numbers, but has sent no picture` | JPEG encoding fails on the board |
+  | `booted after an abnormal restart: BROWNOUT / PANIC / watchdog` | Why the board restarted: a power dip, a crash, a hang |
+  | `Wi-Fi still not connected: NO_SSID_AVAIL (none of the WIFI networks is in range)` | The board cannot join Wi-Fi: wrong `WIFI`, or out of range (`CONNECT_FAILED`: wrong password) |
+  | `could not reach the relay at 192.168.4.9:8080: …` | Wi-Fi is fine but the relay is not reachable: wrong `SERVER_HOST` / `HTTP_PORT`, relay down, firewall (it retries after 2, 4, 8 … `ANN_RETRY` seconds) |
+  | `the relay at … refused the uplink (HTTP 401): wrong key …` | As above, seen from the board |
+  | `the relay at … answered HTTP 404 … probably a relay older than this firmware` / `hung up without answering the uplink request` | The relay on the Pi is older than the detector firmware: update `nodejs/camera-relay` and restart it |
+  | `the relay at … did not answer like a web server (…)` / `did not answer the uplink request within 5 s` | `HTTP_PORT` is not the relay's HTTP port |
+  | `lost the connection to the relay at … after 5m 07s (…); it had carried 1234 pictures — reconnecting` | A running link ended and how; it reconnects by itself |
+  | `could not encode the 96x96 frame as JPEG` | Low on memory on the board |
+  | `Camera init failed: 0x105 (ESP_ERR_NOT_FOUND) - camera not detected: …` / `TFLite initialization FAILED - the detector cannot work, restarting in 30 s` | The board could not start its camera or model: it says so, waits 30 s so the line can reach the relay, and restarts (it used to wait forever, looking fine on a serial cable while doing nothing) |
+  | `alarm line GPIO 13 HIGH: person detected` / `LOW: clear` | When the alarm line moved |
+  | `heartbeat: …` | Every `ANN_HEARTBEAT` seconds: Wi-Fi, signal, memory, the state of the link |
+
+  If the board's own lines never appear but the relay's `[relay]` lines do, the uplink works and only the log delivery does not; if neither appears, read the serial console: everything above is printed there too.
 
 > This sketch is otherwise intentionally minimal (Serial + a GPIO pin): it does not start recordings itself. If you want it to trigger a recording on another camera later, `PERSON_GPIO` here could feed into that other board's `ALARM_GPIO_PIN` from step 1 — but that's a hardware/software integration you'd be adding yourself, not something this sketch does today.
 
@@ -490,7 +512,7 @@ The recorder no longer has a `config.h`: its settings are stored in the board's 
 
 ## Upgrading a person detector to flash-stored settings
 
-The person detector no longer has a `config.h` either. After reflashing it asks for its settings over serial (section 2, step 7) — keep the old `config.h` values at hand. Renamed settings (flash keys are limited to 15 characters): `PERSON_DETECTED_GPIO` → `PERSON_GPIO`, `PERSON_DETECTION_THRESHOLD` → `DETECT_THRESH`, `PERSON_CLEAR_THRESHOLD` → `CLEAR_THRESH`, `DETECTION_LOOP_DELAY_MS` → `LOOP_DELAY_MS`, `STREAM_PASSWORD` → `STREAM_PASS`, `STREAM_JPEG_QUALITY` → `STREAM_JPEG_Q`, `STREAM_WRITE_TIMEOUT_S` → `STREAM_WR_TMO_S`, `ANNOUNCE_HEARTBEAT_SECONDS` → `ANN_HEARTBEAT`, `ANNOUNCE_RETRY_SECONDS` → `ANN_RETRY`. `TENSOR_ARENA_SIZE`, `PRINT_DETECTION_SCORES` and `PRINT_STARTUP_INFO` are now developer switches at the top of the `.ino`. The old `config.h` can be deleted.
+The person detector no longer has a `config.h` either. After reflashing it asks for its settings over serial (section 2, step 7) — keep the old `config.h` values at hand. Renamed settings (flash keys are limited to 15 characters): `PERSON_DETECTED_GPIO` → `PERSON_GPIO`, `PERSON_DETECTION_THRESHOLD` → `DETECT_THRESH`, `PERSON_CLEAR_THRESHOLD` → `CLEAR_THRESH`, `DETECTION_LOOP_DELAY_MS` → `LOOP_DELAY_MS`, `STREAM_JPEG_QUALITY` → `STREAM_JPEG_Q`, `STREAM_WRITE_TIMEOUT_S` → `STREAM_WR_TMO_S`, `ANNOUNCE_HEARTBEAT_SECONDS` → `ANN_HEARTBEAT`, `ANNOUNCE_RETRY_SECONDS` → `ANN_RETRY`. (The stream's user, password and port of the older LAN-server version no longer exist: the live view is pushed to the relay, see the live-view section.) `TENSOR_ARENA_SIZE`, `PRINT_DETECTION_SCORES` and `PRINT_STARTUP_INFO` are now developer switches at the top of the `.ino`. The old `config.h` can be deleted.
 
 ---
 
@@ -560,7 +582,7 @@ It writes the git revision into `fw_version.h` (gitignored, removed afterwards),
   2. then `./ota-deploy.sh`.
 
   Staged first, the update is invisible (one extra restart of ~45 s). Staged afterwards, the camera restarts about once a minute until you stage it. A release that **changes the Wi-Fi / server / port / API key / id settings, renames a setting, or tightens a range** so that a stored value becomes invalid still needs a cable.
-- A detector with `STREAM_ENABLED=0` never joins Wi-Fi and **cannot be updated over the air**. While someone watches a detector's live view its network task is busy streaming, so its update check waits for the viewer to leave.
+- A detector with `STREAM_ENABLED=0` never joins Wi-Fi and **cannot be updated over the air**. A detector with the live view on checks for an update from its network task between two pictures, so an update does not need anyone to stop watching.
 - The camera keeps streaming during a download; the flash writes briefly stall the other CPU core. A weak power supply can brown out during the ~1.5 MB download — if a board resets mid-update, check its supply.
 - A build that boots but can't reach the relay (bad release) can't be rescued over the air: **recover by cable** (USB upload of a good build; settings are kept).
 - Plain HTTP on the relay's port for now, with the same trust as the rest of the camera traffic: anyone on the LAN who has the camera key could fetch the firmware, and the control key travels in clear to publish it. There is no signing, rollback or boot-loop protection yet; HTTPS is the planned next step.
@@ -683,7 +705,7 @@ tail -f nodejs/camera-relay/logs/camera.log
 
 Cost on the camera: about 9 KB of RAM (a fixed block for 16 queued entries, no memory churn), and the HTTP delivery runs in a separate background task so it never delays the video stream.
 
-Notes: the **recorder** firmware reports everything above. The person-detector board (`ESP32_CAM_TFLite_Person`) reports only its live-view address line (see section 2) — no queue, no retries beyond that line, no error reports — and has no network connection at all with `STREAM_ENABLED 0`. Remote logging needs the new relay and new firmware; against an older relay the camera simply gives up after its retries and keeps printing to serial.
+Notes: the **recorder** and the **person detector** (`ESP32_CAM_TFLite_Person`) both report to this log with the same code. The detector has **no `LOG_*` settings**: with the live view on (`STREAM_ENABLED=1`) it always reports `INFO` and above, with a fixed retry (30 s, 3 times, then serial only until its connection to the relay is up again); with `STREAM_ENABLED=0` it has no network connection at all. What it reports is listed in the live-view section of section 2. Remote logging needs the new relay and new firmware; against an older relay the camera simply gives up after its retries and keeps printing to serial.
 
 ## Troubleshooting: an alarm doesn't record, or a stream goes dark
 

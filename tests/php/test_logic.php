@@ -617,14 +617,108 @@ camtest_test('setCameraDetector: refuses a bad id, a taken detector, a camera id
     camtest_assert_equal(CamLogic::setCameraDetector($cams, 'nope', 'det-2')['ok'], false);
 });
 
-camtest_test('buildDetectorStatus: only paired cameras, offline when the relay has not heard of the detector', function () {
+// A detector as the relay's GET /detectors describes it (detectorstate.buildView()).
+function camtest_relay_view(array $over = []): array
+{
+    return array_merge([
+        'state' => 'online', 'online' => true, 'hasPicture' => true, 'connected' => true,
+        'ageMs' => 120, 'pictureAgeMs' => 130, 'connectedForMs' => 5000, 'ip' => '192.168.4.37',
+        'lastDisconnect' => null, 'message' => '', 'report' => ['scene' => ['brightness' => 90]],
+    ], $over);
+}
+
+camtest_test('buildDetectorStatus: only paired cameras; carries the relay\'s state, flags, ip and message', function () {
     $cams = [['id' => 'cam1', 'detector' => 'det-1'], ['id' => 'cam2'], ['id' => 'cam3', 'detector' => 'det-3']];
-    $relay = ['det-1' => ['online' => true, 'ageMs' => 120, 'report' => ['scene' => ['brightness' => 90]]]];
+    $relay = ['det-1' => camtest_relay_view(), 'det-3' => camtest_relay_view([
+        'state' => 'offline', 'online' => false, 'hasPicture' => false, 'connected' => false, 'ageMs' => 9000, 'pictureAgeMs' => 9000,
+        'ip' => '192.168.4.38', 'message' => 'last heard 9 s ago; its connection ended (the board closed the connection)',
+    ])];
     $s = CamLogic::buildDetectorStatus($cams, $relay);
     camtest_assert_equal(array_keys($s), ['cam1', 'cam3']);
-    camtest_assert_equal($s['cam1'], ['detector' => 'det-1', 'online' => true, 'ageMs' => 120, 'report' => ['scene' => ['brightness' => 90]]]);
-    camtest_assert_equal($s['cam3'], ['detector' => 'det-3', 'online' => false, 'ageMs' => null, 'report' => null]);
+    camtest_assert_equal($s['cam1'], [
+        'detector' => 'det-1', 'state' => 'online', 'online' => true, 'hasPicture' => true, 'connected' => true,
+        'ageMs' => 120, 'pictureAgeMs' => 130, 'ip' => '192.168.4.37', 'message' => '', 'report' => ['scene' => ['brightness' => 90]],
+    ]);
+    camtest_assert_equal($s['cam3']['state'], 'offline');
+    camtest_assert_equal($s['cam3']['online'], false);
+    camtest_assert_equal($s['cam3']['message'], 'last heard 9 s ago; its connection ended (the board closed the connection)');
     camtest_assert_equal(CamLogic::buildDetectorStatus([], $relay), []);
+});
+
+camtest_test('buildDetectorStatus: numbers without a picture stay "online" but are flagged no-picture', function () {
+    $s = CamLogic::buildDetectorStatus(
+        [['id' => 'cam1', 'detector' => 'det-1']],
+        ['det-1' => camtest_relay_view(['state' => 'no-picture', 'hasPicture' => false, 'message' => 'the numbers arrive but there is no picture'])]
+    );
+    camtest_assert_equal([$s['cam1']['state'], $s['cam1']['online'], $s['cam1']['hasPicture']], ['no-picture', true, false]);
+    camtest_assert_equal($s['cam1']['message'], 'the numbers arrive but there is no picture');
+});
+
+camtest_test('buildDetectorStatus: a detector the relay has never heard from is "never", with a reason', function () {
+    $s = CamLogic::buildDetectorStatus([['id' => 'cam1', 'detector' => 'det-1']], []);
+    camtest_assert_equal($s['cam1']['state'], 'never');
+    camtest_assert_equal([$s['cam1']['online'], $s['cam1']['hasPicture'], $s['cam1']['connected']], [false, false, false]);
+    camtest_assert_equal([$s['cam1']['ageMs'], $s['cam1']['ip'], $s['cam1']['report']], [null, null, null]);
+    camtest_assert_true(strpos($s['cam1']['message'], "has not heard from a detector called 'det-1'") !== false, $s['cam1']['message']);
+    camtest_assert_true(strpos($s['cam1']['message'], 'SERVER_HOST') !== false, 'with nothing else to go on it says what to check on the board');
+});
+
+camtest_test('buildDetectorStatus: a detector the relay hears but no camera is paired with points at a mistyped id', function () {
+    $cams = [['id' => 'cam1', 'detector' => 'detector-1'], ['id' => 'cam2', 'detector' => 'det-2']];
+    $relay = ['det-2' => camtest_relay_view(), 'detector1' => camtest_relay_view(), 'abc' => camtest_relay_view()];
+    $s = CamLogic::buildDetectorStatus($cams, $relay);
+    camtest_assert_true(strpos($s['cam1']['message'], "does hear 'abc', 'detector1', which no camera here is paired with") !== false, $s['cam1']['message']);
+    camtest_assert_true(strpos($s['cam1']['message'], 'mistyped') !== false);
+    camtest_assert_true(strpos($s['cam1']['message'], "'det-2'") === false, 'a detector that IS paired (with another camera) is not offered as the likely culprit');
+    camtest_assert_equal($s['cam2']['state'], 'online');
+});
+
+camtest_test('buildDetectorStatus: copes with a relay that predates state / hasPicture / message', function () {
+    $s = CamLogic::buildDetectorStatus(
+        [['id' => 'cam1', 'detector' => 'det-1'], ['id' => 'cam2', 'detector' => 'det-2']],
+        ['det-1' => ['online' => true, 'ageMs' => 5, 'report' => ['x' => 1]], 'det-2' => ['online' => false, 'ageMs' => 99999, 'report' => null]]
+    );
+    camtest_assert_equal([$s['cam1']['state'], $s['cam1']['hasPicture'], $s['cam1']['message']], ['online', true, '']);
+    camtest_assert_equal([$s['cam2']['state'], $s['cam2']['hasPicture']], ['offline', false]);
+});
+
+camtest_test('buildDetectorStatus: odd values from the relay are not trusted', function () {
+    $s = CamLogic::buildDetectorStatus(
+        [['id' => 'cam1', 'detector' => 'det-1']],
+        ['det-1' => camtest_relay_view(['message' => ['not', 'text'], 'ip' => 5, 'state' => 7])]
+    );
+    camtest_assert_equal([$s['cam1']['message'], $s['cam1']['ip'], $s['cam1']['state']], ['', null, 'online']);
+});
+
+camtest_test('detectorStreamFailure: relay unreachable is a 502 that carries PHP\'s reason', function () {
+    $f = CamLogic::detectorStreamFailure(null, '', 'Front Door', 'Connection refused');
+    camtest_assert_equal($f['status'], 502);
+    camtest_assert_equal($f['message'], 'Could not reach the relay to get the picture of the person detector of Front Door (Connection refused)');
+    camtest_assert_equal(CamLogic::detectorStreamFailure(null, '', 'Front Door')['message'], 'Could not reach the relay to get the picture of the person detector of Front Door');
+});
+
+camtest_test('detectorStreamFailure: the relay\'s own reason is passed on, with its 404 / 503', function () {
+    $never = CamLogic::detectorStreamFailure(404, '{"error":"no detector called \'d1\' has connected to the relay since it started","state":"never"}', 'Front Door');
+    camtest_assert_equal($never['status'], 404);
+    camtest_assert_equal($never['message'], "The person detector of Front Door: no detector called 'd1' has connected to the relay since it started");
+    $off = CamLogic::detectorStreamFailure(503, '{"error":"detector \'d1\' has no picture to show: last heard 9 s ago"}', 'Back');
+    camtest_assert_equal([$off['status'], $off['message']], [503, "The person detector of Back: detector 'd1' has no picture to show: last heard 9 s ago"]);
+});
+
+camtest_test('detectorStreamFailure: an answer that is not the relay\'s own is a 502 that suspects an old relay', function () {
+    $html = CamLogic::detectorStreamFailure(404, '<!DOCTYPE html><pre>Cannot GET /detector/d1/stream</pre>', 'Front Door');
+    camtest_assert_equal($html['status'], 502);
+    camtest_assert_true(strpos($html['message'], 'HTTP 404 without a reason') !== false && strpos($html['message'], 'older than this dashboard') !== false, $html['message']);
+    camtest_assert_equal(CamLogic::detectorStreamFailure(500, '', 'X')['status'], 502);
+    camtest_assert_equal(CamLogic::detectorStreamFailure(400, '{"error":"invalid detector id"}', 'X')['status'], 502, 'only 404 and 503 are passed on as they are');
+    camtest_assert_equal(CamLogic::detectorStreamFailure(503, '{"error":7}', 'X')['status'], 502, 'a reason that is not text is no reason');
+});
+
+camtest_test('logDue: at most once per period, and a clock that went backwards does not silence it', function () {
+    camtest_assert_true(CamLogic::logDue(null, 1000, 300));
+    camtest_assert_true(!CamLogic::logDue(1000, 1299, 300));
+    camtest_assert_true(CamLogic::logDue(1000, 1300, 300));
+    camtest_assert_true(CamLogic::logDue(5000, 1000, 300), 'now earlier than the last write');
 });
 
 exit(camtest_summarize());

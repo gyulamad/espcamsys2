@@ -331,10 +331,13 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   .det-pic { position: relative; flex: 0 0 auto; width: 192px; height: 192px; background: #000; border: 1px solid var(--border); }
   .det-pic img { width: 100%; height: 100%; display: block; image-rendering: pixelated; object-fit: contain; }
   .det-pic .det-off {
-    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    padding: 10px; overflow-y: auto; text-align: center;
     background: rgba(6,8,16,.85); color: var(--muted); font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
   }
+  .det-pic .det-off .det-off-why { font-size: .55rem; letter-spacing: 0; line-height: 1.35; }
   .det-row.offline .det-off { display: flex; }
+  .det-row.stale .det-vals { opacity: .45; }  /* the numbers are the last ones received, not live */
   .det-vals { flex: 1 1 200px; min-width: 200px; display: flex; flex-direction: column; gap: 7px; font-family: var(--mono); font-size: .65rem; }
   .det-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .det-line .k { color: var(--muted); letter-spacing: .06em; }
@@ -570,8 +573,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
         <div class="det-pic">
           <img id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
                data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>"
-               onerror="onDetectorImgError('<?= $camId ?>')">
-          <div class="det-off">DETECTOR OFFLINE</div>
+               onload="this.dataset.failed=''" onerror="onDetectorImgError('<?= $camId ?>')">
+          <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
           <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span></div>
@@ -591,6 +594,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
             <div class="det-sub" id="detpersonsub-<?= $camId ?>"></div>
           </div>
           <div class="det-line"><span class="k" id="detpinlabel-<?= $camId ?>">ALARM PIN</span><span class="det-chip" id="detpin-<?= $camId ?>">–</span></div>
+          <div class="det-sub" id="detinfo-<?= $camId ?>"></div>
         </div>
       </div>
       <?php endif; ?>
@@ -703,8 +707,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     if (hidden) {
       // Restore
       img.dataset.hidden = '0';
-      const di = document.getElementById('detimg-' + id);
-      if (di) di.src = di.dataset.src + '&_=' + Date.now();
+      if (document.getElementById('detimg-' + id)) reconnectDetectorImg(id);
       btn.textContent = '✕ HIDE';
       btn.classList.remove('danger');
       reloadStream(id);
@@ -1267,11 +1270,13 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     }
   }
   // ── Person detector rows (cameras with a 'detector' in config.php) ──
-  // The detector reports its 96x96 grayscale picture and the numbers behind its alarm line to
-  // the relay. The picture is a normal MJPEG <img>; the numbers are polled about once a second
-  // so you can aim the detector and tune DARK_THRESH / MOTION_THRESH / DETECT_THRESH /
-  // CLEAR_THRESH per camera and SEE the effect: a bar per value, a red mark at the threshold
-  // the value has to cross, and the alarm pin level the detector is driving.
+  // The detector keeps one connection open to the relay and pushes its 96x96 grayscale picture and
+  // the numbers behind its alarm line up it (it may sit behind a NAT router, so nothing connects to
+  // it). The picture is a normal MJPEG <img>; the numbers are polled about once a second so you can
+  // aim the detector and tune DARK_THRESH / MOTION_THRESH / DETECT_THRESH / CLEAR_THRESH per camera
+  // and SEE the effect: a bar per value, a red mark at the threshold the value has to cross, and the
+  // alarm pin level the detector is driving. When the detector is not showing, the picture says WHY
+  // (the relay works it out: never connected, connection lost, no picture, ...).
   const DETECTOR_POLL_MS = 1000;
   const detEl = (k, id) => document.getElementById('det' + k + '-' + id);
   const setW = (e, frac) => { e.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%'; };
@@ -1279,13 +1284,44 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     if (frac === null) { e.style.display = 'none'; return; }
     e.style.display = ''; e.style.left = 'calc(' + Math.max(0, Math.min(1, frac)) * 100 + '% - 1px)';
   }
+  function fmtUptime(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + ' s';
+    const m = Math.floor(s / 60);
+    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+  }
+
+  // What is printed over the picture while it is not showing: a title and, below it, the reason.
+  function setDetectorOverlay(id, title, why) {
+    detEl('title', id).textContent = title || '';
+    detEl('why', id).textContent = why || '';
+    detEl('off', id).title = why || '';
+  }
+
+  // Nothing could be learned about the detector this round (the dashboard lost the relay, say).
+  function renderDetectorProblem(id, title, why) {
+    const row = document.getElementById('det-' + id);
+    if (!row) return;
+    row.classList.add('offline', 'stale');
+    setDetectorOverlay(id, title, why);
+  }
 
   function renderDetector(id, d) {
     const row = document.getElementById('det-' + id);
     if (!row) return;
     const r = d && d.report;
     const online = !!(d && d.online && r);
-    row.classList.toggle('offline', !online);
+    const showing = online && !!d.hasPicture;
+    row.classList.toggle('offline', !showing);
+    row.classList.toggle('stale', !online);
+    if (showing) {
+      setDetectorOverlay(id, '', '');
+      reconnectDetectorImgIfFailed(id);   // the picture is available again: don't wait for the retry timer
+    } else if (!d) {
+      setDetectorOverlay(id, 'NO DATA', 'the dashboard got no answer about this detector');
+    } else {
+      setDetectorOverlay(id, d.state === 'no-picture' ? 'NO PICTURE' : 'DETECTOR OFFLINE', d.message || '');
+    }
     if (!r) return;   // never heard from: keep the dashes
     const sc = r.scene, pe = r.person;
 
@@ -1326,31 +1362,70 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     const pin = detEl('pin', id);
     pin.textContent = r.gpio.high ? 'HIGH' : 'LOW';
     pin.className = 'det-chip ' + (r.gpio.high ? 'high' : 'low');
+
+    // The board itself, for tracking down trouble: where it is, how strong its Wi-Fi, how long it has run,
+    // its memory, which firmware it runs (did the update reach it?), and the trouble it counted.
+    const info = [];
+    if (r.ip) info.push(r.ip);
+    if (r.rssi !== null && r.rssi !== undefined) info.push(r.rssi + ' dBm');
+    if (r.uptimeMs !== null && r.uptimeMs !== undefined) info.push('up ' + fmtUptime(r.uptimeMs));
+    const lk = r.link || {};
+    if (lk.heap !== null && lk.heap !== undefined) info.push(Math.round(lk.heap / 1024) + ' KB free');
+    if (lk.reconnects) info.push(lk.reconnects + ' reconnects');
+    if (lk.jpegFails) info.push(lk.jpegFails + ' JPEG failures');
+    if (r.fw) info.push('fw ' + r.fw);
+    detEl('info', id).textContent = info.join(' · ');
   }
 
   let detectorsPolling = false;
+  let detectorPollFailures = 0;
   async function pollDetectors() {
     if (detectorsPolling || document.hidden) return;
     detectorsPolling = true;
     try {
       const res = await fetch('detector-status.php', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = await res.json();
-      if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) return;
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* not JSON */ }
+      if (!res.ok || !data || typeof data !== 'object' || Array.isArray(data) || data.error) {
+        throw new Error((data && data.error) || ('the dashboard got HTTP ' + res.status));
+      }
+      detectorPollFailures = 0;
       document.querySelectorAll('.det-row').forEach(row => renderDetector(row.dataset.cam, data[row.dataset.cam]));
     } catch (e) {
-      // relay unreachable this round — the next poll tries again
+      // One failed round is a blip; two in a row mean the numbers on screen are no longer live — say so.
+      detectorPollFailures += 1;
+      if (detectorPollFailures >= 2) {
+        const why = String((e && e.message) || e);
+        document.querySelectorAll('.det-row').forEach(row => renderDetectorProblem(row.dataset.cam, 'NO DATA', why));
+      }
     } finally {
       detectorsPolling = false;
     }
   }
+
+  // The picture stream: the relay answers at once (frames, or an error saying why there are none), so a
+  // detector that is offline just makes this fail quickly and retry every few seconds.
+  const detImgTimers = {};
+  function reconnectDetectorImg(id) {
+    clearTimeout(detImgTimers[id]);
+    delete detImgTimers[id];
+    const img = document.getElementById('detimg-' + id);
+    const cam = document.getElementById('img-' + id);
+    if (!img || document.hidden || (cam && cam.dataset.hidden === '1')) return;
+    img.dataset.failed = '';
+    img.dataset.lastTry = String(Date.now());
+    img.src = img.dataset.src + '&_=' + Date.now();
+  }
+  function reconnectDetectorImgIfFailed(id) {
+    const img = document.getElementById('detimg-' + id);
+    // not more than once every 2 s, so a stream the relay keeps refusing is not hammered at the poll rate
+    if (img && img.dataset.failed === '1' && Date.now() - Number(img.dataset.lastTry || 0) > 2000) reconnectDetectorImg(id);
+  }
   function onDetectorImgError(id) {
-    // The relay's stream ended (relay restart, network blip): reconnect shortly.
-    setTimeout(() => {
-      const img = document.getElementById('detimg-' + id);
-      const cam = document.getElementById('img-' + id);
-      if (img && !document.hidden && !(cam && cam.dataset.hidden === '1')) img.src = img.dataset.src + '&_=' + Date.now();
-    }, 5000);
+    const img = document.getElementById('detimg-' + id);
+    if (img) img.dataset.failed = '1';
+    clearTimeout(detImgTimers[id]);
+    detImgTimers[id] = setTimeout(() => reconnectDetectorImg(id), 5000);
   }
   if (document.querySelector('.det-row')) {
     pollDetectors();
