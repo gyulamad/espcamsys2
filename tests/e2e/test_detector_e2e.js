@@ -102,6 +102,28 @@ function openStream(id) {
   });
 }
 
+// Ends a connection the way a power cut or a crashed router does: with a TCP RST, not a FIN. Node 16.17+
+// has socket.resetAndDestroy(), but this has to run on older Node too, so it uses what works everywhere:
+// a socket closed while it still holds UNREAD incoming data makes the kernel send an RST. The socket is
+// paused before it connects so Node never reads the relay's answer (the 101) out of the kernel; the relay
+// has written it by the time it logs the connection, which is what is waited for (not a fixed delay, so a
+// slow machine cannot close the socket before the answer is there and turn the RST into a plain FIN).
+async function resetLikeAPowerCut(id) {
+  const s = fake.net.connect(PORT, '127.0.0.1');
+  s.pause();
+  s.on('error', () => { /* the reset may be reported here too */ });
+  await new Promise((resolve, reject) => {
+    s.on('connect', resolve);
+    s.on('close', () => reject(new Error('the relay closed the connection')));
+    setTimeout(() => reject(new Error('no connection to the relay')), 3000).unref();
+  });
+  s.write(`GET /detector/${id}/uplink HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: ${dl.PROTOCOL}\r\nX-Api-Key: ${KEY}\r\n\r\n`);
+  const accepted = await waitFor(() => new RegExp(`${id}@127\\.0\\.0\\.1 \\[relay\\]: detector connected`).test(readLog()), 4000);
+  if (!accepted) throw new Error('the relay never accepted the connection');
+  await sleep(100);
+  s.destroy();
+}
+
 async function main() {
   if (!fs.existsSync(path.join(RELAY_DIR, 'node_modules', 'express'))) {
     check('relay dependencies are installed', false, 'run "npm install" in nodejs/camera-relay');
@@ -275,8 +297,7 @@ async function main() {
     junk.socket.write(Buffer.from([0x7f, 0xff, 0xff, 0xff, 1, 2, 3]));
     check('a stream whose length prefix is absurd is dropped and logged', !!(await waitFor(() => junk.socket.destroyed, 2000)) &&
       !!(await waitFor(() => /WARN  e2e-junk@127\.0\.0\.1 \[relay\]: dropped the connection: .* \(a corrupt or out-of-step stream/.test(readLog()), 2000)), readLog().slice(-600));
-    const rst = await uplink('e2e-reset');
-    rst.socket.resetAndDestroy();
+    await resetLikeAPowerCut('e2e-reset');
     check('a connection reset mid-stream is logged and does not take the relay down',
       !!(await waitFor(() => /e2e-reset@127\.0\.0\.1 \[relay\]: detector disconnected after \d+s, 0 pictures received \(the connection was reset/.test(readLog()), 2000)) && (await request('GET', '/detectors')).status === 200, readLog().slice(-600));
 

@@ -63,4 +63,4 @@ function heartbeat(sock, make, everyMs = 400) {
   return () => clearInterval(t);
 }
 
-module.exports = { JPEG, JPEG2, status, wire, uplink, heartbeat };
+module.exports = { JPEG, JPEG2, status, wire, uplink, heartbeat, net };

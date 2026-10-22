@@ -37,6 +37,16 @@
 #include <errno.h>
 #include <lwip/sockets.h>  // recv(): notice a connection the relay has closed (see WifiUplinkEnv::isOpen())
 
+// The TFLite Micro headers and the model. ALL #includes belong up here, before the first function of
+// the file: Arduino generates a prototype for every function and inserts them before the first one,
+// so a function whose signature uses a type from a header included LATER (dequantize() takes a
+// TfLiteTensor) does not compile. tests/node/test_sketch_includes.js checks this.
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/schema/schema_generated.h"
+
+#include "person_detect_model_data.h"
+
 // ── Live view (optional) ────────────────────────────────────────────────
 // With the STREAM_ENABLED setting on, the detector also joins Wi-Fi (any of
 // several networks, like the recorder) and keeps ONE connection open to the
@@ -249,12 +259,6 @@ void remoteLogRelayReachable() {
   if (resumed) RLOG_INFO("remote logging resumed — the relay is reachable again");
 }
 // ── end of remote logging glue ──────────────────────────────────────────
-
-#include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/schema/schema_generated.h"
-
-#include "person_detect_model_data.h"
 
 
 // ============================================================
