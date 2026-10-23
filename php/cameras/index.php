@@ -577,7 +577,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
           <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
-          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span></div>
+          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
           <div>
             <div class="det-line"><span class="k">BRIGHTNESS</span><span class="v" id="detbright-<?= $camId ?>">–</span></div>
             <div class="det-bar"><div class="fill" id="detbrightbar-<?= $camId ?>"></div><div class="mark" id="detbrightmark-<?= $camId ?>" style="display:none"></div></div>

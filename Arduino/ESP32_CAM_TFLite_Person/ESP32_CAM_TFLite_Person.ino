@@ -339,41 +339,6 @@ void configureScene()
 
 
 // ============================================================
-// Internal-RAM diagnostics and early Wi-Fi bring-up
-// ============================================================
-
-// The Wi-Fi driver needs ~50-70 KB of INTERNAL RAM (some of it DMA-capable) to initialise. The camera
-// driver, the tensor arena and the task stacks all draw from the same pool, so Wi-Fi must get its share
-// FIRST. This line shows where the internal RAM goes.
-static void logInternalHeap(const char *stage)
-{
-    RLOG_INFO(
-        "internal RAM after %s: free %u, largest block %u, lowest ever %u",
-        stage,
-        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
-    );
-}
-
-// Brings the Wi-Fi driver up before the camera and the model take their memory. Only the driver is
-// initialised here; connecting is still done by the network task. Returns false if the driver could not
-// start (the network task retries later, with a back-off).
-static bool earlyWifiInit()
-{
-    if (!WiFi.mode(WIFI_STA))
-    {
-        RLOG_ERROR("Wi-Fi driver could not start even before the camera - internal RAM is too low");
-        return false;
-    }
-
-    WiFi.setSleep(false);   // modem-sleep adds latency to every request
-
-    return true;
-}
-
-
-// ============================================================
 // Camera initialization
 // ============================================================
 
@@ -737,6 +702,29 @@ void setupSettings() {
 }
 // ── end of settings glue ────────────────────────────────────────────────
 
+// ── Settings changed from the dashboard ─────────────────────────────────
+// The dashboard's CALIBRATE page queues a change on the relay (DARK_THRESH, MOTION_THRESH,
+// DETECT_THRESH ...); this asks for it every half minute (from the network task), stores it, reports
+// back and restarts so the new values start clean. Every rule - all or nothing, the settings that
+// connect the board to the relay stay serial-only - is in settings_logic.h (unit-tested);
+// settings_sync.h is only the HTTP part. Names only in the log: values can be passwords.
+#include "settings_sync.h"
+
+static PreferencesStore* g_syncStore = nullptr;
+static SettingsSync* g_sync = nullptr;
+
+void settingsSyncTick() {
+  if (!g_sync) {   // created on first use, in the task that uses it
+    g_syncStore = new PreferencesStore();
+    g_sync = new SettingsSync(esp32cam_settings::PERSON_SCHEMA, *g_syncStore, "detector", esp32cam_settings::personLockedKeys());
+  }
+  if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId)) {
+    RLOG_INFO("settings changed from the dashboard (%s) - restarting to apply them", g_sync->changedNames().c_str());
+    restartBoard();
+  }
+}
+// ── end of settings changed from the dashboard ──────────────────────────
+
 // Which Arduino-ESP32 core and ESP-IDF built this firmware — the first thing to
 // know when something behaves differently from another board.
 void printCoreVersion() {
@@ -746,6 +734,41 @@ void printCoreVersion() {
 #else
   Serial.printf("Arduino-ESP32 core 1.x (very old), ESP-IDF %s\n", ESP.getSdkVersion());
 #endif
+}
+
+
+// ============================================================
+// Internal-RAM diagnostics and early Wi-Fi bring-up
+// ============================================================
+
+// The Wi-Fi driver needs ~50-70 KB of INTERNAL RAM (some of it DMA-capable) to initialise. The camera
+// driver, the tensor arena and the task stacks all draw from the same pool, so Wi-Fi must get its share
+// FIRST. This line shows where the internal RAM goes.
+static void logInternalHeap(const char *stage)
+{
+    RLOG_INFO(
+        "internal RAM after %s: free %u, largest block %u, lowest ever %u",
+        stage,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+    );
+}
+
+// Brings the Wi-Fi driver up before the camera and the model take their memory. Only the driver is
+// initialised here; connecting is still done by the network task. Returns false if the driver could not
+// start (the network task retries later, with a back-off).
+static bool earlyWifiInit()
+{
+    if (!WiFi.mode(WIFI_STA))
+    {
+        RLOG_ERROR("Wi-Fi driver could not start even before the camera - internal RAM is too low");
+        return false;
+    }
+
+    WiFi.setSleep(false);   // modem-sleep adds latency to every request
+
+    return true;
 }
 
 
@@ -1172,6 +1195,9 @@ void networkTask(void *)
         {
             // Firmware update check (does nothing unless one is due).
             otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId);
+
+            // Calibration changes queued from the dashboard (does nothing unless an ask is due).
+            settingsSyncTick();
         }
 
         session.step(up);

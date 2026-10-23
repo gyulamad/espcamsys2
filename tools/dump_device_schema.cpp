@@ -1,6 +1,8 @@
-// dump_device_schema.cpp — prints the Recorder's settings table (settings_schema.h) as JSON, so the
-// dashboard's camera settings page knows every setting's kind, limits, conditions and help text
-// without a second copy of the table to keep in sync. The output goes (wrapped by tools/gen_device_schema.sh) into php/cameras/lib/device_schema.php.
+// dump_device_schema.cpp — prints one sketch's settings table (settings_schema.h) as a JSON member, so
+// the dashboard's settings pages know every setting's kind, limits, conditions and help text without a
+// second copy of the table to keep in sync. Built twice by tools/gen_device_schema.sh: as is, it dumps
+// the Recorder ("recorder"); with -DDUMP_DETECTOR it dumps the person detector ("detector"). The two
+// members are joined (and wrapped) into php/cameras/lib/device_schema.php.
 //
 //   tools/gen_device_schema.sh            rewrite that file
 //   tests (run_tests.sh) fail when it is out of date.
@@ -8,7 +10,17 @@
 #include <cstdio>
 #include <string>
 
+#ifdef DUMP_DETECTOR
+#include "../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
+#define DUMP_NAME "detector"
+#define DUMP_SCHEMA PERSON_SCHEMA
+#define DUMP_LOCKED() personLockedKeys()
+#else
 #include "../Arduino/ESP32_CAM_Recorder/settings_schema.h"
+#define DUMP_NAME "recorder"
+#define DUMP_SCHEMA RECORDER_SCHEMA
+#define DUMP_LOCKED() recorderLockedKeys()
+#endif
 
 using namespace esp32cam_settings;
 
@@ -47,16 +59,16 @@ static const char* condName(Cond c) {
 }
 
 int main() {
-    std::vector<std::string> locked = recorderLockedKeys();
-    std::printf("{\n  \"recorder\": {\n    \"keys\": [\n");
-    for (size_t i = 0; i < RECORDER_SCHEMA.count; ++i) {
-        const KeyDef& d = RECORDER_SCHEMA.keys[i];
+    std::vector<std::string> locked = DUMP_LOCKED();
+    std::printf("  \"" DUMP_NAME "\": {\n    \"keys\": [\n");
+    for (size_t i = 0; i < DUMP_SCHEMA.count; ++i) {
+        const KeyDef& d = DUMP_SCHEMA.keys[i];
         bool isLocked = false;
         for (size_t j = 0; j < locked.size(); ++j) if (locked[j] == d.name) isLocked = true;
         std::printf("      {\"name\": %s, \"kind\": \"%s\", \"min\": %s, \"max\": %s, \"cond\": \"%s\", \"condKey\": %s, \"condValue\": %s, \"locked\": %s, \"help\": %s}%s\n",
                     jstr(d.name).c_str(), kindName(d.kind), numText(d.min).c_str(), numText(d.max).c_str(), condName(d.cond),
                     jstr(d.condKey).c_str(), jstr(d.condValue).c_str(), isLocked ? "true" : "false", jstr(d.help).c_str(),
-                    i + 1 < RECORDER_SCHEMA.count ? "," : "");
+                    i + 1 < DUMP_SCHEMA.count ? "," : "");
     }
     // The pins the firmware accepts for a Pin / PinOrOff setting (isUsableGpio), so the dashboard never
     // keeps its own copy of the list.
@@ -67,6 +79,6 @@ int main() {
         std::printf("%s%d", first ? "" : ", ", pin);
         first = false;
     }
-    std::printf("]\n  }\n}\n");
+    std::printf("]\n  }\n");
     return 0;
 }

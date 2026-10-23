@@ -189,7 +189,7 @@ else
     # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) and the remote
     # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
     # must be identical too.
-    for shared in ota_logic.h ota.h remote_log.h; do
+    for shared in ota_logic.h ota.h remote_log.h settings_sync.h; do
         echo "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
@@ -249,6 +249,11 @@ else
     sed -n '/Settings changed from the dashboard ──/,/end of settings changed from the dashboard/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/sync_glue.inc"
     run_cpp_test test_settings_sync_sketch -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
+
+    # ...and the person detector's, likewise (its CALIBRATE page uses the same mechanism).
+    sed -n '/Settings changed from the dashboard ──/,/end of settings changed from the dashboard/p' \
+        "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/person_sync_glue.inc"
+    run_cpp_test test_person_settings_sync_sketch -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person"
 
     # ...and the person detector's, likewise.
     sed -n '/Settings glue ──/,/end of settings glue/p' \

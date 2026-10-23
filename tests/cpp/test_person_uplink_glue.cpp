@@ -75,13 +75,16 @@ static std::string g_ssid = "extender-1";
 static std::string g_localIp = "192.168.4.37";
 static bool g_dnsWorks = true;
 static std::vector<std::string> g_dnsAsked;
+static bool g_wifiDriverOk = true;             // false: the driver cannot start (no internal RAM)
+static int g_wifiMode = 0;                     // WIFI_OFF until mode(WIFI_STA) succeeds
 static std::vector<std::string> g_wifiCalls;      // "mode:1", "sleep:0", ...
 struct FakeWiFi {
     int status() { return g_wifiStatus; }
     int RSSI() { return g_rssi; }
     String SSID() { return String(g_ssid.c_str()); }
     IPAddress localIP() { return IPAddress(g_localIp.c_str()); }
-    void mode(int m) { g_wifiCalls.push_back("mode:" + std::to_string(m)); }
+    bool mode(int m) { g_wifiCalls.push_back("mode:" + std::to_string(m)); if (g_wifiDriverOk) g_wifiMode = m; return g_wifiDriverOk; }
+    int getMode() { return g_wifiMode; }
     void setSleep(bool on) { g_wifiCalls.push_back(std::string("sleep:") + (on ? "1" : "0")); }
     int hostByName(const char* host, IPAddress& out) { g_dnsAsked.push_back(host); if (!g_dnsWorks) return 0; out = IPAddress("192.168.4.9"); return 1; }
 } WiFi;
@@ -158,6 +161,14 @@ struct OtaCall { std::string host; int port; std::string key; std::string id; };
 static std::vector<OtaCall> g_otaCalls;
 struct FakeOta { void tick(const std::string& host, int port, const std::string& key, const std::string& id) { g_otaCalls.push_back({host, port, key, id}); } };
 static FakeOta otaUpdater;
+
+// -- the settings changed from the dashboard (settings_sync.h in the sketch) --
+static int g_settingsSyncTicks = 0;
+static void settingsSyncTick() { g_settingsSyncTicks++; }
+
+// -- the internal-RAM line the sketch logs (defined outside the extracted blocks) --
+static std::vector<std::string> g_heapStages;
+static void logInternalHeap(const char* stage) { g_heapStages.push_back(stage); }
 
 // -- the remote log's delivery task is started from startNetwork() --
 static int g_remoteLogStarts = 0;
@@ -310,7 +321,7 @@ static void resetWorld() {
     g_rlog.clear(); g_reachableCalls = 0;
     g_mutexCreateFails = false; g_mutexesCreated = g_mutexesDeleted = 0; g_tasks.clear(); g_taskCreateFails = false;
     g_taskDelays.clear(); g_stopAfterDelays = -1; g_onTaskDelay = nullptr; g_mallocFails = false;
-    g_wifiCalls.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear();
+    g_wifiCalls.clear(); g_wifiDriverOk = true; g_wifiMode = 0; g_settingsSyncTicks = 0; g_heapStages.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear();
     g_remoteLogStarts = 0; g_resetReason = 1; g_psram = true;
     reportFrame = nullptr; reportMutex = nullptr;
     g_cfg = PersonSettings();
@@ -741,6 +752,32 @@ TEST(the_network_task_puts_wi_fi_in_station_mode_without_sleep_and_adds_every_ne
     TEST_ASSERT(g_wifiCalls.size() == 2 && g_wifiCalls[0] == "mode:1" && g_wifiCalls[1] == "sleep:0", "station mode, modem-sleep off (it adds latency to every request)");
     TEST_ASSERT(wifiMulti.aps.size() == 2 && wifiMulti.aps[0].first == "extender-1" && wifiMulti.aps[0].second == "pw1" &&
                 wifiMulti.aps[1].first == "extender-2" && wifiMulti.aps[1].second == "pw2", "both WIFI networks, with their passwords, in order");
+}
+
+TEST(once_wi_fi_is_up_the_task_asks_for_dashboard_settings_changes_every_pass) {
+    resetWorld(); typicalLiveViewSettings();
+    runNetworkTask(3);
+    TEST_ASSERT_EQ(g_settingsSyncTicks, 3, "settingsSyncTick() runs on every pass while the network is up (it does nothing until an ask is due)");
+}
+
+TEST(without_a_network_the_task_does_not_ask_for_settings_changes) {
+    resetWorld(); typicalLiveViewSettings();
+    g_wifiRunScript.push_back(6);                       // WL_DISCONNECTED
+    runNetworkTask(5);
+    TEST_ASSERT_EQ(g_settingsSyncTicks, 0, "no relay to ask");
+}
+
+TEST(a_wi_fi_driver_that_cannot_start_is_retried_quietly_every_five_seconds) {
+    resetWorld(); typicalLiveViewSettings();
+    g_wifiDriverOk = false;                             // the driver never comes up: no internal RAM
+    runNetworkTask(3);
+    bool all5000 = g_taskDelays.size() == 3;
+    for (size_t i = 0; i < g_taskDelays.size(); i++) if (g_taskDelays[i] != 5000) all5000 = false;
+    TEST_ASSERT(all5000, "a 5 s pause per pass instead of hammering the driver every 500 ms");
+    TEST_ASSERT_EQ(g_wifiRunCalls, (size_t)0, "WiFiMulti is not asked to connect through a driver that is not there");
+    TEST_ASSERT(logged('W', "Wi-Fi driver cannot start"), "one clear warning says why");
+    TEST_ASSERT(!g_heapStages.empty() && g_heapStages[0] == "a failed Wi-Fi init", "and the internal-RAM numbers are logged with it");
+    TEST_ASSERT(g_otaCalls.empty() && g_settingsSyncTicks == 0, "nothing else runs without a network");
 }
 
 TEST(while_wi_fi_is_down_the_task_waits_half_a_second_and_does_nothing_else) {

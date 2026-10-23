@@ -134,6 +134,17 @@ inline std::vector<std::string> personRemotePrerequisites() {
     return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
 }
 
+// The settings the dashboard may NOT change (they stay serial-only): everything that connects the
+// board to the relay, the alarm pin, and the switch for the live view itself. A wrong value in one of
+// them would leave a board nobody can reach without a USB cable (or drive the wrong pin). What is left -
+// the thresholds and the stream tuning - is what the dashboard's CALIBRATE page edits. Keep in sync
+// with the schema above.
+inline std::vector<std::string> personLockedKeys() {
+    static const char* const keys[] = { "PERSON_GPIO", "STREAM_ENABLED", "WIFI", "SERVER_HOST", "HTTP_PORT",
+                                        "API_KEY", "DETECTOR_ID" };
+    return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
+}
+
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.
 inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::string& err) {

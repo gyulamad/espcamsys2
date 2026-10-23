@@ -513,6 +513,48 @@ camtest_test('the generated schema is complete and the connection settings are t
     camtest_assert_equal($locked, ['API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'PUSH_PORT', 'SERVER_HOST', 'WIFI']);
 });
 
+function camtest_detector_reported(): array {
+    return ['PERSON_GPIO' => '13', 'DETECT_THRESH' => '0.6', 'CLEAR_THRESH' => '0.5', 'LOOP_DELAY_MS' => '10', 'DARK_THRESH' => '40',
+            'MOTION_THRESH' => '300', 'MOTION_HOLD_S' => '10', 'STREAM_ENABLED' => '1', 'WIFI' => 'net:********', 'SERVER_HOST' => '192.168.1.117',
+            'HTTP_PORT' => '8080', 'API_KEY' => '********', 'DETECTOR_ID' => 'detector-1', 'STREAM_MAX_FPS' => '10', 'STREAM_JPEG_Q' => '80',
+            'STREAM_WR_TMO_S' => '3', 'ANN_HEARTBEAT' => '600', 'ANN_RETRY' => '30'];
+}
+function camtest_detector_change(array $values): array {
+    $sc = camtest_schema()['detector'];
+    return CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], camtest_detector_reported(), $values);
+}
+
+camtest_test('the generated schema has the person detector: the calibration settings are open, the connection and the alarm pin are locked', function () {
+    $sc = camtest_schema()['detector'];
+    $locked = [];
+    $names = [];
+    foreach ($sc['keys'] as $k) {
+        $names[] = $k['name'];
+        if ($k['locked']) { $locked[] = $k['name']; }
+    }
+    sort($locked);
+    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'STREAM_ENABLED', 'WIFI']);
+    foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
+        camtest_assert_true(in_array($n, $names, true), $n);
+    }
+});
+
+camtest_test('buildDeviceChange for a detector: a calibration change becomes a line naming only what changed', function () {
+    $r = camtest_detector_change(['DARK_THRESH' => '55', 'MOTION_THRESH' => '300', 'MOTION_HOLD_S' => '20']);
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['changed'], ['DARK_THRESH', 'MOTION_HOLD_S']);
+    camtest_assert_equal($r['line'], 'DARK_THRESH=55;MOTION_HOLD_S=20');
+});
+
+camtest_test('buildDeviceChange for a detector: the connection settings and the alarm pin cannot be changed, a value out of range is refused', function () {
+    foreach (['SERVER_HOST' => '10.0.0.1', 'DETECTOR_ID' => 'x', 'PERSON_GPIO' => '4', 'STREAM_ENABLED' => '0', 'API_KEY' => 'k'] as $name => $value) {
+        $r = camtest_detector_change([$name => $value]);
+        camtest_assert_equal($r['ok'], false, $name);
+    }
+    camtest_assert_equal(camtest_detector_change(['DARK_THRESH' => '300'])['ok'], false);   // brightness is 0-255
+    camtest_assert_equal(camtest_detector_change(['NOPE' => '1'])['ok'], false);
+});
+
 camtest_test('buildDeviceChange: a valid change becomes a line naming only what changed', function () {
     $r = camtest_change(camtest_reported(), ['LOG_HEARTBEAT' => '900', 'PUSH_GAP_MUL' => '1.5', 'LOG_ECHO' => 'off']);
     camtest_assert_equal($r['ok'], true);

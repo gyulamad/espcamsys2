@@ -2,11 +2,11 @@
 // camera-settings.php — one camera's own settings (the ones stored in the board's flash): what the
 // board reports it holds, and queueing a change for it. The page is camera-settings-page.php.
 //
-//   GET  camera-settings.php?cam=ID
-//        -> { camera: {id, name, icon}, keys: [ {name, kind, min, max, cond, condKey, condValue, locked, help} ],
+//   GET  camera-settings.php?cam=ID[&type=detector]
+//        -> { camera: {id, name, icon, detector, type, deviceId}, keys: [ {name, kind, min, max, cond, condKey, condValue, locked, help} ],
 //             gpios: [...], state: { reported: {settings, at} | null, pending: {rev, keys, at, by} | null,
 //                                    last: {rev, result, message, at} | null, now } }
-//   POST camera-settings.php?cam=ID   body: { "values": { "LOG_HEARTBEAT": "900", ... } }   queue a change
+//   POST camera-settings.php?cam=ID[&type=detector]   body: { "values": { "LOG_HEARTBEAT": "900", ... } }   queue a change
 //                                     or    { "cancel": true }                               withdraw the queued one
 //        -> { ok, queued, changed: [names], message }
 //
@@ -15,6 +15,10 @@
 // anything unsafe), stores it, restarts, and reports back — the page shows "applied" or the reason.
 // Nothing here talks to the board directly, and the settings that connect it to the relay (Wi-Fi,
 // server, ports, key, id) are never changeable this way.
+//
+// &type=detector is the same for the person detector paired with the camera ('detector' in config.php):
+// its thresholds (DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ...) are calibrated from the
+// dashboard's CALIBRATE page. The detector is addressed by its DETECTOR_ID on the relay.
 
 require_once __DIR__ . '/auth.php';      // dashboard login; also defines $config
 require_once __DIR__ . '/lib/Logic.php';
@@ -47,10 +51,21 @@ $textHeaders = CamLogic::buildControlHeaders($key, $actor, true);
 if ($headers === null || $textHeaders === null) {
     json_fail(500, 'relay_control_key in config.php contains a line break');
 }
-$base = rtrim((string) ($config['relay_url'] ?? ''), '/') . '/device-settings/recorder/' . rawurlencode($camId);
+$type = isset($_GET['type']) && is_string($_GET['type']) ? $_GET['type'] : 'recorder';
+if ($type !== 'recorder' && $type !== 'detector') {
+    json_fail(400, 'type must be recorder or detector');
+}
+$deviceId = $camId;
+if ($type === 'detector') {
+    $deviceId = (string) (CamLogic::detectorIdOf($camera) ?? '');
+    if ($deviceId === '') {
+        json_fail(404, 'This camera has no person detector paired with it — set its detector id on the camera\'s SETTINGS page first');
+    }
+}
+$base = rtrim((string) ($config['relay_url'] ?? ''), '/') . '/device-settings/' . $type . '/' . rawurlencode($deviceId);
 $schema = require __DIR__ . '/lib/device_schema.php';
-$keys = $schema['recorder']['keys'];
-$gpios = $schema['recorder']['gpios'];
+$keys = $schema[$type]['keys'];
+$gpios = $schema[$type]['gpios'];
 
 // The relay's state document for this camera, or an error response.
 function camera_state(string $base, string $headers): array
@@ -72,7 +87,7 @@ function camera_state(string $base, string $headers): array
 
 if ($method === 'GET') {
     echo json_encode([
-        'camera' => ['id' => (string) $camera['id'], 'name' => (string) ($camera['name'] ?? ''), 'icon' => (string) ($camera['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($camera) ?? '')],
+        'camera' => ['id' => (string) $camera['id'], 'name' => (string) ($camera['name'] ?? ''), 'icon' => (string) ($camera['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($camera) ?? ''), 'type' => $type, 'deviceId' => $deviceId],
         'keys' => $keys,
         'gpios' => $gpios,
         'state' => camera_state($base, $headers),
@@ -117,7 +132,7 @@ foreach ($input['values'] as $v) {
 
 $state = camera_state($base, $headers);
 if (empty($state['reported']['settings'])) {
-    json_fail(409, 'This camera has not reported its settings yet, so a change cannot be checked. It reports after it starts with the firmware that supports remote settings (publish it with ota-deploy.sh) and has reached the relay.');
+    json_fail(409, 'This ' . ($type === 'detector' ? 'detector' : 'camera') . ' has not reported its settings yet, so a change cannot be checked. It reports after it starts with the firmware that supports remote settings (publish it with ota-deploy.sh) and has reached the relay.');
 }
 $change = CamLogic::buildDeviceChange($keys, $gpios, $state['reported']['settings'], $input['values']);
 if (!$change['ok']) {

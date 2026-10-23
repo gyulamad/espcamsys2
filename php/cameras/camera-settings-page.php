@@ -1,5 +1,6 @@
 <?php
-// camera-settings-page.php?cam=ID — one camera's SETTINGS page: its dashboard entry (name, icon, remove)
+// camera-settings-page.php?cam=ID[&type=detector] — one camera's SETTINGS page (with &type=detector: the
+// CALIBRATE page of the person detector paired with that camera, same form, the detector's own settings): its dashboard entry (name, icon, remove)
 // and the settings stored in the board itself. The form is drawn from what camera-settings.php sends
 // (the firmware's own settings table), so a setting added to the firmware shows up here by itself.
 // Changes are queued on the relay; the board picks them up, applies them and restarts — see camera-settings.php.
@@ -62,13 +63,18 @@ require_once __DIR__ . '/auth.php';
 <header>
   <div>
     <h1>⚙ <span id="title">CAMERA</span></h1>
-    <p>Camera settings</p>
+    <p id="subtitle">Camera settings</p>
   </div>
   <a class="btn" href="index.php">← DASHBOARD</a>
 </header>
 
 <main>
   <div id="banners"></div>
+  <div class="kv" id="calib-help" hidden>Calibrating the person detector: keep the dashboard open next to this page and watch the detector's BRIGHTNESS, MOTION and HUMAN readings.
+DARK_THRESH: set it just below the brightness the picture has when it is too dark to see a person.
+MOTION_THRESH: set it above the motion value of a still scene and below what a person walking makes.
+DETECT_THRESH / CLEAR_THRESH: the HUMAN score that switches the alarm pin on / back off (CLEAR must not be higher than DETECT).
+Applying restarts the detector (about 10 seconds without a picture); then check the readings on the dashboard again.</div>
   <fieldset id="entry" hidden>
     <legend>On the dashboard</legend>
     <div class="inline">
@@ -99,7 +105,9 @@ require_once __DIR__ . '/auth.php';
 <script>
   const CAM = new URLSearchParams(location.search).get('cam') || '';
   const AJAX = { 'X-Requested-With': 'camdash' };
-  const API = 'camera-settings.php?cam=' + encodeURIComponent(CAM);
+  const TYPE = new URLSearchParams(location.search).get('type') === 'detector' ? 'detector' : 'recorder';
+  const WHO = TYPE === 'detector' ? 'detector' : 'camera';
+  const API = 'camera-settings.php?cam=' + encodeURIComponent(CAM) + (TYPE === 'detector' ? '&type=detector' : '');
   let keys = [], gpios = [], reported = null, camera = null, original = {}, pollTimer = null;
 
   const $ = (id) => document.getElementById(id);
@@ -134,24 +142,25 @@ require_once __DIR__ . '/auth.php';
   function render(data) {
     camera = data.camera; keys = data.keys; gpios = data.gpios;
     const st = data.state; reported = st.reported ? st.reported.settings : null;
-    $('title').textContent = camera.icon + ' ' + camera.name;
-    document.title = camera.name + ' settings — ESP32-CAM Dashboard';
-    $('entry').hidden = false; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id; $('e-detector').value = camera.detector || '';
+    $('title').textContent = camera.icon + ' ' + camera.name + (TYPE === 'detector' ? ' — detector' : '');
+    document.title = camera.name + (TYPE === 'detector' ? ' detector calibration' : ' settings') + ' — ESP32-CAM Dashboard';
+    if (TYPE === 'detector') { $('subtitle').textContent = 'Person detector calibration (' + camera.deviceId + ')'; $('calib-help').hidden = false; $('calib-help').style.whiteSpace = 'pre-line'; }
+    $('entry').hidden = TYPE === 'detector'; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id; $('e-detector').value = camera.detector || '';
     $('banners').textContent = ''; form.textContent = ''; original = {};
 
     const parts = [];
-    if (st.reported) parts.push('Settings reported by the camera ' + ago(st.now - st.reported.at));
-    if (st.pending) parts.push('QUEUED: ' + st.pending.keys.join(', ') + ' (queued ' + ago(st.now - st.pending.at) + ') — waiting for the camera to pick it up');
+    if (st.reported) parts.push('Settings reported by the ' + WHO + ' ' + ago(st.now - st.reported.at));
+    if (st.pending) parts.push('QUEUED: ' + st.pending.keys.join(', ') + ' (queued ' + ago(st.now - st.pending.at) + ') — waiting for the ' + WHO + ' to pick it up');
     if (st.last) parts.push('Last change: ' + st.last.result.toUpperCase() + (st.last.message ? ' — ' + st.last.message : '') + ' (' + ago(st.now - st.last.at) + ')');
     $('state').textContent = parts.join('\n'); $('state').style.whiteSpace = 'pre-line';
     cancelBtn.hidden = !st.pending;
 
     if (!reported) {
-      banner('This camera has not reported its settings yet. It reports once it runs the firmware that supports remote settings (publish it with ota-deploy.sh) and has reached the relay — then this page fills in. You can still rename it or remove it from the dashboard above.', 'warn');
+      banner('This ' + WHO + ' has not reported its settings yet. It reports once it runs the firmware that supports remote settings (' + (TYPE === 'detector' ? 'flash the detector with the current ESP32_CAM_TFLite_Person sketch, or publish it with ota-deploy.sh detector' : 'publish it with ota-deploy.sh') + ') and has reached the relay — then this page fills in.' + (TYPE === 'detector' ? '' : ' You can still rename it or remove it from the dashboard above.'), 'warn');
       saveBtn.disabled = revertBtn.disabled = true;
       return;
     }
-    const fs = el('fieldset', {}, el('legend', { textContent: 'Stored in the camera' }));
+    const fs = el('fieldset', {}, el('legend', { textContent: 'Stored in the ' + WHO }));
     for (const d of keys) {
       const id = 'f-' + d.name, fixed = isFixed(d);
       const value = reported[d.name];
@@ -164,7 +173,7 @@ require_once __DIR__ . '/auth.php';
       input.addEventListener('change', () => { refresh(); });
       const tags = el('span', { className: 'tags' });
       if (fixed) tags.append(el('span', { className: 'tag lock', textContent: 'serial only' }));
-      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name }), tags), input, el('div', { className: 'help', textContent: d.help + (fixed ? ' — connects the camera to the relay, so it can only be changed over the USB serial port.' : '') }));
+      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name }), tags), input, el('div', { className: 'help', textContent: d.help + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '') }));
       fs.append(row);
     }
     form.append(fs);
@@ -224,7 +233,7 @@ require_once __DIR__ . '/auth.php';
     clearTimeout(pollTimer);
     if (state && state.pending) pollTimer = setTimeout(async () => {
       const d = await load(true);
-      if (d && !d.state.pending && d.state.last) setStatus('Camera answered: ' + d.state.last.result + (d.state.last.message ? ' — ' + d.state.last.message : ''), d.state.last.result === 'applied' ? 'ok' : 'err');
+      if (d && !d.state.pending && d.state.last) setStatus((TYPE === 'detector' ? 'Detector' : 'Camera') + ' answered: ' + d.state.last.result + (d.state.last.message ? ' — ' + d.state.last.message : ''), d.state.last.result === 'applied' ? 'ok' : 'err');
     }, 3000);
   }
 
@@ -237,7 +246,11 @@ require_once __DIR__ . '/auth.php';
     const c = changes();
     if (c.missing) { setStatus(c.missing + ' is needed too — give it a value', 'err'); return; }
     if (!Object.keys(c.values).length) return;
-    if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + camera.name + '?\n\nThe camera restarts to apply it (its stream and any recording stop for a few seconds).')) return;
+    if (TYPE === 'detector') {
+      const v = currentValues(), d = parseFloat(v.DETECT_THRESH), cl = parseFloat(v.CLEAR_THRESH);
+      if (!isNaN(d) && !isNaN(cl) && cl > d) { setStatus('CLEAR_THRESH (' + v.CLEAR_THRESH + ') must not be higher than DETECT_THRESH (' + v.DETECT_THRESH + ')', 'err'); return; }
+    }
+    if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + (TYPE === 'detector' ? 'the detector of ' : '') + camera.name + '?\n\n' + (TYPE === 'detector' ? 'The detector restarts to apply it (its picture and alarm pin pause for about 10 seconds).' : 'The camera restarts to apply it (its stream and any recording stop for a few seconds).'))) return;
     saveBtn.disabled = revertBtn.disabled = true; setStatus('Queuing…', 'busy');
     try {
       const { res, data } = await post(API, { values: c.values });

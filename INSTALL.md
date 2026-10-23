@@ -112,6 +112,7 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    - `ota.h`
    - `settings_logic.h`
    - `settings_schema.h`
+   - `settings_sync.h`
 
    There is **no config file to edit any more**: like the recorder, the detector keeps its settings in the board's flash and you type them in over the serial port after the first flash (step 7).
 
@@ -213,7 +214,7 @@ The detector connects **out**, so it can sit behind a NAT router or on another n
    | **HUMAN** | The model's person score, a **red mark at `DETECT_THRESH`** (person flagged at or above it) and an **amber mark at `CLEAR_THRESH`** (cleared below it). `model paused` while the gate is dark or still |
    | **ALARM PIN** | `HIGH` / `LOW`: the level the detector drives on its `PERSON_GPIO` — the wire into that camera's alarm input |
 
-   Below them a small line says where the board is and how it is doing: its IP, Wi-Fi signal, uptime, free memory, the firmware it runs (did the update reach it?) and any reconnects or JPEG failures it counted. The numbers update every second. Changing a threshold is still done on the detector (serial console, as above) — the dashboard shows the effect, it does not edit the detector's settings.
+   Below them a small line says where the board is and how it is doing: its IP, Wi-Fi signal, uptime, free memory, the firmware it runs (did the update reach it?) and any reconnects or JPEG failures it counted. The numbers update every second. Thresholds are changed from the browser with the **⚙ CALIBRATE** button of the detector row (see "Calibrating the detector from the browser" below), or over the detector's serial console as above — the readings on the dashboard show the effect.
 
 Things worth knowing:
 
@@ -547,6 +548,16 @@ The relay log shows what happened, with the setting **names only** (values can b
 - It doesn't help when the settings needed to *reach* the relay are the ones missing or wrong (Wi-Fi, server, port, API key, id), nor a detector run without its live view (it has no Wi-Fi settings): those still need the serial port.
 - The line travels over plain HTTP together with the camera key, like everything else between the cameras and the relay. Don't stage anything you wouldn't be happy to have on your LAN.
 
+## Calibrating the detector from the browser
+
+A detector that is paired with a dashboard camera (`'detector' => 'detector-1'` in `config.php`, or set on its camera's SETTINGS page) shows a **⚙ CALIBRATE** button on its row. It opens a page with the detector's own settings, the same way a recorder's settings page works:
+
+- **What can be changed:** `DARK_THRESH`, `MOTION_THRESH`, `MOTION_HOLD_S`, `DETECT_THRESH`, `CLEAR_THRESH`, `LOOP_DELAY_MS` and the stream tuning (`STREAM_MAX_FPS`, `STREAM_JPEG_Q`, `STREAM_WR_TMO_S`, `ANN_*`). Everything that connects the detector to the relay (`WIFI`, `SERVER_HOST`, `HTTP_PORT`, `API_KEY`, `DETECTOR_ID`), the alarm pin (`PERSON_GPIO`) and `STREAM_ENABLED` can only be changed over the USB serial port.
+- **How it works:** *APPLY TO CAMERA* queues the change on the relay (`PUT /device-settings/detector/<DETECTOR_ID>/change`). The detector's network task asks for it about every 30 seconds, checks it again (it refuses anything unsafe, and a `CLEAR_THRESH` above `DETECT_THRESH`), stores it, **restarts** (about 10 seconds without a picture, and the alarm pin is released) and reports back. The page shows *applied* or the reason it was refused.
+- **Calibrating:** keep the dashboard open next to the page and watch the detector's BRIGHTNESS, MOTION and HUMAN readings. Put `DARK_THRESH` just below the brightness at which the picture is too dark to see a person, `MOTION_THRESH` above the motion value of a still scene and below that of a person walking, and `DETECT_THRESH` / `CLEAR_THRESH` where the HUMAN score separates a person from the empty scene.
+- **Needs:** the detector flashed with a firmware that includes `settings_sync.h` (it reports its settings to the relay when it boots; until then the page says it has not reported yet), `relay_control_key` in `config.php` (as for the recorder's settings page) and the relay's `controlKey`. A detector that has never reached the relay cannot be calibrated this way: use the serial console once.
+- After changing a `settings_schema.h`, run `tools/gen_device_schema.sh`; it now generates the dashboard's table for both sketches.
+
 ## Over-the-air firmware updates
 
 Recompile on one machine, run one script, and every camera updates itself. The cameras can't be reached from outside (NAT), so they **poll**: about once a minute each board asks the relay which firmware is current; if that differs from what it runs it downloads it, flashes it and reboots. The version is the **git revision** you built from, and "different" (not "newer") triggers the update, so checking out an older commit and deploying it **downgrades** the cameras the same way.
@@ -662,7 +673,7 @@ Every camera card on the dashboard has a **⚙ SETTINGS** button. Its page has t
 - Secrets never leave the board: the report carries the Wi-Fi *name* and a masked password, and the key as `********`.
 - The queue holds one change per camera; a newer one replaces it, and a queued one can be withdrawn on the page. The relay log shows setting **names only**.
 
-**Rolling it out.** Publish the new firmware to the cameras once with `ota-deploy.sh` (they pick it up over the air) and copy the new `nodejs/camera-relay/` to the Pi. After that no camera needs a cable for a settings change. When you change the firmware's settings table (`settings_schema.h`), regenerate the page's copy with `tools/gen_device_schema.sh` (`./run_tests.sh` fails if you forget). The person detector is not a dashboard camera and has no remote settings (its picture and values can be shown under a camera, though: see "see the detector under its camera on the dashboard" in step 2).
+**Rolling it out.** Publish the new firmware to the cameras once with `ota-deploy.sh` (they pick it up over the air) and copy the new `nodejs/camera-relay/` to the Pi. After that no camera needs a cable for a settings change. When you change the firmware's settings table (`settings_schema.h`), regenerate the page's copy with `tools/gen_device_schema.sh` (`./run_tests.sh` fails if you forget). The person detector is not a dashboard camera, but it has its own settings page for calibration: the **⚙ CALIBRATE** button on its row under the camera (see "Calibrating the detector from the browser" below).
 
 ## Logging: finding out what went wrong
 
