@@ -454,12 +454,32 @@ bool initCamera()
 
 bool initTFLite()
 {
-    // The official v1.3.3 example allocates the tensor arena
-    // from internal RAM.
-    tensor_arena = (uint8_t *)heap_caps_malloc(
-        TENSOR_ARENA_SIZE,
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
-    );
+    // The tensor arena (100 KB) is the biggest user of internal RAM. Internal RAM is also what Wi-Fi, the
+    // camera driver and the task stacks (16 KB network + 8 KB log) need, and there is not enough for all of
+    // them - with the arena inside, the live view could not start. So the arena goes to PSRAM (slower
+    // inference, but the board has 4 MB of it) and falls back to internal RAM only if there is no PSRAM.
+    // Build with -DTENSOR_ARENA_IN_PSRAM=0 (or change the default below) to put it back in internal RAM.
+#ifndef TENSOR_ARENA_IN_PSRAM
+#define TENSOR_ARENA_IN_PSRAM 1
+#endif
+
+    tensor_arena = nullptr;
+
+    if (TENSOR_ARENA_IN_PSRAM && psramFound())
+    {
+        tensor_arena = (uint8_t *)heap_caps_malloc(
+            TENSOR_ARENA_SIZE,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+    }
+
+    if (!tensor_arena)
+    {
+        tensor_arena = (uint8_t *)heap_caps_malloc(
+            TENSOR_ARENA_SIZE,
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+        );
+    }
 
     if (!tensor_arena)
     {
@@ -471,6 +491,12 @@ bool initTFLite()
 
         return false;
     }
+
+    RLOG_INFO(
+        "tensor arena: %d bytes in %s",
+        TENSOR_ARENA_SIZE,
+        esp_ptr_external_ram(tensor_arena) ? "PSRAM" : "internal RAM"
+    );
 
 #if PRINT_STARTUP_INFO
     Serial.printf(
