@@ -26,6 +26,17 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ESP32-CAM Dashboard</title>
+<script>
+  // The live <img> elements start loading while the HTML is still being parsed, and the relay answers
+  // with the last known frame at once, so an image can fire load/error BEFORE the main script at the
+  // bottom of the page has run (that script waits for the stylesheet below; a slow Google Fonts
+  // answer is enough). An event fired with no handler is never repeated, which left the card on
+  // "CONNECTING" for a stream that was in fact running, until RELOAD was pressed. So these stand-ins
+  // (defined before anything that can block) only remember what happened; the main script replays it.
+  window.__earlyStreamEvents = [];
+  function onStreamLoad(id)  { window.__earlyStreamEvents.push(['load', id]); }
+  function onStreamError(id) { window.__earlyStreamEvents.push(['error', id]); }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;500;700&display=swap" rel="stylesheet">
 <style>
@@ -629,14 +640,42 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 
   // ── Stream state callbacks ──
   function onStreamLoad(id) {
+    clearStreamWatchdog(id);
     setStatus(id, 'live', 'LIVE');
     hideOverlay(id);
   }
 
   function onStreamError(id) {
+    clearStreamWatchdog(id);
     setStatus(id, 'error', 'ERROR');
     showOverlay(id, '✕', 'STREAM ERROR', true);
   }
+
+  // A stream that is still "connecting" after this long is retried by itself (what pressing RELOAD
+  // does): a request that was never answered fires neither load nor error, so nothing else would
+  // ever notice it.
+  const STREAM_CONNECT_TIMEOUT_MS = 15000;
+  const streamWatchdogs = {};
+  function clearStreamWatchdog(id) {
+    clearTimeout(streamWatchdogs[id]);
+    delete streamWatchdogs[id];
+  }
+  function armStreamWatchdog(id) {
+    clearStreamWatchdog(id);
+    streamWatchdogs[id] = setTimeout(() => reloadStream(id), STREAM_CONNECT_TIMEOUT_MS);
+  }
+
+  // Events the images fired before this script was ready (see the stand-ins in <head>).
+  (function replayEarlyStreamEvents() {
+    const early = window.__earlyStreamEvents || [];
+    window.__earlyStreamEvents = [];
+    for (const [kind, id] of early) (kind === 'load' ? onStreamLoad : onStreamError)(id);
+    // Whatever is still connecting (no event yet) gets the watchdog too.
+    for (const id of getAllCameraIds()) {
+      const pill = document.getElementById('pill-' + id);
+      if (pill && pill.classList.contains('connecting')) armStreamWatchdog(id);
+    }
+  })();
 
   function setStatus(id, cls, label) {
     const pill = document.getElementById('pill-' + id);
@@ -669,6 +708,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 
     // Cache-bust so the browser actually re-requests
     img.src = img.dataset.src + '&_=' + Date.now();
+    armStreamWatchdog(id);
   }
 
   function reloadAll() {
@@ -714,6 +754,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     } else {
       // Hide — stop the stream by clearing src
       img.dataset.hidden = '1';
+      clearStreamWatchdog(id);
       img.src = '';
       const di = document.getElementById('detimg-' + id);
       if (di) di.src = '';
