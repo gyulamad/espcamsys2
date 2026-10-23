@@ -339,6 +339,14 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
   .det-bar .fill.warn { background: #f0a500; }
   .det-bar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent2); }
   .det-bar .mark.soft { background: #f0a500; }
+  /* The threshold sticks can be dragged (see the drag code below); the ::before is a wider grab area. */
+  .det-bar .mark { cursor: ew-resize; touch-action: none; }
+  .det-bar .mark::before { content: ''; position: absolute; top: -4px; bottom: -4px; left: -6px; right: -6px; }
+  .det-bar .mark.pending { box-shadow: 0 0 0 1px #fff, 0 0 6px 1px rgba(255,255,255,.6); }
+  .det-bar .mark.dragging { box-shadow: 0 0 0 1px #fff, 0 0 8px 2px rgba(255,255,255,.8); }
+  .det-bar.live-drag .fill { transition: none; }
+  .det-apply { display: none; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border: 1px dashed #f0a500; border-radius: 4px; padding: 5px 8px; color: #f0a500; }
+  .det-apply .det-apply-btns { display: flex; gap: 6px; }
   .det-sub { color: var(--muted); font-size: .58rem; }
   .det-chip { padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
   .det-chip.active { color: #2dd67b; border-color: #1a4d3a; }
@@ -562,6 +570,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
             <div class="det-bar"><div class="fill" id="detpersonbar-<?= $camId ?>"></div><div class="mark" id="detpersondetect-<?= $camId ?>" style="display:none"></div><div class="mark soft" id="detpersonclear-<?= $camId ?>" style="display:none"></div></div>
             <div class="det-sub" id="detpersonsub-<?= $camId ?>"></div>
           </div>
+          <div class="det-apply" id="detapply-<?= $camId ?>"><span id="detapplytxt-<?= $camId ?>"></span><span class="det-apply-btns"><button type="button" class="cam-btn" id="detapplybtn-<?= $camId ?>" onclick="applyDetectorThresholds('<?= $camId ?>')" title="Send the moved thresholds to the detector (it stores them and restarts)">APPLY</button><button type="button" class="cam-btn" onclick="resetDetectorThresholds('<?= $camId ?>')" title="Forget the moved thresholds">RESET</button></span></div>
           <div class="det-line"><span class="k" id="detpinlabel-<?= $camId ?>">ALARM PIN</span><span class="det-chip" id="detpin-<?= $camId ?>">–</span></div>
           <div class="det-sub" id="detinfo-<?= $camId ?>"></div>
         </div>
@@ -1282,6 +1291,181 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     detEl('off', id).title = why || '';
   }
 
+  // ── Dragging the threshold sticks ──
+  // Drag a stick along its bar to try a threshold: the stick, the "value/threshold" number and the text
+  // under the bar follow the mouse at once. Nothing is sent while dragging — the moved thresholds wait
+  // (white glow) until APPLY queues them for the detector in ONE change, because the detector stores a
+  // change and restarts. RESET forgets them. Once the detector reports the new values they are dropped.
+  const detLast = {};      // cam id -> last report received
+  const detLastD = {};     // cam id -> last detector status (what renderDetector was given)
+  const detPending = {};   // cam id -> { SETTING: value } moved but not applied yet
+  const detApplying = {};  // cam id -> true between APPLY and the detector reporting the values
+  const detDrag = {};      // cam id -> { key, scale } while a stick is held
+  const DET_STICKS = {     // setting -> [mark element, bar element, value kind]
+    DARK_THRESH:   ['brightmark',   'brightbar', 'int'],
+    MOTION_THRESH: ['motionmark',   'motionbar', 'int'],
+    DETECT_THRESH: ['persondetect', 'personbar', 'pct'],
+    CLEAR_THRESH:  ['personclear',  'personbar', 'pct'],
+  };
+  const isDragging = (id, key) => !!(detDrag[id] && detDrag[id].key === key);
+
+  function motionScale(id, sc, eff) {
+    if (detDrag[id] && detDrag[id].scale) return detDrag[id].scale;
+    return Math.max(eff.MOTION_THRESH > 0 ? eff.MOTION_THRESH * 2 : 0, sc.motion * 1.1, 100);
+  }
+
+  // The detector's reported value of a setting, in the same unit as the pending one.
+  function reportedThreshold(r, key) {
+    return { DARK_THRESH: r.scene.darkBelow, MOTION_THRESH: r.scene.motionAtLeast, DETECT_THRESH: r.person.detectAt, CLEAR_THRESH: r.person.clearAt }[key];
+  }
+  const sameThreshold = (a, b) => Math.abs(a - b) < 0.0051;
+
+  // A pending value the detector now reports (or one dragged back to what it already has) is no longer pending.
+  function dropAppliedPending(id, r) {
+    const pd = detPending[id];
+    if (!pd) return;
+    Object.keys(pd).forEach(k => { if (!isDragging(id, k) && sameThreshold(pd[k], reportedThreshold(r, k))) delete pd[k]; });
+    if (!Object.keys(pd).length) { delete detPending[id]; delete detApplying[id]; }
+  }
+
+  function markPendingSticks(id) {
+    const pd = detPending[id] || {};
+    Object.keys(DET_STICKS).forEach(k => detEl(DET_STICKS[k][0], id).classList.toggle('pending', pd[k] !== undefined));
+  }
+
+  function renderApplyBar(id) {
+    const box = detEl('apply', id), pd = detPending[id];
+    if (!box) return;
+    if (!pd) { box.style.display = 'none'; return; }
+    const r = detLast[id];
+    const fmt = (k, v) => DET_STICKS[k][2] === 'pct' ? Math.round(v * 100) + ' %' : v;
+    const parts = Object.keys(pd).map(k => k + ' ' + (r ? fmt(k, reportedThreshold(r, k)) + ' → ' : '') + fmt(k, pd[k]));
+    const busy = !!detApplying[id];
+    detEl('applytxt', id).textContent = (busy ? 'queued — the detector applies it and restarts: ' : 'not applied yet: ') + parts.join(', ');
+    detEl('applybtn', id).disabled = busy;
+    box.style.display = 'flex';
+  }
+
+  function setPendingThreshold(id, key, value) {
+    const r = detLast[id];
+    if (r && sameThreshold(value, reportedThreshold(r, key))) {
+      if (detPending[id]) delete detPending[id][key];
+      if (detPending[id] && !Object.keys(detPending[id]).length) delete detPending[id];
+    } else {
+      (detPending[id] = detPending[id] || {})[key] = value;
+    }
+    detApplying[id] = false;   // changed since it was queued: it has to be applied again
+  }
+
+  // Value under the pointer for one stick, kept inside what the detector accepts.
+  function thresholdFromX(id, key, frac) {
+    const r = detLast[id], pd = detPending[id] || {};
+    const kind = DET_STICKS[key][2];
+    if (kind === 'int') {
+      const max = key === 'DARK_THRESH' ? 255 : Math.round(detDrag[id].scale);
+      return Math.max(1, Math.min(max, Math.round(frac * max)));   // 0 would switch the check off
+    }
+    const v = Math.round(frac * 100) / 100;
+    const detect = pd.DETECT_THRESH !== undefined ? pd.DETECT_THRESH : r.person.detectAt;
+    const clear  = pd.CLEAR_THRESH  !== undefined ? pd.CLEAR_THRESH  : r.person.clearAt;
+    return key === 'DETECT_THRESH' ? Math.max(clear, Math.min(1, v)) : Math.max(0.01, Math.min(detect, v));   // 0.01..1, clear <= detect
+  }
+
+  function startStickDrag(ev, id, key, mark) {
+    const r = detLast[id];
+    if (!r || ev.button > 0) return;
+    ev.preventDefault();
+    const bar = detEl(DET_STICKS[key][1], id).parentElement;   // the whole bar, not its (partly filled) .fill
+    const rect = bar.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const pd = detPending[id] || {};
+    // Both person sticks at the same spot: the amber one is on top, but which one is meant depends on the
+    // direction it is pulled (right = the red one, left = the amber one), decided on the first movement.
+    const tied = key === 'CLEAR_THRESH' && Math.abs(
+      (pd.DETECT_THRESH !== undefined ? pd.DETECT_THRESH : r.person.detectAt) -
+      (pd.CLEAR_THRESH  !== undefined ? pd.CLEAR_THRESH  : r.person.clearAt)) < 0.005;
+    const eff = { MOTION_THRESH: pd.MOTION_THRESH !== undefined ? pd.MOTION_THRESH : r.scene.motionAtLeast };
+    detDrag[id] = { key, scale: key === 'MOTION_THRESH' ? motionScale(id, r.scene, eff) : 0 };
+    const startX = ev.clientX;
+    let decided = !tied;
+    try { mark.setPointerCapture(ev.pointerId); } catch (e) { /* older browser: window listeners below still work */ }
+    bar.classList.add('live-drag');
+    const place = (k, el) => {
+      const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      const v = thresholdFromX(id, k, frac);
+      setPendingThreshold(id, k, v);
+      placeMark(el, DET_STICKS[k][2] === 'pct' ? v : v / (k === 'DARK_THRESH' ? 255 : Math.round(detDrag[id].scale)));
+      return v;
+    };
+    const redraw = () => { if (detLast[id]) renderDetector(id, detLastD[id]); };
+    const onMove = e => {
+      ev = e;
+      if (!decided) {
+        if (Math.abs(e.clientX - startX) < 3) return;
+        decided = true;
+        if (e.clientX > startX) { detDrag[id].key = key = 'DETECT_THRESH'; mark.classList.remove('dragging'); mark = detEl(DET_STICKS[key][0], id); }
+        mark.classList.add('dragging');
+      }
+      place(key, mark);
+      redraw();
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      bar.classList.remove('live-drag');
+      mark.classList.remove('dragging');
+      delete detDrag[id];
+      redraw();
+    };
+    mark.classList.add('dragging');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  // One listener for every stick (ids look like detbrightmark-<cam>), so it does not matter when the rows are drawn.
+  document.addEventListener('pointerdown', ev => {
+    const m = ev.target.closest && ev.target.closest('.det-bar .mark');
+    if (!m || !m.id) return;
+    const hit = /^det(brightmark|motionmark|persondetect|personclear)-(.+)$/.exec(m.id);
+    if (!hit) return;
+    const key = { brightmark: 'DARK_THRESH', motionmark: 'MOTION_THRESH', persondetect: 'DETECT_THRESH', personclear: 'CLEAR_THRESH' }[hit[1]];
+    startStickDrag(ev, hit[2], key, m);
+  });
+
+  async function applyDetectorThresholds(id) {
+    const pd = detPending[id];
+    if (!pd || detApplying[id]) return;
+    const values = {};
+    Object.keys(pd).forEach(k => { values[k] = DET_STICKS[k][2] === 'pct' ? pd[k].toFixed(2) : String(pd[k]); });
+    const txt = detEl('applytxt', id);
+    detEl('applybtn', id).disabled = true;
+    txt.textContent = 'sending…';
+    try {
+      const res = await fetch('camera-settings.php?cam=' + encodeURIComponent(id) + '&type=detector', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'camdash' },
+        body: JSON.stringify({ values }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) throw new Error(j.error || ('HTTP ' + res.status));
+      if (!j.queued) { delete detPending[id]; renderApplyBar(id); return; }   // the detector already has these values
+      detApplying[id] = true;
+      renderApplyBar(id);
+    } catch (e) {
+      detApplying[id] = false;
+      renderApplyBar(id);
+      txt.textContent = 'could not apply: ' + e.message;
+    }
+  }
+
+  function resetDetectorThresholds(id) {
+    delete detPending[id];
+    delete detApplying[id];
+    if (detLast[id]) renderDetector(id, detLastD[id]);
+  }
+
   // Nothing could be learned about the detector this round (the dashboard lost the relay, say).
   function renderDetectorProblem(id, title, why) {
     const row = document.getElementById('det-' + id);
@@ -1308,6 +1492,17 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     }
     if (!r) return;   // never heard from: keep the dashes
     const sc = r.scene, pe = r.person;
+    detLast[id] = r;
+    detLastD[id] = d;
+    dropAppliedPending(id, r);
+    const pd = detPending[id] || {};
+    // A threshold dragged but not applied yet shows in place of the one the detector reports.
+    const eff = {
+      DARK_THRESH:   pd.DARK_THRESH   !== undefined ? pd.DARK_THRESH   : sc.darkBelow,
+      MOTION_THRESH: pd.MOTION_THRESH !== undefined ? pd.MOTION_THRESH : sc.motionAtLeast,
+      DETECT_THRESH: pd.DETECT_THRESH !== undefined ? pd.DETECT_THRESH : pe.detectAt,
+      CLEAR_THRESH:  pd.CLEAR_THRESH  !== undefined ? pd.CLEAR_THRESH  : pe.clearAt,
+    };
 
     const gate = detEl('gate', id);
     gate.textContent = { dark: 'DARK — paused', still: 'STILL — paused', active: 'ACTIVE — detecting', off: 'GATE OFF' }[sc.state] || sc.state.toUpperCase();
@@ -1315,32 +1510,35 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 
     // Brightness 0..255, mark = DARK_THRESH (below it the picture counts as dark)
     setW(detEl('brightbar', id), sc.brightness / 255);
-    const darkOn = sc.darkBelow > 0;
+    const darkOn = eff.DARK_THRESH > 0;
     // "current/threshold", e.g. 45/230 (just the value while the check is off)
-    detEl('bright', id).textContent = darkOn ? sc.brightness + '/' + sc.darkBelow : sc.brightness;
-    placeMark(detEl('brightmark', id), darkOn ? sc.darkBelow / 255 : null);
-    detEl('brightbar', id).className = 'fill' + (darkOn && sc.brightness < sc.darkBelow ? ' warn' : '');
-    detEl('brightsub', id).textContent = darkOn ? 'dark below ' + sc.darkBelow + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)';
+    detEl('bright', id).textContent = darkOn ? sc.brightness + '/' + eff.DARK_THRESH : sc.brightness;
+    if (!isDragging(id, 'DARK_THRESH')) placeMark(detEl('brightmark', id), darkOn ? eff.DARK_THRESH / 255 : null);
+    detEl('brightbar', id).className = 'fill' + (darkOn && sc.brightness < eff.DARK_THRESH ? ' warn' : '');
+    detEl('brightsub', id).textContent = darkOn ? 'dark below ' + eff.DARK_THRESH + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)';
 
     // Motion; the bar's scale follows the threshold so the mark stays in a readable place
-    const mOn = sc.motionAtLeast > 0;
-    const mScale = Math.max(mOn ? sc.motionAtLeast * 2 : 0, sc.motion * 1.1, 100);
-    detEl('motion', id).textContent = mOn ? sc.motion + '/' + sc.motionAtLeast : sc.motion;
+    const mOn = eff.MOTION_THRESH > 0;
+    // While the stick is being dragged the scale stays as it was when the drag began, so it follows the mouse.
+    const mScale = motionScale(id, sc, eff);
+    detEl('motion', id).textContent = mOn ? sc.motion + '/' + eff.MOTION_THRESH : sc.motion;
     setW(detEl('motionbar', id), sc.motion / mScale);
-    placeMark(detEl('motionmark', id), mOn ? sc.motionAtLeast / mScale : null);
-    detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= sc.motionAtLeast ? ' hit' : '');
+    if (!isDragging(id, 'MOTION_THRESH')) placeMark(detEl('motionmark', id), mOn ? eff.MOTION_THRESH / mScale : null);
+    detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= eff.MOTION_THRESH ? ' hit' : '');
     detEl('motionsub', id).textContent = mOn
-      ? 'moving at ≥ ' + sc.motionAtLeast + ' (MOTION_THRESH), detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
+      ? 'moving at ≥ ' + eff.MOTION_THRESH + ' (MOTION_THRESH), detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
       : 'motion check off (MOTION_THRESH=0)';
 
     // Human score (null while the model is paused: dark / still)
     const hasScore = pe.score !== null && pe.score !== undefined;
-    detEl('person', id).textContent = hasScore ? Math.round(pe.score * 100) + '/' + Math.round(pe.detectAt * 100) + ' %' + (pe.detected ? '  — PERSON' : '') : 'model paused';
+    detEl('person', id).textContent = hasScore ? Math.round(pe.score * 100) + '/' + Math.round(eff.DETECT_THRESH * 100) + ' %' + (pe.detected ? '  — PERSON' : '') : 'model paused';
     setW(detEl('personbar', id), hasScore ? pe.score : 0);
     detEl('personbar', id).className = 'fill' + (pe.detected ? ' hit' : '');
-    placeMark(detEl('persondetect', id), pe.detectAt);
-    placeMark(detEl('personclear', id), pe.clearAt);
-    detEl('personsub', id).textContent = 'person at ≥ ' + Math.round(pe.detectAt * 100) + ' % (DETECT_THRESH, red), clears below ' + Math.round(pe.clearAt * 100) + ' % (CLEAR_THRESH, amber)';
+    if (!isDragging(id, 'DETECT_THRESH')) placeMark(detEl('persondetect', id), eff.DETECT_THRESH);
+    if (!isDragging(id, 'CLEAR_THRESH')) placeMark(detEl('personclear', id), eff.CLEAR_THRESH);
+    detEl('personsub', id).textContent = 'person at ≥ ' + Math.round(eff.DETECT_THRESH * 100) + ' % (DETECT_THRESH, red), clears below ' + Math.round(eff.CLEAR_THRESH * 100) + ' % (CLEAR_THRESH, amber)';
+    markPendingSticks(id);
+    renderApplyBar(id);
 
     // The alarm line the detector drives (its PERSON_GPIO, wired to the camera's alarm input)
     detEl('pinlabel', id).textContent = 'ALARM PIN (GPIO ' + r.gpio.pin + ')';
