@@ -330,7 +330,36 @@ class CamLogic
              'label' => 'Dashboard password', 'help' => 'At least 8 characters. Leave empty to keep the current one.'],
             ['key' => 'relay_url', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
              'label' => 'Relay address', 'help' => 'Where this dashboard reaches the relay, e.g. http://127.0.0.1:8080. A new address is tested before it is saved.'],
+            ['key' => 'record_seconds', 'type' => 'int', 'group' => 'Recording', 'restart' => false, 'scope' => 'dashboard',
+             'min' => 1, 'max' => 3600, 'default' => self::DEFAULT_RECORD_SECONDS,
+             'label' => 'Manual recording length (seconds)', 'help' => 'How long the RECORD and RECORD ALL buttons on the dashboard record for. Pressing them again mid-recording extends it by this many seconds from that moment.'],
+            ['key' => 'switch_off_minutes', 'type' => 'int', 'group' => 'Recording', 'restart' => false, 'scope' => 'dashboard',
+             'min' => -1, 'max' => 10080, 'default' => self::DEFAULT_SWITCH_OFF_MINUTES,
+             'label' => 'Recording OFF time (minutes)', 'help' => 'How long the dashboard\'s recording OFF buttons keep recording switched off before it switches itself back ON. 0 or -1 = off until you press ON.'],
         ];
+    }
+
+    const DEFAULT_RECORD_SECONDS = 60;
+    const DEFAULT_SWITCH_OFF_MINUTES = 60;
+
+    // The dashboard's manual recording length in seconds (what the RECORD buttons use).
+    public static function recordSeconds(array $config): int
+    {
+        $v = $config['record_seconds'] ?? null;
+        if ((is_int($v) || (is_string($v) && preg_match('/^\s*\d+\s*$/', $v))) && (int) $v >= 1 && (int) $v <= 3600) {
+            return (int) $v;
+        }
+        return self::DEFAULT_RECORD_SECONDS;
+    }
+
+    // Minutes the dashboard's OFF buttons switch recording off for (0 or negative = until switched ON).
+    public static function switchOffMinutes(array $config): int
+    {
+        $v = $config['switch_off_minutes'] ?? null;
+        if ((is_int($v) || (is_string($v) && preg_match('/^\s*-?\d+\s*$/', $v))) && (int) $v >= -1 && (int) $v <= 10080) {
+            return (int) $v;
+        }
+        return self::DEFAULT_SWITCH_OFF_MINUTES;
     }
 
     public static function isDashboardKey(string $key): bool
@@ -433,6 +462,16 @@ class CamLogic
                     return ['ok' => false, 'error' => 'relay_url must look like http://host:port (no login, no query)'];
                 }
                 if ($v !== rtrim((string) ($current['relay_url'] ?? ''), '/')) {
+                    $changes[$key] = $v;
+                }
+            } elseif ($key === 'record_seconds' || $key === 'switch_off_minutes') {
+                [$lo, $hi] = $key === 'record_seconds' ? [1, 3600] : [-1, 10080];
+                if (!preg_match('/^\s*-?\d+\s*$/', $value) || (int) $value < $lo || (int) $value > $hi) {
+                    return ['ok' => false, 'error' => $key . ' must be a whole number between ' . $lo . ' and ' . $hi];
+                }
+                $v = (int) $value;
+                $now = $key === 'record_seconds' ? self::recordSeconds($current) : self::switchOffMinutes($current);
+                if ($v !== $now) {
                     $changes[$key] = $v;
                 }
             } else {

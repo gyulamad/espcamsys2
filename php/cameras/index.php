@@ -20,6 +20,12 @@ $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $
 // Whether the recording ON/OFF buttons can work: they need the relay's control
 // key (see recording-switch.php). Without it they are shown disabled, saying why.
 $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
+
+// The numbers the buttons use (recording length, how long OFF lasts) are set on the SETTINGS
+// page, not typed on this page — the dashboard only has buttons.
+$recordSeconds    = CamLogic::recordSeconds($config);
+$switchOffMinutes = CamLogic::switchOffMinutes($config);
+$offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until switched ON';
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -142,18 +148,12 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     animation: blink 1.4s ease-in-out infinite;
   }
 
-  .record-controls, .alarm-controls { display: flex; align-items: center; gap: 6px; }
+  .record-controls { display: flex; align-items: center; gap: 6px; }
 
   /* Recording ON/OFF switch — in the header (all cameras) and on each camera card */
   .switch-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .switch-controls .lbl { font-family: var(--mono); font-size: .62rem; color: var(--muted); }
   .switch-controls .lbl.title { color: var(--text); }
-  .switch-controls input[type=number], .cam-switch-row input[type=number] {
-    width: 56px; font-family: var(--mono); font-size: .65rem;
-    background: transparent; border: 1px solid var(--border); color: var(--text);
-    border-radius: 3px; padding: 4px 6px;
-  }
-  .switch-controls .unit, .cam-switch-row .unit { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
   .switch-pill {
     font-family: var(--mono); font-size: .62rem; padding: 2px 8px; border-radius: 20px;
     border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
@@ -163,20 +163,6 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   .switch-note { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
   .switch-note.err { color: var(--accent2); }
   .cam-btn.switched-off { opacity: .45; }
-  .alarm-controls input[type=number],
-  .record-controls input[type=number] {
-    width: 60px; font-family: var(--mono); font-size: .7rem;
-    background: transparent; border: 1px solid var(--border); color: var(--text);
-    border-radius: var(--radius); padding: 6px 8px;
-  }
-  .record-controls span.unit,
-  .alarm-controls span.unit,
-  .alarm-controls span.lbl { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
-  .alarm-controls .lbl.title { color: var(--accent2); }
-  /* Small "saved / saving / error" note next to the alarm fields */
-  #alarm-status { font-family: var(--mono); font-size: .62rem; min-width: 70px; color: var(--muted); }
-  #alarm-status.ok  { color: var(--accent); }
-  #alarm-status.err { color: var(--accent2); }
 
   /* ── Main grid ── */
   main { flex: 1; padding: 24px 32px; }
@@ -257,12 +243,6 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     padding: 6px 14px; border-top: 1px solid var(--border);
     background: rgba(0,0,0,.15);
   }
-  .cam-record-row input[type=number] {
-    width: 52px; font-family: var(--mono); font-size: .65rem;
-    background: transparent; border: 1px solid var(--border); color: var(--text);
-    border-radius: 3px; padding: 4px 6px;
-  }
-  .cam-record-row .unit { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
 
   .rec-dot {
     width: 7px; height: 7px; border-radius: 50%;
@@ -459,13 +439,10 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     <button class="btn"        id="btn-list" onclick="setLayout('list')">☰ LIST</button>
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
     <a class="btn" id="btn-settings" href="settings-page.php"
-       title="Settings of the whole system: relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
+       title="Settings of the whole system: recording lengths, relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
     <span class="record-controls">
-      <input type="number" id="record-seconds" min="1" max="3600" value="60" title="Recording length in seconds">
-      <span class="unit">sec</span>
-      <span class="unit preroll-note" id="preroll-note-record"></span>
       <button class="btn" id="btn-record-all" onclick="recordAll()"
-              title="Press again mid-recording to extend it by this many seconds from now">⏺ RECORD ALL</button>
+              title="Record every camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it by that many seconds from now">⏺ RECORD ALL</button>
       <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
       <button class="btn danger" id="btn-delete-all" onclick="deleteAllRecordingsEverywhere()"
               title="Delete every saved recording, for every camera">🗑 DELETE ALL FOOTAGE</button>
@@ -474,24 +451,11 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
           title="Switch recording OFF while people are on site, so nothing is recorded for no reason. Applies to every camera the relay currently knows; each camera can then be changed on its own.">
       <span class="lbl title">⏻ RECORDING:</span>
       <span class="switch-pill" id="switch-all-pill">…</span>
-      <input type="number" id="switch-all-minutes" step="1" value="60"
-             title="Minutes to stay OFF. 0 or a negative number = OFF until you press ON.">
-      <span class="unit">min</span>
       <button class="btn danger" id="btn-switch-all-off" onclick="switchRecording('all', null, 'off')"
-              title="Switch recording OFF for every camera, for this many minutes (0 or negative = until switched ON)">⏻ ALL OFF</button>
+              title="Switch recording OFF for every camera <?= $offFor ?> (set on the SETTINGS page)">⏻ ALL OFF</button>
       <button class="btn" id="btn-switch-all-on" onclick="switchRecording('all', null, 'on')"
               title="Switch recording back ON for every camera">⏻ ALL ON</button>
       <span class="switch-note" id="switch-all-note"></span>
-    </span>
-    <span class="alarm-controls"
-          title="Used when a camera's alarm input triggers. Stored on the relay and applied to every camera — no reflashing needed. Changes apply to the next alarm.">
-      <span class="lbl title">🚨 ALARM:</span>
-      <span class="lbl">record</span>
-      <input type="number" id="alarm-record-seconds" min="1" max="3600" value="60"
-             title="How long an alarm-triggered recording runs (a repeat alarm extends it from that moment)" onchange="saveAlarmSettings()">
-      <span class="unit">sec</span>
-      <span class="unit preroll-note" id="preroll-note-alarm"></span>
-      <span id="alarm-status"></span>
     </span>
   </div>
 </header>
@@ -525,11 +489,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
       <!-- Recording + its file list live together: start/stop a recording,
            browse and download what's already been saved, all in one place. -->
       <div class="cam-record-row">
-        <input type="number" id="seconds-<?= $camId ?>" min="1" max="3600" value="60"
-               title="Recording length in seconds">
-        <span class="unit">sec</span>
         <button class="cam-btn" id="rec-btn-<?= $camId ?>"
-                title="Press again mid-recording to extend it by this many seconds from now"
+                title="Record this camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it"
                 onclick="recordOne('<?= $camId ?>')">⏺ RECORD</button>
         <button class="cam-btn danger" id="stop-btn-<?= $camId ?>" style="display:none;"
                 onclick="stopOne('<?= $camId ?>')">⏹ STOP</button>
@@ -540,11 +501,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 
       <div class="cam-record-row cam-switch-row">
         <span class="switch-pill" id="sw-pill-<?= $camId ?>">…</span>
-        <input type="number" id="sw-min-<?= $camId ?>" step="1" value="60"
-               title="Minutes to stay OFF. 0 or a negative number = OFF until you press ON.">
-        <span class="unit">min</span>
         <button class="cam-btn danger" id="sw-off-<?= $camId ?>"
-                title="Switch recording OFF for this camera only, for this many minutes (0 or negative = until switched ON)"
+                title="Switch recording OFF for this camera only, <?= $offFor ?> (set on the SETTINGS page)"
                 onclick="switchRecording('camera', '<?= $camId ?>', 'off')">⏻ OFF</button>
         <button class="cam-btn" id="sw-on-<?= $camId ?>"
                 title="Switch recording back ON for this camera"
@@ -785,6 +743,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   // page only asks it to change (via recording-switch.php, which adds the secret
   // control key — the browser never has it) and shows what the relay reports.
   const SWITCH_ENABLED = <?= $switchConfigured ? 'true' : 'false' ?>;
+  const RECORD_SECONDS = <?= (int) $recordSeconds ?>;          // from the SETTINGS page
+  const SWITCH_OFF_MINUTES = <?= (int) $switchOffMinutes ?>;   // from the SETTINGS page
   const switchState = {};   // camera id -> { forever, untilAt } while OFF (untilAt: this browser's clock, ms); absent = recording is ON
 
   function formatRemaining(ms) {
@@ -855,12 +815,7 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
     if (scope === 'camera') url += `&cam=${encodeURIComponent(id)}`;
 
     if (action === 'off') {
-      const raw = document.getElementById(scope === 'all' ? 'switch-all-minutes' : 'sw-min-' + id).value.trim();
-      if (raw !== '' && !/^-?\d+$/.test(raw)) {
-        setSwitchNote(noteId, 'Enter a whole number of minutes (0 or negative = until switched ON)', true);
-        return;
-      }
-      const minutes = raw === '' ? 60 : parseInt(raw, 10);
+      const minutes = SWITCH_OFF_MINUTES;
       if (scope === 'all') {
         const forHowLong = minutes > 0 ? `for ${minutes} minutes` : 'until you switch it back ON';
         if (!confirm(`Switch recording OFF for ALL cameras ${forHowLong}?\n\nNothing will be recorded meanwhile, and recordings in progress are stopped.`)) return;
@@ -899,19 +854,8 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   // Keep the "N min left" text ticking between status polls.
   setInterval(() => { getAllCameraIds().forEach(renderSwitch); }, 1000);
 
-  // The recording length typed into a duration field, or null (after telling
-  // the user) when it is not a whole number of at least 1.
-  function readRecordSeconds(inputId) {
-    const seconds = parseInt(document.getElementById(inputId).value, 10);
-    if (Number.isFinite(seconds) && seconds >= 1) return seconds;
-    alert('Enter a valid number of seconds');
-    return null;
-  }
-
   async function recordAll() {
-    const seconds = readRecordSeconds('record-seconds');
-    if (seconds === null) return;
-
+    const seconds = RECORD_SECONDS;
     const btn = document.getElementById('btn-record-all');
     btn.disabled = true;
     const results = await Promise.all(getAllCameraIds().map(id => startRecording(id, seconds)));
@@ -933,10 +877,9 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   }
 
   // Same start/extend behaviour as "RECORD ALL", just scoped to one camera
-  // using that card's own duration field instead of the header's.
+  // for a single camera. Both use the length from the SETTINGS page.
   async function recordOne(id) {
-    const seconds = readRecordSeconds('seconds-' + id);
-    if (seconds === null) return;
+    const seconds = RECORD_SECONDS;
     const btn = document.getElementById('rec-btn-' + id);
     btn.disabled = true;
     await startRecording(id, seconds);
@@ -1476,65 +1419,6 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
   const STATUS_POLL_MS = 4000;
   pollAllStatuses();
   setInterval(pollAllStatuses, STATUS_POLL_MS);
-
-  // ── Alarm settings — how long an alarm-triggered recording runs. Stored
-  // on the relay (via settings.php), not on the camera boards, so changing
-  // it here takes effect on the next alarm without reflashing anything.
-  // Saved automatically whenever the field is changed. The same response
-  // carries the relay's read-only pre-roll length (config.js), shown next
-  // to the duration fields as "+ Ns pre-roll" since every recording is that
-  // much longer than the number you type. ──
-  const alarmRecordInput = document.getElementById('alarm-record-seconds');
-  const alarmStatus      = document.getElementById('alarm-status');
-
-  function setAlarmStatus(text, cls) {
-    alarmStatus.textContent = text;
-    alarmStatus.className = cls || '';
-  }
-
-  function applyAlarmSettings(s) {
-    if (document.activeElement !== alarmRecordInput) alarmRecordInput.value = s.alarmRecordSeconds;
-
-    const pre = Number(s.preRollSeconds);
-    const note = pre > 0 ? `+ ${pre}s pre-roll` : '';
-    const tip = pre > 0
-      ? `Every recording also includes the ${pre}s of footage from just BEFORE it was triggered, so the clip is ${pre}s longer than this number.`
-      : '';
-    for (const id of ['preroll-note-record', 'preroll-note-alarm']) {
-      const el = document.getElementById(id);
-      el.textContent = note;
-      el.title = tip;
-    }
-  }
-
-  async function loadAlarmSettings() {
-    try {
-      const res = await fetch('settings.php');
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      applyAlarmSettings(await res.json());
-    } catch (e) {
-      setAlarmStatus('load failed', 'err');
-    }
-  }
-
-  async function saveAlarmSettings() {
-    const rec = parseInt(alarmRecordInput.value, 10);
-    if (!Number.isFinite(rec) || rec < 1) {
-      setAlarmStatus('invalid value', 'err');
-      return;
-    }
-    setAlarmStatus('saving…', '');
-    try {
-      const res = await fetch(`settings.php?alarmRecordSeconds=${rec}`, { method: 'POST' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      applyAlarmSettings(await res.json()); // show exactly what the relay stored
-      setAlarmStatus('saved ✓', 'ok');
-      setTimeout(() => setAlarmStatus(''), 2500);
-    } catch (e) {
-      setAlarmStatus('save failed', 'err');
-    }
-  }
-  loadAlarmSettings();
 
   // ── Layout toggle ──
   function setLayout(mode) {

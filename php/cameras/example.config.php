@@ -22,6 +22,12 @@ return [
     // sees it. Left empty, the buttons are disabled.)
     'relay_control_key' => '',
 
+    // Recording buttons on the dashboard (both also editable on the SETTINGS page).
+    // Length of a manual recording (RECORD / RECORD ALL), in seconds.
+    'record_seconds' => 60,
+    // How long the recording OFF buttons keep recording off, in minutes (0 or -1 = until switched ON).
+    'switch_off_minutes' => 60,
+
     // Cameras shown on the dashboard. 'id' must exactly match the
     // CAMERA_ID configured in that device's sketch (its CAMERA_ID setting).
     // Optional 'detector' => '<DETECTOR_ID>' pairs the camera with the person detector board wired to

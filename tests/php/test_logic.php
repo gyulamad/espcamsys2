@@ -407,6 +407,32 @@ camtest_test('validateDashboardUpdate: refuses bad logins and addresses, and unk
     }
 });
 
+camtest_test('recordSeconds / switchOffMinutes: configured value, or the default when missing or out of range', function () {
+    camtest_assert_equal(CamLogic::recordSeconds([]), 60);
+    camtest_assert_equal(CamLogic::recordSeconds(['record_seconds' => 120]), 120);
+    camtest_assert_equal(CamLogic::recordSeconds(['record_seconds' => '90']), 90);
+    camtest_assert_equal(CamLogic::recordSeconds(['record_seconds' => 0]), 60);
+    camtest_assert_equal(CamLogic::recordSeconds(['record_seconds' => 99999]), 60);
+    camtest_assert_equal(CamLogic::recordSeconds(['record_seconds' => 'abc']), 60);
+    camtest_assert_equal(CamLogic::switchOffMinutes([]), 60);
+    camtest_assert_equal(CamLogic::switchOffMinutes(['switch_off_minutes' => 30]), 30);
+    camtest_assert_equal(CamLogic::switchOffMinutes(['switch_off_minutes' => 0]), 0);
+    camtest_assert_equal(CamLogic::switchOffMinutes(['switch_off_minutes' => -1]), -1);
+    camtest_assert_equal(CamLogic::switchOffMinutes(['switch_off_minutes' => 'x']), 60);
+});
+
+camtest_test('validateDashboardUpdate: recording length and OFF time are checked, and only real changes returned', function () {
+    $cur = ['auth_user' => 'bob', 'auth_pass' => 'longenough1', 'relay_url' => 'http://x:8080', 'record_seconds' => 60];
+    $r = CamLogic::validateDashboardUpdate(['record_seconds' => '60', 'switch_off_minutes' => '60'], $cur);
+    camtest_assert_equal($r, ['ok' => true, 'changes' => []]);
+    $r = CamLogic::validateDashboardUpdate(['record_seconds' => '120', 'switch_off_minutes' => '0'], $cur);
+    camtest_assert_equal($r['changes'], ['record_seconds' => 120, 'switch_off_minutes' => 0]);
+    foreach ([['record_seconds' => '0'], ['record_seconds' => '3601'], ['record_seconds' => 'abc'], ['record_seconds' => ''],
+              ['switch_off_minutes' => '-2'], ['switch_off_minutes' => '10081'], ['switch_off_minutes' => '1.5']] as $bad) {
+        camtest_assert_equal(CamLogic::validateDashboardUpdate($bad, $cur)['ok'], false, var_export($bad, true));
+    }
+});
+
 camtest_test('isValidSecret: 8-200 characters without spaces or control characters', function () {
     camtest_assert_true(CamLogic::isValidSecret('abcdefgh'));
     foreach (['short', 'has space123', "tab\tkey12345", "nl\nkey12345", str_repeat('x', 201), ''] as $bad) {
