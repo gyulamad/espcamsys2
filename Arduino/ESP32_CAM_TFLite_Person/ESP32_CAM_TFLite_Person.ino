@@ -339,6 +339,41 @@ void configureScene()
 
 
 // ============================================================
+// Internal-RAM diagnostics and early Wi-Fi bring-up
+// ============================================================
+
+// The Wi-Fi driver needs ~50-70 KB of INTERNAL RAM (some of it DMA-capable) to initialise. The camera
+// driver, the tensor arena and the task stacks all draw from the same pool, so Wi-Fi must get its share
+// FIRST. This line shows where the internal RAM goes.
+static void logInternalHeap(const char *stage)
+{
+    RLOG_INFO(
+        "internal RAM after %s: free %u, largest block %u, lowest ever %u",
+        stage,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+    );
+}
+
+// Brings the Wi-Fi driver up before the camera and the model take their memory. Only the driver is
+// initialised here; connecting is still done by the network task. Returns false if the driver could not
+// start (the network task retries later, with a back-off).
+static bool earlyWifiInit()
+{
+    if (!WiFi.mode(WIFI_STA))
+    {
+        RLOG_ERROR("Wi-Fi driver could not start even before the camera - internal RAM is too low");
+        return false;
+    }
+
+    WiFi.setSleep(false);   // modem-sleep adds latency to every request
+
+    return true;
+}
+
+
+// ============================================================
 // Camera initialization
 // ============================================================
 
@@ -1093,6 +1128,16 @@ void networkTask(void *)
     {
         // May block for several seconds while it scans / connects — fine, nothing else runs in this task
         // and detection is on the other core.
+        // If the driver never initialised (not enough internal RAM), every wifiMulti.run() would retry the
+        // init and print a burst of driver errors. Retry the init here, quietly, every 5 s instead.
+        if (WiFi.getMode() != WIFI_STA && !WiFi.mode(WIFI_STA))
+        {
+            RLOG_WARN("Wi-Fi driver cannot start - not enough internal RAM, retrying");
+            logInternalHeap("a failed Wi-Fi init");
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
         bool up = wifiMulti.run() == WL_CONNECTED;
 
         logWifi(wifiWatch.update(millis(), up));
@@ -1557,10 +1602,21 @@ void setup()
     // Camera
     // --------------------------------------------------------
 
+    logInternalHeap("boot");
+
+    // Wi-Fi gets its internal RAM before the camera and the tensor arena take theirs.
+    if (g_cfg.streamEnabled)
+    {
+        earlyWifiInit();
+        logInternalHeap("Wi-Fi driver init");
+    }
+
     if (!initCamera())
     {
         startupFailed("Camera initialization FAILED");
     }
+
+    logInternalHeap("camera init");
 
     Serial.println(
         "Camera initialized."
@@ -1577,10 +1633,14 @@ void setup()
     }
 
 
+    logInternalHeap("TFLite init");
+
     if (g_cfg.streamEnabled && !startNetwork())
     {
         RLOG_ERROR("the live view could not start - the detector runs without it (see the line above)");
     }
+
+    logInternalHeap("network task start");
 
     Serial.println();
     RLOG_INFO("Detector ready.");
