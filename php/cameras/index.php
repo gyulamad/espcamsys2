@@ -1314,9 +1314,10 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     gate.className = 'det-chip ' + (sc.state === 'off' ? '' : sc.state);
 
     // Brightness 0..255, mark = DARK_THRESH (below it the picture counts as dark)
-    detEl('bright', id).textContent = sc.brightness;
     setW(detEl('brightbar', id), sc.brightness / 255);
     const darkOn = sc.darkBelow > 0;
+    // "current/threshold", e.g. 45/230 (just the value while the check is off)
+    detEl('bright', id).textContent = darkOn ? sc.brightness + '/' + sc.darkBelow : sc.brightness;
     placeMark(detEl('brightmark', id), darkOn ? sc.darkBelow / 255 : null);
     detEl('brightbar', id).className = 'fill' + (darkOn && sc.brightness < sc.darkBelow ? ' warn' : '');
     detEl('brightsub', id).textContent = darkOn ? 'dark below ' + sc.darkBelow + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)';
@@ -1324,7 +1325,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     // Motion; the bar's scale follows the threshold so the mark stays in a readable place
     const mOn = sc.motionAtLeast > 0;
     const mScale = Math.max(mOn ? sc.motionAtLeast * 2 : 0, sc.motion * 1.1, 100);
-    detEl('motion', id).textContent = sc.motion;
+    detEl('motion', id).textContent = mOn ? sc.motion + '/' + sc.motionAtLeast : sc.motion;
     setW(detEl('motionbar', id), sc.motion / mScale);
     placeMark(detEl('motionmark', id), mOn ? sc.motionAtLeast / mScale : null);
     detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= sc.motionAtLeast ? ' hit' : '');
@@ -1334,7 +1335,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 
     // Human score (null while the model is paused: dark / still)
     const hasScore = pe.score !== null && pe.score !== undefined;
-    detEl('person', id).textContent = hasScore ? Math.round(pe.score * 100) + ' %' + (pe.detected ? '  — PERSON' : '') : 'model paused';
+    detEl('person', id).textContent = hasScore ? Math.round(pe.score * 100) + '/' + Math.round(pe.detectAt * 100) + ' %' + (pe.detected ? '  — PERSON' : '') : 'model paused';
     setW(detEl('personbar', id), hasScore ? pe.score : 0);
     detEl('personbar', id).className = 'fill' + (pe.detected ? ' hit' : '');
     placeMark(detEl('persondetect', id), pe.detectAt);
