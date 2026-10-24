@@ -342,9 +342,26 @@ void configureScene()
 // Camera initialization
 // ============================================================
 
-bool initCamera()
+// Power-cycles the OV2640 through its PWDN pin. ESP.restart() resets the ESP32 but NOT the camera
+// module: the sensor keeps its supply and whatever state it was in, and the driver's probe can then
+// fail with ESP_ERR_NOT_SUPPORTED ("Detected camera not supported") until the board is power-cycled by
+// hand. Pulsing PWDN gives the sensor the clean start a cold boot would.
+static void cameraPowerCycle()
 {
-    camera_config_t config;
+    pinMode(PWDN_GPIO_NUM, OUTPUT);
+    digitalWrite(PWDN_GPIO_NUM, HIGH);   // power down
+    delay(100);
+    digitalWrite(PWDN_GPIO_NUM, LOW);    // power up
+    delay(100);
+}
+
+static bool initCameraOnce()
+{
+    // Zero-initialize: camera_config_t has gained fields (sccb_i2c_port, fb_location, grab_mode, ...)
+    // across esp32-camera versions, and a stack variable holds whatever the previous code left there.
+    // That differs between a cold boot and a software restart - exactly "works after a power-cycle,
+    // fails after a settings-change restart" (same fix as in ESP32_CAM_Recorder).
+    camera_config_t config = {};
 
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer   = LEDC_TIMER_0;
@@ -382,10 +399,14 @@ bool initCamera()
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
+    cameraPowerCycle();
+
     esp_err_t err = esp_camera_init(&config);
 
     if (err != ESP_OK)
     {
+        esp_camera_deinit();   // release anything a half-done init took, so a retry starts clean
+
         RLOG_ERROR(
             "Camera init failed: 0x%x (%s)%s",
             (unsigned)err,
@@ -410,6 +431,21 @@ bool initCamera()
     }
 
     return true;
+}
+
+// A few attempts, each with a fresh power-cycle of the sensor, before the caller gives up and restarts.
+bool initCamera()
+{
+    constexpr int ATTEMPTS = 3;
+
+    for (int attempt = 1; attempt <= ATTEMPTS; attempt++)
+    {
+        if (initCameraOnce()) return true;
+
+        if (attempt < ATTEMPTS) RLOG_WARN("camera init attempt %d/%d failed - power-cycling the sensor and retrying", attempt, ATTEMPTS);
+    }
+
+    return false;
 }
 
 
