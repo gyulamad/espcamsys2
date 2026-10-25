@@ -281,7 +281,7 @@ async function main() {
     check('the old login no longer works', (await dash('GET', 'system-settings.php')).status === 401);
     AUTH = { user: 'new-user', pass: 'new-pass-0002' };
     check('the new login works', (await dash('GET', 'system-settings.php')).status === 200);
-    check('a config.php backup is kept', fs.existsSync(path.join(dashDir, 'config.php.bak')));
+    check('no config.php.bak is left in the web folder (it would be served to anyone)', !fs.existsSync(path.join(dashDir, 'config.php.bak')));
 
     // settings that disconnect cameras need a confirm
     const r0 = relay.restarts;

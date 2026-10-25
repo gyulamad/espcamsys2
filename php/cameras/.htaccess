@@ -1,0 +1,6 @@
+# Never serve copies, backups or editor leftovers of the config (they contain the dashboard
+# password and the relay control key). Needs "AllowOverride All" (or at least FileInfo/AuthConfig)
+# in the vhost, as INSTALL.md §4 sets it; the vhost's own <FilesMatch> rule is the belt-and-braces.
+<FilesMatch "^config\.php.+|\.(bak|orig|old|save|swp|tmp)$|~$">
+    Require all denied
+</FilesMatch>
