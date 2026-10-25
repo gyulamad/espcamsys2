@@ -71,6 +71,7 @@ function stream_recording($url, $filename, $disposition) {
     while (ob_get_level()) ob_end_clean();
     http_response_code($status);
     header('Content-Type: video/mp4');
+    header('Cache-Control: private, no-cache');   // not no-store: players seek and resume badly without a cache
     header('Content-Disposition: ' . CamLogic::buildContentDispositionHeader($disposition, $filename));
     foreach ($passThroughHeaders as $header) {
         header($header);

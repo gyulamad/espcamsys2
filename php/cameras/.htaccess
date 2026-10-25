@@ -1,6 +1,7 @@
-# Never serve copies, backups or editor leftovers of the config (they contain the dashboard
-# password and the relay control key). Needs "AllowOverride All" (or at least FileInfo/AuthConfig)
-# in the vhost, as INSTALL.md §4 sets it; the vhost's own <FilesMatch> rule is the belt-and-braces.
+# Second lock: never serve copies, backups or editor leftovers of the config (they contain the
+# dashboard password and the relay control key). The vhost in apache/camdash.conf already denies them
+# (and sets AllowOverride None, so this file is then simply not read); this only matters on a server
+# whose vhost allows overrides (AllowOverride FileInfo/AuthConfig/All) and lacks that rule.
 <FilesMatch "^config\.php.+|\.(bak|orig|old|save|swp|tmp)$|~$">
     Require all denied
 </FilesMatch>

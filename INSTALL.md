@@ -372,31 +372,26 @@ Things worth knowing:
    ];
    ```
 
-4. Point an Apache vhost at that folder:
+4. Point Apache at that folder with the config files shipped in this repo (`apache/`). They listen on `127.0.0.1` only, turn off folder listings, deny `lib/`, `config.php` and every copy or backup of it, add the security headers, and make Apache stop announcing its version:
 
    ```
-   # /etc/apache2/sites-available/camdash.conf
-   <VirtualHost 127.0.0.1:80>
-       DocumentRoot /var/www/camdash
-       <Directory /var/www/camdash>
-           AllowOverride All
-           Require all granted
-       </Directory>
-       # Never serve copies/backups of the config (they hold the password and the control key)
-       <FilesMatch "^config\.php.+|\.(bak|orig|old|save|swp|tmp)$|~$">
-           Require all denied
-       </FilesMatch>
-   </VirtualHost>
-   ```
-
-   Also copy `php/cameras/.htaccess` into the folder (same rule, in case the vhost is replaced). Only `config.php` itself must be writable by the web server (`sudo chown www-data config.php`) — never `chown -R` the whole web folder. If you upgraded from an older version, delete any leftover `config.php.bak` there and change the dashboard password and control key if that folder was ever reachable.
-
-   Bind this to `127.0.0.1` only — Tor will be the only thing reaching it (see next step).
-
-   ```
+   sudo cp apache/camdash.conf /etc/apache2/sites-available/camdash.conf
+   sudo cp apache/camdash-hardening.conf /etc/apache2/conf-available/camdash-hardening.conf
+   sudo a2enmod headers
+   sudo a2enconf camdash-hardening
+   sudo a2dissite 000-default          # Apache's default site serves EVERY interface
    sudo a2ensite camdash
-   sudo systemctl reload apache2
    ```
+
+   Also make Apache listen on localhost only: in `/etc/apache2/ports.conf` replace `Listen 80` with `Listen 127.0.0.1:80`. Then:
+
+   ```
+   sudo apache2ctl configtest && sudo systemctl restart apache2
+   ```
+
+   Only `config.php` itself must be writable by the web server (`sudo chown www-data config.php`) — never `chown -R` the whole web folder. `sudo ./deploy.sh` (from the repo root) copies the dashboard into `/var/www/camdash` and does that `chown`. If you upgraded from an older version that used `/var/www/html/camdash`, it carries your `config.php` over and tells you to delete the old folder — do that, because the default site serves it on the LAN. Change the dashboard password and control key if that folder was ever reachable from the network, or if a `config.php.bak` was ever in it.
+
+   Why not LAN access: Basic auth over plain HTTP sends the password in a form anyone sniffing the network can read. If you really want the dashboard on the LAN, put HTTPS in front of it first.
 
 5. Sanity check from the Pi itself:
 
@@ -404,7 +399,7 @@ Things worth knowing:
    curl -u pick-a-username:yourpassword http://127.0.0.1:80/
    ```
 
-   You should get the dashboard HTML back. From a LAN browser you should get a Basic Auth prompt, then see live streams, per-camera record controls, and recordings.
+   You should get the dashboard HTML back. From another computer on your LAN, `http://<the Pi's LAN address>/` should NOT answer at all (connection refused); the dashboard is reached through the Tor hidden service (next step). Also check that `curl -sI http://127.0.0.1/lib/` and `curl -sI http://127.0.0.1/config.php` answer `403`, and that the response headers include `X-Content-Type-Options: nosniff` and no Apache version number.
 
 ---
 

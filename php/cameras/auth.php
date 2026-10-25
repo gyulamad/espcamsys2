@@ -19,6 +19,30 @@
 
 require_once __DIR__ . '/lib/Logic.php';
 
+// Safe response headers for every page and endpoint (all of them require this file first), also on
+// the 401 / 429 / 503 answers below. They break nothing today:
+//   nosniff             - the browser must not guess a type for a response (a recording name is not a script)
+//   Referrer-Policy     - a click on an outside link does not tell that site which dashboard it came from
+//   frame-ancestors     - no other website can put the dashboard in a frame (clickjacking); the older
+//                         X-Frame-Options says the same to browsers that do not know the CSP directive
+//   Cache-Control       - nothing from the dashboard (camera ids, recording names, settings) is kept in a cache
+// Endpoints that need something different set their own value later (header() replaces).
+// A full Content-Security-Policy (default-src 'self'; script-src 'self') has to wait until the inline
+// handlers and scripts are gone (review F-05, F-19). The Apache vhost in apache/camdash.conf sets
+// the same headers too, so error pages that never reach PHP carry them as well.
+function camdash_security_headers(): void
+{
+    if (headers_sent()) {
+        return;
+    }
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: no-referrer');
+    header("Content-Security-Policy: frame-ancestors 'none'");
+    header('X-Frame-Options: DENY');
+    header('Cache-Control: no-store');
+}
+camdash_security_headers();
+
 $config = require __DIR__ . '/config.php';
 
 // Runs $fn on the stored throttle state while holding a lock, and stores what it returns, so
