@@ -17,6 +17,36 @@ function json_fail(int $status, string $message): void
     exit;
 }
 
+// Stops with 403 unless this state-changing request comes from the dashboard's own page.
+function require_dashboard_mutation(): void
+{
+    if (!CamLogic::isDashboardMutationAllowed($_SERVER)) {
+        json_fail(403, 'This request must come from the dashboard page itself');
+    }
+}
+
+// "<dashboard user>@<address>" of whoever is making this request (for the relay and the audit log).
+function request_actor(): string
+{
+    return CamLogic::buildActor((string) ($_SERVER['PHP_AUTH_USER'] ?? ''), (string) ($_SERVER['REMOTE_ADDR'] ?? ''));
+}
+
+// Headers for a state-changing call to the relay: X-Actor, and X-Control-Key when config.php has one.
+function relay_actor_headers(array $config, bool $withLength = true): string
+{
+    $headers = CamLogic::buildActorHeaders((string) ($config['relay_control_key'] ?? ''), request_actor(), $withLength);
+    if ($headers === null) {
+        json_fail(500, 'relay_control_key in config.php contains a line break');
+    }
+    return $headers;
+}
+
+// One line in the web server's error log for a destructive action, so there is a trail of who did what.
+function audit_log(string $what): void
+{
+    error_log('camdash audit: ' . request_actor() . ' ' . $what);
+}
+
 // One request to the relay. Returns [body, response headers]; the body is
 // false when the relay could not be reached. HTTP error statuses are not
 // failures here — the caller gets the body and the status line like any other.

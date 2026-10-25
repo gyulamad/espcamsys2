@@ -789,4 +789,49 @@ camtest_test('logDue: at most once per period, and a clock that went backwards d
     camtest_assert_true(CamLogic::logDue(5000, 1000, 300), 'now earlier than the last write');
 });
 
+// ── F-02: CSRF guard for state-changing requests ─────────────────────
+
+camtest_test('isSameOriginRequest accepts no Origin / no Sec-Fetch-Site (curl, old browsers)', function () {
+    camtest_assert_true(CamLogic::isSameOriginRequest(['HTTP_HOST' => 'a.onion']));
+});
+
+camtest_test('isSameOriginRequest accepts an Origin that matches Host (case and port aware)', function () {
+    camtest_assert_true(CamLogic::isSameOriginRequest(['HTTP_HOST' => 'abc.onion', 'HTTP_ORIGIN' => 'http://ABC.onion']));
+    camtest_assert_true(CamLogic::isSameOriginRequest(['HTTP_HOST' => '127.0.0.1:8081', 'HTTP_ORIGIN' => 'http://127.0.0.1:8081']));
+});
+
+camtest_test('isSameOriginRequest rejects another site, another port, "null" and junk Origins', function () {
+    foreach (['http://evil.example', 'http://abc.onion:81', 'null', 'garbage', 'http://abc.onion.evil.example'] as $o) {
+        camtest_assert_true(!CamLogic::isSameOriginRequest(['HTTP_HOST' => 'abc.onion', 'HTTP_ORIGIN' => $o]), $o);
+    }
+});
+
+camtest_test('isSameOriginRequest follows Sec-Fetch-Site', function () {
+    camtest_assert_true(CamLogic::isSameOriginRequest(['HTTP_HOST' => 'h', 'HTTP_SEC_FETCH_SITE' => 'same-origin']));
+    camtest_assert_true(!CamLogic::isSameOriginRequest(['HTTP_HOST' => 'h', 'HTTP_SEC_FETCH_SITE' => 'cross-site']));
+    camtest_assert_true(!CamLogic::isSameOriginRequest(['HTTP_HOST' => 'h', 'HTTP_SEC_FETCH_SITE' => 'same-site']));
+});
+
+camtest_test('isDashboardMutationAllowed needs the header AND same origin', function () {
+    $ok = ['HTTP_HOST' => 'h', 'HTTP_X_REQUESTED_WITH' => 'camdash'];
+    camtest_assert_true(CamLogic::isDashboardMutationAllowed($ok));
+    camtest_assert_true(!CamLogic::isDashboardMutationAllowed(['HTTP_HOST' => 'h']));
+    camtest_assert_true(!CamLogic::isDashboardMutationAllowed($ok + ['HTTP_ORIGIN' => 'http://evil.example']));
+    camtest_assert_true(!CamLogic::isDashboardMutationAllowed($ok + ['HTTP_SEC_FETCH_SITE' => 'cross-site']));
+});
+
+camtest_test('validateRecordSeconds accepts 1..3600 and nothing else', function () {
+    camtest_assert_equal(CamLogic::validateRecordSeconds('1'), 1);
+    camtest_assert_equal(CamLogic::validateRecordSeconds('3600'), 3600);
+    foreach (['3601', '999999999', '0', '-5', '', 'abc', null, ['5'], '1.5'] as $bad) {
+        camtest_assert_equal(CamLogic::validateRecordSeconds($bad), null, var_export($bad, true));
+    }
+});
+
+camtest_test('buildActorHeaders: actor always, control key when set, refuses a key with a line break', function () {
+    camtest_assert_equal(CamLogic::buildActorHeaders('k', 'u@1', true), "Content-Length: 0\r\nX-Control-Key: k\r\nX-Actor: u@1\r\n");
+    camtest_assert_equal(CamLogic::buildActorHeaders('', 'u@1', false), "X-Actor: u@1\r\n");
+    camtest_assert_equal(CamLogic::buildActorHeaders("k\r\nX-Evil: 1", 'u@1'), null);
+});
+
 exit(camtest_summarize());

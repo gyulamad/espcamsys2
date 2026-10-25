@@ -917,7 +917,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 
   async function startRecording(id, seconds) {
     try {
-      const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&seconds=${seconds}`, { method: 'POST' });
+      const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&seconds=${seconds}`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
       const data = await res.json();
       if (res.ok && data.recording) {
         beginRecordCountdown(id, seconds); // restarts the countdown, whether this was a fresh start or an extend
@@ -936,7 +936,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 
   async function stopRecording(id) {
     try {
-      const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&stop=1`, { method: 'POST' });
+      const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&stop=1`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
       const data = await res.json().catch(() => null);
       endRecordCountdown(id);
       return data;
@@ -1114,7 +1114,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
       if (box) box.dataset.seen = '1';
     }
     updateSelectionUI(id);
-    fetch(`recordings.php?cam=${encodeURIComponent(id)}&seen=${encodeURIComponent(filename)}`, { method: 'POST' }).catch(() => null);
+    fetch(`recordings.php?cam=${encodeURIComponent(id)}&seen=${encodeURIComponent(filename)}`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } }).catch(() => null);
   }
 
   // Toggles a plain HTML5 <video> element in place under the clicked
@@ -1140,7 +1140,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
   // POSTs a delete request to recordings.php and refreshes the camera's list.
   // `query` is the part after cam=...; failures are shown to the user.
   async function recordingsPost(id, query) {
-    const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&${query}`, { method: 'POST' });
+    const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&${query}`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || ('HTTP ' + res.status));
@@ -1209,7 +1209,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     btn.disabled = true;
     try {
       await Promise.all(getAllCameraIds().map(id =>
-        fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST' }).catch(() => null)
+        fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } }).catch(() => null)
       ));
       // Refresh any panels currently open so deleted files disappear immediately.
       await Promise.all(getAllCameraIds().map(refreshRecordingsList));

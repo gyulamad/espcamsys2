@@ -5,8 +5,11 @@
 // on the ESP32-CAM itself.
 //
 // GET  record.php?cam=ID                 -> current { recording, ... } status
-// POST record.php?cam=ID&seconds=N       -> start recording for N seconds
+// POST record.php?cam=ID&seconds=N       -> start recording for N seconds (1-3600)
 // POST record.php?cam=ID&stop=1          -> stop early
+//
+// Both POSTs need the dashboard's X-Requested-With header and a same-origin request (see
+// CamLogic::isDashboardMutationAllowed), and reach the relay with the control key and X-Actor.
 //
 // Camera lookup, seconds validation, and status-code forwarding all live
 // in lib/Logic.php (CamLogic) so they can be unit tested without a web
@@ -32,14 +35,20 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+// Start/stop change state: only the dashboard's own page may do that (not a form on another website).
+require_dashboard_mutation();
+$headers = relay_actor_headers($config);
+
 if (isset($_GET['stop'])) {
+    audit_log('stop recording ' . $camera['id']);
     // Forward the relay's actual status code (e.g. 409 "already recording").
-    relay_proxy_json($base . '/stop', 'POST', 5, RELAY_EMPTY_POST_HEADER, $unreachable);
+    relay_proxy_json($base . '/stop', 'POST', 5, $headers, $unreachable);
     exit;
 }
 
-$seconds = CamLogic::validatePositiveIntParam($_GET['seconds'] ?? '');
+$seconds = CamLogic::validateRecordSeconds($_GET['seconds'] ?? '');
 if ($seconds === null) {
-    json_fail(400, 'seconds must be a positive integer');
+    json_fail(400, 'seconds must be a whole number from 1 to ' . CamLogic::MAX_RECORD_SECONDS);
 }
-relay_proxy_json($base . '?seconds=' . urlencode((string) $seconds), 'POST', 5, RELAY_EMPTY_POST_HEADER, $unreachable);
+audit_log('start recording ' . $camera['id'] . ' for ' . $seconds . 's');
+relay_proxy_json($base . '?seconds=' . urlencode((string) $seconds), 'POST', 5, $headers, $unreachable);

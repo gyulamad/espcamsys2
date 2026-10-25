@@ -13,6 +13,10 @@
 // POST recordings.php?cam=ID&seen=FILENAME      -> marks one recording as seen (the list's
 //                                                  "seen" flag; unseen ones are shown in bold)
 //
+// The three POSTs need the dashboard's X-Requested-With header and a same-origin request (see
+// CamLogic::isDashboardMutationAllowed); they reach the relay with the control key and X-Actor,
+// and deletes leave a line in the web server's error log.
+//
 // Camera lookup, filename validation, and header forwarding all live in
 // lib/Logic.php (CamLogic) so they can be unit tested without a web
 // server or a running relay — see tests/php/test_logic.php.
@@ -90,10 +94,11 @@ if ($seen !== null) {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         json_fail(405, 'Use POST to mark a recording as seen');
     }
+    require_dashboard_mutation();
     if (!CamLogic::isSafeFilename($seen)) {
         json_fail(400, 'Invalid filename');
     }
-    relay_proxy_json($relayBase . '/' . rawurlencode($seen) . '/seen', 'POST', 10, RELAY_EMPTY_POST_HEADER);
+    relay_proxy_json($relayBase . '/' . rawurlencode($seen) . '/seen', 'POST', 10, relay_actor_headers($config));
     exit;
 }
 
@@ -102,15 +107,20 @@ if ($deleteAll || $delete !== null) {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         json_fail(405, 'Use POST to delete');
     }
+    // The most destructive action of the dashboard: only its own page may ask for it.
+    require_dashboard_mutation();
+    $headers = relay_actor_headers($config, false);
     if ($deleteAll) {
         // No filename -> DELETE /recordings/:id (all of them).
-        relay_proxy_json($relayBase, 'DELETE', 30);
+        audit_log('delete ALL recordings of ' . $camera['id']);
+        relay_proxy_json($relayBase, 'DELETE', 30, $headers);
         exit;
     }
     if (!CamLogic::isSafeFilename($delete)) {
         json_fail(400, 'Invalid filename');
     }
-    relay_proxy_json($relayBase . '/' . rawurlencode($delete), 'DELETE', 10);
+    audit_log('delete recording ' . $camera['id'] . '/' . $delete);
+    relay_proxy_json($relayBase . '/' . rawurlencode($delete), 'DELETE', 10, $headers);
     exit;
 }
 

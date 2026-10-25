@@ -26,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Allow: POST');
     json_fail(405, 'POST only');
 }
-if (!CamLogic::isDashboardAjaxRequest($_SERVER)) {
+if (!CamLogic::isDashboardMutationAllowed($_SERVER)) {
     json_fail(403, 'This request must come from the dashboard page itself');
 }
 

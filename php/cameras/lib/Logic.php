@@ -252,6 +252,58 @@ class CamLogic
         return ($server['HTTP_X_REQUESTED_WITH'] ?? '') === self::AJAX_HEADER_VALUE;
     }
 
+    // Second layer, for browsers that send them: a state-changing request must come from the
+    // dashboard's own origin. Sec-Fetch-Site (if present) must be same-origin (or none), and Origin
+    // (if present) must name the host the request was sent to. Both are set by the browser itself,
+    // not by page script, so another website cannot fake them. Requests that carry neither (curl,
+    // old browsers) are decided by the custom header alone.
+    public static function isSameOriginRequest(array $server): bool
+    {
+        $site = $server['HTTP_SEC_FETCH_SITE'] ?? '';
+        if ($site !== '' && $site !== 'same-origin' && $site !== 'none') {
+            return false;
+        }
+        $origin = $server['HTTP_ORIGIN'] ?? '';
+        if ($origin === '') {
+            return true;
+        }
+        $parts = parse_url($origin);
+        if (!is_array($parts) || !isset($parts['host'], $parts['scheme'])) {   // includes the literal "null"
+            return false;
+        }
+        $authority = strtolower($parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : ''));
+        return $authority === strtolower($server['HTTP_HOST'] ?? '');
+    }
+
+    // What every state-changing endpoint (anything that is not a plain read) must pass.
+    public static function isDashboardMutationAllowed(array $server): bool
+    {
+        return self::isDashboardAjaxRequest($server) && self::isSameOriginRequest($server);
+    }
+
+    // The longest recording the dashboard will ask the relay for (the SETTINGS page uses the same maximum).
+    const MAX_RECORD_SECONDS = 3600;
+
+    // A ?seconds= value for a manual recording: a whole number from 1 to MAX_RECORD_SECONDS, else null.
+    public static function validateRecordSeconds($raw): ?int
+    {
+        if (!is_string($raw) && !is_int($raw)) return null;
+        $n = self::validatePositiveIntParam($raw);
+        return ($n !== null && $n <= self::MAX_RECORD_SECONDS) ? $n : null;
+    }
+
+    // Headers for a state-changing relay call: who is acting and, when one is configured, the
+    // control key. Null if the key holds a line break (it would inject extra headers).
+    public static function buildActorHeaders(string $controlKey, string $actor, bool $withLength = true): ?string
+    {
+        if (preg_match('/[\r\n]/', $controlKey)) {
+            return null;
+        }
+        return ($withLength ? "Content-Length: 0\r\n" : '')
+            . ($controlKey !== '' ? "X-Control-Key: " . $controlKey . "\r\n" : '')
+            . "X-Actor: " . $actor . "\r\n";
+    }
+
     // Checks a switch request and turns it into the URL to call on the relay.
     //   action   on | off
     //   scope    camera (needs cam=ID, one of the configured cameras) | all

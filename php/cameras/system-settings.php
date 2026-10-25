@@ -39,7 +39,7 @@ if ($method !== 'GET' && $method !== 'POST') {
     header('Allow: GET, POST');
     json_fail(405, 'GET or POST only');
 }
-if (!CamLogic::isDashboardAjaxRequest($_SERVER)) {
+if (!CamLogic::isDashboardMutationAllowed($_SERVER)) {
     json_fail(403, 'This request must come from the dashboard page itself');
 }
 
