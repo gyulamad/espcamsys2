@@ -48,19 +48,19 @@ function audit_log(string $what): void
 }
 
 // One request to the relay. Returns [body, response headers]; the body is
-// false when the relay could not be reached. HTTP error statuses are not
+// false when the relay could not be reached (or answered with a redirect). HTTP error statuses are not
 // failures here — the caller gets the body and the status line like any other.
 function relay_fetch(string $url, string $method = 'GET', int $timeout = 5, string $headers = '', ?string $body = null): array
 {
-    $http = ['method' => $method, 'timeout' => $timeout, 'ignore_errors' => true];
-    if ($headers !== '') {
-        $http['header'] = $headers;
+    // Redirects are not followed (they would carry X-Control-Key to another host, review F-08):
+    // a redirecting relay counts as one that cannot be used.
+    $response = @file_get_contents($url, false, stream_context_create(['http' => CamLogic::relayHttpOptions($method, $timeout, $headers, $body)]));
+    $responseHeaders = $http_response_header ?? [];
+    if (CamLogic::isRedirectStatus(CamLogic::extractStatusCode($responseHeaders))) {
+        error_log('camdash: the relay answered ' . $method . ' with a redirect, which is never followed (the control key must not be sent anywhere else) — check relay_url in config.php');
+        return [false, $responseHeaders];
     }
-    if ($body !== null) {
-        $http['content'] = $body;
-    }
-    $response = @file_get_contents($url, false, stream_context_create(['http' => $http]));
-    return [$response, $http_response_header ?? []];
+    return [$response, $responseHeaders];
 }
 
 // Passes the relay's JSON answer straight through to the browser: 502 if the

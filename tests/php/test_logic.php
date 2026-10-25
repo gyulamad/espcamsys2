@@ -904,4 +904,77 @@ camtest_test('throttle: garbage in the state file is ignored, and a clock that j
     camtest_assert_equal(CamLogic::loginLockRemaining($s, 10), 900);
 });
 
+// ── F-08: the control key must only ever go to the relay ─────────────
+
+camtest_test('relayHttpOptions never follows redirects, whatever the call', function () {
+    foreach ([CamLogic::relayHttpOptions(), CamLogic::relayHttpOptions('POST', 8, "X-Control-Key: k\r\n", '{}'), CamLogic::relayHttpOptions('DELETE', 30)] as $o) {
+        camtest_assert_equal($o['follow_location'], 0);
+        camtest_assert_equal($o['max_redirects'], 0);
+        camtest_assert_true($o['ignore_errors'] === true);
+    }
+    $o = CamLogic::relayHttpOptions('POST', 8, "X-Actor: a\r\n", '{"x":1}');
+    camtest_assert_equal([$o['method'], $o['timeout'], $o['header'], $o['content']], ['POST', 8, "X-Actor: a\r\n", '{"x":1}']);
+    camtest_assert_true(!isset(CamLogic::relayHttpOptions()['header']) && !isset(CamLogic::relayHttpOptions()['content']));
+});
+
+camtest_test('isRedirectStatus: only 3xx', function () {
+    foreach ([301, 302, 307, 308, 300, 399] as $s) camtest_assert_true(CamLogic::isRedirectStatus($s), (string) $s);
+    foreach ([null, 0, 200, 202, 299, 400, 404, 502] as $s) camtest_assert_true(!CamLogic::isRedirectStatus($s), var_export($s, true));
+});
+
+camtest_test('isAllowedRelayHost accepts this machine and the local network', function () {
+    foreach (['127.0.0.1', '127.1.2.3', '10.0.0.5', '10.255.255.255', '172.16.0.1', '172.31.255.254', '192.168.1.20', '100.64.0.1', '100.127.255.1',
+              '[::1]', '::1', '[fd12:3456:789a::1]', 'fc00::1', 'localhost', 'LOCALHOST', 'raspberrypi', 'pi', 'relay.local', 'pi.lan', 'cam-relay.home.arpa', 'nas.localdomain'] as $h) {
+        camtest_assert_true(CamLogic::isAllowedRelayHost($h), $h);
+    }
+});
+
+camtest_test('isAllowedRelayHost refuses public, link-local, metadata and disguised addresses', function () {
+    foreach (['8.8.8.8', '1.1.1.1', '169.254.169.254', '169.254.0.1', '172.15.0.1', '172.32.0.1', '192.169.0.1', '100.63.255.255', '100.128.0.1', '11.0.0.1', '0.0.0.0', '255.255.255.255',
+              '[fe80::1]', 'fe80::1', '2001:4860:4860::8888', '[::ffff:8.8.8.8]', '::ffff:127.0.0.1', '::',
+              'example.com', 'evil.example.com', 'localhost.evil.com', 'relay.local.evil.com', 'metadata.google.internal', 'relay.internal',
+              '2130706433', '0x7f000001', '017700000001', '127.1', '10.1', '1e3', '0relay', '', 'pi.', '.local', 'bad host', "a\nb", str_repeat('a', 64)] as $h) {
+        camtest_assert_true(!CamLogic::isAllowedRelayHost($h), var_export($h, true));
+    }
+});
+
+camtest_test('relayUrlHostAllowed reads the host out of a URL', function () {
+    camtest_assert_true(CamLogic::relayUrlHostAllowed('http://127.0.0.1:8080'));
+    camtest_assert_true(CamLogic::relayUrlHostAllowed('https://192.168.1.5'));
+    camtest_assert_true(CamLogic::relayUrlHostAllowed('http://[::1]:8080'));
+    camtest_assert_true(CamLogic::relayUrlHostAllowed('http://pi.local:8080/'));
+    camtest_assert_true(!CamLogic::relayUrlHostAllowed('http://169.254.169.254/latest'));
+    camtest_assert_true(!CamLogic::relayUrlHostAllowed('http://8.8.8.8:80'));
+    camtest_assert_true(!CamLogic::relayUrlHostAllowed('http://127.0.0.1.evil.com:80'));
+    camtest_assert_true(!CamLogic::relayUrlHostAllowed('not a url'));
+});
+
+camtest_test('validateDashboardUpdate refuses a NEW relay_url outside the local network', function () {
+    $cur = ['auth_user' => 'bob', 'auth_pass' => 'longenough1', 'relay_url' => 'http://127.0.0.1:8080'];
+    foreach (['http://8.8.8.8:80', 'http://169.254.169.254', 'http://evil.example.com:8080', 'https://relay.example.org', 'http://2130706433:80'] as $bad) {
+        $r = CamLogic::validateDashboardUpdate(['relay_url' => $bad], $cur);
+        camtest_assert_true($r['ok'] === false && strpos($r['error'], 'local network') !== false, $bad);
+    }
+    foreach (['http://192.168.1.9:8080', 'http://pi.local:8080', 'http://[::1]:8080', 'http://10.0.0.2'] as $good) {
+        $r = CamLogic::validateDashboardUpdate(['relay_url' => $good], $cur);
+        camtest_assert_true($r['ok'] === true && $r['changes']['relay_url'] === $good, $good);
+    }
+});
+
+camtest_test('an UNCHANGED relay_url is never refused (a hand-set remote relay must not block other saves)', function () {
+    $cur = ['auth_user' => 'bob', 'auth_pass' => 'longenough1', 'relay_url' => 'https://relay.example.com'];
+    $r = CamLogic::validateDashboardUpdate(['relay_url' => 'https://relay.example.com/', 'auth_user' => 'alice'], $cur);
+    camtest_assert_true($r['ok'] === true);
+    camtest_assert_equal($r['changes'], ['auth_user' => 'alice']);
+});
+
+camtest_test('isRelayStatusAnswer wants 200 and a JSON object/list, nothing else', function () {
+    camtest_assert_true(CamLogic::isRelayStatusAnswer('{"cam1":{"online":true}}', 200));
+    camtest_assert_true(CamLogic::isRelayStatusAnswer('{}', 200), 'an empty relay');
+    camtest_assert_true(CamLogic::isRelayStatusAnswer('[]', 200));
+    foreach ([['<html>router login</html>', 200], ['{"a":1}', 404], ['{"a":1}', null], ['{"a":1}', 302], [false, 200], [null, 200], ['', 200], ['12', 200], ['"str"', 200], ['null', 200]] as [$b, $s]) {
+        camtest_assert_true(!CamLogic::isRelayStatusAnswer($b, $s), var_export($b, true) . ' ' . var_export($s, true));
+    }
+});
+
 exit(camtest_summarize());

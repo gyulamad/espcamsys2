@@ -24,12 +24,8 @@ if (!$camera) {
 $streamUrl = rtrim($camera['url'], '/') . '/stream/' . rawurlencode($camera['id']);
 
 // Open the stream from the relay
-$ctx = stream_context_create([
-    'http' => [
-        'timeout'        => 10,
-        'ignore_errors'  => true,
-    ]
-]);
+// (no redirects: review F-08)
+$ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10)]);
 
 $stream = @fopen($streamUrl, 'rb', false, $ctx);
 
@@ -42,6 +38,11 @@ if (!$stream) {
 // (ESP32 sends multipart/x-mixed-replace; boundary=...)
 $meta        = stream_get_meta_data($stream);
 $wrapperData = $meta['wrapper_data'] ?? [];
+if (CamLogic::isRedirectStatus(CamLogic::extractStatusCode($wrapperData))) {
+    fclose($stream);
+    http_response_code(502);
+    exit('Could not connect to camera: ' . htmlspecialchars($camera['name']));
+}
 $contentType = CamLogic::extractContentType($wrapperData, 'multipart/x-mixed-replace; boundary=frame');
 
 // Disable output buffering so frames reach the browser immediately

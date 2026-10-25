@@ -544,6 +544,92 @@ class CamLogic
         return rtrim($raw, '/');
     }
 
+    // ── Talking to the relay safely (review F-08) ──
+
+    // The 'http' options for every call from the dashboard to the relay. Redirects are NEVER followed:
+    // PHP would resend the custom headers — X-Control-Key and X-Actor — to wherever a redirect points,
+    // so a relay (or anything answering at relay_url) could collect the control key on another host.
+    public static function relayHttpOptions(string $method = 'GET', int $timeout = 5, string $headers = '', ?string $body = null): array
+    {
+        $http = ['method' => $method, 'timeout' => $timeout, 'ignore_errors' => true, 'follow_location' => 0, 'max_redirects' => 0];
+        if ($headers !== '') {
+            $http['header'] = $headers;
+        }
+        if ($body !== null) {
+            $http['content'] = $body;
+        }
+        return $http;
+    }
+
+    // A relay never redirects; one that does is wrong or not the relay.
+    public static function isRedirectStatus(?int $status): bool
+    {
+        return $status !== null && $status >= 300 && $status <= 399;
+    }
+
+    // Where the relay may live: this machine or the local network — never the internet, and never a
+    // link-local address (169.254.x.x is where cloud metadata services answer). Accepts: loopback,
+    // 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale and carrier-grade NAT), ::1, fc00::/7, and
+    // names that cannot be public: localhost, one word (raspberrypi), *.local, *.lan, *.home.arpa,
+    // *.localdomain. A single word must start with a letter, so 2130706433 or 0x7f000001 (other ways
+    // to write an IPv4 address) do not slip through as "names". The address is checked as written, never resolved,
+    // because a name that resolves differently on the next lookup (DNS rebinding) would defeat a check.
+    public static function isAllowedRelayHost(string $host): bool
+    {
+        $host = strtolower($host);
+        if ($host !== '' && $host[0] === '[' && substr($host, -1) === ']') {
+            $host = substr($host, 1, -1);
+        }
+        if ($host === '') {
+            return false;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            $n = ip2long($host);
+            if ($n === false) {
+                return false;
+            }
+            foreach ([['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['100.64.0.0', 10]] as [$net, $bits]) {
+                if (($n & (-1 << (32 - $bits))) === ip2long($net)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            $bin = inet_pton($host);
+            return $bin !== false && ($bin === inet_pton('::1') || (ord($bin[0]) & 0xfe) === 0xfc);
+        }
+        if ($host === 'localhost') {
+            return true;
+        }
+        if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/', $host)) {
+            return false;
+        }
+        if (strpos($host, '.') === false) {
+            return (bool) preg_match('/^[a-z]/', $host);
+        }
+        foreach (['.local', '.lan', '.home.arpa', '.localdomain'] as $suffix) {
+            if (substr($host, -strlen($suffix)) === $suffix) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // normalizeRelayUrl() said the address is well formed; may the dashboard send the control key there?
+    public static function relayUrlHostAllowed(string $url): bool
+    {
+        $p = parse_url($url);
+        return is_array($p) && isset($p['host']) && self::isAllowedRelayHost($p['host']);
+    }
+
+    // Did this look like the relay's /status? (200 and a JSON object or list — an empty relay answers {}.)
+    // The settings page asks before saving a new relay address; a web server that merely answers is not enough.
+    public static function isRelayStatusAnswer($body, ?int $status): bool
+    {
+        return is_string($body) && $status === 200 && is_array(json_decode($body, true));
+    }
+
     // The same address with another port (the relay's port changed, and the dashboard
     // has to keep finding it). Null if the address has no usable host.
     public static function replaceUrlPort(string $url, int $port): ?string
@@ -593,6 +679,11 @@ class CamLogic
                     return ['ok' => false, 'error' => 'relay_url must look like http://host:port (no login, no query)'];
                 }
                 if ($v !== rtrim((string) ($current['relay_url'] ?? ''), '/')) {
+                    // (only a CHANGED address is checked: a relay that already lives elsewhere, set by hand
+                    // in config.php, must not block saving the other settings)
+                    if (!self::relayUrlHostAllowed($v)) {
+                        return ['ok' => false, 'error' => 'relay_url must point at this machine or your local network (127.x, 10.x, 172.16-31.x, 192.168.x, 100.64-127.x, ::1, fc00::/7, or a name like raspberrypi / pi.local) — the control key is sent there, so use the relay\'s IP address'];
+                    }
                     $changes[$key] = $v;
                 }
             } elseif ($key === 'record_seconds' || $key === 'switch_off_minutes') {

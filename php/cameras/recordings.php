@@ -52,11 +52,8 @@ function stream_recording($url, $filename, $disposition) {
         $reqHeaders[] = 'Range: ' . $_SERVER['HTTP_RANGE'];
     }
 
-    $ctx = stream_context_create(['http' => [
-        'timeout'       => 30,
-        'ignore_errors' => true,
-        'header'        => implode("\r\n", $reqHeaders),
-    ]]);
+    // No redirects (review F-08): the Range header and anything else we send must not follow one to another host.
+    $ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 30, implode("\r\n", $reqHeaders))]);
     $stream = @fopen($url, 'rb', false, $ctx);
 
     if (!$stream) {
@@ -66,6 +63,11 @@ function stream_recording($url, $filename, $disposition) {
 
     $headers = $http_response_header ?? [];
     $status = CamLogic::extractStatusCode($headers) ?? 200;
+    if (CamLogic::isRedirectStatus($status)) {
+        fclose($stream);
+        http_response_code(502);
+        exit('Could not reach relay');
+    }
     $passThroughHeaders = CamLogic::extractPassThroughHeaders($headers);
 
     while (ob_get_level()) ob_end_clean();

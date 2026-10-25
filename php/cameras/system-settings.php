@@ -121,9 +121,11 @@ if ($breaking && empty($input['confirm'])) {
 
 // A new relay address must answer before it is saved: a wrong one would lock the dashboard out of the relay.
 if (isset($dashChanges['relay_url']) && !isset($relayValues['port'])) {
-    [$probe] = relay_fetch($dashChanges['relay_url'] . '/status', 'GET', 3);
-    if ($probe === false) {
-        json_fail(400, 'Nothing answers at the new relay address ' . $dashChanges['relay_url'] . ' — not saved');
+    // It must answer like the relay (200 and JSON), and every failure reads the same, so this cannot be
+    // used to find out what else is listening on the network (review F-08). The probe carries no control key.
+    [$probe, $probeResp] = relay_fetch($dashChanges['relay_url'] . '/status', 'GET', 3);
+    if (!CamLogic::isRelayStatusAnswer($probe, CamLogic::extractStatusCode($probeResp))) {
+        json_fail(400, 'No relay answered at the new relay address ' . $dashChanges['relay_url'] . ' — not saved');
     }
 }
 
