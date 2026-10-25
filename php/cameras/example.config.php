@@ -9,6 +9,8 @@ return [
     // HTTP Basic Auth credentials gating the Tor-facing dashboard.
     // Pick a long random password — this is the only thing standing
     // between "anyone with the .onion address" and your cameras.
+    // The dashboard REFUSES to start (HTTP 503) while either is empty, still "change-me",
+    // or the password is shorter than 8 characters:  openssl rand -base64 24
     'auth_user' => 'change-me',
     'auth_pass' => 'change-me',
 

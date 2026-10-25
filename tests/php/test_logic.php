@@ -834,4 +834,74 @@ camtest_test('buildActorHeaders: actor always, control key when set, refuses a k
     camtest_assert_equal(CamLogic::buildActorHeaders("k\r\nX-Evil: 1", 'u@1'), null);
 });
 
+// ── F-03 / F-04: login policy and guess throttle ─────────────────────
+
+camtest_test('checkCredentials never accepts an empty configured login (F-04)', function () {
+    camtest_assert_true(!CamLogic::checkCredentials('', '', '', ''), 'empty config + empty request');
+    camtest_assert_true(!CamLogic::checkCredentials('admin', '', 'admin', ''), 'empty password');
+    camtest_assert_true(!CamLogic::checkCredentials('', 'secret', '', 'secret'), 'empty user');
+    camtest_assert_true(CamLogic::checkCredentials('admin', 'secret', 'admin', 'secret'));
+});
+
+camtest_test('credentialProblem: empty, template and short logins are refused, a real one is fine', function () {
+    camtest_assert_true(CamLogic::credentialProblem('', 'a-long-password') !== null);
+    camtest_assert_true(CamLogic::credentialProblem('admin', '') !== null);
+    camtest_assert_true(CamLogic::credentialProblem('change-me', 'change-me') !== null);
+    camtest_assert_true(CamLogic::credentialProblem('admin', 'change-me') !== null);
+    camtest_assert_true(CamLogic::credentialProblem('Change-Me', 'a-long-password') !== null);
+    camtest_assert_true(CamLogic::credentialProblem('admin', 'short') !== null);
+    camtest_assert_true(CamLogic::credentialProblem(null, 'a-long-password') !== null, 'missing key');
+    camtest_assert_true(CamLogic::credentialProblem('admin', ['x']) !== null, 'wrong type');
+    camtest_assert_equal(CamLogic::credentialProblem('admin', '12345678'), null);
+});
+
+camtest_test('validateDashboardUpdate refuses the template value, so the settings page cannot lock the owner out', function () {
+    $r = CamLogic::validateDashboardUpdate(['auth_pass' => 'change-me'], []);
+    camtest_assert_true($r['ok'] === false);
+    $r = CamLogic::validateDashboardUpdate(['auth_user' => 'change-me'], []);
+    camtest_assert_true($r['ok'] === false);
+    $r = CamLogic::validateDashboardUpdate(['auth_user' => 'owner', 'auth_pass' => 'a-long-password'], []);
+    camtest_assert_true($r['ok'] === true);
+});
+
+camtest_test('throttle: the first 9 failures are not locked, the 10th locks for 15 s', function () {
+    $s = CamLogic::loginThrottleState(null, 1000);
+    for ($i = 1; $i <= 9; $i++) {
+        $s = CamLogic::loginAfterFailure($s, 1000);
+        camtest_assert_equal(CamLogic::loginLockRemaining($s, 1000), 0, "failure $i");
+    }
+    $s = CamLogic::loginAfterFailure($s, 1000);
+    camtest_assert_equal($s['fails'], 10);
+    camtest_assert_equal(CamLogic::loginLockRemaining($s, 1000), 15);
+    camtest_assert_equal(CamLogic::loginLockRemaining($s, 1015), 0);
+});
+
+camtest_test('throttle: the lock doubles with every further failure and stops at 15 minutes', function () {
+    $s = ['fails' => 10, 'last' => 0, 'lockUntil' => 0];
+    $expect = [30, 60, 120, 240, 480, 900, 900, 900];
+    foreach ($expect as $i => $secs) {
+        $s = CamLogic::loginAfterFailure($s, 5000);
+        camtest_assert_equal(CamLogic::loginLockRemaining($s, 5000), $secs, 'failure ' . ($i + 11));
+    }
+    $s = CamLogic::loginAfterFailure(['fails' => 100000, 'last' => 0, 'lockUntil' => 0], 5000);
+    camtest_assert_equal(CamLogic::loginLockRemaining($s, 5000), 900, 'huge count stays capped (no shift overflow)');
+});
+
+camtest_test('throttle: a success clears everything; old failures are forgotten', function () {
+    camtest_assert_equal(CamLogic::loginAfterSuccess(['fails' => 12, 'last' => 5, 'lockUntil' => 99]), ['fails' => 0, 'last' => 0, 'lockUntil' => 0]);
+    $old = ['fails' => 9, 'last' => 1000, 'lockUntil' => 0];
+    camtest_assert_equal(CamLogic::loginThrottleState($old, 1000 + 3601)['fails'], 0);
+    camtest_assert_equal(CamLogic::loginThrottleState($old, 1000 + 3000)['fails'], 9);
+    // ...but never while a lock is still running
+    $locked = ['fails' => 12, 'last' => 1000, 'lockUntil' => 1000 + 3700];
+    camtest_assert_equal(CamLogic::loginThrottleState($locked, 1000 + 3601)['fails'], 12);
+});
+
+camtest_test('throttle: garbage in the state file is ignored, and a clock that jumped back cannot lock forever', function () {
+    camtest_assert_equal(CamLogic::loginThrottleState('junk', 10), ['fails' => 0, 'last' => 0, 'lockUntil' => 0]);
+    camtest_assert_equal(CamLogic::loginThrottleState(['fails' => 'x', 'last' => -5, 'lockUntil' => 1.5], 10), ['fails' => 0, 'last' => 0, 'lockUntil' => 0]);
+    $s = CamLogic::loginThrottleState(['fails' => 12, 'last' => 10, 'lockUntil' => 10 + 999999], 10);
+    camtest_assert_equal(CamLogic::loginLockRemaining($s, 10), 900);
+});
+
 exit(camtest_summarize());

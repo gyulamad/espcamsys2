@@ -500,6 +500,17 @@ else
 fi
 
 hr
+echo "End-to-end (dashboard login: unsafe config refused, guess throttle) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_login_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
 echo "End-to-end (relay logging) test"
 hr
 if ! command -v node >/dev/null 2>&1; then

@@ -450,6 +450,8 @@ Things worth knowing:
 
 - Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js`, and re-flash every camera's `config.h` with the same value.
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
+  The dashboard enforces this: with an empty username or password, a password under 8 characters, or the template's `change-me`, it answers **503** and shows nothing (the reason is in the web server's error log). Generate one with `openssl rand -base64 24`.
+- Wrong logins are logged (`camdash: failed login for user ...` in the Apache error log) and slowed down: after 10 wrong logins in a row every attempt gets **429** for 15 s, doubling up to 15 minutes — even with the right password. Over Tor every visitor looks like 127.0.0.1, so the counter is global: someone guessing can lock the owner out for a while. Tor v3 *client authorization* (an `authorized_clients/*.auth` file in the hidden service directory) keeps strangers from reaching the login at all and is the recommended second lock.
 - Keep `config.php`, `config.js` and your real settings templates (`Arduino/templates/*.txt`) out of git — they're already listed in `.gitignore`; just don't force-add them.
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
 

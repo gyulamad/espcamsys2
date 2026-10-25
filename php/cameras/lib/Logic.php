@@ -20,9 +20,82 @@ class CamLogic
     // Constant-time comparison of both the username and password against
     // config — mirrors auth.php's use of hash_equals() so a wrong guess
     // doesn't leak timing info about how much of it was right.
+    // Both are always compared (no short-circuit &&), so the time does not reveal whether the
+    // username was right. A config with an empty username or password never matches anything
+    // (hash_equals('', '') is true — that would let a request with NO login in).
     public static function checkCredentials(string $configUser, string $configPass, string $suppliedUser, string $suppliedPass): bool
     {
-        return hash_equals($configUser, $suppliedUser) && hash_equals($configPass, $suppliedPass);
+        $userOk = hash_equals($configUser, $suppliedUser);
+        $passOk = hash_equals($configPass, $suppliedPass);
+        return $userOk && $passOk && $configUser !== '' && $configPass !== '';
+    }
+
+    // What the template ships with; never acceptable as a real login.
+    const PLACEHOLDER_CREDENTIAL = 'change-me';
+    const MIN_PASSWORD_LENGTH = 8;
+
+    // Why the configured login is not safe to run with, or null if it is fine. (The dashboard answers
+    // 503 instead of showing anything until config.php is fixed.)
+    public static function credentialProblem($user, $pass): ?string
+    {
+        if (!is_string($user) || $user === '') return 'auth_user is empty';
+        if (!is_string($pass) || $pass === '') return 'auth_pass is empty';
+        if (strtolower($user) === self::PLACEHOLDER_CREDENTIAL || strtolower($pass) === self::PLACEHOLDER_CREDENTIAL) {
+            return 'auth_user / auth_pass still has the template value "' . self::PLACEHOLDER_CREDENTIAL . '"';
+        }
+        if (strlen($pass) < self::MIN_PASSWORD_LENGTH) return 'auth_pass is shorter than ' . self::MIN_PASSWORD_LENGTH . ' characters';
+        return null;
+    }
+
+    // ── Slowing down password guessing ──
+    // Tor connects from 127.0.0.1, so a per-address limit cannot tell an attacker from the owner:
+    // the counter is global. After LOGIN_FREE_FAILURES wrong logins in a row, every further attempt is
+    // refused (429) for a growing time (15 s, 30 s, 60 s ... at most 15 min), and a wrong attempt after
+    // the pause extends it again. Failures older than LOGIN_DECAY_SECONDS are forgotten.
+    // State is ['fails' => int, 'last' => unix time of the last failure, 'lockUntil' => unix time].
+    const LOGIN_FREE_FAILURES = 10;
+    const LOGIN_LOCK_BASE_SECONDS = 15;
+    const LOGIN_LOCK_MAX_SECONDS = 900;
+    const LOGIN_DECAY_SECONDS = 3600;
+
+    // Cleans what was read back from the state file (anything may be in there) and forgets old failures.
+    public static function loginThrottleState($raw, int $now): array
+    {
+        $s = ['fails' => 0, 'last' => 0, 'lockUntil' => 0];
+        if (is_array($raw)) {
+            foreach (['fails', 'last', 'lockUntil'] as $k) {
+                if (isset($raw[$k]) && is_int($raw[$k]) && $raw[$k] >= 0) $s[$k] = $raw[$k];
+            }
+        }
+        if ($s['fails'] > 0 && $now - $s['last'] > self::LOGIN_DECAY_SECONDS && $now >= $s['lockUntil']) {
+            return ['fails' => 0, 'last' => 0, 'lockUntil' => 0];
+        }
+        if ($s['lockUntil'] > $now + self::LOGIN_LOCK_MAX_SECONDS) {   // a clock that jumped back must not lock forever
+            $s['lockUntil'] = $now + self::LOGIN_LOCK_MAX_SECONDS;
+        }
+        return $s;
+    }
+
+    // Seconds until logins are looked at again; 0 = not locked.
+    public static function loginLockRemaining(array $state, int $now): int
+    {
+        return max(0, $state['lockUntil'] - $now);
+    }
+
+    public static function loginAfterFailure(array $state, int $now): array
+    {
+        $fails = $state['fails'] + 1;
+        $lockUntil = $state['lockUntil'];
+        if ($fails >= self::LOGIN_FREE_FAILURES) {
+            $step = min($fails - self::LOGIN_FREE_FAILURES, 6);   // 2^6 * 15 s is past the maximum
+            $lockUntil = $now + min(self::LOGIN_LOCK_MAX_SECONDS, self::LOGIN_LOCK_BASE_SECONDS * (1 << $step));
+        }
+        return ['fails' => $fails, 'last' => $now, 'lockUntil' => $lockUntil];
+    }
+
+    public static function loginAfterSuccess(array $state): array
+    {
+        return ['fails' => 0, 'last' => 0, 'lockUntil' => 0];
     }
 
     // Attaches the relay's base URL to every camera from config.php —
@@ -495,6 +568,9 @@ class CamLogic
                 if ($v === '' || strlen($v) > 64 || preg_match('/[\x00-\x1f\x7f:]/', $v)) {
                     return ['ok' => false, 'error' => 'auth_user must be 1-64 characters, without a colon or line breaks'];
                 }
+                if (strtolower($v) === self::PLACEHOLDER_CREDENTIAL) {
+                    return ['ok' => false, 'error' => 'auth_user must not be the template value "' . self::PLACEHOLDER_CREDENTIAL . '"'];
+                }
                 if ($v !== ($current['auth_user'] ?? null)) {
                     $changes[$key] = $v;
                 }
@@ -504,6 +580,9 @@ class CamLogic
                 }
                 if (strlen($value) < 8 || strlen($value) > 200 || preg_match('/[\x00-\x1f\x7f]/', $value)) {
                     return ['ok' => false, 'error' => 'auth_pass must be 8-200 characters, without line breaks'];
+                }
+                if (strtolower($value) === self::PLACEHOLDER_CREDENTIAL) {
+                    return ['ok' => false, 'error' => 'auth_pass must not be the template value "' . self::PLACEHOLDER_CREDENTIAL . '"'];
                 }
                 if ($value !== ($current['auth_pass'] ?? null)) {
                     $changes[$key] = $value;
