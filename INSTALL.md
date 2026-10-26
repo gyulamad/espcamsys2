@@ -349,11 +349,11 @@ Things worth knowing:
    sudo a2enmod headers
    ```
 
-2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `relay.php`, `record.php`, `recordings.php`, `recording-switch.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/camdash/`.
+2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `relay.php`, `record.php`, `recordings.php`, `recording-switch.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/html/camdash/` (that is the folder `deploy.sh` copies to; it is then at `http://<the Pi>/camdash/`).
 3. Create the real config:
 
    ```
-   cd /var/www/camdash
+   cd /var/www/html/camdash
    cp example.config.php config.php
    ```
 
@@ -372,34 +372,42 @@ Things worth knowing:
    ];
    ```
 
-4. Point Apache at that folder with the config files shipped in this repo (`apache/`). They listen on `127.0.0.1` only, turn off folder listings, deny `lib/`, `config.php` and every copy or backup of it, add the security headers, and make Apache stop announcing its version:
+4. Protect that folder with the config file shipped in this repo (`apache/camdash-protect.conf`). It is **not** a new site: nothing is disabled and your existing Apache setup keeps serving the dashboard exactly as before, on your **LAN** (`http://<the Pi>/camdash/`) and over **Tor** (step 6). It only adds rules for the dashboard folder: no folder listings, `lib/`, `config.php` and every copy or backup of it are never served, the security headers, and (with the second file) Apache stops announcing its version.
 
    ```
-   sudo cp apache/camdash.conf /etc/apache2/sites-available/camdash.conf
-   sudo cp apache/camdash-hardening.conf /etc/apache2/conf-available/camdash-hardening.conf
+   sudo cp apache/camdash-protect.conf /etc/apache2/conf-available/camdash-protect.conf
+   sudo cp apache/camdash-hardening.conf /etc/apache2/conf-available/camdash-hardening.conf   # optional: server-wide, hides the Apache version
    sudo a2enmod headers
-   sudo a2enconf camdash-hardening
-   sudo a2dissite 000-default          # Apache's default site serves EVERY interface
-   sudo a2ensite camdash
+   sudo a2enconf camdash-protect camdash-hardening
+   sudo apache2ctl configtest && sudo systemctl reload apache2
    ```
 
-   Also make Apache listen on localhost only: in `/etc/apache2/ports.conf` replace `Listen 80` with `Listen 127.0.0.1:80`. Then:
+   If your dashboard is in another folder than `/var/www/html/camdash`, change the one `Define CAMDASH_DIR` line at the top of `camdash-protect.conf` (and run `sudo CAMDASH_DIR=/your/folder ./deploy.sh`).
+
+   Only `config.php` itself must be writable by the web server (`sudo chown www-data config.php`) — never `chown -R` the whole web folder. `sudo ./deploy.sh` (from the repo root) copies the dashboard into the folder and does that `chown`.
+
+   **Plain HTTP on the LAN — what it means.** Basic auth sends the username and password unencrypted, so anyone who can watch the traffic on your LAN (a compromised device, someone on your Wi-Fi) can read them. The login also slows down guessing (see the security notes below), but it cannot stop sniffing. Over Tor this does not apply: Tor encrypts everything. If your LAN is only people you trust, plain HTTP is a reasonable convenience; if not, use the optional HTTPS below.
+
+   **Optional: HTTPS for the LAN.** Skip this if plain HTTP is fine for you; nothing else depends on it. It adds a site on port 443 with a certificate the Pi signs for itself, so the password is encrypted on the LAN (the plain HTTP address keeps working next to it):
 
    ```
+   sudo ./apache/make-selfsigned-cert.sh raspberrypi raspberrypi.local 192.168.1.20
+   sudo a2dissite default-ssl                 # only if Debian's own HTTPS site is enabled
+   sudo cp apache/camdash-ssl.conf /etc/apache2/sites-available/camdash-ssl.conf
+   sudo a2enmod ssl
+   sudo a2ensite camdash-ssl
    sudo apache2ctl configtest && sudo systemctl restart apache2
    ```
 
-   Only `config.php` itself must be writable by the web server (`sudo chown www-data config.php`) — never `chown -R` the whole web folder. `sudo ./deploy.sh` (from the repo root) copies the dashboard into `/var/www/camdash` and does that `chown`. If you upgraded from an older version that used `/var/www/html/camdash`, it carries your `config.php` over and tells you to delete the old folder — do that, because the default site serves it on the LAN. Change the dashboard password and control key if that folder was ever reachable from the network, or if a `config.php.bak` was ever in it.
-
-   Why not LAN access: Basic auth over plain HTTP sends the password in a form anyone sniffing the network can read. If you really want the dashboard on the LAN, put HTTPS in front of it first.
+   Give the script every name and address you use to reach the Pi (replace the example ones). Then open `https://<the Pi>/camdash/`. The certificate is signed by itself, so the browser warns **once**: compare the SHA-256 fingerprint the script printed with the one the browser shows, and accept it. The certificate is valid for 825 days; to renew it, run the script again with `--force` as the first argument and reload Apache. No HSTS header is sent on purpose: with a self-signed certificate it would make the warning impossible to click through.
 
 5. Sanity check from the Pi itself:
 
    ```
-   curl -u pick-a-username:yourpassword http://127.0.0.1:80/
+   curl -u pick-a-username:yourpassword http://127.0.0.1:80/camdash/
    ```
 
-   You should get the dashboard HTML back. From another computer on your LAN, `http://<the Pi's LAN address>/` should NOT answer at all (connection refused); the dashboard is reached through the Tor hidden service (next step). Also check that `curl -sI http://127.0.0.1/lib/` and `curl -sI http://127.0.0.1/config.php` answer `403`, and that the response headers include `X-Content-Type-Options: nosniff` and no Apache version number.
+   (Use `http://127.0.0.1:80/camdash/` if the dashboard is in `/var/www/html/camdash`, `http://127.0.0.1:80/` if your own site has that folder as its web root.) You should get the dashboard HTML back. Then, from another computer on your LAN, open the same address with the Pi's LAN address instead of `127.0.0.1` (or `https://` if you set up the optional HTTPS): you should get the login prompt. Also check that `curl -sI http://127.0.0.1/camdash/lib/` and `curl -sI http://127.0.0.1/camdash/config.php` answer `403`, and that the response headers include `X-Content-Type-Options: nosniff`.
 
 ---
 
@@ -446,7 +454,7 @@ Things worth knowing:
 - Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js`, and re-flash every camera's `config.h` with the same value.
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
   The dashboard enforces this: with an empty username or password, a password under 8 characters, or the template's `change-me`, it answers **503** and shows nothing (the reason is in the web server's error log). Generate one with `openssl rand -base64 24`.
-- Wrong logins are logged (`camdash: failed login for user ...` in the Apache error log) and slowed down: after 10 wrong logins in a row every attempt gets **429** for 15 s, doubling up to 15 minutes — even with the right password. Over Tor every visitor looks like 127.0.0.1, so the counter is global: someone guessing can lock the owner out for a while. Tor v3 *client authorization* (an `authorized_clients/*.auth` file in the hidden service directory) keeps strangers from reaching the login at all and is the recommended second lock.
+- Wrong logins are logged (`camdash: failed login for user ...` in the Apache error log) and slowed down: after 10 wrong logins in a row every attempt gets **429** for 15 s, doubling up to 15 minutes — even with the right password. Over Tor every visitor looks like 127.0.0.1, so the counter is global: someone guessing can lock the owner out for a while. Tor v3 *client authorization* (an `authorized_clients/*.auth` file in the hidden service directory) keeps strangers from reaching the login over Tor at all and is the recommended second lock for the `.onion` address; on the LAN the equivalent is the optional HTTPS plus a password only you know.
 - Keep `config.php`, `config.js` and your real settings templates (`Arduino/templates/*.txt`) out of git — they're already listed in `.gitignore`; just don't force-add them.
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
 
