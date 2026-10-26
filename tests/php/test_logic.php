@@ -977,4 +977,54 @@ camtest_test('isRelayStatusAnswer wants 200 and a JSON object/list, nothing else
     }
 });
 
+// ── F-05: nothing from the relay or config.php may become markup ─────
+
+camtest_test('sanitizeRecordingList keeps clean names and drops everything else', function () {
+    $list = [
+        ['filename' => 'cam1-20260101-000000.mp4', 'sizeBytes' => 1234, 'seen' => false],
+        ['filename' => "x');alert(1);('.mp4", 'sizeBytes' => 1],
+        ['filename' => '"><img src=x onerror=alert(1)>.mp4'],
+        ['filename' => '../../etc/passwd'],
+        ['filename' => 'a/b.mp4'],
+        ['filename' => 'notvideo.html'],
+        ['filename' => ['a.mp4']],
+        ['filename' => 5],
+        ['nofilename' => 'a.mp4'],
+        'a-string', null, 7,
+        ['filename' => 'ok-2.mp4', 'sizeBytes' => '<b>big</b>', 'seen' => 'false', 'extra' => '<script>'],
+    ];
+    camtest_assert_equal(CamLogic::sanitizeRecordingList($list), [
+        ['filename' => 'cam1-20260101-000000.mp4', 'sizeBytes' => 1234, 'seen' => false],
+        ['filename' => 'ok-2.mp4', 'sizeBytes' => 0],
+    ]);
+});
+
+camtest_test('sanitizeRecordingList: an empty list is a list; anything that is not a list is refused', function () {
+    camtest_assert_equal(CamLogic::sanitizeRecordingList([]), []);
+    foreach ([null, 'text', 5, true, ['error' => 'boom'], ['a.mp4' => ['filename' => 'a.mp4']], [1 => ['filename' => 'a.mp4']]] as $bad) {
+        camtest_assert_equal(CamLogic::sanitizeRecordingList($bad), null, var_export($bad, true));
+    }
+});
+
+camtest_test('sanitizeRecordingList: negative, float and huge sizes become 0 or stay whole numbers', function () {
+    $r = CamLogic::sanitizeRecordingList([
+        ['filename' => 'a.mp4', 'sizeBytes' => -5], ['filename' => 'b.mp4', 'sizeBytes' => 1.5], ['filename' => 'c.mp4', 'sizeBytes' => PHP_INT_MAX],
+    ]);
+    camtest_assert_equal(array_column($r, 'sizeBytes'), [0, 0, PHP_INT_MAX]);
+});
+
+camtest_test('onlyValidCameras drops ids that are not plain ids and reports them', function () {
+    $cams = [
+        ['id' => 'cam1', 'name' => 'A'], ['id' => 'front.door-2_x', 'name' => 'B'],
+        ['id' => "a');alert(1);('", 'name' => 'evil'], ['id' => '<img src=x>', 'name' => 'evil2'], ['id' => 'has space'], ['id' => '-startsbad'],
+        ['id' => str_repeat('a', 65)], ['id' => 5], ['name' => 'no id'], 'junk', null,
+    ];
+    $skipped = null;
+    $valid = CamLogic::onlyValidCameras($cams, $skipped);
+    camtest_assert_equal(array_column($valid, 'id'), ['cam1', 'front.door-2_x']);
+    camtest_assert_equal(count($skipped), 9);
+    foreach ($skipped as $s) camtest_assert_true(preg_match('/^[\x20-\x7e]*$/', $s) === 1 && strlen($s) <= 40, $s);
+    camtest_assert_equal(CamLogic::onlyValidCameras('not an array'), []);
+});
+
 exit(camtest_summarize());

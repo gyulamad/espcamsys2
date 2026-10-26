@@ -110,6 +110,49 @@ class CamLogic
         }, $camerasConfig);
     }
 
+    // Cameras whose id is not a plain id ([A-Za-z0-9_.-], see CAMERA_ID_PATTERN) are dropped: the id goes into
+    // page ids, URLs and the relay's folder names, and config.php can be edited by hand. $skipped receives
+    // what was dropped, for the log. (Review F-05.)
+    public static function onlyValidCameras($camerasConfig, ?array &$skipped = null): array
+    {
+        $skipped = [];
+        $valid = [];
+        foreach (is_array($camerasConfig) ? $camerasConfig : [] as $cam) {
+            if (is_array($cam) && isset($cam['id']) && is_string($cam['id']) && preg_match(self::CAMERA_ID_PATTERN, $cam['id']) === 1) {
+                $valid[] = $cam;
+            } else {
+                $skipped[] = is_array($cam) && isset($cam['id']) && is_string($cam['id']) ? substr(preg_replace('/[^\x20-\x7e]/', '?', $cam['id']), 0, 40) : '(no id)';
+            }
+        }
+        return $valid;
+    }
+
+    // What the relay says its list of recordings is, cut down to what the dashboard needs and no more:
+    // PHP is the trust boundary, so a name that is not a clean recording filename never reaches the
+    // browser (where it would become a page id, a URL and a button label). Null when it is not a list.
+    // Each entry: filename (checked by isSafeFilename), sizeBytes (a whole number, else 0), seen (only a real boolean).
+    public static function sanitizeRecordingList($decoded): ?array
+    {
+        if (!is_array($decoded) || ($decoded !== [] && array_keys($decoded) !== range(0, count($decoded) - 1))) {
+            return null;
+        }
+        $out = [];
+        foreach ($decoded as $f) {
+            if (!is_array($f) || !isset($f['filename']) || !is_string($f['filename']) || !self::isSafeFilename($f['filename'])) {
+                continue;
+            }
+            $entry = [
+                'filename'  => $f['filename'],
+                'sizeBytes' => (isset($f['sizeBytes']) && is_int($f['sizeBytes']) && $f['sizeBytes'] >= 0) ? $f['sizeBytes'] : 0,
+            ];
+            if (isset($f['seen']) && is_bool($f['seen'])) {
+                $entry['seen'] = $f['seen'];
+            }
+            $out[] = $entry;
+        }
+        return $out;
+    }
+
     // Finds one camera by its 'id' in the $cameras array built above.
     // Returns null if there's no match — the "camera not found" case every
     // proxying endpoint checks before doing anything else.

@@ -555,6 +555,18 @@ else
 fi
 
 hr
+echo "DOM (the real dashboard page in jsdom: nothing from the relay or config becomes markup) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    # needs the jsdom package: (cd tests/dom && npm install); the test says SKIP if it is missing
+    run_node_e2e "$ROOT_DIR/tests/dom/test_index_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
 echo "End-to-end (relay logging) test"
 hr
 if ! command -v node >/dev/null 2>&1; then

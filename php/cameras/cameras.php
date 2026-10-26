@@ -11,4 +11,8 @@ require_once __DIR__ . '/lib/Logic.php';
 
 $config = require __DIR__ . '/config.php';
 
-$cameras = CamLogic::attachRelayUrl($config['cameras'], $config['relay_url']);
+$validCameras = CamLogic::onlyValidCameras($config['cameras'], $skippedCameras);
+foreach ($skippedCameras as $skippedId) {
+    error_log('camdash: camera "' . $skippedId . '" in config.php is ignored: an id may only contain letters, digits, _ . - (start with a letter or digit, at most 64 characters)');
+}
+$cameras = CamLogic::attachRelayUrl($validCameras, $config['relay_url']);

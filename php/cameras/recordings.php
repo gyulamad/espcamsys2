@@ -137,4 +137,13 @@ if ($play !== null) {
 
 // Otherwise: list this camera's saved recordings as JSON.
 header('Content-Type: application/json');
-relay_proxy_json($relayBase, 'GET', 10, '', 'Could not reach relay', false);
+[$listBody, $listHeaders] = relay_fetch($relayBase, 'GET', 10);
+if ($listBody === false) {
+    json_fail(502, 'Could not reach relay');
+}
+// PHP is the trust boundary: only clean recording filenames (and plain sizes / flags) go on to the browser.
+$list = CamLogic::sanitizeRecordingList(json_decode($listBody, true));
+if ($list === null) {
+    json_fail(502, 'The relay did not answer with a list of recordings');
+}
+echo json_encode($list);

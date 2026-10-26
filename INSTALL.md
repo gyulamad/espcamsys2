@@ -456,6 +456,8 @@ Things worth knowing:
 
 `run_tests.sh` in the repo root runs every test suite: the Arduino C++ logic of **both** sketches, the relay's Node.js logic, the end-to-end tests and the PHP dashboard logic. Nothing needs flashing — it all runs on your laptop or the Pi.
 
+One test needs a package that is installed separately: `tests/dom/test_index_dom.js` runs the real dashboard page in a simulated browser (jsdom) to prove that nothing from the relay or `config.php` can become markup or script. Run `cd tests/dom && npm install` once; without it that test prints `SKIP` and everything else still runs. A test that is skipped protects nothing, so install it on the machine where you run the tests before you commit.
+
 ```bash
 ./run_tests.sh
 ```

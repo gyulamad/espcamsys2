@@ -486,35 +486,35 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
           <span class="rec-dot"></span>
           <span class="status-pill connecting" id="pill-<?= $camId ?>">CONNECTING</span>
           <span class="rec-pill" id="recpill-<?= $camId ?>"></span>
-          <button class="cam-btn" onclick="reloadStream('<?= $camId ?>')">↺ RELOAD</button>
+          <button data-cam="<?= $camId ?>" class="cam-btn" onclick="reloadStream(this.dataset.cam)">↺ RELOAD</button>
           <a class="cam-btn" id="settings-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>"
              title="Settings of this camera: name, icon and everything stored in the board">⚙ SETTINGS</a>
-          <button class="cam-btn danger" id="hide-<?= $camId ?>"
-                  onclick="toggleHide('<?= $camId ?>')">✕ HIDE</button>
+          <button data-cam="<?= $camId ?>" class="cam-btn danger" id="hide-<?= $camId ?>"
+                  onclick="toggleHide(this.dataset.cam)">✕ HIDE</button>
         </div>
       </div>
 
       <!-- Recording + its file list live together: start/stop a recording,
            browse and download what's already been saved, all in one place. -->
       <div class="cam-record-row">
-        <button class="cam-btn" id="rec-btn-<?= $camId ?>"
+        <button data-cam="<?= $camId ?>" class="cam-btn" id="rec-btn-<?= $camId ?>"
                 title="Record this camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it"
-                onclick="recordOne('<?= $camId ?>')">⏺ RECORD</button>
-        <button class="cam-btn danger" id="stop-btn-<?= $camId ?>" style="display:none;"
-                onclick="stopOne('<?= $camId ?>')">⏹ STOP</button>
-        <button class="cam-btn" id="files-btn-<?= $camId ?>"
+                onclick="recordOne(this.dataset.cam)">⏺ RECORD</button>
+        <button data-cam="<?= $camId ?>" class="cam-btn danger" id="stop-btn-<?= $camId ?>" style="display:none;"
+                onclick="stopOne(this.dataset.cam)">⏹ STOP</button>
+        <button data-cam="<?= $camId ?>" class="cam-btn" id="files-btn-<?= $camId ?>"
                 title="Saved recordings for this camera — click to open the list"
-                onclick="toggleRecordingsPanel('<?= $camId ?>')"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
+                onclick="toggleRecordingsPanel(this.dataset.cam)"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
       </div>
 
       <div class="cam-record-row cam-switch-row">
         <span class="switch-pill" id="sw-pill-<?= $camId ?>">…</span>
-        <button class="cam-btn danger" id="sw-off-<?= $camId ?>"
+        <button data-cam="<?= $camId ?>" class="cam-btn danger" id="sw-off-<?= $camId ?>"
                 title="Switch recording OFF for this camera only, <?= $offFor ?> (set on the SETTINGS page)"
-                onclick="switchRecording('camera', '<?= $camId ?>', 'off')">⏻ OFF</button>
-        <button class="cam-btn" id="sw-on-<?= $camId ?>"
+                onclick="switchRecording('camera', this.dataset.cam, 'off')">⏻ OFF</button>
+        <button data-cam="<?= $camId ?>" class="cam-btn" id="sw-on-<?= $camId ?>"
                 title="Switch recording back ON for this camera"
-                onclick="switchRecording('camera', '<?= $camId ?>', 'on')">⏻ ON</button>
+                onclick="switchRecording('camera', this.dataset.cam, 'on')">⏻ ON</button>
         <span class="switch-note" id="sw-note-<?= $camId ?>"></span>
       </div>
 
@@ -528,15 +528,15 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
           <span>CONNECTING…</span>
         </div>
 
-        <img
+        <img data-cam="<?= $camId ?>"
           class="stream"
           id="img-<?= $camId ?>"
           src="<?= $proxyUrl ?>"
           alt="<?= $camName ?>"
           data-src="<?= $proxyUrl ?>"
-          onload="onStreamLoad('<?= $camId ?>')"
-          onerror="onStreamError('<?= $camId ?>')"
-          onclick="toggleStreamFullscreen('<?= $camId ?>')"
+          onload="onStreamLoad(this.dataset.cam)"
+          onerror="onStreamError(this.dataset.cam)"
+          onclick="toggleStreamFullscreen(this.dataset.cam)"
           title="Click to view full screen"
         >
 
@@ -548,9 +548,9 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
            with visual confirmation. Filled in by pollDetectors(). -->
       <div class="det-row offline" id="det-<?= $camId ?>" data-cam="<?= $camId ?>">
         <div class="det-pic">
-          <img id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
+          <img data-cam="<?= $camId ?>" id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
                data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>"
-               onload="this.dataset.failed=''" onerror="onDetectorImgError('<?= $camId ?>')">
+               onload="this.dataset.failed=''" onerror="onDetectorImgError(this.dataset.cam)">
           <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
@@ -570,7 +570,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
             <div class="det-bar"><div class="fill" id="detpersonbar-<?= $camId ?>"></div><div class="mark" id="detpersondetect-<?= $camId ?>" style="display:none"></div><div class="mark soft" id="detpersonclear-<?= $camId ?>" style="display:none"></div></div>
             <div class="det-sub" id="detpersonsub-<?= $camId ?>"></div>
           </div>
-          <div class="det-apply" id="detapply-<?= $camId ?>"><span id="detapplytxt-<?= $camId ?>"></span><span class="det-apply-btns"><button type="button" class="cam-btn" id="detapplybtn-<?= $camId ?>" onclick="applyDetectorThresholds('<?= $camId ?>')" title="Send the moved thresholds to the detector (it stores them and restarts)">APPLY</button><button type="button" class="cam-btn" onclick="resetDetectorThresholds('<?= $camId ?>')" title="Forget the moved thresholds">RESET</button></span></div>
+          <div class="det-apply" id="detapply-<?= $camId ?>"><span id="detapplytxt-<?= $camId ?>"></span><span class="det-apply-btns"><button data-cam="<?= $camId ?>" type="button" class="cam-btn" id="detapplybtn-<?= $camId ?>" onclick="applyDetectorThresholds(this.dataset.cam)" title="Send the moved thresholds to the detector (it stores them and restarts)">APPLY</button><button data-cam="<?= $camId ?>" type="button" class="cam-btn" onclick="resetDetectorThresholds(this.dataset.cam)" title="Forget the moved thresholds">RESET</button></span></div>
           <div class="det-line"><span class="k" id="detpinlabel-<?= $camId ?>">ALARM PIN</span><span class="det-chip" id="detpin-<?= $camId ?>">–</span></div>
           <div class="det-sub" id="detinfo-<?= $camId ?>"></div>
         </div>
@@ -654,10 +654,24 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     document.getElementById('overlay-' + id).classList.remove('visible');
   }
 
+  // Page elements are built with createElement / textContent / addEventListener — never from HTML
+  // strings — so nothing that came from the relay or config.php (names, ids, messages) can ever become
+  // markup or script (security review F-05). `h('div', {className: 'x'}, child, 'text', ...)`.
+  function h(tag, props, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el[k] = v;   // className, id, textContent, href, value, type, disabled, title, checked ...
+    }
+    el.append(...children);
+    return el;
+  }
+
   function showOverlay(id, icon, msg, showRetry) {
     const el = document.getElementById('overlay-' + id);
-    el.innerHTML = `<span class="x">${icon}</span><span>${msg}</span>`
-      + (showRetry ? `<button class="cam-btn" onclick="reloadStream('${id}')">↺ RETRY</button>` : '');
+    el.replaceChildren(h('span', { className: 'x', textContent: icon }), h('span', { textContent: msg }));
+    if (showRetry) el.append(h('button', { className: 'cam-btn', textContent: '↺ RETRY', onclick: () => reloadStream(id) }));
     el.classList.add('visible');
   }
 
@@ -670,7 +684,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 
     setStatus(id, 'connecting', 'CONNECTING');
     const overlay = document.getElementById('overlay-' + id);
-    overlay.innerHTML = '<div class="spinner"></div><span>CONNECTING…</span>';
+    overlay.replaceChildren(h('div', { className: 'spinner' }), h('span', { textContent: 'CONNECTING…' }));
     overlay.classList.add('visible');
 
     // Cache-bust so the browser actually re-requests
@@ -729,8 +743,8 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
       btn.classList.add('danger');
       setStatus(id, 'hidden', 'HIDDEN');
       showOverlay(id, '◼', 'FEED PAUSED', false);
-      document.getElementById('overlay-' + id).innerHTML +=
-        `<button class="cam-btn" onclick="toggleHide('${id}')">▶ RESTORE</button>`;
+      document.getElementById('overlay-' + id).append(
+        h('button', { className: 'cam-btn', textContent: '▶ RESTORE', onclick: () => toggleHide(id) }));
     }
   }
 
@@ -1003,6 +1017,9 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
   // a whole number (a folder the relay couldn't read) leaves the button
   // showing whatever it showed before rather than a wrong number. The text
   // must match CamLogic::formatFilesButtonLabel() in lib/Logic.php.
+  // Same as CamLogic::SAFE_FILENAME_PATTERN in lib/Logic.php: what a recording's name may look like.
+  const SAFE_FILENAME = new RegExp(<?= json_encode(trim(CamLogic::SAFE_FILENAME_PATTERN, '/'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES) ?>);
+
   function setFilesCount(id, count) {
     if (!Number.isInteger(count) || count < 0) return;
     const btn = document.getElementById('files-btn-' + id);
@@ -1023,44 +1040,37 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
       const files = await res.json();
       if (Array.isArray(files)) setFilesCount(id, files.length); // keep the button in step with what the list shows
       if (!Array.isArray(files) || files.length === 0) {
-        panel.innerHTML = '<div class="files-empty">No recordings yet.</div>';
+        panel.replaceChildren(h('div', { className: 'files-empty', textContent: 'No recordings yet.' }));
         return;
       }
       // Keep whatever was ticked across a re-render (the list refreshes itself when a recording finishes).
       const keep = new Set(selectedRecordings(id));
-      const header = `
-        <div class="files-panel-header">
-          <span>${files.length} recording${files.length === 1 ? '' : 's'}</span>
-          <button class="cam-btn danger" onclick="deleteAllRecordings('${id}')">🗑 DELETE ALL</button>
-        </div>
-      `;
+      const header = h('div', { className: 'files-panel-header' },
+        h('span', { textContent: `${files.length} recording${files.length === 1 ? '' : 's'}` }),
+        h('button', { className: 'cam-btn danger', textContent: '🗑 DELETE ALL', onclick: () => deleteAllRecordings(id) }));
       // f.seen comes from the relay; an older relay that doesn't send it counts as seen, so nothing is bold by mistake.
-      const rows = files.map(f => `
-        <div class="files-row${f.seen === false ? ' unseen' : ''}" id="row-${id}-${f.filename}">
-          <input type="checkbox" class="files-select" value="${f.filename}" data-seen="${f.seen === false ? '0' : '1'}" ${keep.has(f.filename) ? 'checked' : ''}
-                 aria-label="Select ${f.filename}" onchange="updateSelectionUI('${id}')">
-          <span class="files-name">${escapeHtml(f.filename)}</span>
-          <span class="files-size">${formatBytes(f.sizeBytes)}</span>
-          <button class="cam-btn" onclick="markRecordingSeen('${id}', '${f.filename}'); togglePlayRecording('${id}', '${f.filename}')">▶ PLAY</button>
-          <a class="cam-btn" href="recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}" onclick="markRecordingSeen('${id}', '${f.filename}')">⬇ GET</a>
-          <button class="cam-btn danger" onclick="deleteRecording('${id}', '${f.filename}')">🗑 DEL</button>
-        </div>
-        <div class="files-player" id="player-${id}-${f.filename}"></div>
-      `).join('');
-      const footer = `
-        <div class="files-panel-footer">
-          <button class="cam-btn" id="files-sel-all-${id}" onclick="toggleSelectAll('${id}', false)">☑ SELECT ALL</button>
-          <button class="cam-btn" id="files-sel-seen-${id}" onclick="toggleSelectAll('${id}', true)">☑ SELECT ALL SEEN</button>
-          <button class="cam-btn" id="files-dl-selected-${id}" disabled
-                  onclick="downloadSelectedRecordings('${id}')">⬇ DOWNLOAD SELECTED (0)</button>
-          <button class="cam-btn danger" id="files-del-selected-${id}" disabled
-                  onclick="deleteSelectedRecordings('${id}')">🗑 DELETE SELECTED (0)</button>
-        </div>
-      `;
-      panel.innerHTML = header + rows + footer;
+      // recordings.php already drops every name that is not a clean recording filename; the check is repeated here
+      // so a name could never reach an id, a URL or the page even if that filter were ever bypassed.
+      const rows = files.filter(f => f && typeof f.filename === 'string' && SAFE_FILENAME.test(f.filename)).flatMap(f => [
+        h('div', { className: 'files-row' + (f.seen === false ? ' unseen' : ''), id: `row-${id}-${f.filename}` },
+          h('input', { type: 'checkbox', className: 'files-select', value: f.filename, checked: keep.has(f.filename),
+                       ariaLabel: `Select ${f.filename}`, dataset: { seen: f.seen === false ? '0' : '1' }, onchange: () => updateSelectionUI(id) }),
+          h('span', { className: 'files-name', textContent: f.filename }),
+          h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
+          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => { markRecordingSeen(id, f.filename); togglePlayRecording(id, f.filename); } }),
+          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}`, onclick: () => markRecordingSeen(id, f.filename) }),
+          h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteRecording(id, f.filename) })),
+        h('div', { className: 'files-player', id: `player-${id}-${f.filename}` }),
+      ]);
+      const footer = h('div', { className: 'files-panel-footer' },
+        h('button', { className: 'cam-btn', id: `files-sel-all-${id}`, textContent: '☑ SELECT ALL', onclick: () => toggleSelectAll(id, false) }),
+        h('button', { className: 'cam-btn', id: `files-sel-seen-${id}`, textContent: '☑ SELECT ALL SEEN', onclick: () => toggleSelectAll(id, true) }),
+        h('button', { className: 'cam-btn', id: `files-dl-selected-${id}`, disabled: true, textContent: '⬇ DOWNLOAD SELECTED (0)', onclick: () => downloadSelectedRecordings(id) }),
+        h('button', { className: 'cam-btn danger', id: `files-del-selected-${id}`, disabled: true, textContent: '🗑 DELETE SELECTED (0)', onclick: () => deleteSelectedRecordings(id) }));
+      panel.replaceChildren(header, ...rows, footer);
       updateSelectionUI(id);
     } catch (e) {
-      panel.innerHTML = '<div class="files-empty">Could not load recordings.</div>';
+      panel.replaceChildren(h('div', { className: 'files-empty', textContent: 'Could not load recordings.' }));
     }
   }
 
@@ -1128,12 +1138,12 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     const container = document.getElementById(`player-${id}-${filename}`);
     if (!container) return;
     if (container.dataset.open === '1') {
-      container.innerHTML = ''; // also stops playback — removing the <video> drops its media element
+      container.replaceChildren(); // also stops playback — removing the <video> drops its media element
       container.dataset.open = '0';
       return;
     }
     const src = `recordings.php?cam=${encodeURIComponent(id)}&play=${encodeURIComponent(filename)}`;
-    container.innerHTML = `<video controls autoplay src="${src}"></video>`;
+    container.replaceChildren(h('video', { controls: true, autoplay: true, src }));
     container.dataset.open = '1';
   }
 
@@ -1223,10 +1233,6 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
     return (n / 1024 / 1024).toFixed(1) + ' MB';
-  }
-
-  function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
   // ── Status polling — the single mechanism that keeps the dashboard in
