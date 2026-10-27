@@ -1,7 +1,9 @@
 <?php
 // system-settings.php — the settings page's backend: reads and saves every setting of
 // the main system, which used to live in two config files:
-//   - the relay's (config.js): ports, keys, pre-roll, log, folders  — kept by the relay
+//   - the relay's (config.js): ports, keys, pre-roll, log size — kept by the relay. (Its file and
+//     folder PATHS — log file, firmware, staged settings, on/off state — are NOT editable here:
+//     change them on the Pi, in config.js or the environment.)
 //   - the dashboard's (config.php): login, relay address           — kept here
 // plus the alarm recording length, so one page covers everything.
 //
@@ -71,7 +73,8 @@ if ($method === 'GET') {
         echo json_encode(['error' => is_array($relay) && isset($relay['error']) ? $relay['error'] : 'The relay did not answer with its settings (is it up to date? copy the new nodejs/camera-relay/ and restart it)']);
         exit;
     }
-    $fields = $relay['fields'];
+    // Only the settings the dashboard may change are shown (not the file and folder paths, review F-09).
+    $fields = CamLogic::visibleRelayFields($relay['fields']);
     foreach (CamLogic::dashboardFields() as $f) {
         if ($f['type'] === 'secret') {
             $f['isSet'] = (string) ($config[$f['key']] ?? '') !== '';

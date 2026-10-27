@@ -543,6 +543,32 @@ class CamLogic
     // Splits the submitted { key: value } into the dashboard's own settings and the
     // relay's. Only plain values are accepted (no arrays or objects).
     //   -> ['ok' => true, 'dashboard' => [...], 'relay' => [...]] | ['ok' => false, 'error' => ...]
+    // The relay settings the dashboard is allowed to change (review F-09). An ALLOW-list, so a setting the
+    // relay gains later stays out of reach until it is added here on purpose. Numbers, ports and keys only.
+    const RELAY_SETTING_KEYS = [
+        'alarmRecordSeconds', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort',
+        'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles',
+    ];
+
+    // Free-text FILE and FOLDER paths on the Pi. Whoever can save settings here must not be able to point
+    // the relay (which runs with its own rights) at an arbitrary place — a log written into another
+    // program's folder, firmware served from /etc, the on/off state file overwritten. These are changed
+    // on the Pi itself: config.js or the relay's environment (INSTALL.md).
+    const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile'];
+
+    // The fields from the relay's GET /system-settings that the page may show and change: the others
+    // (the paths, and anything unknown) are dropped, so the page never offers them.
+    public static function visibleRelayFields($fields): array
+    {
+        $out = [];
+        foreach (is_array($fields) ? $fields : [] as $f) {
+            if (is_array($f) && isset($f['key']) && is_string($f['key']) && in_array($f['key'], self::RELAY_SETTING_KEYS, true)) {
+                $out[] = $f;
+            }
+        }
+        return $out;
+    }
+
     public static function splitSettingsValues($values): array
     {
         if (!is_array($values) || array_is_list($values)) {
@@ -556,8 +582,13 @@ class CamLogic
             }
             if (self::isDashboardKey($key)) {
                 $dash[$key] = (string) $value;
-            } else {
+            } elseif (in_array($key, self::RELAY_SETTING_KEYS, true)) {
                 $relay[$key] = $value;
+            } elseif (in_array($key, self::RELAY_PATH_SETTING_KEYS, true)) {
+                return ['ok' => false, 'error' => $key . ' is a file or folder path on the Pi: it can only be changed there (in the relay\'s config.js or its environment, see INSTALL.md), never from the dashboard — nothing was saved'];
+            } else {
+                $shown = substr(preg_replace('/[^\x20-\x7e]/', '?', $key), 0, 40);
+                return ['ok' => false, 'error' => 'unknown setting "' . $shown . '" — nothing was saved'];
             }
         }
         return ['ok' => true, 'dashboard' => $dash, 'relay' => $relay];

@@ -258,6 +258,30 @@ async function main() {
     check('garbage in the body is refused', (await dash('POST', 'system-settings.php', { body: 'nope' })).status === 400);
     check('non-plain values are refused', (await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: [1] } } })).status === 400);
 
+    // ── F-09: the dashboard must not be able to point the relay at files and folders ──
+    const PATH_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile'];
+    const OK_KEYS = ['alarmRecordSeconds', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort', 'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles'];
+    check('the settings page is not offered the file and folder paths (no logFile, no Folders group)', PATH_KEYS.every((k) => !field(d1.json, k)) && !d1.json.fields.some((f) => f.group === 'Folders'), d1.json.fields.map((f) => f.key).join(','));
+    check('...but still gets every setting it may change', OK_KEYS.every((k) => field(d1.json, k)), d1.json.fields.map((f) => f.key).join(','));
+    const relayDirect = (await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json;
+    check('(control) the relay itself still has those four settings', PATH_KEYS.every((k) => field(relayDirect, k)));
+    const relayView = async () => JSON.stringify((await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json.fields);
+    const viewBefore = await relayView();
+    const jsonBefore = fs.existsSync(path.join(relayDir, 'system-settings.json')) ? fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8') : '';
+    for (const [k, v] of [['switchFile', '/etc/passwd'], ['firmwareDir', '/'], ['deviceSettingsDir', '../../..'], ['logFile', '/etc/cron.d/camdash']]) {
+      const r = await dash('POST', 'system-settings.php', { body: { values: { [k]: v } } });
+      check(`${k} = ${v} cannot be saved from the dashboard (400, names the setting)`, r.status === 400 && r.json && r.json.error.includes(k) && /nothing was saved/.test(r.json.error), r.text);
+    }
+    const mixed = await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: 20, switchFile: '/tmp/evil.json' } } });
+    check('a path hidden among valid settings stops the WHOLE save', mixed.status === 400, mixed.text);
+    const unknown = await dash('POST', 'system-settings.php', { body: { values: { somethingTheRelayMayGainLater: 1 } } });
+    check('a setting that is not on the allow-list is refused too', unknown.status === 400 && /unknown setting/.test(unknown.json.error), unknown.text);
+    check('the relay\'s own view of ALL its settings is unchanged after every attempt', (await relayView()) === viewBefore);
+    check('...and no settings file was written or changed', (fs.existsSync(path.join(relayDir, 'system-settings.json')) ? fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8') : '') === jsonBefore);
+    const okSave = await dash('POST', 'system-settings.php', { body: { values: { alarmRecordSeconds: 31 } } });
+    check('(control) a normal setting still saves through the dashboard', okSave.status === 200 && okSave.json.ok === true, okSave.text);
+    await dash('POST', 'system-settings.php', { body: { values: { alarmRecordSeconds: 30 } } });
+
     const badRelay = await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: 'x', auth_user: 'changed-user' } } });
     check('a value the relay refuses is reported, and nothing is saved anywhere', badRelay.status === 400 && /preRollSeconds/.test(badRelay.json.error) && cfg().includes('dash-user') && !cfg().includes('changed-user'), badRelay.text);
     const badDash = await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: 7, auth_pass: 'short' } } });

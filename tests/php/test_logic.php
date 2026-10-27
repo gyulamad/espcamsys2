@@ -1027,4 +1027,74 @@ camtest_test('onlyValidCameras drops ids that are not plain ids and reports them
     camtest_assert_equal(CamLogic::onlyValidCameras('not an array'), []);
 });
 
+// ── F-09: the dashboard must not set file or folder paths on the relay ─
+
+camtest_test('splitSettingsValues passes every allowed relay setting on, and the dashboard\'s own to the dashboard', function () {
+    $values = ['alarmRecordSeconds' => 60, 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608, 'port' => 8080, 'pushPort' => 8081,
+               'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'auth_user' => 'bob'];
+    $r = CamLogic::splitSettingsValues($values);
+    camtest_assert_true($r['ok'] === true);
+    camtest_assert_equal(array_keys($r['relay']), CamLogic::RELAY_SETTING_KEYS);
+    camtest_assert_equal(array_keys($r['dashboard']), ['auth_user']);
+});
+
+camtest_test('splitSettingsValues refuses every file and folder path, saving nothing', function () {
+    foreach (CamLogic::RELAY_PATH_SETTING_KEYS as $key) {
+        foreach (['/etc/passwd', '../../etc', '/home/pi/.ssh', 'logs/camera.log', ''] as $path) {
+            $r = CamLogic::splitSettingsValues(['preRollSeconds' => 5, $key => $path]);
+            camtest_assert_true($r['ok'] === false, "$key = $path");
+            camtest_assert_true(strpos($r['error'], $key) !== false && strpos($r['error'], 'nothing was saved') !== false && !isset($r['relay']), $r['error'] ?? '');
+        }
+    }
+    camtest_assert_equal(CamLogic::RELAY_PATH_SETTING_KEYS, ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile']);
+});
+
+camtest_test('splitSettingsValues refuses a setting it does not know (allow-list, not deny-list)', function () {
+    foreach (['somethingNew', 'PORT', 'port ', 'preRollSeconds2', '__proto__', 'constructor', 'LOG_FILE', "port\n"] as $key) {
+        $r = CamLogic::splitSettingsValues([$key => 1]);
+        camtest_assert_true($r['ok'] === false && strpos($r['error'], 'unknown setting') !== false, var_export($key, true));
+    }
+    $r = CamLogic::splitSettingsValues([str_repeat("x\x00\n", 100) => 1]);
+    camtest_assert_true($r['ok'] === false && preg_match('/unknown setting "([^"]*)"/', $r['error'], $m) === 1, 'message names the key');
+    camtest_assert_true(strlen($m[1]) <= 40 && preg_match('/^[\x20-\x7e]*$/', $m[1]) === 1, 'a hostile key is cut short and printable in the message: ' . var_export($m[1], true));
+});
+
+camtest_test('the allow-list and the path list do not overlap, and the dashboard keys are not in either', function () {
+    camtest_assert_equal(array_intersect(CamLogic::RELAY_SETTING_KEYS, CamLogic::RELAY_PATH_SETTING_KEYS), []);
+    foreach (CamLogic::dashboardFields() as $f) {
+        camtest_assert_true(!in_array($f['key'], CamLogic::RELAY_SETTING_KEYS, true) && !in_array($f['key'], CamLogic::RELAY_PATH_SETTING_KEYS, true), $f['key']);
+    }
+});
+
+camtest_test('visibleRelayFields keeps the allowed fields in order and drops paths, unknowns and junk', function () {
+    $fields = [
+        ['key' => 'alarmRecordSeconds', 'group' => 'Recording'], ['key' => 'logFile', 'group' => 'Log'], ['key' => 'port', 'group' => 'Network'],
+        ['key' => 'firmwareDir', 'group' => 'Folders'], ['key' => 'switchFile', 'group' => 'Folders'], ['key' => 'deviceSettingsDir', 'group' => 'Folders'],
+        ['key' => 'newThing'], ['nokey' => 1], 'junk', null, ['key' => ['port']], ['key' => 'controlKey', 'group' => 'Keys'],
+    ];
+    camtest_assert_equal(array_column(CamLogic::visibleRelayFields($fields), 'key'), ['alarmRecordSeconds', 'port', 'controlKey']);
+    camtest_assert_equal(CamLogic::visibleRelayFields('nonsense'), []);
+    camtest_assert_equal(CamLogic::visibleRelayFields(null), []);
+});
+
+camtest_test('the allow-list matches the relay\'s real settings schema: every relay field is either allowed or a path, nothing else', function () {
+    // The relay (nodejs/camera-relay/lib/sysconfig.js) is where the keys are defined. If it gains a setting,
+    // this fails until someone decides on purpose whether the dashboard may change it.
+    $src = @file_get_contents(__DIR__ . '/../../nodejs/camera-relay/lib/sysconfig.js');
+    if ($src === false) {
+        camtest_assert_true(true, 'relay source not found (skipped)');
+        return;
+    }
+    $relayKeys = [];
+    if (preg_match('/const FIELDS = \[(.*?)\n\];/s', $src, $m)) {
+        preg_match_all("/\{ key: '([A-Za-z]+)'/", $m[1], $mm);
+        $relayKeys = $mm[1];
+    }
+    camtest_assert_true(count($relayKeys) >= 10, 'found ' . count($relayKeys) . ' fields in sysconfig.js');
+    $known = array_merge(CamLogic::RELAY_SETTING_KEYS, CamLogic::RELAY_PATH_SETTING_KEYS);
+    sort($relayKeys);
+    sort($known);
+    camtest_assert_equal($relayKeys, $known);
+});
+
 exit(camtest_summarize());
