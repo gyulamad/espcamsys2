@@ -1018,7 +1018,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
   // showing whatever it showed before rather than a wrong number. The text
   // must match CamLogic::formatFilesButtonLabel() in lib/Logic.php.
   // Same as CamLogic::SAFE_FILENAME_PATTERN in lib/Logic.php: what a recording's name may look like.
-  const SAFE_FILENAME = new RegExp(<?= json_encode(trim(CamLogic::SAFE_FILENAME_PATTERN, '/'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES) ?>);
+  const SAFE_FILENAME = new RegExp(<?= json_encode(CamLogic::SAFE_FILENAME_REGEX, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES) ?>);
 
   function setFilesCount(id, count) {
     if (!Number.isInteger(count) || count < 0) return;

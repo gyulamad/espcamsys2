@@ -43,11 +43,21 @@ function camdash_backup_dir(string $file): ?string
     return $resolved;
 }
 
+// What the browser is told when config.php cannot be written: no path and no command, only what to do
+// (review F-20). The details go to the web server's error log.
+function camdash_unwritable_message(string $file): string
+{
+    error_log('camdash: ' . $file . ' is not writable by the web server (running as '
+        . (function_exists('posix_geteuid') && function_exists('posix_getpwuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? 'an unknown user') : 'an unknown user')
+        . '). Run deploy.sh as root once: it makes www-data the owner of that file and sets mode 640.');
+    return 'config.php is not writable by the web server — run deploy.sh as root on the Pi once (it sets the owner; details are in the web server error log)';
+}
+
 // null when saved, else what went wrong.
 function camdash_write_config(string $file, array $config): ?string
 {
     if (!is_file($file) || !is_writable($file)) {
-        return 'config.php is not writable by the web server — run once on the Pi: sudo chown www-data ' . $file . ' (deploy.sh does this)';
+        return camdash_unwritable_message($file);
     }
     // An old version left config.php.bak next to config.php, where the web server hands it out. Remove it.
     $legacy = $file . '.bak';

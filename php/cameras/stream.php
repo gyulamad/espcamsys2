@@ -11,6 +11,11 @@ require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
 
+// ?cam[]=x is an array, not a name: refuse it plainly instead of crashing (review F-16)
+if (CamLogic::firstNonStringParam($_GET, ['cam']) !== null) {
+    http_response_code(400);
+    exit('Invalid parameter');
+}
 $requested = $_GET['cam'] ?? '';
 $camera = CamLogic::findCameraById($cameras, $requested);
 
@@ -43,7 +48,15 @@ if (CamLogic::isRedirectStatus(CamLogic::extractStatusCode($wrapperData))) {
     http_response_code(502);
     exit('Could not connect to camera: ' . htmlspecialchars($camera['name']));
 }
-$contentType = CamLogic::extractContentType($wrapperData, 'multipart/x-mixed-replace; boundary=frame');
+// Only a picture stream is passed on. Whatever else the relay claims to send (text/html from a spoofed
+// relay would run as a page in the dashboard's own origin) is refused (review F-14).
+$contentType = CamLogic::safeStreamContentType($wrapperData);
+if ($contentType === null) {
+    fclose($stream);
+    error_log('camdash: stream.php: the relay sent a Content-Type that is not a picture stream for camera ' . $camera['id'] . ' — refused');
+    http_response_code(502);
+    exit('Could not connect to camera: ' . htmlspecialchars($camera['name']));
+}
 
 // Disable output buffering so frames reach the browser immediately
 while (ob_get_level()) ob_end_clean();

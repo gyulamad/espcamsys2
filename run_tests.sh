@@ -555,6 +555,17 @@ else
 fi
 
 hr
+echo "End-to-end (hostile relay: stream types, Range, statuses, array params, leaks) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_trust_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
 echo "DOM (the real dashboard page in jsdom: nothing from the relay or config becomes markup) test"
 hr
 if ! command -v node >/dev/null 2>&1; then

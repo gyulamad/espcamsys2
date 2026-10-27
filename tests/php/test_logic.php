@@ -1097,4 +1097,114 @@ camtest_test('the allow-list matches the relay\'s real settings schema: every re
     camtest_assert_equal($relayKeys, $known);
 });
 
+// ── F-12 / F-14 / F-15 / F-16: small input and output checks ─────────
+
+camtest_test('F-15: a trailing newline no longer slips past the validators', function () {
+    foreach (["a.mp4\n", "cam1-20260101-000000.mp4\n", "a.mp4\r\n"] as $name) camtest_assert_true(!CamLogic::isSafeFilename($name), var_export($name, true));
+    camtest_assert_true(CamLogic::isSafeFilename('a.mp4'));
+    camtest_assert_equal(preg_match(CamLogic::CAMERA_ID_PATTERN, "cam1\n"), 0);
+    camtest_assert_equal(preg_match(CamLogic::CAMERA_ID_PATTERN, 'cam1'), 1);
+    camtest_assert_true(!CamLogic::isAllowedRelayHost("pi\n") && !CamLogic::isAllowedRelayHost("localhost\n") && !CamLogic::isAllowedRelayHost("relay.local\n"), 'relay host with a trailing newline');
+    camtest_assert_equal(CamLogic::onlyValidCameras([['id' => "cam1\n"], ['id' => 'cam2']])[0]['id'], 'cam2');
+});
+
+camtest_test('F-15: the filename pattern the PAGE gets is the bare regex (JavaScript has no /D flag)', function () {
+    camtest_assert_equal(CamLogic::SAFE_FILENAME_REGEX, '^[A-Za-z0-9_.-]+\.mp4$');
+    camtest_assert_equal(CamLogic::SAFE_FILENAME_PATTERN, '/^[A-Za-z0-9_.-]+\.mp4$/D');
+    camtest_assert_true(strpos(CamLogic::SAFE_FILENAME_REGEX, '/') === false);
+});
+
+camtest_test('F-12: validateSwitchMinutes caps the top, keeps negatives, rejects junk', function () {
+    foreach ([['60', 60], ['0', 0], ['-1', -1], ['-15', -15], ['10080', 10080], [' 7 ', 7], ['007', 7], ["5\n", 5], ['-0', 0]] as [$in, $out]) {
+        camtest_assert_equal(CamLogic::validateSwitchMinutes($in), $out, $in);
+    }
+    foreach (['10081', '99999999', '999999999', '1000000000', '+5', '1.5', '1e3', '', 'abc', '5 6', '0x10', '--5', "5\n6"] as $bad) {
+        camtest_assert_equal(CamLogic::validateSwitchMinutes($bad), null, var_export($bad, true));
+    }
+    foreach ([null, 60, ['5'], true] as $notText) camtest_assert_equal(CamLogic::validateSwitchMinutes($notText), null, var_export($notText, true));
+});
+
+camtest_test('F-12: a switch-off request forwards the checked number, written fresh', function () {
+    $q = fn($minutes) => ['scope' => 'camera', 'cam' => 'cam2', 'action' => 'off', 'minutes' => $minutes];
+    $r = CamLogic::buildSwitchRequest($q(' 007 '), camtest_switch_cams());
+    camtest_assert_true($r['ok'] === true && substr($r['url'], -10) === '?minutes=7', json_encode($r));
+    $r = CamLogic::buildSwitchRequest($q('-15'), camtest_switch_cams());
+    camtest_assert_true($r['ok'] === true && substr($r['url'], -12) === '?minutes=-15', json_encode($r));
+    $r = CamLogic::buildSwitchRequest($q(''), camtest_switch_cams());
+    camtest_assert_true($r['ok'] === true && strpos($r['url'], 'minutes') === false, 'an empty value counts as not given (the relay uses its default)');
+    foreach (['10081', '99999999', '1e3', 'abc'] as $bad) {
+        $r = CamLogic::buildSwitchRequest($q($bad), camtest_switch_cams());
+        camtest_assert_true($r['ok'] === false && $r['status'] === 400 && strpos($r['error'], '10080') !== false, $bad . ' ' . json_encode($r));
+    }
+    $r = CamLogic::buildSwitchRequest($q(['5']), camtest_switch_cams());
+    camtest_assert_true($r['ok'] === false && $r['status'] === 400, 'an array is refused, not a crash');
+});
+
+camtest_test('F-16: firstNonStringParam names the first parameter that is not plain text', function () {
+    camtest_assert_equal(CamLogic::firstNonStringParam(['cam' => 'a', 'play' => 'x.mp4'], ['cam', 'play', 'delete']), null);
+    camtest_assert_equal(CamLogic::firstNonStringParam(['cam' => ['a']], ['cam']), 'cam');
+    camtest_assert_equal(CamLogic::firstNonStringParam(['cam' => 'a', 'play' => ['x'], 'delete' => ['y']], ['cam', 'play', 'delete']), 'play');
+    camtest_assert_equal(CamLogic::firstNonStringParam(['other' => ['x']], ['cam']), null, 'only the named ones are looked at');
+    camtest_assert_equal(CamLogic::firstNonStringParam(['cam' => null], ['cam']), 'cam', 'a present non-string value');
+    camtest_assert_equal(CamLogic::firstNonStringParam([], ['cam']), null);
+});
+
+camtest_test('F-14: safeStreamContentType serves picture streams only', function () {
+    $mj = fn($v) => CamLogic::safeStreamContentType(['HTTP/1.1 200 OK', 'Content-Type: ' . $v]);
+    camtest_assert_equal($mj('multipart/x-mixed-replace; boundary=frame'), 'multipart/x-mixed-replace; boundary=frame');
+    camtest_assert_equal($mj('multipart/x-mixed-replace;boundary="myboundary-1"'), 'multipart/x-mixed-replace; boundary=myboundary-1');
+    camtest_assert_equal($mj('MULTIPART/X-MIXED-REPLACE; boundary=abc'), 'multipart/x-mixed-replace; boundary=abc');
+    camtest_assert_equal($mj('multipart/x-mixed-replace'), 'multipart/x-mixed-replace; boundary=frame', 'no boundary: the default one');
+    camtest_assert_equal($mj('image/jpeg'), 'image/jpeg');
+    camtest_assert_equal(CamLogic::safeStreamContentType(['HTTP/1.1 200 OK']), 'multipart/x-mixed-replace; boundary=frame', 'no Content-Type at all: the default');
+    camtest_assert_equal($mj(''), 'multipart/x-mixed-replace; boundary=frame', 'an empty Content-Type counts as none');
+    foreach (['text/html', 'text/html; charset=utf-8', 'application/javascript', 'image/svg+xml', 'application/xhtml+xml', 'text/plain', 'video/mp4',
+              'multipart/x-mixed-replace; boundary=<script>', 'multipart/x-mixed-replace; boundary=a b', 'multipart/x-mixed-replace; charset=x', 'image/jpeg; boundary=x',
+              'multipart/x-mixed-replace; boundary=' . str_repeat('a', 71), 'multipart/x-mixed-replace; boundary=frame; x=y', "text/html\nX: y"] as $bad) {
+        camtest_assert_equal($mj($bad), null, var_export($bad, true));
+    }
+});
+
+camtest_test('F-14: validRangeHeader passes ONE plain byte range and nothing else', function () {
+    foreach (['bytes=0-99', 'bytes=500-', 'bytes=-500', 'bytes=0-0', 'bytes=123456789012345-123456789012345'] as $ok) camtest_assert_equal(CamLogic::validRangeHeader($ok), $ok, $ok);
+    foreach (['bytes=0-1,5-9', 'bytes=-', 'bytes=', 'bytes=abc', 'bytes=5-2', 'items=0-5', 'bytes=0-5 ', " bytes=0-5", "bytes=0-5\n", "bytes=0-5\r\nX-Evil: 1", 'bytes=0-9999999999999999', 'bytes=1-2-3', '', 'bytes=+1-2'] as $bad) {
+        camtest_assert_equal(CamLogic::validRangeHeader($bad), null, var_export($bad, true));
+    }
+    foreach ([null, ['bytes=0-1'], 5] as $notText) camtest_assert_equal(CamLogic::validRangeHeader($notText), null);
+});
+
+camtest_test('F-14: only well-formed Content-Range / Content-Length / Accept-Ranges are passed back', function () {
+    $in = ['HTTP/1.1 206 Partial Content', 'Content-Type: text/html', 'Content-Range: bytes 0-99/1000', 'Content-Range: bytes */1000', 'Content-Length: 100', 'Accept-Ranges: bytes', 'Accept-Ranges: none',
+           'Content-Range: <script>alert(1)</script>', 'Content-Range: bytes 0-99/abc', 'Content-Length: -5', 'Content-Length: 12abc', 'Accept-Ranges: everything',
+           'Set-Cookie: a=b', 'Location: http://evil.example', 'content-length: 7'];
+    camtest_assert_equal(CamLogic::extractPassThroughHeaders($in), ['Content-Range: bytes 0-99/1000', 'Content-Range: bytes */1000', 'Content-Length: 100', 'Accept-Ranges: bytes', 'Accept-Ranges: none', 'content-length: 7']);
+    camtest_assert_equal(CamLogic::extractPassThroughHeaders(['Content-Length: 5' . "\r\n"]), ['Content-Length: 5' . "\r\n"], 'a CRLF at the very end is just the line end');
+    camtest_assert_equal(CamLogic::extractPassThroughHeaders(["Content-Length: 5\r\nSet-Cookie: x=y"]), [], 'an injected second header is refused');
+    camtest_assert_equal(CamLogic::extractPassThroughHeaders([null, 5, ['Content-Length: 5']]), []);
+});
+
+camtest_test('F-14: passableStatus repeats real final answers only', function () {
+    foreach ([200, 206, 204, 400, 404, 416, 500, 502, 599] as $ok) camtest_assert_equal(CamLogic::passableStatus($ok), $ok, (string) $ok);
+    foreach ([null, 0, 100, 101, 199, 300, 301, 302, 399, 600, 999, -1] as $bad) camtest_assert_equal(CamLogic::passableStatus($bad), null, var_export($bad, true));
+});
+
+camtest_test('F-20: transportReason keeps the reason in words and drops the address', function () {
+    $cases = [
+        ['fopen(http://127.0.0.1:8080/detector/det-A/stream): Failed to open stream: Connection refused', 'Connection refused'],
+        ['fopen(http://192.168.1.9:8080/x): Failed to open stream: Connection timed out', 'Connection timed out'],
+        ['fopen(http://10.0.0.5:8080/x): Failed to open stream: No route to host', 'No route to host'],
+        ['fopen(http://pi.local:8080/x): Failed to open stream: php_network_getaddresses: getaddrinfo for pi.local failed: Name or service not known', "the relay's name could not be looked up"],
+        ['file_get_contents(): Failed to open stream: HTTP request failed!', 'HTTP request failed!'],
+        ['something else entirely', 'the connection failed'],
+        ['', 'the connection failed'],
+        ['fopen(x): Failed to open stream: ', 'the connection failed'],
+    ];
+    foreach ($cases as [$in, $out]) camtest_assert_equal(CamLogic::transportReason($in), $out, $in);
+    $long = CamLogic::transportReason('fopen(x): Failed to open stream: ' . str_repeat('a', 500));
+    camtest_assert_true(strlen($long) <= 80, 'cut short');
+    $weird = CamLogic::transportReason("fopen(x): Failed to open stream: bad http://secret.example:99/path\x00\n stuff");
+    camtest_assert_true(strpos($weird, 'secret') === false && preg_match('/^[\x20-\x7e]*$/', $weird) === 1, $weird);
+    foreach ($cases as [$in]) camtest_assert_true(!preg_match('~://|127\.0\.0\.1|192\.168|fopen|pi\.local~', CamLogic::transportReason($in)), 'no address in the reason for: ' . $in);
+});
+
 exit(camtest_summarize());

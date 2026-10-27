@@ -17,9 +17,11 @@ require_once __DIR__ . '/lib/Logic.php';
 
 // Ends the request with a plain-text explanation (the <img> on the dashboard only needs the status;
 // a person opening this address directly reads the text).
-function detector_stream_fail(int $status, string $message, string $logKey): void
+// $detail (PHP's own full error text, which names the relay's address) goes to the log only; the browser gets
+// just the short reason (CamLogic::transportReason).
+function detector_stream_fail(int $status, string $message, string $logKey, string $detail = ''): void
 {
-    log_throttled('detector-stream:' . $logKey . ':' . $status, 'detector-stream.php: HTTP ' . $status . ': ' . $message);
+    log_throttled('detector-stream:' . $logKey . ':' . $status, 'detector-stream.php: HTTP ' . $status . ': ' . $message . ($detail !== '' ? ' [' . $detail . ']' : ''));
     http_response_code($status);
     header('Content-Type: text/plain; charset=utf-8');
     header('Cache-Control: no-store');
@@ -28,6 +30,11 @@ function detector_stream_fail(int $status, string $message, string $logKey): voi
     exit;
 }
 
+// ?cam[]=x is an array, not a name: refuse it plainly instead of crashing (review F-16)
+if (CamLogic::firstNonStringParam($_GET, ['cam']) !== null) {
+    http_response_code(400);
+    exit('Invalid parameter');
+}
 $camera = CamLogic::findCameraById($cameras, $_GET['cam'] ?? '');
 if (!$camera) {
     http_response_code(404);
@@ -43,8 +50,8 @@ $streamUrl = rtrim($camera['url'], '/') . '/detector/' . rawurlencode($detectorI
 // (no redirects: review F-08)
 $stream = @fopen($streamUrl, 'rb', false, stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10)]));
 if (!$stream) {
-    $failure = CamLogic::detectorStreamFailure(null, '', (string) $camera['name'], last_php_error());
-    detector_stream_fail($failure['status'], $failure['message'], $detectorId);
+    $failure = CamLogic::detectorStreamFailure(null, '', (string) $camera['name'], CamLogic::transportReason(last_php_error()));
+    detector_stream_fail($failure['status'], $failure['message'], $detectorId, last_php_error());
 }
 
 $meta = stream_get_meta_data($stream);
@@ -56,7 +63,12 @@ if ($relayStatus !== 200) {
     $failure = CamLogic::detectorStreamFailure($relayStatus ?? 0, $body, (string) $camera['name']);
     detector_stream_fail($failure['status'], $failure['message'], $detectorId);
 }
-$contentType = CamLogic::extractContentType($meta['wrapper_data'] ?? [], 'multipart/x-mixed-replace; boundary=frame');
+// Only a picture stream is passed on (review F-14): a spoofed relay saying text/html must not run as a page here.
+$contentType = CamLogic::safeStreamContentType($meta['wrapper_data'] ?? []);
+if ($contentType === null) {
+    fclose($stream);
+    detector_stream_fail(502, 'The relay did not send a picture stream for the person detector of ' . $camera['name'], $detectorId, 'unexpected Content-Type');
+}
 
 while (ob_get_level()) ob_end_clean();
 header('Content-Type: ' . $contentType);

@@ -15,7 +15,10 @@ class CamLogic
 {
     // Only ever matches filenames the relay itself generates for saved
     // recordings — also rules out path traversal (no '/', no '..').
-    const SAFE_FILENAME_PATTERN = '/^[A-Za-z0-9_.-]+\.mp4$/';
+    // The pattern's body also goes into the page's JavaScript (index.php), where $ already means the very end;
+    // PHP's $ also matches just before a trailing newline, so the PHP side adds the /D flag (review F-15).
+    const SAFE_FILENAME_REGEX = '^[A-Za-z0-9_.-]+\.mp4$';
+    const SAFE_FILENAME_PATTERN = '/' . self::SAFE_FILENAME_REGEX . '/D';
 
     // Constant-time comparison of both the username and password against
     // config — mirrors auth.php's use of hash_equals() so a wrong guess
@@ -156,6 +159,19 @@ class CamLogic
     // Finds one camera by its 'id' in the $cameras array built above.
     // Returns null if there's no match — the "camera not found" case every
     // proxying endpoint checks before doing anything else.
+    // The first of $names that is present in $src (a $_GET) but is not plain text — ?cam[]=x arrives as an
+    // array, and handing that to a function that wants a string ends in a TypeError (HTTP 500, log noise).
+    // Null when every present one is fine. (Review F-16.)
+    public static function firstNonStringParam(array $src, array $names): ?string
+    {
+        foreach ($names as $name) {
+            if (array_key_exists($name, $src) && !is_string($src[$name])) {
+                return $name;
+            }
+        }
+        return null;
+    }
+
     public static function findCameraById(array $cameras, string $id): ?array
     {
         foreach ($cameras as $cam) {
@@ -218,12 +234,60 @@ class CamLogic
     // Filters a raw header array down to just the ones recordings.php
     // forwards on to the browser while streaming a recording — the ones
     // that make Range-based seeking in the <video> player work.
+    // Only these three headers, and only with values of the exact shape they must have (the relay's text
+    // is copied into our response, so a header that does not look right is dropped, review F-14).
     public static function extractPassThroughHeaders(array $headers): array
     {
         return array_values(array_filter($headers, function ($header) {
-            return preg_match('#^(Content-Range|Content-Length|Accept-Ranges):#i', $header) === 1;
+            return is_string($header) && preg_match('#^(Content-Range:[ \t]*bytes (\d{1,15}-\d{1,15}|\*)/(\d{1,15}|\*)|Content-Length:[ \t]*\d{1,15}|Accept-Ranges:[ \t]*(bytes|none))[ \t]*\r?\n?$#iD', $header) === 1;
         }));
     }
+
+    // The Content-Type of a live picture stream, only if it is one the dashboard serves: a motion-JPEG
+    // stream (multipart/x-mixed-replace with a plain boundary) or a JPEG. Anything else (text/html from a
+    // spoofed relay would run as a page in the dashboard's own origin) -> null. A stream that names no
+    // type gets the default. Returned fresh, rebuilt from the checked parts.
+    public static function safeStreamContentType(array $wrapperData, string $fallback = 'multipart/x-mixed-replace; boundary=frame'): ?string
+    {
+        $raw = self::extractContentType($wrapperData, $fallback);
+        if (!preg_match('~^\s*([A-Za-z0-9.+/-]{1,60})\s*(?:;\s*boundary=("?)([A-Za-z0-9\'()+_,./:=?-]{1,70})\2)?\s*$~D', $raw, $m)) {
+            return null;
+        }
+        $type = strtolower($m[1]);
+        if ($type === 'image/jpeg') {
+            return isset($m[3]) ? null : 'image/jpeg';
+        }
+        if ($type === 'multipart/x-mixed-replace') {
+            return 'multipart/x-mixed-replace; boundary=' . (isset($m[3]) && $m[3] !== '' ? $m[3] : 'frame');
+        }
+        return null;
+    }
+
+    // The browser's Range header, if it is exactly ONE plain byte range (bytes=0-99, bytes=500-, bytes=-500),
+    // else null: it is passed on to the relay, and anything odd is simply not passed on (the whole file is served).
+    public static function validRangeHeader($value): ?string
+    {
+        if (!is_string($value) || !preg_match('/^bytes=(\d{1,15})?-(\d{1,15})?$/D', $value, $m)) {
+            return null;
+        }
+        $from = $m[1] ?? '';
+        $to = $m[2] ?? '';
+        if ($from === '' && $to === '') {
+            return null;
+        }
+        if ($from !== '' && $to !== '' && (int) $from > (int) $to) {
+            return null;
+        }
+        return $value;
+    }
+
+    // A status the relay answered that the dashboard will repeat to the browser: a real final one (200-599).
+    // 1xx, 3xx and nonsense are not passed on (the caller answers 502 instead).
+    public static function passableStatus(?int $status): ?int
+    {
+        return ($status !== null && $status >= 200 && $status <= 299) || ($status !== null && $status >= 400 && $status <= 599) ? $status : null;
+    }
+
 
     // True for exactly the filenames the relay generates for recordings —
     // used to reject path traversal / arbitrary filenames before ever
@@ -420,11 +484,23 @@ class CamLogic
             . "X-Actor: " . $actor . "\r\n";
     }
 
+    // The OFF time of a switch request: a whole number, at most MAX_SWITCH_OFF_MINUTES (a week), else null.
+    // 0 and any negative number mean "until switched back ON" and are passed on as they are; it is the
+    // other direction that needs the limit — a huge number would switch recording off for years.
+    public static function validateSwitchMinutes($raw): ?int
+    {
+        if (!is_string($raw) || !preg_match('/^\s*-?\d{1,9}\s*$/D', $raw)) {
+            return null;
+        }
+        $n = (int) trim($raw);
+        return $n <= self::MAX_SWITCH_OFF_MINUTES ? $n : null;
+    }
+
     // Checks a switch request and turns it into the URL to call on the relay.
     //   action   on | off
     //   scope    camera (needs cam=ID, one of the configured cameras) | all
-    //   minutes  off only, optional: a whole number, possibly 0 or negative
-    //            ("until switched ON"); left out, the relay uses 60
+    //   minutes  off only, optional: a whole number, at most 10080 (0 or negative = "until switched ON");
+    //            left out, the relay uses 60
     // Returns ['ok' => true, 'url' => ...] or ['ok' => false, 'status' => 4xx, 'error' => ...].
     public static function buildSwitchRequest(array $query, array $cameras): array
     {
@@ -439,10 +515,11 @@ class CamLogic
 
         $suffix = '';
         if ($action === 'off' && isset($query['minutes']) && $query['minutes'] !== '') {
-            if (!is_string($query['minutes']) || !preg_match('/^\s*-?\d+\s*$/', $query['minutes'])) {
-                return ['ok' => false, 'status' => 400, 'error' => 'minutes must be a whole number (0 or negative = until switched back ON)'];
+            $minutes = self::validateSwitchMinutes($query['minutes']);
+            if ($minutes === null) {
+                return ['ok' => false, 'status' => 400, 'error' => 'minutes must be a whole number, at most ' . self::MAX_SWITCH_OFF_MINUTES . ' (0 or negative = until switched back ON)'];
             }
-            $suffix = '?minutes=' . urlencode(trim($query['minutes']));
+            $suffix = '?minutes=' . $minutes;   // the checked number, written out fresh — not the text that came in
         }
 
         if ($scope === 'camera') {
@@ -502,19 +579,22 @@ class CamLogic
              'min' => 1, 'max' => 3600, 'default' => self::DEFAULT_RECORD_SECONDS,
              'label' => 'Manual recording length (seconds)', 'help' => 'How long the RECORD and RECORD ALL buttons on the dashboard record for. Pressing them again mid-recording extends it by this many seconds from that moment.'],
             ['key' => 'switch_off_minutes', 'type' => 'int', 'group' => 'Recording', 'restart' => false, 'scope' => 'dashboard',
-             'min' => -1, 'max' => 10080, 'default' => self::DEFAULT_SWITCH_OFF_MINUTES,
+             'min' => self::MIN_SWITCH_OFF_MINUTES, 'max' => self::MAX_SWITCH_OFF_MINUTES, 'default' => self::DEFAULT_SWITCH_OFF_MINUTES,
              'label' => 'Recording OFF time (minutes)', 'help' => 'How long the dashboard\'s recording OFF buttons keep recording switched off before it switches itself back ON. 0 or -1 = off until you press ON.'],
         ];
     }
 
     const DEFAULT_RECORD_SECONDS = 60;
     const DEFAULT_SWITCH_OFF_MINUTES = 60;
+    // The same limits the SETTINGS page enforces (dashboardFields below): -1 = until switched back ON, at most a week.
+    const MIN_SWITCH_OFF_MINUTES = -1;
+    const MAX_SWITCH_OFF_MINUTES = 10080;
 
     // The dashboard's manual recording length in seconds (what the RECORD buttons use).
     public static function recordSeconds(array $config): int
     {
         $v = $config['record_seconds'] ?? null;
-        if ((is_int($v) || (is_string($v) && preg_match('/^\s*\d+\s*$/', $v))) && (int) $v >= 1 && (int) $v <= 3600) {
+        if ((is_int($v) || (is_string($v) && preg_match('/^\s*\d+\s*$/D', $v))) && (int) $v >= 1 && (int) $v <= 3600) {
             return (int) $v;
         }
         return self::DEFAULT_RECORD_SECONDS;
@@ -524,7 +604,7 @@ class CamLogic
     public static function switchOffMinutes(array $config): int
     {
         $v = $config['switch_off_minutes'] ?? null;
-        if ((is_int($v) || (is_string($v) && preg_match('/^\s*-?\d+\s*$/', $v))) && (int) $v >= -1 && (int) $v <= 10080) {
+        if ((is_int($v) || (is_string($v) && preg_match('/^\s*-?\d+\s*$/D', $v))) && (int) $v >= self::MIN_SWITCH_OFF_MINUTES && (int) $v <= self::MAX_SWITCH_OFF_MINUTES) {
             return (int) $v;
         }
         return self::DEFAULT_SWITCH_OFF_MINUTES;
@@ -676,7 +756,7 @@ class CamLogic
         if ($host === 'localhost') {
             return true;
         }
-        if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/', $host)) {
+        if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/D', $host)) {
             return false;
         }
         if (strpos($host, '.') === false) {
@@ -762,7 +842,7 @@ class CamLogic
                 }
             } elseif ($key === 'record_seconds' || $key === 'switch_off_minutes') {
                 [$lo, $hi] = $key === 'record_seconds' ? [1, 3600] : [-1, 10080];
-                if (!preg_match('/^\s*-?\d+\s*$/', $value) || (int) $value < $lo || (int) $value > $hi) {
+                if (!preg_match('/^\s*-?\d+\s*$/D', $value) || (int) $value < $lo || (int) $value > $hi) {
                     return ['ok' => false, 'error' => $key . ' must be a whole number between ' . $lo . ' and ' . $hi];
                 }
                 $v = (int) $value;
@@ -807,7 +887,7 @@ class CamLogic
     // Add, rename and remove from the settings pages. The id is what ties an entry to a board
     // (its CAMERA_ID setting), so it can never be edited — remove the entry and add a new one.
 
-    const CAMERA_ID_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/';
+    const CAMERA_ID_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/D';
 
     // Null when fine, else what is wrong. The icon is shown on the page (it is escaped there too).
     // Length in characters (not bytes) without the mbstring extension; -1 if it is not valid UTF-8.
@@ -986,6 +1066,23 @@ class CamLogic
         return $msg;
     }
 
+    // The short reason out of PHP's own error text, for the browser: "fopen(http://10.0.0.5:8080/x): Failed to
+    // open stream: Connection refused" -> "Connection refused". The address and PHP's internals stay in the
+    // log (review F-20); what a person can use ("refused", "timed out", "no route") stays.
+    public static function transportReason(string $phpError): string
+    {
+        if (!preg_match('/failed to open stream:\s*(.+)$/is', $phpError, $m)) {
+            return 'the connection failed';
+        }
+        $reason = $m[1];
+        if (stripos($reason, 'getaddrinfo') !== false || stripos($reason, 'name or service') !== false) {
+            return 'the relay\'s name could not be looked up';
+        }
+        $reason = preg_replace('~[a-z][a-z0-9+.-]*://\S+~i', '', $reason);       // any address that slipped in
+        $reason = trim(preg_replace('/[^\x20-\x7e]/', ' ', $reason));
+        return $reason !== '' ? substr($reason, 0, 80) : 'the connection failed';
+    }
+
     // What detector-stream.php tells the browser (and the web server's error log) when the relay gives no
     // picture: [status, message]. $relayStatus is null when the relay could not be reached at all
     // ($transportError then carries PHP's reason); otherwise it is the relay's HTTP status and
@@ -1057,7 +1154,7 @@ class CamLogic
         if (preg_match('/[\x00-\x1f\x7f]/', $raw)) {
             return $bad('must not contain control characters or line breaks');
         }
-        $isInt = function (string $v): bool { return (bool) preg_match('/^-?\d{1,15}$/', $v); };
+        $isInt = function (string $v): bool { return (bool) preg_match('/^-?\d{1,15}$/D', $v); };
         switch ($def['kind']) {
             case 'int':
                 if (!$isInt($raw) || (int) $raw < $def['min'] || (int) $raw > $def['max']) {
@@ -1065,7 +1162,7 @@ class CamLogic
                 }
                 return ['ok' => true, 'value' => (string) (int) $raw];
             case 'float':
-                if (!preg_match('/^-?\d+(\.\d+)?$/', $raw) || (float) $raw < $def['min'] || (float) $raw > $def['max']) {
+                if (!preg_match('/^-?\d+(\.\d+)?$/D', $raw) || (float) $raw < $def['min'] || (float) $raw > $def['max']) {
                     return $bad('must be a number from ' . $def['min'] . ' to ' . $def['max']);
                 }
                 return ['ok' => true, 'value' => $raw];
@@ -1099,7 +1196,7 @@ class CamLogic
             case 'host':
             case 'id':
                 $max = $def['kind'] === 'host' ? 253 : 64;
-                if ($raw === '' || strlen($raw) > $max || !preg_match('/^[A-Za-z0-9_.-]+$/', $raw)) {
+                if ($raw === '' || strlen($raw) > $max || !preg_match('/^[A-Za-z0-9_.-]+$/D', $raw)) {
                     return $bad('may only contain letters, digits and _ . - (1 to ' . $max . ' characters)');
                 }
                 return ['ok' => true, 'value' => $raw];

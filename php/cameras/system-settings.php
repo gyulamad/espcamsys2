@@ -135,7 +135,7 @@ if (isset($dashChanges['relay_url']) && !isset($relayValues['port'])) {
 // Needed later? Then fail NOW, before the relay has saved anything.
 $willWriteConfig = $dashChanges || $newKey !== '' || isset($relayValues['port']);
 if ($willWriteConfig && !$configWritable) {
-    json_fail(500, 'config.php is not writable by the web server — run once on the Pi: sudo chown www-data ' . $configFile . ' (deploy.sh does this)');
+    json_fail(500, camdash_unwritable_message($configFile));
 }
 
 // 2. the relay

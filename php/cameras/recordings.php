@@ -26,6 +26,11 @@ require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/relay.php';
 
+// ?cam[]=x, ?play[]=x ... are arrays, not names: refuse them plainly instead of crashing (review F-16)
+if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen']) !== null) {
+    http_response_code(400);
+    exit('Invalid parameter');
+}
 $camera = CamLogic::findCameraById($cameras, $_GET['cam'] ?? '');
 if (!$camera) {
     http_response_code(404);
@@ -48,8 +53,10 @@ $seen = $_GET['seen'] ?? null;
 // file — that's what lets the built-in player's seek bar actually work.
 function stream_recording($url, $filename, $disposition) {
     $reqHeaders = [];
-    if (isset($_SERVER['HTTP_RANGE'])) {
-        $reqHeaders[] = 'Range: ' . $_SERVER['HTTP_RANGE'];
+    // Only ONE plain byte range is passed on; anything odd is dropped and the whole file is served (review F-14).
+    $range = CamLogic::validRangeHeader($_SERVER['HTTP_RANGE'] ?? null);
+    if ($range !== null) {
+        $reqHeaders[] = 'Range: ' . $range;
     }
 
     // No redirects (review F-08): the Range header and anything else we send must not follow one to another host.
@@ -63,7 +70,7 @@ function stream_recording($url, $filename, $disposition) {
 
     $headers = $http_response_header ?? [];
     $status = CamLogic::extractStatusCode($headers) ?? 200;
-    if (CamLogic::isRedirectStatus($status)) {
+    if (CamLogic::passableStatus($status) === null) {   // a redirect, an informational code or nonsense: not repeated to the browser
         fclose($stream);
         http_response_code(502);
         exit('Could not reach relay');

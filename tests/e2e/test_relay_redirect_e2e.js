@@ -163,9 +163,10 @@ async function main() {
       const r = await dash(method, q);
       check(`${name}: the redirect is not passed on (no 3xx, nothing from the thief)`, r.status >= 400 && !/leaked|moved/.test(r.text) && !r.headers.location, `status=${r.status} ${r.text.slice(0, 120)}`);
     }
-    const sw = await dash('POST', 'recording-switch.php?cam=cam-a&state=off');
+    const sw = await dash('POST', 'recording-switch.php?scope=camera&cam=cam-a&action=off');   // (the real parameter names: a wrong one is refused before the relay is even asked)
     check('recording-switch.php: the redirect is not followed either', sw.status >= 400 && !/leaked|moved/.test(sw.text), `status=${sw.status} ${sw.text.slice(0, 120)}`);
     await sleep(300);
+    check('(control) the switch call really reached the hostile relay, with the key', log.hostile.some((x) => x.url.startsWith('/recording/camera/cam-a/off') && x.headers['x-control-key'] === KEY), JSON.stringify(log.hostile.slice(-3).map((x) => x.url)));
     check('the thief received NOTHING (no request at all, so no control key, no actor)', log.thief.length === 0, JSON.stringify(log.thief.slice(0, 2)));
     const withKey = log.hostile.filter((x) => x.headers['x-control-key'] === KEY);
     check('(control) the hostile relay itself did get the key on the calls that carry it', withKey.length >= 5, `with key: ${withKey.length} of ${log.hostile.length}`);

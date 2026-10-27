@@ -80,6 +80,9 @@ function relay_proxy_json(
     }
     $status = $forwardStatus ? CamLogic::extractStatusCode($responseHeaders) : null;
     if ($status !== null) {
+        if (CamLogic::passableStatus($status) === null) {   // not a real final answer (review F-14)
+            json_fail(502, 'The relay answered with a status the dashboard does not pass on');
+        }
         http_response_code($status);
     }
     echo $body;

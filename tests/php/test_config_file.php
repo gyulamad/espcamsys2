@@ -70,4 +70,15 @@ camtest_test('CAMDASH_BACKUP_DIR inside the web folder, relative, or via .. is r
     cf_rm($d);
 });
 
+camtest_test('F-20: the unwritable-config message tells the browser what to do, without a path or a command', function () {
+    ini_set('error_log', '/dev/null');   // the details are meant for the error log; keep the test output clean
+    $file = sys_get_temp_dir() . '/camdash_secret_dir_' . bin2hex(random_bytes(3)) . '/config.php';   // does not exist
+    $msg = camdash_write_config($file, cf_config());
+    camtest_assert_true(is_string($msg) && $msg !== '', 'an error is returned');
+    camtest_assert_true(strpos($msg, $file) === false && strpos($msg, dirname($file)) === false && strpos($msg, sys_get_temp_dir()) === false, 'no path: ' . $msg);
+    camtest_assert_true(!preg_match('/sudo|chown|chmod|\/var\/|\/tmp\//', $msg), 'no command or folder: ' . $msg);
+    camtest_assert_true(strpos($msg, 'deploy.sh') !== false && strpos($msg, 'error log') !== false, 'but says what to do and where the details are: ' . $msg);
+    camtest_assert_equal(camdash_unwritable_message($file), $msg, 'the settings page gets the very same text');
+});
+
 exit(camtest_summarize());

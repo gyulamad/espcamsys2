@@ -22,6 +22,10 @@ require_once __DIR__ . '/relay.php';
 
 header('Content-Type: application/json');
 
+// ?cam[]=x is an array, not a name: refuse it plainly instead of crashing (review F-16)
+if (CamLogic::firstNonStringParam($_GET, ['cam', 'stop', 'seconds']) !== null) {
+    json_fail(400, 'Invalid parameter');
+}
 $camera = CamLogic::findCameraById($cameras, $_GET['cam'] ?? '');
 if (!$camera) {
     json_fail(404, 'Camera not found');
