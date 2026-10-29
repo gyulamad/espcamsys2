@@ -89,13 +89,14 @@ function ensureConfigExists() {
   console.log('(no config.js found — wrote a temporary throwaway one for this test run)');
 }
 
-// Alarm recordings create recordings/<camId>/ — only remove the ones that
-// belong to this test (and didn't exist before it ran).
-const preExistingRecDirs = new Set();
-function noteExistingRecDirs() {
-  for (const id of TEST_CAMS) {
-    if (fs.existsSync(path.join(RECORDINGS_DIR, id))) preExistingRecDirs.add(id);
-  }
+// Alarm recordings create recordings/<camId>/ — only the ones of this test's own e2e-named cameras are
+// ever removed. A folder with one of those names can only be footage left by an earlier run that was
+// aborted, timed out or crashed before it cleaned up; left in place it would spoil every later run (and
+// nothing would ever remove it), so start from nothing.
+function removeLeftoverTestFootage() {
+  const left = TEST_CAMS.filter((id) => fs.existsSync(path.join(RECORDINGS_DIR, id)));
+  for (const id of left) removeDir(path.join(RECORDINGS_DIR, id));
+  if (left.length) console.log(`(removed test footage left over from an earlier run: ${left.join(', ')})`);
 }
 function removeDir(dir) {
   try {
@@ -105,10 +106,7 @@ function removeDir(dir) {
 }
 function cleanup(settingsFile) {
   if (createdTempConfig) { try { fs.unlinkSync(CONFIG_PATH); } catch (e) { /* gone */ } }
-  for (const id of TEST_CAMS) {
-    if (preExistingRecDirs.has(id)) continue;
-    removeDir(path.join(RECORDINGS_DIR, id));
-  }
+  for (const id of TEST_CAMS) removeDir(path.join(RECORDINGS_DIR, id));
   for (const f of [settingsFile, settingsFile + '.tmp']) {
     try { fs.unlinkSync(f); } catch (e) { /* gone */ }
   }
@@ -199,7 +197,7 @@ async function main() {
     return;
   }
   ensureConfigExists();
-  noteExistingRecDirs();
+  removeLeftoverTestFootage();
 
   let relay;
   try {

@@ -114,20 +114,21 @@ function ensureConfigExists() {
   createdTempConfig = true;
   console.log('(no config.js found — wrote a temporary throwaway one for this test run)');
 }
-const preExistingRecDirs = new Set();
-function noteExistingRecDirs() {
-  for (const id of TEST_CAMS) {
-    if (fs.existsSync(path.join(RECORDINGS_DIR, id))) preExistingRecDirs.add(id);
-  }
+// The test cameras have e2e-only names, so a folder with one of those names can only be footage left by an
+// earlier run that was aborted, timed out or crashed before it cleaned up. Left in place it spoils every
+// later run (the "first clip" would be an old, maybe unfinished one, and the clip count would be too high)
+// and nothing would ever remove it — so start from nothing.
+function removeLeftoverTestFootage() {
+  const left = TEST_CAMS.filter((id) => fs.existsSync(path.join(RECORDINGS_DIR, id)));
+  for (const id of left) removeDir(path.join(RECORDINGS_DIR, id));
+  if (left.length) console.log(`(removed test footage left over from an earlier run: ${left.join(', ')})`);
 }
 function removeDir(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* already gone */ }
 }
 function cleanup(settingsFile) {
   if (createdTempConfig) { try { fs.unlinkSync(CONFIG_PATH); } catch (e) { /* gone */ } }
-  for (const id of TEST_CAMS) {
-    if (!preExistingRecDirs.has(id)) removeDir(path.join(RECORDINGS_DIR, id));
-  }
+  for (const id of TEST_CAMS) removeDir(path.join(RECORDINGS_DIR, id));
   for (const f of [settingsFile, settingsFile + '.tmp']) {
     try { fs.unlinkSync(f); } catch (e) { /* gone */ }
   }
@@ -321,7 +322,7 @@ async function main() {
     return;
   }
   ensureConfigExists();
-  noteExistingRecDirs();
+  removeLeftoverTestFootage();
 
   let relay;
   let cam;
