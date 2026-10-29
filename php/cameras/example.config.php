@@ -3,6 +3,11 @@
 // your real values. config.php is gitignored, so your secrets never get
 // committed; this example file is what stays in the repo.
 //
+// After `sudo ./deploy.sh` the web server can only READ config.php. Whatever you change on the
+// dashboard's settings pages is saved in data/settings.json (in the same folder, never served) and
+// takes precedence over the value written here; to change such a value by hand, change it on the
+// dashboard, or delete it from data/settings.json.
+//
 //   cp example.config.php config.php
 
 return [

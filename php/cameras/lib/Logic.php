@@ -865,6 +865,75 @@ class CamLogic
 
     // The text of config.php for a config array — everything in it, `cameras` included,
     // so saving the settings never loses a camera.
+    // ── Settings saved on the dashboard: data/settings.json over config.php (review F-18, F-10) ──
+    // config.php stays what the owner wrote (read-only for the web server, nothing but code a human
+    // edited). What the settings pages change is kept in a small JSON file the web server may write —
+    // not code, so a bug can never turn it into code that runs — and laid over config.php when the
+    // config is loaded. Only these keys can be overridden; anything else in the file is ignored.
+    const CONFIG_OVERRIDE_KEYS = ['auth_user', 'auth_pass', 'relay_url', 'relay_control_key', 'record_seconds', 'switch_off_minutes', 'cameras'];
+
+    // What of a decoded settings.json may be used: only the known keys, each with the right type, and
+    // cameras with a valid id. Anything else is dropped, so a damaged or tampered file can neither add
+    // new settings nor break the dashboard with a value of the wrong type.
+    public static function sanitizeOverrides($decoded): array
+    {
+        if (!is_array($decoded)) {
+            return [];
+        }
+        $out = [];
+        foreach (['auth_user', 'auth_pass', 'relay_url', 'relay_control_key'] as $k) {
+            if (isset($decoded[$k]) && is_string($decoded[$k])) {
+                $out[$k] = $decoded[$k];
+            }
+        }
+        foreach (['record_seconds', 'switch_off_minutes'] as $k) {
+            if (isset($decoded[$k]) && is_int($decoded[$k])) {
+                $out[$k] = $decoded[$k];
+            }
+        }
+        if (isset($decoded['cameras']) && is_array($decoded['cameras'])) {
+            $cams = [];
+            foreach ($decoded['cameras'] as $cam) {
+                if (!is_array($cam) || !isset($cam['id']) || !is_string($cam['id']) || preg_match(self::CAMERA_ID_PATTERN, $cam['id']) !== 1) {
+                    continue;
+                }
+                $clean = [];
+                foreach ($cam as $ck => $cv) {   // id, name, icon, detector, and any other plain value the entry already had
+                    if (is_string($ck) && preg_match('/^[A-Za-z_][A-Za-z0-9_]{0,31}$/D', $ck) === 1 && (is_string($cv) || is_int($cv) || is_bool($cv))) {
+                        $clean[$ck] = $cv;
+                    }
+                }
+                $cams[] = $clean;
+            }
+            $out['cameras'] = $cams;
+        }
+        return $out;
+    }
+
+    // config.php's values with the saved overrides on top (a camera list replaces the whole list).
+    public static function mergeConfig(array $base, array $overrides): array
+    {
+        foreach ($overrides as $k => $v) {
+            if (in_array($k, self::CONFIG_OVERRIDE_KEYS, true)) {
+                $base[$k] = $v;
+            }
+        }
+        return $base;
+    }
+
+    // What has to be saved so that mergeConfig($base, result) gives $effective: the overridable keys whose
+    // value is not what config.php says. A value changed back to the config.php one drops its override.
+    public static function configOverrides(array $base, array $effective): array
+    {
+        $out = [];
+        foreach (self::CONFIG_OVERRIDE_KEYS as $k) {
+            if (array_key_exists($k, $effective) && (!array_key_exists($k, $base) || $base[$k] !== $effective[$k])) {
+                $out[$k] = $effective[$k];
+            }
+        }
+        return self::sanitizeOverrides($out);
+    }
+
     public static function buildConfigPhp(array $config): string
     {
         return "<?php\n"

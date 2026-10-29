@@ -16,7 +16,6 @@
 // Usage:  node tests/e2e/test_relay_trust_e2e.js
 // Exit code: 0 if every check passed (or php is missing), 1 otherwise.
 
-const crypto = require('crypto');
 const fs = require('fs');
 const nodeHttp = require('http');
 const net = require('net');
@@ -75,6 +74,8 @@ function relayHandler(req, res) {
 }
 
 let docroot;
+let phpTmp;   // PHP's own temp folder for this run: the 'log once per 5 minutes' markers of log_throttled() live there,
+              // so another user's or an earlier run's marker files can never hide the line this test looks for
 let phpLog = '';
 function makeDashboard() {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-trust-')));
@@ -86,7 +87,7 @@ function makeDashboard() {
 }
 function startPhp(dir) {
   return new Promise((resolve, reject) => {
-    const child = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4' } });
+    const child = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4', TMPDIR: phpTmp } });
     child.stdout.on('data', (d) => { phpLog += d; });
     child.stderr.on('data', (d) => { phpLog += d; });
     child.on('exit', (code) => reject(new Error(`php -S exited early (code ${code})`)));
@@ -147,6 +148,7 @@ async function main() {
     relay = nodeHttp.createServer(relayHandler);
     await new Promise((r) => relay.listen(RELAY_PORT, '127.0.0.1', r));
     docroot = makeDashboard();
+    phpTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-trust-tmp-'));
     php = await startPhp(docroot);
 
     // ── F-14: live streams ──
@@ -240,9 +242,10 @@ async function main() {
 
     // ── F-20: the relay is unreachable: the browser is not told where it lives ──
     await new Promise((resolve) => relay.close(resolve));   // port closed: "connection refused"
-    // log_throttled() writes the same line only once per 5 minutes, using a marker file in the temp folder:
-    // clear the ones this test can hit, so an earlier run cannot hide the line we look for
-    for (const status of [502, 503, 504]) fs.rmSync(path.join(os.tmpdir(), 'camdash-log-' + crypto.createHash('sha1').update(`detector-stream:det-a:${status}`).digest('hex')), { force: true });
+    // log_throttled() writes the same line only once per 5 minutes, using marker files in PHP's temp folder (phpTmp,
+    // private to this run). The refusals above already logged under the same key, so clear the markers: the line we
+    // look for now is the same kind of line a few minutes later.
+    for (const f of fs.readdirSync(phpTmp)) if (f.startsWith('camdash-log-')) fs.rmSync(path.join(phpTmp, f), { force: true });
     phpLog = '';
     const addr = `127.0.0.1:${RELAY_PORT}`;
     for (const url of ['detector-stream.php?cam=cam-a', 'stream.php?cam=cam-a', 'recordings.php?cam=cam-a', 'status.php', 'record.php?cam=cam-a']) {
@@ -259,6 +262,7 @@ async function main() {
     await stopProc(php);
     try { relay.close(); } catch (e) { /* already closed */ }
     if (docroot) fs.rmSync(docroot, { recursive: true, force: true });
+    if (phpTmp) fs.rmSync(phpTmp, { recursive: true, force: true });
   }
   summarize();
 }

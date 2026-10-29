@@ -81,6 +81,27 @@ fi
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
 
+# Installs a test-only package folder from its lockfile (npm ci) when its packages are missing, or when the
+# lockfile is newer than what is installed (a patch changed a version). Does nothing otherwise, so a normal
+# run costs nothing. Never aborts the run: with no npm or no network it says so and the test that needs the
+# packages reports SKIP. $1 = folder with package.json + package-lock.json, $2 = what the packages are for.
+ensure_npm_deps() {
+    local dir="$1" why="$2"
+    [ -f "$dir/package-lock.json" ] || return 0
+    if [ -d "$dir/node_modules" ] && [ ! "$dir/package-lock.json" -nt "$dir/node_modules" ]; then
+        return 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        echo "NOTE: npm not found, so the packages for $why ($dir) are not installed — that test will SKIP."
+        return 0
+    fi
+    echo "Installing the packages for $why (npm ci in $dir) ..."
+    if ! (cd "$dir" && npm ci --no-audit --no-fund); then
+        echo "NOTE: npm ci failed in $dir (no network?) — $why may SKIP or fail."
+    fi
+    return 0
+}
+
 # ── Arduino / C++ logic tests ────────────────────────────────────────────
 # Built with a plain desktop g++ (no Arduino core needed — logic.h has no
 # hardware dependencies) and run under gdb in batch mode, so a crash prints
@@ -566,13 +587,26 @@ else
 fi
 
 hr
+echo "End-to-end (settings saved in data/settings.json: atomic, locked, damage-proof) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_config_overrides_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
 echo "DOM (the real dashboard page in jsdom: nothing from the relay or config becomes markup) test"
 hr
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
 else
-    # needs the jsdom package: (cd tests/dom && npm install); the test says SKIP if it is missing
+    # needs the jsdom package (tests/dom/package.json): installed here when missing or out of date; the
+    # test says SKIP if that was not possible
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_index_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi

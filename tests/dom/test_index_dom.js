@@ -57,6 +57,32 @@ function summarize() {
   process.exitCode = failCount === 0 ? 0 : 1;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A tiny fetch() built on Node's http module, so the test does not depend on the Node version (the
+// global fetch only exists from Node 18). Gives back what the page uses of a response: ok, status,
+// headers.get(), json(), text(). opts: { method, headers, body }.
+function nodeFetch(url, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method: opts.method || 'GET', headers: opts.headers || {} }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve({
+        ok: res.statusCode >= 200 && res.statusCode < 300,
+        status: res.statusCode,
+        headers: { get: (k) => res.headers[String(k).toLowerCase()] || null },
+        text: () => Promise.resolve(data),
+        json: () => Promise.resolve().then(() => JSON.parse(data)),
+      }));
+    });
+    req.on('error', reject);
+    req.setTimeout(20000, () => req.destroy(new Error('request timed out')));
+    if (opts.body !== undefined) req.write(opts.body);
+    req.end();
+  });
+}
+// The same, shaped like a ready answer (used where the test hands the page a made-up reply).
+const fakeResponse = (obj) => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, text: () => Promise.resolve(JSON.stringify(obj)), json: () => Promise.resolve(obj) });
 const basic = 'Basic ' + Buffer.from(`${AUTH.user}:${AUTH.pass}`).toString('base64');
 
 function makeDashboard() {
@@ -114,7 +140,8 @@ function startRelay() {
 }
 
 async function main() {
-  if (!JSDOM) { console.log('SKIP: the jsdom package is not installed (cd tests/dom && npm install).'); finished = true; return; }
+  if (Number(process.versions.node.split('.')[0]) < 16) { console.log(`SKIP: this test needs Node 16 or newer (this is ${process.version}).`); finished = true; return; }
+  if (!JSDOM) { console.log('SKIP: the jsdom package is not installed, or does not run on this Node (cd tests/dom && npm install).'); finished = true; return; }
   if (spawnSync('php', ['-v'], { stdio: 'ignore' }).status !== 0) { console.log('SKIP: php is not installed.'); finished = true; return; }
   let php; let relay; let dir; let dom;
   try {
@@ -122,11 +149,11 @@ async function main() {
     dir = makeDashboard();
     php = await startPhp(dir);
 
-    const html = await (await fetch(`${BASE}/index.php`, { headers: { Authorization: basic } })).text();
+    const html = await (await nodeFetch(`${BASE}/index.php`, { headers: { Authorization: basic } })).text();
     check('the page loads', html.includes('<main>'), html.slice(0, 120));
     check('the attack camera id is not in the page source at all', !html.includes('__pwned') || !html.includes(EVIL_ID.slice(0, 6) + "');"), 'source contains the id');
 
-    const rawList = await (await fetch(`${BASE}/recordings.php?cam=cam1`, { headers: { Authorization: basic } })).json();
+    const rawList = await (await nodeFetch(`${BASE}/recordings.php?cam=cam1`, { headers: { Authorization: basic } })).json();
     check('recordings.php hands the browser only the clean entry, with plain types', JSON.stringify(rawList) === JSON.stringify([{ filename: GOOD_FILE, sizeBytes: 2048, seen: false }]), JSON.stringify(rawList));
 
     // The browser side: scripts run, fetch goes to the real PHP; raw=true skips PHP's list filter on purpose.
@@ -141,9 +168,9 @@ async function main() {
           const url = new URL(u, `${BASE}/index.php`).toString();
           if (bypassFilter && /recordings\.php\?cam=[^&]+$/.test(url)) {
             const raw = [{ filename: GOOD_FILE, sizeBytes: 2048, seen: false }, ...EVIL_FILES.map((f) => ({ filename: f, sizeBytes: 1, seen: false })), { filename: 5 }, null];
-            return Promise.resolve(new Response(JSON.stringify(raw), { headers: { 'Content-Type': 'application/json' } }));
+            return Promise.resolve(fakeResponse(raw));
           }
-          return fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: basic } });
+          return nodeFetch(url, { method: opts.method, body: opts.body, headers: { ...(opts.headers || {}), Authorization: basic } });
         };
       },
     });

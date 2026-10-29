@@ -58,8 +58,9 @@ if ($headers === null || $jsonHeaders === null) {
     json_fail(500, 'relay_control_key in config.php contains a line break');
 }
 
-// Can this server rewrite config.php? (It runs as the web server's user.)
-$configWritable = is_file($configFile) && is_writable($configFile);
+// Can this server save settings? (It runs as the web server's user: into data/settings.json once deploy.sh
+// has made that folder, else into config.php itself.)
+$configWritable = camdash_config_writable(__DIR__);
 
 if ($method === 'GET') {
     [$body, $resp] = relay_fetch($relayBase . '/system-settings', 'GET', 5, $headers);
@@ -158,26 +159,28 @@ if ($relayValues) {
 }
 
 // 3. config.php
-$newConfig = $config;
-foreach ($dashChanges as $k => $v) {
-    $newConfig[$k] = $v;
-}
-if (in_array('controlKey', $changed, true) && $newKey !== '') {
-    $newConfig['relay_control_key'] = $newKey;
-}
-if (in_array('port', $changed, true) && !isset($dashChanges['relay_url'])) {
-    $moved = CamLogic::replaceUrlPort((string) $newConfig['relay_url'], (int) $relayValues['port']);
-    if ($moved !== null) {
-        $newConfig['relay_url'] = $moved;
+// The change is applied to the settings as they are when the lock is taken (not the ones this request
+// started with), so a save made by someone else a moment ago is not undone.
+$saved = camdash_update_config(function (array $fresh) use ($dashChanges, $changed, $newKey, $relayValues) {
+    $new = $fresh;
+    foreach ($dashChanges as $k => $v) {
+        $new[$k] = $v;
     }
-}
-$configChanged = $newConfig !== $config;
-if ($configChanged) {
-    $writeErr = camdash_write_config($configFile, $newConfig);
-    if ($writeErr !== null) {
-        json_fail(500, 'The relay saved its settings, but ' . $writeErr);
+    if (in_array('controlKey', $changed, true) && $newKey !== '') {
+        $new['relay_control_key'] = $newKey;
     }
+    if (in_array('port', $changed, true) && !isset($dashChanges['relay_url'])) {
+        $moved = CamLogic::replaceUrlPort((string) $new['relay_url'], (int) $relayValues['port']);
+        if ($moved !== null) {
+            $new['relay_url'] = $moved;
+        }
+    }
+    return $new;
+}, __DIR__);
+if (!$saved['ok']) {
+    json_fail(500, 'The relay saved its settings, but ' . $saved['error']);
 }
+$newConfig = $saved['config'] ?: $config;
 foreach (array_keys($dashChanges) as $k) {
     $changed[] = $k;
 }

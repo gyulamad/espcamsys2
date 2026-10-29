@@ -16,7 +16,7 @@
 //   - the rest of the site is left exactly as it was (the snippet protects only the dashboard folder)
 //   - the security headers are on every answer: the page, the 401 login prompt, 403 and 404 pages
 //   - Apache does not announce its version, and TRACE is refused
-//   - lib/, config.php, example.config.php, config.php.bak (and other copies/backups of it),
+//   - lib/, data/ (the settings saved on the dashboard), config.php, example.config.php, config.php.bak (and other copies/backups of it),
 //     editor leftovers and dot-files answer 403 and never leak their content — with NO .htaccess in
 //     the folder, so it is the snippet doing it (AllowOverride None)
 //   - folder listings are off inside the dashboard (a folder without index answers 403, no "Index of")
@@ -92,6 +92,9 @@ function makeDocroot() {
     fs.writeFileSync(path.join(dir, leftover), SECRET + '\n');
   }
   fs.writeFileSync(path.join(dir, 'lib', 'secret.txt'), SECRET + '\n');
+  // the settings saved on the dashboard (login, control key ...) live here once deploy.sh has run
+  fs.mkdirSync(path.join(dir, 'data'));
+  for (const f of ['settings.json', 'settings.lock', 'settings.json.tmpabc123', 'notes.txt']) fs.writeFileSync(path.join(dir, 'data', f), SECRET + '\n');
   fs.mkdirSync(path.join(dir, 'emptydir'));
   // the rest of the site: a page, and a folder with no index (Debian's default site lists those)
   fs.writeFileSync(path.join(siteRoot, 'index.html'), '<html>It works</html>\n');
@@ -228,7 +231,8 @@ async function suite(label, where) {
   check(n('TRACE is refused'), r.status === 405 || r.status === 403, `status=${r.status}`);
 
   const denied = ['/lib/', '/lib/Logic.php', '/lib/secret.txt', '/config.php', '/example.config.php', '/config.php.bak',
-    '/config.php.orig', '/config.php~', '/config.php.swp', '/.env', '/notes.md', '/deploy.sh'];
+    '/config.php.orig', '/config.php~', '/config.php.swp', '/.env', '/notes.md', '/deploy.sh',
+    '/data/', '/data/settings.json', '/data/settings.lock', '/data/settings.json.tmpabc123', '/data/notes.txt'];
   for (const p of denied) {
     r = await q('GET', p, { auth: true });
     check(n(`${p} -> 403, content never leaks (even with a valid login)`), r.status === 403 && !r.text.includes(SECRET) && !/Index of/.test(r.text), `status=${r.status}`);
@@ -257,6 +261,7 @@ function staticChecks() {
   const install = read('INSTALL.md');
   check('there is NO new virtual host for the dashboard: the existing site keeps serving it (nothing is disabled)', !/<VirtualHost/.test(noComments(protect)) && !fs.existsSync(path.join(ROOT, 'apache/camdash.conf')) && !fs.existsSync(path.join(ROOT, 'apache/camdash-common.conf')));
   check('the protect snippet covers the folder deploy.sh copies to, set by ONE Define line', /^Define CAMDASH_DIR \/var\/www\/html\/camdash$/m.test(protect) && (noComments(protect).match(/\/var\/www\//g) || []).length === 1);
+  check('the snippet denies data/ (the settings saved on the dashboard) to everyone', /<Directory \$\{CAMDASH_DIR\}\/data>\s*Require all denied/.test(protect));
   check('the snippet still denies lib/, config files, dot-files and sets the headers', /<Directory \$\{CAMDASH_DIR\}\/lib>/.test(protect) && /config\\\.php/.test(protect) && /X-Content-Type-Options/.test(protect) && /\^\\\./.test(protect));
   check('the optional HTTPS site is on every address, port 443, TLS 1.2 and 1.3 only, no HSTS', /<VirtualHost \*:443>/.test(ssl) && /SSLProtocol -all \+TLSv1\.2 \+TLSv1\.3/.test(ssl) && !/Strict-Transport-Security/i.test(noComments(ssl)));
   check('the HTTPS site serves the same web root as the default site', /DocumentRoot \/var\/www\/html$/m.test(ssl));
@@ -359,8 +364,13 @@ async function main() {
       const r = await request('GET', '/camdash/', { auth: true, where: { host: tlsHost, port: TLS_PORT, tls: true } });
       const protocol = r.tlsInfo.protocol;
       check('HTTPS negotiates TLS 1.2 or 1.3', protocol === 'TLSv1.2' || protocol === 'TLSv1.3', protocol);
-      const cert = r.tlsInfo.cert;
-      check('the certificate the browser sees carries the names it was made for', /raspberrypi\.local/.test(cert.subjectaltname || '') && (!lan || (cert.subjectaltname || '').includes(lan)), cert.subjectaltname);
+      // What the server presents, read by OpenSSL itself (Node's own certificate object comes back without
+      // the names on older Node versions, so the test does not depend on it).
+      const shown = spawnSync('openssl', ['s_client', '-connect', `${tlsHost}:${TLS_PORT}`], { input: '', encoding: 'utf8', timeout: 8000 });
+      const pem = ((shown.stdout || '').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/) || [])[0];
+      const served = pem ? (spawnSync('openssl', ['x509', '-noout', '-text'], { input: pem, encoding: 'utf8' }).stdout || '') : '';
+      const sanAt = served.indexOf('Alternative Name');
+      check('the certificate Apache serves carries the names it was made for', /DNS:raspberrypi\.local/.test(served) && (!lan || served.includes('IP Address:' + lan)), sanAt >= 0 ? served.slice(sanAt, sanAt + 200) : `no certificate received: ${((shown.stdout || '') + (shown.stderr || '')).slice(0, 200)}`);
       check('no HSTS header is sent (a self-signed certificate must stay click-through-able)', !r.headers['strict-transport-security'], JSON.stringify(r.headers));
       // Old TLS: a client that is willing to speak it (security level 0), so a refusal is the SERVER's doing.
       const old = (v) => spawnSync('openssl', ['s_client', '-connect', `${tlsHost}:${TLS_PORT}`, v, '-cipher', 'DEFAULT:@SECLEVEL=0'], { input: '', encoding: 'utf8', timeout: 8000 });

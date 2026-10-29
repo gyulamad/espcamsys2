@@ -1207,4 +1207,50 @@ camtest_test('F-20: transportReason keeps the reason in words and drops the addr
     foreach ($cases as [$in]) camtest_assert_true(!preg_match('~://|127\.0\.0\.1|192\.168|fopen|pi\.local~', CamLogic::transportReason($in)), 'no address in the reason for: ' . $in);
 });
 
+// ── F-18 / F-10: settings saved on the dashboard (data/settings.json) laid over config.php ──
+
+camtest_test('sanitizeOverrides keeps the known keys with the right types, nothing else', function () {
+    $in = ['auth_user' => 'bob', 'auth_pass' => 'a-long-password', 'relay_url' => 'http://127.0.0.1:8080', 'relay_control_key' => 'k', 'record_seconds' => 90, 'switch_off_minutes' => -1,
+           'cameras' => [['id' => 'cam1', 'name' => 'Front', 'icon' => '📷', 'detector' => 'det1']],
+           'evil' => 'x', 'auth_admin' => true, '__proto__' => 1, 'port' => 8080];
+    $out = CamLogic::sanitizeOverrides($in);
+    camtest_assert_equal(array_keys($out), ['auth_user', 'auth_pass', 'relay_url', 'relay_control_key', 'record_seconds', 'switch_off_minutes', 'cameras']);
+    camtest_assert_equal($out['cameras'], [['id' => 'cam1', 'name' => 'Front', 'icon' => '📷', 'detector' => 'det1']]);
+});
+
+camtest_test('sanitizeOverrides drops values of the wrong type instead of letting them break the dashboard', function () {
+    foreach (['auth_user' => 5, 'auth_pass' => ['x'], 'relay_url' => null, 'relay_control_key' => true, 'record_seconds' => '60', 'switch_off_minutes' => 1.5, 'cameras' => 'cam1'] as $k => $bad) {
+        $out = CamLogic::sanitizeOverrides([$k => $bad]);
+        camtest_assert_true(!array_key_exists($k, $out) || ($k === 'cameras' && $out[$k] === []), $k . ' = ' . var_export($bad, true));
+    }
+    foreach ([null, 'text', 5, true, []] as $notAnArray) camtest_assert_equal(CamLogic::sanitizeOverrides($notAnArray), []);
+});
+
+camtest_test('sanitizeOverrides: cameras with a bad id are dropped, odd fields are cleaned', function () {
+    $out = CamLogic::sanitizeOverrides(['cameras' => [
+        ['id' => 'ok1', 'name' => 'A'], ['id' => "a');alert(1);('", 'name' => 'evil'], ['id' => '<img>'], ['id' => 5], ['name' => 'no id'], 'junk', null,
+        ['id' => 'ok2', 'name' => ['array'], 'icon' => 'x', 'weird key!' => 'y', 'nested' => ['a'], 'flag' => true, 'n' => 3, 'obj' => new stdClass()],
+    ]]);
+    camtest_assert_equal($out['cameras'], [['id' => 'ok1', 'name' => 'A'], ['id' => 'ok2', 'icon' => 'x', 'flag' => true, 'n' => 3]]);
+});
+
+camtest_test('mergeConfig lays the overrides over config.php; only the known keys; a camera list replaces the list', function () {
+    $base = ['auth_user' => 'owner', 'auth_pass' => 'long-enough-1', 'relay_url' => 'http://127.0.0.1:8080', 'cameras' => [['id' => 'a'], ['id' => 'b']], 'my_own_note' => 'keep'];
+    $m = CamLogic::mergeConfig($base, ['auth_pass' => 'new-password-2', 'cameras' => [['id' => 'c']], 'port' => 1, 'my_own_note' => 'x']);
+    camtest_assert_equal($m, ['auth_user' => 'owner', 'auth_pass' => 'new-password-2', 'relay_url' => 'http://127.0.0.1:8080', 'cameras' => [['id' => 'c']], 'my_own_note' => 'keep']);
+    camtest_assert_equal(CamLogic::mergeConfig($base, []), $base);
+});
+
+camtest_test('configOverrides: only what differs from config.php, and a value changed back drops its override', function () {
+    $base = ['auth_user' => 'owner', 'auth_pass' => 'long-enough-1', 'relay_url' => 'http://127.0.0.1:8080', 'cameras' => [['id' => 'a']], 'my_own_note' => 'keep'];
+    camtest_assert_equal(CamLogic::configOverrides($base, $base), []);
+    $eff = $base; $eff['auth_pass'] = 'new-password-2'; $eff['record_seconds'] = 90; $eff['my_own_note'] = 'changed';
+    camtest_assert_equal(CamLogic::configOverrides($base, $eff), ['auth_pass' => 'new-password-2', 'record_seconds' => 90]);
+    $back = $eff; $back['auth_pass'] = 'long-enough-1';
+    camtest_assert_equal(array_keys(CamLogic::configOverrides($base, $back)), ['record_seconds']);
+    $roundTrip = CamLogic::mergeConfig($base, CamLogic::configOverrides($base, $eff));
+    camtest_assert_equal($roundTrip['auth_pass'], 'new-password-2');
+    camtest_assert_equal($roundTrip['my_own_note'], 'keep', 'a key that is not overridable is never taken over');
+});
+
 exit(camtest_summarize());

@@ -9,7 +9,8 @@
 
 require_once __DIR__ . '/lib/Logic.php';
 
-$config = require __DIR__ . '/config.php';
+require_once __DIR__ . '/config_file.php';
+$config = camdash_load_config(__DIR__);   // config.php with the settings saved on the dashboard (data/settings.json) on top
 
 $validCameras = CamLogic::onlyValidCameras($config['cameras'], $skippedCameras);
 foreach ($skippedCameras as $skippedId) {

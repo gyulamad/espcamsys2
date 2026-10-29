@@ -38,38 +38,44 @@ $id   = isset($input['id']) && is_string($input['id']) ? trim($input['id']) : ''
 $name = isset($input['name']) && is_string($input['name']) ? $input['name'] : '';
 $icon = isset($input['icon']) && is_string($input['icon']) ? trim($input['icon']) : '';
 $detector = isset($input['detector']) && is_string($input['detector']) ? trim($input['detector']) : '';
-$cameras = $config['cameras'] ?? [];
-
-switch ($input['action']) {
-    case 'add':
-        $r = CamLogic::addCamera($cameras, $id, $name, $icon);
-        $done = 'added';
-        break;
-    case 'update':
-        $r = CamLogic::updateCamera($cameras, $id, $name, $icon);
-        $done = 'saved';
-        break;
-    case 'detector':
-        $r = CamLogic::setCameraDetector($cameras, $id, $detector);
-        $done = $detector === '' ? 'unpaired from its person detector' : 'paired with the person detector ' . $detector;
-        break;
-    case 'remove':
-        $r = CamLogic::removeCamera($cameras, $id);
-        $done = 'removed from the dashboard';
-        break;
-    default:
-        json_fail(400, 'unknown action');
-}
-if (!$r['ok']) {
-    json_fail(400, $r['error']);
+if (!in_array($input['action'], ['add', 'update', 'detector', 'remove'], true)) {
+    json_fail(400, 'unknown action');
 }
 
-$newConfig = $config;
-$newConfig['cameras'] = $r['cameras'];
-$err = camdash_write_config(__DIR__ . '/config.php', $newConfig);
-if ($err !== null) {
-    json_fail(500, $err);
+// The change is worked out on the camera list as it is when the lock is taken (not the one this request
+// started with), so two people changing cameras at the same moment cannot undo each other.
+$done = '';
+$refused = false;
+$saved = camdash_update_config(function (array $fresh) use ($input, $id, $name, $icon, $detector, &$done, &$refused) {
+    $cameras = $fresh['cameras'] ?? [];
+    switch ($input['action']) {
+        case 'add':
+            $r = CamLogic::addCamera($cameras, $id, $name, $icon);
+            $done = 'added';
+            break;
+        case 'update':
+            $r = CamLogic::updateCamera($cameras, $id, $name, $icon);
+            $done = 'saved';
+            break;
+        case 'detector':
+            $r = CamLogic::setCameraDetector($cameras, $id, $detector);
+            $done = $detector === '' ? 'unpaired from its person detector' : 'paired with the person detector ' . $detector;
+            break;
+        default:   // remove
+            $r = CamLogic::removeCamera($cameras, $id);
+            $done = 'removed from the dashboard';
+    }
+    if (!$r['ok']) {
+        $refused = true;
+        return $r['error'];
+    }
+    $fresh['cameras'] = $r['cameras'];
+    return $fresh;
+});
+if (!$saved['ok']) {
+    json_fail($refused ? 400 : 500, $saved['error']);
 }
+$newConfig = $saved['config'];
 
 $message = 'Camera ' . $id . ' ' . $done . '.';
 if ($input['action'] === 'add') {
@@ -90,5 +96,5 @@ echo json_encode([
     'message' => $message,
     'cameras' => array_map(function ($c) {
         return ['id' => (string) $c['id'], 'name' => (string) ($c['name'] ?? ''), 'icon' => (string) ($c['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($c) ?? '')];
-    }, $r['cameras']),
+    }, $newConfig['cameras'] ?? []),
 ]);

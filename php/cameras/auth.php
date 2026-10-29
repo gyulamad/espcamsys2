@@ -43,7 +43,8 @@ function camdash_security_headers(): void
 }
 camdash_security_headers();
 
-$config = require __DIR__ . '/config.php';
+require_once __DIR__ . '/config_file.php';
+$config = camdash_load_config(__DIR__);   // config.php with the settings saved on the dashboard (data/settings.json) on top
 
 // Runs $fn on the stored throttle state while holding a lock, and stores what it returns, so
 // parallel guesses cannot all slip past the counter. Null if the state file cannot be used
