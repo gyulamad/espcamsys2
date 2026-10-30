@@ -18,7 +18,9 @@ const LIMITS = {
   fw: 80,
   maxAgeMs: 30 * 24 * 3600 * 1000, // an entry older than 30 days is nonsense (a clock/wrap bug), treat age as unknown
 };
-const CAMERA_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+// Must start with a letter or digit so ".." and "." can never be an id (they would escape the
+// recordings folder when joined into a path); same rule as firmware.js, devicesettings.js and the PHP side.
+const CAMERA_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
 // Normalises line endings, drops control characters other than newline and
 // tab, and caps the length (marking the cut). Non-strings become ''.

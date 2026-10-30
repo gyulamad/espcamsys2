@@ -174,13 +174,31 @@ function settingsView() {
   return { ...settings, preRollSeconds: preRollCfg.seconds };
 }
 
+// Every route with an :id segment gets the id checked first. Express percent-decodes a segment AFTER it has
+// matched the route, so %2F..%2F arrives here as a real "../" — this is the single place that refuses it.
+app.param('id', (req, res, next, id) => {
+  if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid camera id' });
+  return next();
+});
+
 // Raw binary body for camera uploads (JPEG bytes, not JSON/form)
 app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
-const cameras = {}; // id -> { frame, emitter, lastSeen, socket, ip, recording, preRoll, lastRecordedUntil }
+const cameras = Object.create(null); // id -> { frame, emitter, lastSeen, socket, ip, recording, preRoll, lastRecordedUntil }
+const MAX_CAMERAS = 64; // a wrong or hostile id must not grow memory without bound (same idea as MAX_DETECTORS)
+
+class CameraIdError extends Error {
+  constructor(message, status) { super(message); this.status = status; }
+}
 
 function getCamera(id) {
+  if (typeof id !== 'string' || !logentry.CAMERA_ID_RE.test(id)) {
+    throw new CameraIdError('invalid camera id', 400);
+  }
   if (!cameras[id]) {
+    if (Object.keys(cameras).length >= MAX_CAMERAS) {
+      throw new CameraIdError(`the relay already knows ${MAX_CAMERAS} cameras and accepts no more`, 503);
+    }
     cameras[id] = {
       frame: null,
       emitter: new EventEmitter(),
@@ -266,12 +284,22 @@ async function writePreRollFrames(rec, frames) {
   }
 }
 
+// The folder holding one camera's recordings. The id is validated again here and the result is checked to
+// sit directly inside RECORDINGS_DIR, so no route can reach outside it even if a caller forgets to validate.
+function cameraDir(id) {
+  if (typeof id !== 'string' || !logentry.CAMERA_ID_RE.test(id)) throw new CameraIdError('invalid camera id', 400);
+  const root = path.resolve(RECORDINGS_DIR);
+  const dir = path.resolve(root, id);
+  if (path.dirname(dir) !== root) throw new CameraIdError('invalid camera id', 400);
+  return dir;
+}
+
 function startRecording(cam, id, seconds) {
   if (cam.recording) return null; // caller should call extendRecording() instead
 
   const triggerTs = Date.now();
 
-  const dir = path.join(RECORDINGS_DIR, id);
+  const dir = cameraDir(id);
   fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date(triggerTs).toISOString().replace(/[:.]/g, '-');
   const tempDir = path.join(dir, `.tmp_${stamp}`);
@@ -832,7 +860,7 @@ app.get('/snapshot/:id', (req, res) => {
 // for that camera instead of failing the whole status response.
 async function countRecordings(id) {
   try {
-    return validation.countRecordingFiles(await fsp.readdir(path.join(RECORDINGS_DIR, id)));
+    return validation.countRecordingFiles(await fsp.readdir(cameraDir(id)));
   } catch (err) {
     return err.code === 'ENOENT' ? 0 : null;
   }
@@ -1544,16 +1572,16 @@ app.post('/record/:id', requireRecordSeconds, (req, res) => {
 // Stop a recording early. Encoding into the final .mp4 happens in the
 // background — it won't show up in /recordings/:id until ffmpeg finishes.
 app.post('/record/:id/stop', (req, res) => {
-  const cam = getCamera(req.params.id);
-  const rec = stopRecording(cam);
+  const cam = cameras[req.params.id];
+  const rec = cam && stopRecording(cam);
   if (!rec) return res.status(409).json({ error: 'not recording' });
   res.json({ id: req.params.id, recording: false, encoding: rec.frameCount > 0 });
 });
 
 // Current recording status/progress for one camera.
 app.get('/record/:id', (req, res) => {
-  const cam = getCamera(req.params.id);
-  if (!cam.recording) return res.json({ recording: false });
+  const cam = cameras[req.params.id];
+  if (!cam || !cam.recording) return res.json({ recording: false });
   const { elapsed, remaining } = timing.computeElapsedRemaining(
     Date.now(), cam.recording.startedAt.getTime(), cam.recording.endAt.getTime()
   );
@@ -1594,7 +1622,7 @@ function removeClip(clipPath) {
 function requireExistingRecording(req, res, next) {
   const { id, filename } = req.params;
   if (!validation.isSafeFilename(filename)) return res.sendStatus(400);
-  const filePath = path.join(RECORDINGS_DIR, id, filename);
+  const filePath = path.join(cameraDir(id), filename);
   if (!fs.existsSync(filePath)) return res.sendStatus(404);
   req.recordingPath = filePath;
   return next();
@@ -1603,7 +1631,7 @@ function requireExistingRecording(req, res, next) {
 // List saved recordings for a camera, newest first. `seen` says whether the
 // clip has been played or downloaded yet (see seenMarkerPath above).
 app.get('/recordings/:id', (req, res) => {
-  const dir = path.join(RECORDINGS_DIR, req.params.id);
+  const dir = cameraDir(req.params.id);
   const files = recordingFileNames(dir)
     .map((f) => {
       const stat = fs.statSync(path.join(dir, f));
@@ -1618,7 +1646,7 @@ app.get('/recordings/:id', (req, res) => {
 // by method — no filename segment, so it can't collide with the
 // single-file delete route below.
 app.delete('/recordings/:id', (req, res) => {
-  const dir = path.join(RECORDINGS_DIR, req.params.id);
+  const dir = cameraDir(req.params.id);
   const deleted = recordingFileNames(dir);
   for (const f of deleted) removeClip(path.join(dir, f));
   res.json({ deleted });
@@ -1650,6 +1678,11 @@ app.post('/recordings/:id/:filename/seen', requireExistingRecording, (req, res) 
 // trace (Express's default handler would only print it to the console), and
 // answered with a plain 500.
 app.use((err, req, res, next) => {
+  if (err instanceof CameraIdError) {
+    if (err.status === 503) relayLog('WARN', `refused ${req.method} ${req.path}: ${err.message}`, { via: 'relay' });
+    if (res.headersSent) return next(err);
+    return res.status(err.status).json({ error: err.message });
+  }
   relayLog('ERROR', `unhandled error in ${req.method} ${req.path}: ${errorMessage(err)}`, { trace: err && err.stack });
   if (res.headersSent) return next(err);
   return res.sendStatus(500);
@@ -1804,11 +1837,17 @@ const pushServer = net.createServer((socket) => {
     buf = buf.slice(nl + 1);
     if (!parsed) return reject(null, 'malformed first line');
     if (!auth.safeEqual(parsed.key, API_KEY)) return reject(parsed.id, 'wrong key');
+    // Even with the right key the id must be a plain camera id: it names a recordings folder (and a map entry).
+    if (!logentry.CAMERA_ID_RE.test(parsed.id)) return reject(null, 'invalid camera id');
+    try {
+      acceptPushCamera(socket, parsed.id, peerIp);
+    } catch (err) {
+      return reject(null, errorMessage(err)); // e.g. the relay already knows MAX_CAMERAS cameras
+    }
     camId = parsed.id;
     authed = true;
     connectedAt = Date.now();
     socket.setTimeout(PUSH_IDLE_TIMEOUT_MS);
-    acceptPushCamera(socket, camId, peerIp);
     return true;
   };
 
