@@ -37,6 +37,7 @@ WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // frames are written straight to it with no
                          // per-frame HTTP request/response round trip
 bool pushAuthed = false;
+volatile uint32_t g_relayOkAt = 0;   // millis() when the push connection was last up (read by relayFindTick())
 
 // Whether the relay on the CURRENT push connection has announced that it
 // understands in-band alarm messages (see logic.h, RELAY_CAP_INBAND_ALARM).
@@ -301,12 +302,14 @@ OtaUpdater otaUpdater("recorder");
 // settings page queued for this board are applied from here — the same background task, so
 // no second task (and its stack) is needed.
 void settingsSyncTick();
+void relayFindTick();   // same, for finding the relay again after its address changed
 
 void otaTask(void *) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId);
     settingsSyncTick();
+    relayFindTick();
   }
 }
 
@@ -364,7 +367,7 @@ size_t writePushBytes(const uint8_t *data, size_t len) {
 // the one-time auth line. Cheap to call every loop when already connected —
 // just checks the socket state, no reconnect attempt unless it's actually down.
 bool ensurePushConnection() {
-  if (pushClient.connected()) return true;
+  if (pushClient.connected()) { g_relayOkAt = millis(); return true; }
 
   pushAuthed = false;
   relaySupportsInBandAlarm = false; // capability is per connection: wait for this relay to announce it
@@ -376,6 +379,7 @@ bool ensurePushConnection() {
   std::string authLine = buildAuthLine(g_cfg.cameraId, g_cfg.apiKey);
   pushClient.print(authLine.c_str());
   pushAuthed = true;
+  g_relayOkAt = millis();
   RLOG_INFO("push connection to %s:%d established", g_cfg.serverHost.c_str(), g_cfg.pushPort);
   remoteLogRelayReachable(); // if remote logging had given up, the relay is evidently back
   return true;
@@ -770,6 +774,27 @@ void settingsSyncTick() {
   }
 }
 // ── end of settings changed from the dashboard ──────────────────────────
+
+// ── Finding the relay again ─────────────────────────────────────────────
+// When the push connection has been down for RELAY_DOWN_MS (the router gave the Pi another address),
+// look for the relay on the network, store the address it answers from as SERVER_HOST and restart.
+// Decisions: relay_find_logic.h (unit-tested); the UDP and flash calls: relay_find.h.
+#define RELAY_FIND_INFO(...) RLOG_INFO(__VA_ARGS__)
+#define RELAY_FIND_WARN(...) RLOG_WARN(__VA_ARGS__)
+#include "relay_find.h"
+
+static const uint32_t RELAY_DOWN_MS = 30000;
+static PreferencesStore* g_findStore = nullptr;
+static RelayFind* g_find = nullptr;
+
+void relayFindTick() {
+  if (!g_find) {   // created on first use, in the task that uses it
+    g_findStore = new PreferencesStore();
+    g_find = new RelayFind(*g_findStore);
+  }
+  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, (uint32_t)(millis() - g_relayOkAt) > RELAY_DOWN_MS)) restartBoard();
+}
+// ── end of finding the relay again ──────────────────────────────────────
 
 // Which Arduino-ESP32 core and ESP-IDF built this firmware — the first thing to
 // know when something behaves differently from another camera.

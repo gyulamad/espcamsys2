@@ -1,5 +1,6 @@
 const express = require('express');
 const net = require('net');
+const dgram = require('dgram');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
@@ -25,6 +26,7 @@ const devicesettings = require('./lib/devicesettings');
 const firmware = require('./lib/firmware');
 const detectorstate = require('./lib/detectorstate');
 const detectorlink = require('./lib/detectorlink');
+const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const connection = require('./lib/connection');
@@ -1899,6 +1901,53 @@ const pushServer = net.createServer((socket) => {
 });
 
 pushServer.listen(PUSH_PORT, () => console.log(`Camera relay (raw push) listening on :${PUSH_PORT}`));
+
+// ── Discovery responder (UDP) ──
+// A camera whose stored SERVER_HOST stops answering (the router gave the Pi another address) asks
+// the network "where is the relay?" with a tiny UDP probe — to a broadcast address and to the other
+// addresses of its subnet, which is the only thing that reaches a relay from behind a NAT router —
+// and this answers it, proving it knows camKey without ever sending it (see lib/discovery.js for the
+// protocol). The camera then stores the address it was answered from. Entirely optional: if the port
+// is taken or the socket fails, the relay carries on and cameras simply keep their stored address.
+// discoveryPort in config.js (or DISCOVERY_PORT): default 8082, 0 = off. It must equal the
+// firmware's RELAY_FIND_PORT. The Pi's firewall has to let UDP in on it (INSTALL.md).
+const discoveryCfg = discovery.resolveDiscoveryPort(fromEnv('DISCOVERY_PORT', config.discoveryPort));
+for (const w of discoveryCfg.warnings) console.warn(`[config] ${w}`);
+const discoveryAnswerGap = new Throttle(100);          // at most ~10 answers a second to one address
+const discoveryLogGap = new Throttle(60 * 60 * 1000);  // a camera asks every minute: log it once an hour
+
+function startDiscoveryResponder() {
+  if (discoveryCfg.port === 0) {
+    console.log('Camera relay (discovery) is off (discoveryPort = 0)');
+    return;
+  }
+  if (!API_KEY) {
+    relayLog('WARN', 'discovery responder not started: camKey is empty, so no camera could check an answer');
+    return;
+  }
+  const socket = dgram.createSocket('udp4');
+  socket.on('error', (err) => {
+    relayLog('WARN', `discovery responder stopped: ${errorMessage(err)} — cameras keep using the SERVER_HOST they have stored`);
+    try { socket.close(); } catch (e) { /* already closed */ }
+  });
+  socket.on('message', (msg, rinfo) => {
+    try {
+      const nonce = discovery.parseProbe(msg);
+      if (!nonce) return; // not a probe: stay silent
+      const now = Date.now();
+      if (!discoveryAnswerGap.check(rinfo.address, now).allow) return;
+      const reply = discovery.buildReply(nonce, API_KEY);
+      if (!reply) return;
+      socket.send(reply, rinfo.port, rinfo.address, () => { /* a lost answer is just a lost UDP datagram */ });
+      const t = discoveryLogGap.check(rinfo.address, now);
+      if (t.allow) relayLog('INFO', `a camera at ${rinfo.address} asked where the relay is${suppressedNote(t.suppressed)}`);
+    } catch (err) {
+      relayLog('ERROR', `discovery probe failed: ${errorMessage(err)}`, { trace: err && err.stack }); // never let a datagram stop the relay
+    }
+  });
+  socket.bind(discoveryCfg.port, () => console.log(`Camera relay (discovery) listening on UDP :${discoveryCfg.port}`));
+}
+startDiscoveryResponder();
 
 // ── Process lifecycle, for the log ──
 // A relay that restarted is the first thing to rule in or out when a camera

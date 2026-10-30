@@ -9,6 +9,12 @@ module.exports = {
   pushPort: 8081,   // raw TCP: cameras push frames here continuously (see sketch)
   camKey: 'change-me', // must match API_KEY in each camera's sketch
 
+  // Discovery: when the router gives the Pi a new address, the cameras find it again by themselves
+  // (they ask over UDP, and this answers; the answer proves the relay knows camKey without sending it).
+  // The port must equal RELAY_FIND_PORT in the firmware (default 8082). 0 switches it off. Optional.
+  // The Pi's firewall must let UDP in on it — see "Cameras find the relay by themselves" in INSTALL.md.
+  // discoveryPort: 8082,
+
   // Pre-roll ("black box"): the relay always keeps the last N seconds of every
   // camera in RAM, and every recording — alarm, person detector, or the
   // dashboard's RECORD button — starts with that footage, so the clip begins

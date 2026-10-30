@@ -55,7 +55,7 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
    | Setting | Meaning |
    |---|---|
    | `WIFI` | Networks to join, as `ssid:password` pairs joined by `:` — any number up to 8 (the camera takes the strongest one in range and fails over if it drops). An open network is `ssid:` with an empty password. |
-   | `SERVER_HOST` | Your Pi's LAN IP (or hostname) |
+   | `SERVER_HOST` | Your Pi's LAN IP (or hostname). Use an **IP address**, even a stale one: if the Pi's address changes later the board finds the relay again by itself and replaces it (see *Cameras find the relay by themselves*), and an IP also tells it which subnet to search. |
    | `PUSH_PORT` | The relay's raw push port — must match `pushPort` in the Pi's `config.js` |
    | `HTTP_PORT` | The relay's HTTP port — must match `port` in the Pi's `config.js` |
    | `CAMERA_ID` | Unique per device (`cam1`, `cam2`, ...) — must match `config.php` on the Pi. Letters, digits, `_ . -` |
@@ -459,6 +459,17 @@ Things worth knowing:
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
 
 ---
+
+## Cameras find the relay by themselves (the Pi's address may change)
+
+You do not need a fixed address for the Pi. `SERVER_HOST` is only where a board looks **first**. If its connection to the relay has been down for 30 seconds, the board asks the network *"where is the relay?"*, stores the address the relay answers from as its new `SERVER_HOST`, and restarts to use it. While the relay works at the stored address none of this runs: a healthy system sends no discovery packet at all.
+
+- **How it asks** (UDP, port 8082): first the stored address; then a broadcast (finds the relay anywhere on the same Wi-Fi); then every address of the `/24` the stored `SERVER_HOST` is in (about 3 seconds). The last step is what finds the relay from **behind a NAT router** (a Wi-Fi extender in router mode): broadcasts and mDNS names such as `raspberrypi.local` do not cross a NAT router, but ordinary unicast packets do. A search that finds nothing is repeated after 15 s, 30 s, 60 s ... up to every 5 minutes.
+- **Why it is safe to ask everyone:** the question carries no secret. The relay answers with a one-time proof that only a machine knowing `camKey` can make (HMAC-SHA256 over a fresh random number from the board), so the key is never sent to a printer or a stranger, a machine that merely says "yes, I'm the relay" is ignored, and an old answer cannot be replayed. It does **not** protect against someone who can already sit in the middle of your LAN; the cameras' HTTP is plain, as before.
+- **On the Pi:** nothing to configure; the relay listens on UDP 8082 (`discoveryPort` in `config.js`, `DISCOVERY_PORT` in the environment, `0` = off; it must equal `RELAY_FIND_PORT` in the sketches). If the Pi has a firewall, allow it: `sudo ufw allow 8082/udp`. If the port is taken the relay still runs and says so in its log.
+- **Flash the cameras with an IP address in `SERVER_HOST`** (any address in the Pi's subnet will do, it does not have to be right). A name that does not resolve gives the board no subnet to search except its own, which is wrong behind a NAT router.
+- **What you see:** the relay's log has `a camera at <ip> asked where the relay is` (once an hour per camera). The camera's log has `the relay is at <new ip> now (SERVER_HOST was <old ip>) - stored, restarting to use it`, or `relay not found ... is UDP 8082 blocked on it?` (the first time, then one in twelve).
+- **Limits:** a relay older than this update does not answer (the boards then behave exactly as before, with one search of a few seconds every 5 minutes while the relay is unreachable). The search finds only a relay that answers with your `camKey`. IPv4 only. Switch it off in a sketch with `#define RELAY_FIND_ENABLED 0` before `#include "relay_find.h"`.
 
 ## Running the tests (and checking coverage)
 

@@ -166,6 +166,11 @@ static FakeOta otaUpdater;
 static int g_settingsSyncTicks = 0;
 static void settingsSyncTick() { g_settingsSyncTicks++; }
 
+// -- finding the relay again (relay_find.h in the sketch): the uplink says when it was last open --
+static int g_relayFindTicks = 0;
+static volatile uint32_t g_relayOkAt = 0;
+static void relayFindTick() { g_relayFindTicks++; }
+
 // -- the internal-RAM line the sketch logs (defined outside the extracted blocks) --
 static std::vector<std::string> g_heapStages;
 static void logInternalHeap(const char* stage) { g_heapStages.push_back(stage); }
@@ -321,7 +326,7 @@ static void resetWorld() {
     g_rlog.clear(); g_reachableCalls = 0;
     g_mutexCreateFails = false; g_mutexesCreated = g_mutexesDeleted = 0; g_tasks.clear(); g_taskCreateFails = false;
     g_taskDelays.clear(); g_stopAfterDelays = -1; g_onTaskDelay = nullptr; g_mallocFails = false;
-    g_wifiCalls.clear(); g_wifiDriverOk = true; g_wifiMode = 0; g_settingsSyncTicks = 0; g_heapStages.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear();
+    g_wifiCalls.clear(); g_wifiDriverOk = true; g_wifiMode = 0; g_settingsSyncTicks = 0; g_heapStages.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear(); g_relayFindTicks = 0; g_relayOkAt = 0;
     g_remoteLogStarts = 0; g_resetReason = 1; g_psram = true;
     reportFrame = nullptr; reportMutex = nullptr;
     g_cfg = PersonSettings();
@@ -767,6 +772,52 @@ TEST(without_a_network_the_task_does_not_ask_for_settings_changes) {
     TEST_ASSERT_EQ(g_settingsSyncTicks, 0, "no relay to ask");
 }
 
+// ── g_relayOkAt: when the relay last answered, for "look for it again" ──────
+
+TEST(the_uplink_notes_the_time_it_was_last_known_open_for_the_relay_finder) {
+    resetWorld();
+    WifiUplinkEnv env;
+    std::string why;
+    TEST_ASSERT_EQ((int)g_relayOkAt, 0, "never, to begin with");
+    g_now = 4000;
+    env.open("h", 1, 1000, why);
+    TEST_ASSERT_EQ((int)g_relayOkAt, 4000, "a connection that was just made");
+    g_now = 9000; g_recvResult = -1; g_recvErrno = EWOULDBLOCK;
+    TEST_ASSERT(env.isOpen(), "still open");
+    TEST_ASSERT_EQ((int)g_relayOkAt, 9000, "and every look at it that finds it open moves the time on");
+    g_now = 9500; g_recvResult = 1;
+    TEST_ASSERT(env.isOpen(), "data waiting");
+    TEST_ASSERT_EQ((int)g_relayOkAt, 9500, "likewise");
+    g_now = 20000; g_recvResult = 0;
+    TEST_ASSERT(!env.isOpen(), "the relay closed it");
+    TEST_ASSERT_EQ((int)g_relayOkAt, 9500, "a closed connection does not count: the time stays where it was");
+    g_recvResult = -1; g_recvErrno = ECONNRESET;
+    TEST_ASSERT(!env.isOpen(), "broken");
+    TEST_ASSERT_EQ((int)g_relayOkAt, 9500, "nor does a broken one");
+}
+
+TEST(a_failed_open_does_not_count_as_the_relay_being_there) {
+    resetWorld();
+    WifiUplinkEnv env;
+    std::string why;
+    g_now = 5000;
+    WiFiClient::connectWorks = false;
+    TEST_ASSERT(!env.open("192.168.4.9", 8080, 4000, why), "fails");
+    g_dnsWorks = false;
+    TEST_ASSERT(!env.open("relay.local", 8080, 4000, why), "fails");
+    TEST_ASSERT_EQ((int)g_relayOkAt, 0, "neither a refused connection nor a name that does not resolve");
+}
+
+TEST(once_wi_fi_is_up_the_task_also_looks_for_a_moved_relay_every_pass_and_never_without_a_network) {
+    resetWorld(); typicalLiveViewSettings();
+    runNetworkTask(3);
+    TEST_ASSERT_EQ(g_relayFindTicks, 3, "relayFindTick() runs on every pass while the network is up (it does nothing unless the uplink has been down for a while)");
+    resetWorld(); typicalLiveViewSettings();
+    g_wifiRunScript.push_back(6);                       // WL_DISCONNECTED
+    runNetworkTask(5);
+    TEST_ASSERT_EQ(g_relayFindTicks, 0, "no Wi-Fi, nothing to search with");
+}
+
 TEST(a_wi_fi_driver_that_cannot_start_is_retried_quietly_every_five_seconds) {
     resetWorld(); typicalLiveViewSettings();
     g_wifiDriverOk = false;                             // the driver never comes up: no internal RAM
@@ -971,6 +1022,9 @@ int main() {
     RUN_TEST(open_resolves_the_host_connects_to_the_resolved_address_and_turns_nagle_off);
     RUN_TEST(a_dns_failure_is_told_apart_from_a_connect_failure);
     RUN_TEST(a_connect_failure_names_the_likely_causes_and_the_wifi_signal);
+    RUN_TEST(the_uplink_notes_the_time_it_was_last_known_open_for_the_relay_finder);
+    RUN_TEST(a_failed_open_does_not_count_as_the_relay_being_there);
+    RUN_TEST(once_wi_fi_is_up_the_task_also_looks_for_a_moved_relay_every_pass_and_never_without_a_network);
     RUN_TEST(is_open_is_false_when_the_client_says_it_is_not_connected);
     RUN_TEST(is_open_peeks_the_raw_socket_without_consuming_anything);
     RUN_TEST(an_orderly_close_by_the_relay_is_noticed_although_connected_says_otherwise);

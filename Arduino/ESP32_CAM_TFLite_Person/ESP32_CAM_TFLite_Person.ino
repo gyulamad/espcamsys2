@@ -761,6 +761,28 @@ void settingsSyncTick() {
 }
 // ── end of settings changed from the dashboard ──────────────────────────
 
+// ── Finding the relay again ─────────────────────────────────────────────
+// When the uplink has been down for RELAY_DOWN_MS (the router gave the Pi another address), look for
+// the relay on the network, store the address it answers from as SERVER_HOST and restart.
+// Decisions: relay_find_logic.h (unit-tested); the UDP and flash calls: relay_find.h.
+#define RELAY_FIND_INFO(...) RLOG_INFO(__VA_ARGS__)
+#define RELAY_FIND_WARN(...) RLOG_WARN(__VA_ARGS__)
+#include "relay_find.h"
+
+static const uint32_t RELAY_DOWN_MS = 30000;
+volatile uint32_t g_relayOkAt = 0;   // millis() when the uplink was last open (set by WifiUplinkEnv)
+static PreferencesStore* g_findStore = nullptr;
+static RelayFind* g_find = nullptr;
+
+void relayFindTick() {
+  if (!g_find) {   // created on first use, in the task that uses it
+    g_findStore = new PreferencesStore();
+    g_find = new RelayFind(*g_findStore);
+  }
+  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, (uint32_t)(millis() - g_relayOkAt) > RELAY_DOWN_MS)) restartBoard();
+}
+// ── end of finding the relay again ──────────────────────────────────────
+
 // Which Arduino-ESP32 core and ESP-IDF built this firmware — the first thing to
 // know when something behaves differently from another board.
 void printCoreVersion() {
@@ -937,6 +959,7 @@ public:
         }
 
         client_.setNoDelay(true);   // small messages, several a second: don't hold them back to fill a packet
+        g_relayOkAt = millis();
 
         return true;
     }
@@ -964,6 +987,7 @@ public:
 
         if (n > 0)
         {
+            g_relayOkAt = millis();
             return true;    // something is waiting to be read: still open (as connected() counts it)
         }
 
@@ -972,7 +996,14 @@ public:
             return false;   // orderly close by the relay
         }
 
-        return errno == EWOULDBLOCK || errno == EAGAIN;   // nothing to read yet = open; anything else = broken
+        bool open = errno == EWOULDBLOCK || errno == EAGAIN;   // nothing to read yet = open; anything else = broken
+
+        if (open)
+        {
+            g_relayOkAt = millis();
+        }
+
+        return open;
     }
 
     // Writes everything or reports how far it got. A relay that accepts nothing for stallMs is given up
@@ -1234,6 +1265,9 @@ void networkTask(void *)
 
             // Calibration changes queued from the dashboard (does nothing unless an ask is due).
             settingsSyncTick();
+
+            // The relay's address changed? (does nothing unless the uplink has been down for a while)
+            relayFindTick();
         }
 
         session.step(up);

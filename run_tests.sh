@@ -174,7 +174,8 @@ else
     fi
 
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
-             ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h; do
+             ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h \
+             ESP32_CAM_Recorder/relay_find_logic.h; do
         echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
@@ -210,7 +211,7 @@ else
     # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) and the remote
     # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
     # must be identical too.
-    for shared in ota_logic.h ota.h remote_log.h settings_sync.h; do
+    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h; do
         echo "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
@@ -240,6 +241,9 @@ else
     run_cpp_test test_settings_change
     run_cpp_test test_person_settings
     run_cpp_test test_ota_logic
+    # Finding the relay again when its address changed: the decisions, then relay_find.h against fakes.
+    run_cpp_test test_relay_find_logic
+    run_cpp_test test_relay_find_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     # ota.h is compiled for real against fakes of the Arduino core (tests/cpp/ota_fakes/).
     run_cpp_test test_ota_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     # settings_sync.h (changing a board's stored settings from the dashboard) the same way.
@@ -715,6 +719,22 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_camera_id_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (cameras find the relay again: UDP discovery) test"
+hr
+# tests/e2e/test_discovery_e2e.js: a real relay answers on UDP, and the question is asked by the firmware's
+# real search code (relay_find_logic.h, compiled by tests/cpp/relay_find_tool.cpp) — so the C++ and the
+# JavaScript are proven to agree over real sockets. Junk gets no answer; the wrong key finds nothing;
+# a sweep finds the relay with the broadcast cut off (a NAT router). Needs g++. Ports: E2E_DISC_PORT,
+# E2E_DISC_PUSH_PORT, E2E_DISC_UDP.
+if ! command -v node >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+    echo "FAIL: node and g++ are needed on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_discovery_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

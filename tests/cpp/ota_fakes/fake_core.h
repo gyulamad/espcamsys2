@@ -9,8 +9,11 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <deque>
+#include <functional>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fake {
@@ -40,6 +43,17 @@ struct State {
   std::string updateMd5;
   size_t bytesFlashed = 0;
 
+  // the network (relay_find.h): this board's address, DNS, and the UDP socket. `udpHook` plays the
+  // machines on the network: it is called with (address, port, payload) for every packet sent and
+  // may put answers into udpInbox as (from address, payload).
+  std::string ownIp = "192.168.1.50";
+  std::map<std::string, std::string> dns;
+  std::vector<std::string> udpSent;                              // "<address>:<port> <payload>", per packet
+  std::deque<std::pair<std::string, std::string> > udpInbox;
+  std::function<void(const std::string&, int, const std::string&)> udpHook;
+  int udpOpens = 0, udpCloses = 0;
+  bool udpOpen = false;
+
   // how the flash behaves
   bool beginOk = true;
   bool shortWrite = false;
@@ -59,7 +73,7 @@ inline State& g() { static State s; return s; }
 
 inline uint32_t millis() { return fake::g().now; }
 inline long random(long, long) { return fake::g().randomValue; }
-inline void delay(uint32_t) {}
+inline void delay(uint32_t ms) { fake::g().now += ms; }   // time passes, so a loop that waits with delay() ends
 
 class String {
  public:
@@ -84,8 +98,53 @@ struct FakeSerial {
 };
 inline FakeSerial Serial;
 
-struct FakeWiFi { int status() { return fake::g().wifiUp ? WL_CONNECTED : WL_DISCONNECTED; } };
+class IPAddress {
+ public:
+  IPAddress() {}
+  bool fromString(const char* s) { s_ = s; return true; }
+  String toString() const { return String(s_.c_str()); }
+  std::string s_;
+};
+
+struct FakeWiFi {
+  int status() { return fake::g().wifiUp ? WL_CONNECTED : WL_DISCONNECTED; }
+  IPAddress localIP() { IPAddress a; a.s_ = fake::g().ownIp; return a; }
+  bool hostByName(const char* name, IPAddress& out) {
+    std::map<std::string, std::string>::const_iterator it = fake::g().dns.find(name);
+    if (it == fake::g().dns.end()) return false;
+    out.s_ = it->second;
+    return true;
+  }
+};
 inline FakeWiFi WiFi;
+
+class WiFiUDP {
+ public:
+  uint8_t begin(uint16_t) { fake::g().udpOpen = true; fake::g().udpOpens++; return 1; }
+  void stop() { if (fake::g().udpOpen) fake::g().udpCloses++; fake::g().udpOpen = false; }
+  int beginPacket(IPAddress ip, uint16_t port) { to_ = ip.s_; port_ = port; out_.clear(); return fake::g().udpOpen ? 1 : 0; }
+  size_t write(const uint8_t* d, size_t n) { out_.append(reinterpret_cast<const char*>(d), n); return n; }
+  int endPacket() {
+    fake::g().udpSent.push_back(to_ + ":" + std::to_string(port_) + " " + out_);
+    if (fake::g().udpHook) fake::g().udpHook(to_, port_, out_);
+    return 1;
+  }
+  int parsePacket() { return fake::g().udpInbox.empty() ? 0 : (int)fake::g().udpInbox.front().second.size(); }
+  int read(uint8_t* buf, size_t len) {
+    if (fake::g().udpInbox.empty()) return 0;
+    from_.s_ = fake::g().udpInbox.front().first;
+    std::string p = fake::g().udpInbox.front().second;
+    fake::g().udpInbox.pop_front();
+    size_t n = p.size() < len ? p.size() : len;
+    for (size_t i = 0; i < n; ++i) buf[i] = (uint8_t)p[i];
+    return (int)n;
+  }
+  IPAddress remoteIP() { return from_; }
+ private:
+  std::string to_, out_;
+  int port_ = 0;
+  IPAddress from_;
+};
 
 struct FakeEsp { void restart() { fake::g().restarted = true; } };
 inline FakeEsp ESP;

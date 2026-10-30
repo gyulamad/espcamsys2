@@ -19,8 +19,9 @@ return [
     'auth_user' => 'change-me',
     'auth_pass' => 'change-me',
 
-    // Base URL of the server.js relay that all cameras push frames to.
-    'relay_url' => 'http://192.168.4.9:8080',
+    // Base URL of the server.js relay that all cameras push frames to. The dashboard runs on the same
+    // Pi, so 127.0.0.1 keeps working when the router gives the Pi another address.
+    'relay_url' => 'http://127.0.0.1:8080',
 
     // Needed for the dashboard's recording ON/OFF buttons. Must be EXACTLY the same
     // as `controlKey` in the relay's config.js. Use a long random value that is not
