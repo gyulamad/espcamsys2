@@ -35,16 +35,15 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 <script>
   // The live <img> elements start loading while the HTML is still being parsed, and the relay answers
   // with the last known frame at once, so an image can fire load/error BEFORE the main script at the
-  // bottom of the page has run (that script waits for the stylesheet below; a slow Google Fonts
-  // answer is enough). An event fired with no handler is never repeated, which left the card on
+  // bottom of the page has run (that script waits for the stylesheet below; a slow font
+  // download is enough). An event fired with no handler is never repeated, which left the card on
   // "CONNECTING" for a stream that was in fact running, until RELOAD was pressed. So these stand-ins
   // (defined before anything that can block) only remember what happened; the main script replays it.
   window.__earlyStreamEvents = [];
   function onStreamLoad(id)  { window.__earlyStreamEvents.push(['load', id]); }
   function onStreamError(id) { window.__earlyStreamEvents.push(['error', id]); }
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
   :root {
     --bg:      #0b0e14;

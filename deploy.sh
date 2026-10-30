@@ -24,6 +24,9 @@ fi
 mkdir -p "$DEST/lib"
 cp ./php/cameras/*.php "$DEST"
 cp ./php/cameras/lib/*.php "$DEST/lib"
+# the two typefaces (Share Tech Mono, Barlow) are served from here, not from Google Fonts (review F-19)
+mkdir -p "$DEST/fonts"
+cp ./php/cameras/fonts/* "$DEST/fonts"
 # .htaccess denies config.php.bak and similar copies of the config if the server allows overrides
 # (cp *.php does not pick it up); apache/camdash-protect.conf denies them on its own too.
 cp ./php/cameras/.htaccess "$DEST/.htaccess"
