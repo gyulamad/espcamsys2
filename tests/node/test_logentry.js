@@ -1,7 +1,7 @@
 'use strict';
 
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
-const { cleanText, normalizeLevel, parseLogBatch, LIMITS } = require('../../nodejs/camera-relay/lib/logentry');
+const { cleanText, normalizeLevel, parseLogBatch, LIMITS, CAMERA_ID_RE } = require('../../nodejs/camera-relay/lib/logentry');
 
 const good = (over = {}) => Object.assign({
   camera: 'cam2', fw: 'Oct  3 2026', attempt: 0, dropped: 0,
@@ -128,6 +128,23 @@ test('parseLogBatch accepts exactly what the firmware sends (contract with tests
     camera: 'cam2', fw: 'Oct  3 2026', attempt: 2, dropped: 5,
     entries: [{ seq: 7, level: 'ERROR', ageMs: 5000, uptimeMs: 9000, heap: 84312, rssi: -71, message: 'Frame capture failed', trace: 'at a.ino:405 loop()' }],
   });
+});
+
+// ── CAMERA_ID_RE (an id names a recordings folder, so it must never be able to leave it) ──
+test('CAMERA_ID_RE: accepts ordinary camera ids', () => {
+  for (const id of ['cam1', 'Cam_2', 'front-door', 'cam.1', '7', 'a'.repeat(64)]) assertTrue(CAMERA_ID_RE.test(id), id);
+});
+test('CAMERA_ID_RE: refuses ".", ".." and anything starting with a dot, dash or underscore', () => {
+  for (const id of ['.', '..', '...', '.hidden', '-x', '_x']) assertTrue(!CAMERA_ID_RE.test(id), id);
+});
+test('CAMERA_ID_RE: refuses path separators, percent-encoding leftovers, whitespace and the empty string', () => {
+  for (const id of ['', 'a/b', '../etc', '..\\x', 'a\\b', 'a b', 'a\n', 'a\u0000b', '%2e%2e', 'cam1/', '/cam1']) assertTrue(!CAMERA_ID_RE.test(id), JSON.stringify(id));
+});
+test('CAMERA_ID_RE: refuses more than 64 characters', () => {
+  assertTrue(!CAMERA_ID_RE.test('a'.repeat(65)));
+});
+test('parseLogBatch: a batch naming a traversal camera id is refused', () => {
+  for (const camera of ['..', '../x', '.x']) assertTrue(!parseLogBatch(good({ camera })).ok, camera);
 });
 
 summarize();
