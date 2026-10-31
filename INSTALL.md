@@ -449,6 +449,7 @@ Things worth knowing:
 - [ ] `http://127.0.0.1:80/` on the Pi (with `-u user:pass`) shows all cameras live
 - [ ] Starting a recording from the dashboard (or `POST /record/:id?seconds=10`) produces a playable `.mp4` under the relay's `recordings/` folder — if it doesn't, check `ffmpeg` is installed and on `$PATH`
 - [ ] The `.onion` address, opened in Tor Browser, prompts for Basic Auth and then shows all cameras live
+- [ ] **⏻ LOG OUT** shows the "logged out" page; after pressing Cancel on the login prompt, reloading the dashboard asks for the login again (try it in each browser you use — see section 7)
 - [ ] Port 8080 and 8081 are **not** reachable from outside your LAN (check your router's port-forwarding list — there should be none for this project)
 - [ ] *(If you flashed the optional person detector)* its Serial Monitor prints changing `Person: NN% No person: NN%` lines and flips to `>>> PERSON DETECTED - GPIO HIGH <<<` when someone steps in front of it
 
@@ -460,6 +461,7 @@ Things worth knowing:
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
   The dashboard enforces this: with an empty username or password, a password under 8 characters, or the template's `change-me`, it answers **503** and shows nothing (the reason is in the web server's error log). Generate one with `openssl rand -base64 24`.
 - Wrong logins are logged (`camdash: failed login for user ...` in the Apache error log) and slowed down: after 10 wrong logins in a row every attempt gets **429** for 15 s, doubling up to 15 minutes — even with the right password. Over Tor every visitor looks like 127.0.0.1, so the counter is global: someone guessing can lock the owner out for a while. Tor v3 *client authorization* (an `authorized_clients/*.auth` file in the hidden service directory) keeps strangers from reaching the login over Tor at all and is the recommended second lock for the `.onion` address; on the LAN the equivalent is the optional HTTPS plus a password only you know.
+- **Logging out.** The dashboard header has a **⏻ LOG OUT** button (dashboard, SETTINGS and camera settings pages). The login is HTTP Basic Auth, which the *browser* remembers, so the server cannot end it: the button makes `logout.php` answer with a login prompt for the same realm, which tells the browser to forget the saved login, and shows a "logged out" page. **Press Cancel on that prompt** (typing the login into it just asks for the same page again); *LOG IN AGAIN* on the page goes back to the dashboard. Browsers differ in how reliably they forget a login (Safari is the least reliable), so on a shared computer also close every window of the browser — in Tor Browser use *New Identity*. Each logout leaves a `camdash audit: <user>@<address> logged out` line in the web server's error log.
 - Keep `config.php`, `config.js` and your real settings templates (`Arduino/templates/*.txt`) out of git — they're already listed in `.gitignore`; just don't force-add them.
 - Back up your `config.*` files somewhere safe (password manager, encrypted volume) — they're gitignored on purpose, so a fresh clone of the repo won't have them.
 

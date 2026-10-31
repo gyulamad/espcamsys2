@@ -2,6 +2,7 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/lib/Layout.php';
 require_once __DIR__ . '/relay.php';
 $count = count($cameras);
 $cols  = CamLogic::computeGridColumns($count);
@@ -468,6 +469,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
     <a class="btn" id="btn-settings" href="settings-page.php"
        title="Settings of the whole system: recording lengths, relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
+    <?= CamLayout::logoutForm() ?>
     <span class="record-controls">
       <button class="btn" id="btn-record-all" onclick="recordAll()"
               title="Record every camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it by that many seconds from now">⏺ RECORD ALL</button>

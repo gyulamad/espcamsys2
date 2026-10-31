@@ -5,6 +5,7 @@
 // (the firmware's own settings table), so a setting added to the firmware shows up here by itself.
 // Changes are queued on the relay; the board picks them up, applies them and restarts — see camera-settings.php.
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/lib/Layout.php';
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,6 +23,7 @@ require_once __DIR__ . '/auth.php';
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: var(--sans); font-weight: 300; min-height: 100vh; }
   header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .header-actions { display: flex; align-items: center; gap: 8px; }
   header h1 { font-family: var(--mono); font-size: 1.1rem; letter-spacing: .12em; color: var(--accent); }
   header p { font-size: .72rem; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
   .btn { font-family: var(--mono); font-size: .75rem; padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--border-light); background: transparent; color: var(--text); cursor: pointer; letter-spacing: .06em; text-decoration: none; display: inline-block; transition: all .2s; }
@@ -64,7 +66,10 @@ require_once __DIR__ . '/auth.php';
     <h1>⚙ <span id="title">CAMERA</span></h1>
     <p id="subtitle">Camera settings</p>
   </div>
-  <a class="btn" href="index.php">← DASHBOARD</a>
+  <div class="header-actions">
+    <a class="btn" href="index.php">← DASHBOARD</a>
+    <?= CamLayout::logoutForm() ?>
+  </div>
 </header>
 
 <main>

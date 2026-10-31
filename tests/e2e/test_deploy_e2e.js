@@ -63,6 +63,7 @@ try {
   let r = deploy(repo, dest, noStray);
   check('deploy.sh succeeds', r.status === 0, r.out);
   check('the pages and lib/ are copied', fs.existsSync(path.join(dest, 'index.php')) && fs.existsSync(path.join(dest, 'lib/Logic.php')) && fs.existsSync(path.join(dest, 'auth.php')));
+  check('the LOG OUT pieces are copied too (logout.php and lib/Layout.php)', fs.existsSync(path.join(dest, 'logout.php')) && fs.existsSync(path.join(dest, 'lib/Layout.php')));
   check('.htaccess is copied', fs.existsSync(path.join(dest, '.htaccess')));
   // F-19: the typefaces come from fonts/ in the web folder — no page asks Google for them
   const fontCss = fs.existsSync(path.join(dest, 'fonts/fonts.css')) ? fs.readFileSync(path.join(dest, 'fonts/fonts.css'), 'utf8') : '';

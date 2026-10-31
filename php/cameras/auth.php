@@ -89,7 +89,7 @@ function camdash_login_gate(array $config): void
     }
 
     $challenge = function () {
-        header('WWW-Authenticate: Basic realm="Camera Dashboard"');
+        header(CamLogic::basicChallengeHeader());   // the same realm logout.php answers with
         header('HTTP/1.1 401 Unauthorized');
         exit('Authentication required.');
     };

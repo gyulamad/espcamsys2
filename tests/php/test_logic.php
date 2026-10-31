@@ -1354,4 +1354,35 @@ camtest_test('configOverrides: only what differs from config.php, and a value ch
     camtest_assert_equal($roundTrip['my_own_note'], 'keep', 'a key that is not overridable is never taken over');
 });
 
+// ── Logout (logout.php) ──────────────────────────────────────────────
+
+camtest_test('basicChallengeHeader names the dashboard realm, and AUTH_REALM is the only place it is spelled', function () {
+    camtest_assert_equal(CamLogic::basicChallengeHeader(), 'WWW-Authenticate: Basic realm="Camera Dashboard"');
+    camtest_assert_equal(CamLogic::AUTH_REALM, 'Camera Dashboard');
+    // The login prompt and the logout answer must never drift apart: no page may spell the realm out itself.
+    foreach (glob(__DIR__ . '/../../php/cameras/*.php') as $file) {
+        camtest_assert_true(strpos((string) file_get_contents($file), 'realm=') === false, basename($file) . ' spells the realm out instead of using CamLogic::basicChallengeHeader()');
+    }
+});
+
+camtest_test('logoutRefusalStatus lets a same-origin POST through', function () {
+    camtest_assert_equal(CamLogic::logoutRefusalStatus(['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'h', 'HTTP_ORIGIN' => 'http://h', 'HTTP_SEC_FETCH_SITE' => 'same-origin']), null);
+    camtest_assert_equal(CamLogic::logoutRefusalStatus(['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'h']), null, 'curl / old browsers send neither header');
+});
+
+camtest_test('logoutRefusalStatus refuses everything that is not a POST with 405 (links, images, prefetches)', function () {
+    foreach (['GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS', 'post', ''] as $method) {
+        camtest_assert_equal(CamLogic::logoutRefusalStatus(['REQUEST_METHOD' => $method, 'HTTP_HOST' => 'h']), 405, "method '$method'");
+    }
+    camtest_assert_equal(CamLogic::logoutRefusalStatus(['HTTP_HOST' => 'h']), 405, 'no method at all');
+});
+
+camtest_test('logoutRefusalStatus refuses a POST another website caused with 403', function () {
+    $post = ['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'abc.onion'];
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_ORIGIN' => 'http://evil.example']), 403);
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_ORIGIN' => 'null']), 403);
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'cross-site']), 403);
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'same-site']), 403);
+});
+
 exit(camtest_summarize());

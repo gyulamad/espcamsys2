@@ -118,7 +118,7 @@ async function main() {
       let r = await get('/', null);
       check('the 401 login prompt carries the safe headers', r.status === 401 && safe(r) && r.headers['cache-control'] === 'no-store', detail(r));
       const pages = ['/', '/status.php', '/recordings.php?cam=cam-a', '/record.php?cam=cam-a', '/settings.php', '/detector-status.php',
-        '/system-settings.php', '/camera-settings.php?cam=cam-a', '/recording-switch.php'];   // (a page that does not exist never reaches PHP: Apache's headers cover that, see the Apache test)
+        '/system-settings.php', '/camera-settings.php?cam=cam-a', '/recording-switch.php', '/logout.php'];   // (a page that does not exist never reaches PHP: Apache's headers cover that, see the Apache test)
       for (const p of pages) {
         r = await get(p, AUTH);
         check(`${p} (status ${r.status}) has the safe headers and no-store`, safe(r) && r.headers['cache-control'] === 'no-store', detail(r));

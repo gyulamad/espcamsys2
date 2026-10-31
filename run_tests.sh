@@ -386,6 +386,10 @@ fi
 #   - tests/e2e/test_dashboard_csrf_e2e.js: the dashboard's record.php / recordings.php POSTs
 #     (start, stop, delete, delete all, seen) refuse a cross-site request, send the control key
 #     and X-Actor to the relay, cap seconds, and leave an audit line; the old settings.php POST is gone.
+#   - tests/e2e/test_dashboard_logout_e2e.js: the LOG OUT button (real php -S): on every page header as a
+#     plain POST form; logout.php answers a logged-in same-origin POST with 401 + the login's own realm and
+#     a "logged out" page; a GET or a cross-site POST is refused and never prompts; one audit line per real
+#     logout; logging out never feeds the guess throttle. Override the port with E2E_LOGOUT_PORT.
 #   - tests/e2e/test_dashboard_switch_e2e.js: the dashboard's recording-switch.php
 #     proxy (real php -S in front of a recording fake relay) — login, the
 #     anti-forgery header, POST only, key added server-side and never sent to
@@ -564,6 +568,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_login_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (dashboard LOG OUT button) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_logout_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

@@ -101,6 +101,31 @@ class CamLogic
         return ['fails' => 0, 'last' => 0, 'lockUntil' => 0];
     }
 
+    // The one realm name of the dashboard's login. The login prompt (auth.php) and the reply to a
+    // logout (logout.php) must name the SAME realm: a browser only forgets a saved login when it
+    // gets a 401 for the realm that login was saved under.
+    const AUTH_REALM = 'Camera Dashboard';
+
+    public static function basicChallengeHeader(): string
+    {
+        return 'WWW-Authenticate: Basic realm="' . self::AUTH_REALM . '"';
+    }
+
+    // Decides whether a request to logout.php may log the browser out: null if it may, else the
+    // HTTP status to refuse it with — 405 when it is not a POST (a link, an <img> or a prefetch must
+    // not be able to log the owner out), 403 when the browser says it came from another website
+    // (same Origin / Sec-Fetch-Site rule as every state-changing endpoint, see isSameOriginRequest()).
+    // The custom X-Requested-With header is NOT required here, on purpose: the LOG OUT button is a
+    // plain <form> POST that works without JavaScript, and logging out gives an attacker nothing
+    // but a nuisance.
+    public static function logoutRefusalStatus(array $server): ?int
+    {
+        if (($server['REQUEST_METHOD'] ?? '') !== 'POST') {
+            return 405;
+        }
+        return self::isSameOriginRequest($server) ? null : 403;
+    }
+
     // Attaches the relay's base URL to every camera from config.php —
     // exactly what cameras.php does to build the $cameras array used by
     // every other endpoint.
