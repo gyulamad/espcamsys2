@@ -7,7 +7,7 @@ function good() {
   return {
     ip: '192.168.4.37', fw: 'abc', uptimeMs: 1234, rssi: -60,
     gpio: { pin: 13, high: false },
-    scene: { state: 'active', brightness: 120, motion: 812, darkBelow: 40, motionAtLeast: 300, holdS: 10 },
+    scene: { state: 'active', brightness: 120, motion: 812, darkBelow: 40, motionAtLeast: 300, holdS: 10, area: { x0: 10, y0: 20, x1: 60, y1: 90 } },
     person: { score: 0.74, detectAt: 0.6, clearAt: 0.5, detected: true },
     link: { frames: 42, jpegFails: 1, reconnects: 2, heap: 91000 },
   };
@@ -22,6 +22,45 @@ test('parseStatus: complete readings are accepted', () => {
   assertEqual(r.report.gpio, { pin: 13, high: false });
   assertEqual(r.report.person.score, 0.74);
   assertEqual(r.report.link, { frames: 42, jpegFails: 1, reconnects: 2, heap: 91000 });
+});
+
+test('parseStatus: the motion area is carried to the dashboard as reported', () => {
+  const r = ds.parseStatus(good());
+  assertTrue(r.ok, r.error);
+  assertEqual(r.report.scene.area, { x0: 10, y0: 20, x1: 60, y1: 90 });
+  const b = good(); b.scene.area = { x0: 0, y0: 0, x1: 96, y1: 96 };
+  assertEqual(ds.parseStatus(b).report.scene.area, { x0: 0, y0: 0, x1: 96, y1: 96 }, 'the whole picture');
+});
+
+test('parseStatus: firmware from before the motion area sends none, which is not an error', () => {
+  const b = good(); delete b.scene.area;
+  const r = ds.parseStatus(b);
+  assertTrue(r.ok, r.error);
+  assertEqual(r.report.scene.area, null, 'null: the dashboard shows no area for it');
+  b.scene.area = null;
+  assertEqual(ds.parseStatus(b).report.scene.area, null);
+});
+
+test('parseStatus: a motion area that is not a rectangle inside the picture is refused', () => {
+  const area = (a) => { const b = good(); b.scene.area = a; return ds.parseStatus(b); };
+  const full = { x0: 0, y0: 0, x1: 96, y1: 96 };
+  for (const bad of [
+    { ...full, x0: -1 }, { ...full, y0: -1 }, { ...full, x1: 97 }, { ...full, y1: 97 },
+    { ...full, x0: 50, x1: 50 }, { ...full, y0: 60, y1: 40 },
+    { ...full, x0: 1.5 }, { ...full, x1: '96' }, { ...full, y1: NaN }, { ...full, x0: Infinity },
+    { x0: 0, y0: 0, x1: 96 }, {}, [], 'all', 5, true,
+  ]) {
+    const r = area(bad);
+    assertEqual(r.ok, false, JSON.stringify(bad));
+    assertTrue(/scene\.area/.test(r.error), 'the error names the member: ' + r.error);
+  }
+  assertEqual(area({ x0: 95, y0: 95, x1: 96, y1: 96 }).ok, true, 'any rectangle inside the picture is a reading; the minimum size is the settings\' business');
+});
+
+test('parseArea: only the four edges are kept', () => {
+  assertEqual(ds.parseArea({ x0: 1, y0: 2, x1: 30, y1: 40, junk: 'x' }), { ok: true, area: { x0: 1, y0: 2, x1: 30, y1: 40 } });
+  assertEqual(ds.parseArea(undefined), { ok: true, area: null });
+  assertEqual(ds.FRAME_SIZE, 96);
 });
 
 test('parseStatus: no score is fine (model paused)', () => {

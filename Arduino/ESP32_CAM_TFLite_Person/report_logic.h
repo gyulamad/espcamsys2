@@ -114,6 +114,7 @@ struct Config {
     int darkBelow = 0;
     uint32_t motionAtLeast = 0;
     uint32_t holdSec = 0;
+    person_scene::MotionArea motionArea;   // the part of the picture the motion reading is taken from
     float detectAt = 0.6f;
     float clearAt = 0.5f;
 };
@@ -157,8 +158,12 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
     out += buf;
 
     snprintf(buf, sizeof(buf),
-             ",\"scene\":{\"state\":\"%s\",\"brightness\":%d,\"motion\":%u,\"darkBelow\":%d,\"motionAtLeast\":%u,\"holdS\":%u}",
+             ",\"scene\":{\"state\":\"%s\",\"brightness\":%d,\"motion\":%u,\"darkBelow\":%d,\"motionAtLeast\":%u,\"holdS\":%u",
              gateName(s.gate), s.brightness, (unsigned)s.motion, cfg.darkBelow, (unsigned)cfg.motionAtLeast, (unsigned)cfg.holdSec);
+    out += buf;
+    // The motion area, so the dashboard can draw it over the picture (left/top inside, right/bottom outside).
+    snprintf(buf, sizeof(buf), ",\"area\":{\"x0\":%d,\"y0\":%d,\"x1\":%d,\"y1\":%d}}",
+             cfg.motionArea.x0, cfg.motionArea.y0, cfg.motionArea.x1, cfg.motionArea.y1);
     out += buf;
 
     bool fresh = s.hasScore && (uint32_t)(nowMs - s.scoreAtMs) <= SCORE_FRESH_MS;

@@ -185,6 +185,7 @@ async function main() {
     check('the numbers the firmware builds are the numbers the relay shows (readings, thresholds, pin, board)',
       !!d1 && d1.report.fw === 'desktop-tool' && d1.report.ip === '10.1.2.3' && d1.report.rssi === -61 && d1.report.gpio.pin === 13 &&
       d1.report.scene.darkBelow === 40 && d1.report.scene.motionAtLeast === 300 && d1.report.scene.holdS === 10 && d1.report.scene.state === 'active' &&
+      JSON.stringify(d1.report.scene.area) === JSON.stringify({ x0: 10, y0: 20, x1: 60, y1: 90 }) &&
       d1.report.person.detectAt === 0.6 && d1.report.person.clearAt === 0.5 && d1.report.link.heap === 77777, JSON.stringify(d1 && d1.report));
     check('the relay sees the board\'s address as the connection\'s (not the one the board claims)', !!d1 && d1.ip === '127.0.0.1' && d1.connected === true);
     check('they are live: uptime and the frame counter move between two looks', !!d1 && !!d2 && d2.report.uptimeMs > d1.report.uptimeMs && d2.report.link.frames > d1.report.link.frames, `${d1 && d1.report.link.frames} -> ${d2 && d2.report.link.frames}`);

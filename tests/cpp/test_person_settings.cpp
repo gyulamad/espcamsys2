@@ -19,13 +19,13 @@ static bool has(const std::string& s, const char* part) { return s.find(part) !=
 
 // A complete configuration with the live view ON, as one line.
 static const char* WITH_STREAM =
-    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=1;"
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;STREAM_ENABLED=1;"
     "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
 // The minimal one: no live view, no Wi-Fi.
-static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0";
+static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;STREAM_ENABLED=0";
 
 // Stores a line the way the conversation does (including the cross-setting rule).
 static std::vector<std::string> storeLine(MemoryStore& st, const std::string& line) {
@@ -78,7 +78,7 @@ TEST(the_two_example_templates_are_valid_complete_configurations) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
     const char* files[] = { "example.person.template.txt", "example.person-no-wifi.template.txt" };
-    const size_t expected[] = { PERSON_SCHEMA.count, 8 };
+    const size_t expected[] = { PERSON_SCHEMA.count, 12 };
     for (size_t i = 0; i < 2; ++i) {
         std::ifstream f(dir + "../../Arduino/templates/" + files[i]);
         std::string line;
@@ -100,11 +100,11 @@ TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_val
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
-TEST(with_the_live_view_off_only_eight_settings_are_needed_and_no_wifi_is_asked_for) {
+TEST(with_the_live_view_off_only_twelve_settings_are_needed_and_no_wifi_is_asked_for) {
     MemoryStore st;
     TEST_ASSERT(store(st, NO_STREAM), "stored");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those eight");
-    TEST_ASSERT_EQ((int)st.m.size(), 8, "exactly eight stored");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those twelve");
+    TEST_ASSERT_EQ((int)st.m.size(), 12, "exactly twelve stored");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
@@ -145,9 +145,23 @@ TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off) {
     MemoryStore st;
     TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0"), "an old five-setting configuration is stored");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 3, "exactly the three new ones are missing (what a firmware update to this version leaves behind)");
-    TEST_ASSERT(listed(ps, "DARK_THRESH") && listed(ps, "MOTION_THRESH") && listed(ps, "MOTION_HOLD_S"), "namely these");
-    TEST_ASSERT(ps[0].missing && ps[1].missing && ps[2].missing, "reported as not set, not as invalid");
+    TEST_ASSERT_EQ((int)ps.size(), 7, "exactly the seven new ones are missing (what a firmware update to this version leaves behind)");
+    TEST_ASSERT(listed(ps, "DARK_THRESH") && listed(ps, "MOTION_THRESH") && listed(ps, "MOTION_HOLD_S"), "the scene gate's three");
+    TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "and the motion area's four");
+    bool allMissing = true;
+    for (size_t i = 0; i < ps.size(); ++i) if (!ps[i].missing) allMissing = false;
+    TEST_ASSERT(allMissing, "reported as not set, not as invalid");
+}
+
+TEST(a_board_from_before_the_motion_area_is_missing_exactly_the_four_area_settings) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0"), "the previous version's configuration is stored");
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
+    TEST_ASSERT_EQ((int)ps.size(), 4, "four settings are missing");
+    TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "the area's corners");
+    // The line the INSTALL.md tells you to stage on the relay (the whole picture = what the board did before) completes it.
+    TEST_ASSERT(store(st, "MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96"), "the whole-picture line is accepted");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and the board is complete again");
 }
 
 TEST(loop_delay_and_stream_tuning_ranges) {
@@ -223,6 +237,78 @@ TEST(the_threshold_rule_works_in_the_boot_conversation) {
     TEST_ASSERT(s == BootConfigFlow::Restart && st.m["DETECT_THRESH"] == "0.4" && st.m["CLEAR_THRESH"] == "0.3", "both together are accepted; empty line saves and restarts");
 }
 
+// ── the motion area ─────────────────────────────────────────────────────
+
+TEST(each_motion_area_number_is_a_whole_number_from_0_to_96) {
+    TEST_ASSERT(valid("MOTION_X0=0") && valid("MOTION_Y0=50") && valid("MOTION_X1=96") && valid("MOTION_Y1=96"), "in range");
+    TEST_ASSERT(!valid("MOTION_X0=-1") && !valid("MOTION_X1=97") && !valid("MOTION_Y0=-5") && !valid("MOTION_Y1=1000"), "outside the picture");
+    TEST_ASSERT(!valid("MOTION_X0=1.5") && !valid("MOTION_Y1=abc") && !valid("MOTION_X1=") && !valid("MOTION_Y0=12px"), "not whole numbers");
+}
+
+TEST(the_motion_area_settings_have_flash_safe_names_and_can_be_changed_from_the_dashboard) {
+    const char* names[] = { "MOTION_X0", "MOTION_Y0", "MOTION_X1", "MOTION_Y1" };
+    std::vector<std::string> locked = personLockedKeys();
+    for (int i = 0; i < 4; ++i) {
+        const KeyDef* d = findKey(PERSON_SCHEMA, names[i]);
+        TEST_ASSERT(d != nullptr && d->kind == Kind::Int && d->cond == Cond::Always, (std::string(names[i]) + ": an always-needed whole number").c_str());
+        bool isLocked = false;
+        for (size_t j = 0; j < locked.size(); ++j) if (locked[j] == names[i]) isLocked = true;
+        TEST_ASSERT(!isLocked, (std::string(names[i]) + ": not locked - the dashboard's picture edits it").c_str());
+    }
+}
+
+TEST(the_four_motion_area_numbers_must_make_a_usable_area) {
+    MemoryStore st;
+    store(st, NO_STREAM);                                   // 0,0 - 96,96
+    TEST_ASSERT(store(st, "MOTION_X0=20;MOTION_Y0=30;MOTION_X1=70;MOTION_Y1=80"), "a good area, all four together");
+    TEST_ASSERT(store(st, "MOTION_X1=30"), "a single edge may move while the result stays usable (20..30 = 10 wide)");
+    std::vector<std::string> e = storeLine(st, "MOTION_X1=29");
+    TEST_ASSERT(anyError(e, "at least 10 pixels") && anyError(e, "in one line"), "9 wide: refused, with the way out");
+    TEST_ASSERT(anyError(e, "MOTION_X0/Y0/X1/Y1 (20,30,29,80)"), "and the message shows the four numbers it judged");
+    TEST_ASSERT(st.m["MOTION_X1"] == "30", "and nothing was stored");
+    e = storeLine(st, "MOTION_X0=40");
+    TEST_ASSERT(!e.empty() && st.m["MOTION_X0"] == "20", "the left edge past the right one: refused");
+    TEST_ASSERT(store(st, "MOTION_X0=40;MOTION_X1=90"), "both together move the area: each alone would clash with the stored one");
+    e = storeLine(st, "MOTION_Y1=35");
+    TEST_ASSERT(anyError(e, "at least 10 pixels"), "too low (30..35)");
+    TEST_ASSERT(store(st, "MOTION_Y0=0;MOTION_Y1=96"), "the full height again");
+    TEST_ASSERT(store(st, "MOTION_X0=86;MOTION_Y0=86;MOTION_X1=96;MOTION_Y1=96"), "the smallest area, in a corner");
+}
+
+TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_threshold_rule_working) {
+    MemoryStore blank;
+    TEST_ASSERT(store(blank, "MOTION_X0=50"), "on a blank board the others are not known yet: no complaint");
+    TEST_ASSERT(store(blank, "MOTION_X1=40"), "still three unknown");
+    TEST_ASSERT(store(blank, "MOTION_Y0=0"), "still one unknown");
+    std::vector<std::string> e = storeLine(blank, "MOTION_Y1=96");
+    TEST_ASSERT(!e.empty() && anyError(e, "MOTION_X0/Y0/X1/Y1 (50,0,40,96)"), "the fourth reveals the clash");
+    TEST_ASSERT(!blank.m.count("MOTION_Y1"), "and it is not stored");
+
+    MemoryStore st;
+    store(st, NO_STREAM);
+    e = storeLine(st, "CLEAR_THRESH=0.7");
+    TEST_ASSERT(anyError(e, "CLEAR_THRESH (0.7) must not be higher than DETECT_THRESH (0.6)"), "the threshold rule still applies");
+    e = storeLine(st, "CLEAR_THRESH=0.7;MOTION_X1=5");
+    TEST_ASSERT(e.size() == 1 && anyError(e, "CLEAR_THRESH"), "when both rules are broken the first is reported (one message at a time)");
+}
+
+TEST(the_motion_area_loads_into_the_typed_settings) {
+    MemoryStore st;
+    store(st, NO_STREAM);
+    TEST_ASSERT(store(st, "MOTION_X0=10;MOTION_Y0=20;MOTION_X1=60;MOTION_Y1=90"), "an area is stored");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT(s.motionArea == person_scene::MotionArea(10, 20, 60, 90), "loaded as left, top, right, bottom");
+    st.m["MOTION_X0"] = "200";                              // damaged in flash behind the rules' back
+    TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "MOTION_X0 is invalid"), "a stored number out of range is named and refuses the load");
+    st.m["MOTION_X0"] = "95";                               // in range on its own, but no area together with the others
+    TEST_ASSERT(loadPersonSettings(st, s, err), "each number alone is fine, so it loads (the rule only runs when a line is typed)...");
+    std::string why;
+    TEST_ASSERT(!person_scene::motionAreaUsable(s.motionArea, person_scene::FRAME_SIZE, person_scene::FRAME_SIZE, why),
+                "...and the sketch's sampler then refuses that area and watches the whole picture (see configureScene)");
+}
+
 // ── the conversation on a blank detector ────────────────────────────────
 
 TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
@@ -232,7 +318,7 @@ TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
     con.in = std::string(NO_STREAM) + "\n";
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (uint32_t t = 0; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
-    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the eight settings");
+    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the twelve settings");
     TEST_ASSERT(con.said("These settings need a value (" + std::to_string(PERSON_SCHEMA.count) + ")"), "first it asked for all of them");
     TEST_ASSERT(con.said("STREAM_ENABLED - ") && con.said("DETECT_THRESH - "), "with their help text");
 }
@@ -268,6 +354,7 @@ TEST(settings_load_into_typed_fields_with_the_live_view_on) {
     TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
     TEST_ASSERT(s.personGpio == 13 && s.detectThreshold == 0.6f && s.clearThreshold == 0.5f && s.loopDelayMs == 10, "detection");
     TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10, "scene gate");
+    TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "motion area");
     TEST_ASSERT(s.streamEnabled && s.wifi.size() == 2 && s.wifi[1].pass == "pass;word2", "wifi, decoded");
     TEST_ASSERT(s.serverHost == "192.168.4.9" && s.httpPort == 8080 && s.apiKey == "s3cret" && s.detectorId == "detector-1", "relay");
     TEST_ASSERT(s.streamMaxFps == 10 && s.streamJpegQuality == 80 && s.streamWriteTimeoutSec == 3, "stream tuning");
@@ -292,6 +379,7 @@ TEST(the_documented_typical_values_are_the_defaults_of_the_struct_the_glue_test_
                 "test_person_detect_glue.cpp is written around these values");
     TEST_ASSERT(s.darkThreshold == 0 && s.motionThreshold == 0 && s.motionHoldSec == 0,
                 "and with the scene gate off, so that test sees every frame");
+    TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "and the whole picture watched for motion");
 }
 
 TEST(loading_refuses_missing_or_invalid_settings_and_says_which) {
@@ -308,9 +396,10 @@ int main() {
     RUN_TEST(the_person_schema_is_consistent);
     RUN_TEST(the_two_example_templates_are_valid_complete_configurations);
     RUN_TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists);
-    RUN_TEST(with_the_live_view_off_only_eight_settings_are_needed_and_no_wifi_is_asked_for);
+    RUN_TEST(with_the_live_view_off_only_twelve_settings_are_needed_and_no_wifi_is_asked_for);
     RUN_TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_check_off);
     RUN_TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off);
+    RUN_TEST(a_board_from_before_the_motion_area_is_missing_exactly_the_four_area_settings);
     RUN_TEST(turning_the_live_view_on_asks_for_the_whole_live_view_group_and_nothing_else);
     RUN_TEST(the_output_gpio_must_be_a_pin_the_board_leaves_free);
     RUN_TEST(thresholds_are_scores_between_0_01_and_1);
@@ -319,6 +408,11 @@ int main() {
     RUN_TEST(a_board_that_still_has_the_old_server_settings_stored_is_not_asked_for_anything);
     RUN_TEST(clear_threshold_must_not_exceed_the_detect_threshold);
     RUN_TEST(the_threshold_rule_works_in_the_boot_conversation);
+    RUN_TEST(each_motion_area_number_is_a_whole_number_from_0_to_96);
+    RUN_TEST(the_motion_area_settings_have_flash_safe_names_and_can_be_changed_from_the_dashboard);
+    RUN_TEST(the_four_motion_area_numbers_must_make_a_usable_area);
+    RUN_TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_threshold_rule_working);
+    RUN_TEST(the_motion_area_loads_into_the_typed_settings);
     RUN_TEST(a_blank_detector_is_configured_with_one_line_and_restarts);
     RUN_TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown);
     RUN_TEST(a_detector_without_wifi_shows_the_live_view_settings_as_not_used);

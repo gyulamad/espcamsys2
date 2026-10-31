@@ -36,6 +36,10 @@ return json_decode(<<<'JSON'
       {"name": "DARK_THRESH", "kind": "int", "min": 0, "max": 255, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "average brightness (0-255) below which the picture counts as dark and detection is paused; 0 = darkness check off"},
       {"name": "MOTION_THRESH", "kind": "int", "min": 0, "max": 1e+06, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "detection runs only after motion: summed pixel change between frames at or above this (about 100-1000 is typical); 0 = motion check off"},
       {"name": "MOTION_HOLD_S", "kind": "int", "min": 0, "max": 3600, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "seconds detection stays on after the last motion (a person standing still stays detected anyway); 0 = only while moving"},
+      {"name": "MOTION_X0", "kind": "int", "min": 0, "max": 96, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "motion area, left edge in pixels of the 96x96 picture (0 = the picture's left edge); only what lies inside the area counts as motion"},
+      {"name": "MOTION_Y0", "kind": "int", "min": 0, "max": 96, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "motion area, top edge in pixels (0 = the picture's top edge)"},
+      {"name": "MOTION_X1", "kind": "int", "min": 0, "max": 96, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "motion area, right edge in pixels, first column outside the area (96 = the picture's right edge); at least 10 more than MOTION_X0"},
+      {"name": "MOTION_Y1", "kind": "int", "min": 0, "max": 96, "cond": "always", "condKey": null, "condValue": null, "locked": false, "help": "motion area, bottom edge in pixels, first row outside the area (96 = the picture's bottom edge); at least 10 more than MOTION_Y0"},
       {"name": "STREAM_ENABLED", "kind": "bool", "min": 0, "max": 0, "cond": "always", "condKey": null, "condValue": null, "locked": true, "help": "1: join Wi-Fi and send the live view (picture + values) to the relay's dashboard; 0: no Wi-Fi at all (everything below is then not needed)"},
       {"name": "WIFI", "kind": "wifi", "min": 0, "max": 0, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": true, "help": "the networks to join (strongest one in range wins, fails over if it drops)"},
       {"name": "SERVER_HOST", "kind": "host", "min": 0, "max": 0, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": true, "help": "the relay's IP address or hostname (your Pi): the detector connects OUT to it, so it can sit behind a NAT router"},
@@ -48,7 +52,8 @@ return json_decode(<<<'JSON'
       {"name": "ANN_HEARTBEAT", "kind": "int", "min": 1, "max": 86400, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "seconds between status lines (Wi-Fi, link, memory) in the relay's log"},
       {"name": "ANN_RETRY", "kind": "int", "min": 1, "max": 3600, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)"}
     ],
-    "gpios": [2, 4, 13, 14, 15]
+    "gpios": [2, 4, 13, 14, 15],
+    "rules": {"motionArea": {"frame": 96, "minSide": 10}}
   }
 }
 JSON, true);

@@ -79,6 +79,13 @@ int main() {
         std::printf("%s%d", first ? "" : ", ", pin);
         first = false;
     }
-    std::printf("]\n  }\n");
+    std::printf("]");
+#ifdef DUMP_DETECTOR
+    // The one rule over several settings that the dashboard repeats (it draws the motion area on the
+    // detector's picture and checks a change before queueing it): the picture size and the smallest
+    // side of an area. Taken from the firmware's own constants, like everything else here.
+    std::printf(",\n    \"rules\": {\"motionArea\": {\"frame\": %d, \"minSide\": %d}}", person_scene::FRAME_SIZE, person_scene::SAMPLE_STEP);
+#endif
+    std::printf("\n  }\n");
     return 0;
 }

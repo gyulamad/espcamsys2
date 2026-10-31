@@ -13,7 +13,7 @@ const JPEG2 = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x11,
 const status = (over = {}) => Object.assign({
   ip: '192.168.4.37', fw: 'e2e', uptimeMs: 5000, rssi: -55,
   gpio: { pin: 13, high: true },
-  scene: { state: 'active', brightness: 130, motion: 900, darkBelow: 40, motionAtLeast: 300, holdS: 10 },
+  scene: { state: 'active', brightness: 130, motion: 900, darkBelow: 40, motionAtLeast: 300, holdS: 10, area: { x0: 10, y0: 20, x1: 60, y1: 90 } },
   person: { score: 0.81, detectAt: 0.6, clearAt: 0.5, detected: true },
   link: { frames: 1, jpegFails: 0, reconnects: 0, heap: 90000 },
 }, over);
