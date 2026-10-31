@@ -145,6 +145,7 @@ const pushErrThrottle = new Throttle(5 * 1000);   // errors while handling a cam
 const writeErrThrottle = new Throttle(10 * 1000); // failing to write recording files
 const suppressedThrottle = new Throttle(60 * 1000); // "ignored a recording request while OFF": once a minute per camera
 const switchAuthThrottle = new Throttle(60 * 1000); // recording on/off requests with a missing or wrong control key
+const dashboardAuthThrottle = new Throttle(60 * 1000); // dashboard-only requests (see requireDashboardKey) with a missing or wrong control key
 function suppressedNote(n) {
   return n > 0 ? ` (${n} similar event${n === 1 ? '' : 's'} not logged since the last one)` : '';
 }
@@ -910,14 +911,14 @@ app.get('/status', async (req, res) => {
 // GET  /settings                         -> { alarmRecordSeconds, preRollSeconds }
 // POST /settings?alarmRecordSeconds=N    -> save it, returns the new settings
 // preRollSeconds is read-only here: it comes from config.js.
-// Same trust boundary as /record (only the PHP layer should
-// reach this port). Changes take effect on the next alarm; an alarm
+// Reading is open; changing needs the control key (requireDashboardKey — the dashboard now saves
+// through POST /system-settings, so nothing legitimate posts here keyless). Changes take effect on the next alarm; an alarm
 // recording that's already running keeps the length it was started with.
 app.get('/settings', (req, res) => {
   res.json(settingsView());
 });
 
-app.post('/settings', (req, res) => {
+app.post('/settings', requireDashboardKey, (req, res) => {
   const result = settingsLogic.applySettingsUpdate(settings, req.query);
   if (result.error) return res.status(400).json({ error: result.error });
   try {
@@ -927,6 +928,7 @@ app.post('/settings', (req, res) => {
     return res.status(500).json({ error: 'could not save settings' });
   }
   settings = result.settings;
+  relayLog('INFO', `settings changed by ${actorOf(req)} (POST /settings)`);
   res.json(settingsView());
 });
 
@@ -985,6 +987,23 @@ app.post('/restart', requireControlKey, (req, res) => {
 //   POST /recording/all/on
 //   GET  /recording/state                      who is OFF (no key needed)
 // The four POSTs need `X-Control-Key: <controlKey>`; see the notes at the switch above.
+// Guards what only the dashboard does — changing settings, starting/stopping/extending a recording by hand, deleting
+// or marking recordings (review R-03). The dashboard's PHP already sends X-Control-Key on exactly these calls; the
+// camera boards use none of them (their alarm goes in-band on the authenticated push connection, with POST /alarm
+// as an unauthenticated fallback that stays open because the firmware cannot send a key there). Fails CLOSED:
+// without a controlKey in the relay config these routes answer 503, the same as the recording switch does.
+function requireDashboardKey(req, res, next) {
+  if (!CONTROL_KEY) {
+    return res.status(503).json({ error: 'this action is disabled: controlKey is not set in the relay config' });
+  }
+  const provided = req.headers['x-control-key'];
+  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = dashboardAuthThrottle.check(ip || 'unknown', Date.now());
+  if (t.allow) relayLog('WARN', `REJECTED ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong control key' });
+}
+
 function requireControlKey(req, res, next) {
   if (!CONTROL_KEY) {
     return res.status(503).json({ error: 'switching is disabled: controlKey is not set in the relay config' });
@@ -1552,7 +1571,7 @@ function requireRecordSeconds(req, res, next) {
 // camera that has connected/registered at least once since this process
 // started — same set /status reports on.) Registered before /record/:id so
 // Express doesn't try to match "all" as a literal camera id.
-app.post('/record/all', requireRecordSeconds, (req, res) => {
+app.post('/record/all', requireDashboardKey, requireRecordSeconds, (req, res) => {
   const results = Object.keys(cameras).map((id) => startOrExtendRecording(cameras[id], id, req.recordSeconds));
   res.json({ cameras: results });
 });
@@ -1560,11 +1579,10 @@ app.post('/record/all', requireRecordSeconds, (req, res) => {
 // Start recording this camera's incoming frames to a file for `seconds`
 // (plus the pre-roll lead-in — see the Recording notes above). If it's
 // already recording, this extends it instead — see extendRecording().
-// Same trust boundary as /status and /settings — no key. Called by the PHP layer (the
-// dashboard's RECORD button) and now also directly by camera boards
-// themselves, over the LAN, when their alarm-trigger GPIO fires — see the
-// ESP32 sketch's ALARM_* constants and sendRecordRequest().
-app.post('/record/:id', requireRecordSeconds, (req, res) => {
+// Needs the control key (requireDashboardKey, review R-03): called by the PHP layer — the dashboard's
+// RECORD button, which sends X-Control-Key. The camera boards do not call this route; their alarm is
+// in-band on the push connection, with POST /alarm/:id above as the keyless fallback.
+app.post('/record/:id', requireDashboardKey, requireRecordSeconds, (req, res) => {
   const result = startOrExtendRecording(getCamera(req.params.id), req.params.id, req.recordSeconds);
   // A person pressing RECORD must be told it did not happen; a camera's alarm (below) just gets the summary.
   if (result.suppressed) return res.status(409).json(Object.assign({ error: 'recording is switched OFF for this camera' }, result));
@@ -1573,7 +1591,7 @@ app.post('/record/:id', requireRecordSeconds, (req, res) => {
 
 // Stop a recording early. Encoding into the final .mp4 happens in the
 // background — it won't show up in /recordings/:id until ffmpeg finishes.
-app.post('/record/:id/stop', (req, res) => {
+app.post('/record/:id/stop', requireDashboardKey, (req, res) => {
   const cam = cameras[req.params.id];
   const rec = cam && stopRecording(cam);
   if (!rec) return res.status(409).json({ error: 'not recording' });
@@ -1647,9 +1665,10 @@ app.get('/recordings/:id', (req, res) => {
 // "DELETE ALL" button). Same path as the list route above, distinguished
 // by method — no filename segment, so it can't collide with the
 // single-file delete route below.
-app.delete('/recordings/:id', (req, res) => {
+app.delete('/recordings/:id', requireDashboardKey, (req, res) => {
   const dir = cameraDir(req.params.id);
   const deleted = recordingFileNames(dir);
+  relayLog('INFO', `all ${deleted.length} recording(s) of ${req.params.id} deleted by ${actorOf(req)}`);
   for (const f of deleted) removeClip(path.join(dir, f));
   res.json({ deleted });
 });
@@ -1665,13 +1684,14 @@ app.get('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
 });
 
 // Delete one recording.
-app.delete('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
+app.delete('/recordings/:id/:filename', requireDashboardKey, requireExistingRecording, (req, res) => {
   removeClip(req.recordingPath);
+  relayLog('INFO', `recording ${req.params.id}/${req.params.filename} deleted by ${actorOf(req)}`);
   res.json({ deleted: req.params.filename });
 });
 
 // Mark one recording as seen (played or downloaded). Harmless and repeatable.
-app.post('/recordings/:id/:filename/seen', requireExistingRecording, (req, res) => {
+app.post('/recordings/:id/:filename/seen', requireDashboardKey, requireExistingRecording, (req, res) => {
   fs.writeFileSync(seenMarkerPath(req.recordingPath), '');
   res.json({ seen: req.params.filename });
 });

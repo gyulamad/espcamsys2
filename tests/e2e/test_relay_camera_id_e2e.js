@@ -105,9 +105,12 @@ function stopRelay(relay) {
 }
 
 // An HTTP request returning status, headers, the raw body, and the body parsed as JSON when it is.
-function request(method, urlPath, { headers = {}, body } = {}) {
+// The routes only the dashboard uses need the control key (review R-03). Added here for those routes alone, so a
+// test that wants to be REFUSED sends its own headers ({ noKey: true } sends none).
+const needsDashboardKey = (method, p) => (method === 'POST' && /^\/(record\/|settings)/.test(p)) || ((method === 'DELETE' || method === 'POST') && /^\/recordings\//.test(p));
+function request(method, urlPath, { headers = {}, body, noKey = false } = {}) {
   return new Promise((resolve, reject) => {
-    const h = Object.assign({}, headers);
+    const h = Object.assign({}, !noKey && needsDashboardKey(method, urlPath) ? { 'X-Control-Key': CONTROL_KEY } : {}, headers);
     if (body !== undefined) h['Content-Length'] = body.length;
     const req = nodeHttp.request(`http://127.0.0.1:${PORT}${urlPath}`, { method, headers: h }, (res) => {
       const chunks = [];

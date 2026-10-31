@@ -62,6 +62,7 @@ const PORT = Number(process.env.E2E_PREROLL_PORT || 19290);
 const PUSH_PORT = Number(process.env.E2E_PREROLL_PUSH_PORT || 19291);
 const BASE = `http://127.0.0.1:${PORT}`;
 const CAM_KEY = 'e2e-preroll-key';
+const CONTROL_KEY = 'e2e-preroll-control-key'; // record / stop / delete are dashboard-only and need it (review R-03)
 
 const CAM = 'e2e-preroll-cam';
 const CAM_OFF = 'e2e-preroll-cam-off';
@@ -144,6 +145,7 @@ function startRelay(settingsFile, extraEnv) {
         PORT: String(PORT),
         PUSH_PORT: String(PUSH_PORT),
         CAM_KEY,
+        CONTROL_KEY,
         SETTINGS_FILE: settingsFile,
         LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), // never write into the real logs/ folder
         SWITCH_FILE: path.join(path.dirname(settingsFile), 'switch.json'), // ...nor read a real recording-switch.json
@@ -181,7 +183,7 @@ function stopRelay(relay) {
 
 function http(method, pathAndQuery) {
   return new Promise((resolve, reject) => {
-    const req = nodeHttp.request(BASE + pathAndQuery, { method, headers: { 'Content-Length': 0 } }, (res) => {
+    const req = nodeHttp.request(BASE + pathAndQuery, { method, headers: { 'Content-Length': 0, 'X-Control-Key': CONTROL_KEY } }, (res) => {
       let data = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { data += c; });

@@ -40,6 +40,7 @@ const PORT = Number(process.env.E2E_SETTINGS_PORT || 19190);
 const PUSH_PORT = Number(process.env.E2E_SETTINGS_PUSH_PORT || 19191);
 const BASE = `http://127.0.0.1:${PORT}`;
 const CAM_KEY = 'e2e-settings-key';
+const CONTROL_KEY = 'e2e-settings-control-key'; // POST /settings changes the relay's behaviour, so it needs this (review R-03)
 
 // Unique camera ids so cleanup can never touch real cameras' recordings.
 const CAM_A = 'e2e-alarm-cam-a';
@@ -121,6 +122,7 @@ function startRelay(settingsFile) {
         PORT: String(PORT),
         PUSH_PORT: String(PUSH_PORT),
         CAM_KEY,
+        CONTROL_KEY,
         SETTINGS_FILE: settingsFile,
         LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), // never write into the real logs/ folder
         SWITCH_FILE: path.join(path.dirname(settingsFile), 'switch.json'), // ...nor read a real recording-switch.json
@@ -162,7 +164,7 @@ function http(method, pathAndQuery) {
   return new Promise((resolve, reject) => {
     const req = nodeHttp.request(
       BASE + pathAndQuery,
-      { method, headers: { 'Content-Length': 0 } },
+      { method, headers: { 'Content-Length': 0, 'X-Control-Key': CONTROL_KEY } },
       (res) => {
         let data = '';
         res.setEncoding('utf8');

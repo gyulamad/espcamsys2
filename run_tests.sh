@@ -438,6 +438,12 @@ fi
 #     the relay remembers at most 64 camera ids and refuses (503) a 65th on every way in, while
 #     cameras it already knows keep working. Override the ports with E2E_CAMID_PORT /
 #     E2E_CAMID_PUSH_PORT.
+#   - tests/e2e/test_relay_dashboard_auth_e2e.js: what only the dashboard does needs the relay's control
+#     key (POST /settings, POST /record/..., DELETE /recordings/..., POST /recordings/.../seen): refused
+#     (401) with no key, a wrong or empty key, the camera key or the key in the query string — and a
+#     refused request changes nothing; works with the key, and who did it is logged; answers 503 (closed,
+#     not open) when no controlKey is configured; reads and POST /alarm stay open; no key in the log.
+#     Override the ports with E2E_DASHAUTH_PORT / E2E_DASHAUTH_PUSH_PORT.
 # With --coverage, the relay processes these tests start also record V8
 # coverage (NODE_V8_COVERAGE is inherited by the relay they spawn; the relay
 # writes it when the test stops it), which is how server.js — the relay itself —
@@ -708,6 +714,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_api_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (dashboard-only relay routes need the control key) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_dashboard_auth_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

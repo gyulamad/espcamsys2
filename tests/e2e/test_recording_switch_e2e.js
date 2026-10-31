@@ -122,7 +122,8 @@ function request(method, urlPath, { headers = {} } = {}) {
   });
 }
 const get = (p) => request('GET', p);
-const post = (p) => request('POST', p);
+// /record/... is dashboard-only and needs the control key (review R-03); everything else here is sent as it is.
+const post = (p) => (p.startsWith('/record/') ? request('POST', p, { headers: { 'X-Control-Key': CONTROL_KEY } }) : request('POST', p));
 const ctl = (p, extra) => request('POST', p, { headers: Object.assign({ 'X-Control-Key': CONTROL_KEY }, extra) });
 const camOff = (id, q = '', extra) => ctl(`/recording/camera/${id}/off${q}`, extra);
 const camOn = (id, extra) => ctl(`/recording/camera/${id}/on`, extra);
