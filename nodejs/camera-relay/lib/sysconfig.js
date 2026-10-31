@@ -43,19 +43,19 @@ const FIELDS = [
   { key: 'controlKey', type: 'secret', min: 8, max: 200, env: 'CONTROL_KEY', group: 'Keys', restart: true,
     label: 'Control key', help: 'Protects recording ON/OFF, these settings and firmware publishing. Use a different value from the camera key. The dashboard\'s copy is updated for you. Leave empty to keep the current one.' },
 
-  { key: 'logFile', type: 'string', min: 1, max: 300, default: 'logs/camera.log', env: 'LOG_FILE', group: 'Log', restart: true,
-    label: 'Log file', help: 'Relative paths are relative to the relay\'s folder.' },
+  { key: 'logFile', type: 'string', path: 'file', ext: '.log', min: 1, max: 300, default: 'logs/camera.log', env: 'LOG_FILE', group: 'Log', restart: true,
+    label: 'Log file', help: 'A path inside the relay\'s own folder, ending in .log (for example logs/camera.log). To keep it somewhere else, set logFile in config.js.' },
   { key: 'logMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 5 * MIB, env: 'LOG_MAX_BYTES', group: 'Log', restart: true,
     label: 'Log rotation size (bytes)', help: 'The file rotates when it would pass this size. Default 5 MiB = 5242880.' },
   { key: 'logKeepFiles', type: 'int', min: 1, max: 20, default: 2, env: 'LOG_KEEP_FILES', group: 'Log', restart: true,
     label: 'Rotated log files kept', help: 'Disk use is at most (this + 1) x the rotation size.' },
 
-  { key: 'deviceSettingsDir', type: 'string', min: 1, max: 300, default: 'device-settings', env: 'DEVICE_SETTINGS_DIR', group: 'Folders', restart: true,
-    label: 'Staged device settings folder', help: 'Where settings staged for boards missing some are kept.' },
-  { key: 'firmwareDir', type: 'string', min: 1, max: 300, default: 'firmware', env: 'FIRMWARE_DIR', group: 'Folders', restart: true,
-    label: 'Firmware folder', help: 'Where the over-the-air firmware is published.' },
-  { key: 'switchFile', type: 'string', min: 1, max: 300, default: 'recording-switch.json', env: 'SWITCH_FILE', group: 'Folders', restart: true,
-    label: 'Recording on/off state file', help: 'Where the recording ON/OFF state is kept so it survives a restart.' },
+  { key: 'deviceSettingsDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'device-settings', env: 'DEVICE_SETTINGS_DIR', group: 'Folders', restart: true,
+    label: 'Staged device settings folder', help: 'Where settings staged for boards missing some are kept. A folder inside the relay\'s own folder; for one elsewhere, set deviceSettingsDir in config.js.' },
+  { key: 'firmwareDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'firmware', env: 'FIRMWARE_DIR', group: 'Folders', restart: true,
+    label: 'Firmware folder', help: 'Where the over-the-air firmware is published. A folder inside the relay\'s own folder; for one elsewhere, set firmwareDir in config.js.' },
+  { key: 'switchFile', type: 'string', path: 'file', ext: '.json', min: 1, max: 300, default: 'recording-switch.json', env: 'SWITCH_FILE', group: 'Folders', restart: true,
+    label: 'Recording on/off state file', help: 'Where the recording ON/OFF state is kept so it survives a restart. A .json file inside the relay\'s own folder; for one elsewhere, set switchFile in config.js.' },
 ];
 
 const BY_KEY = Object.fromEntries(FIELDS.map((f) => [f.key, f]));
@@ -85,6 +85,36 @@ function checkValue(field, raw) {
   const v = raw.trim();
   if (v.length < field.min || v.length > field.max) return { error: `${field.key} must be ${field.min}-${field.max} characters long` };
   return { value: v };
+}
+
+// The four path settings (logFile, switchFile, firmwareDir, deviceSettingsDir) say where the relay WRITES. Anyone
+// holding the control key can change them from the dashboard, so a value set there must stay inside the relay's own
+// folder and must not name the relay's own code or state (review R-04): a plain relative path, no leading / or ~,
+// no ".." , no backslash or ":" (drive letters), no segment starting with a dot, not under lib/, node_modules/ or
+// recordings/, and not one of the relay's own files; a file setting also has to carry its own extension (.log /
+// .json), so it cannot be pointed at server.js or config.js. A path that is already in force (it came from
+// config.js, which only the machine's owner can edit) is left alone: only a CHANGE made here is checked. The check
+// is on the text — it cannot see a symlink inside the folder; the owner's own folder layout is theirs to trust.
+// -> { value } (normalised: no empty or "." segments) or { error }
+const PROTECTED_DIRS = ['lib', 'node_modules', 'recordings'];
+const PROTECTED_FILES = ['server.js', 'config.js', 'example.config.js', 'package.json', 'package-lock.json', 'settings.json', 'system-settings.json'];
+function checkRelayPath(field, value) {
+  const fail = (why) => ({ error: `${field.key} ${why}` });
+  const kindHint = field.path === 'file' ? ` ending in ${field.ext}` : '';
+  const shape = `must be a path inside the relay's own folder${kindHint}, like ${field.default}`;
+  if (typeof value !== 'string' || value === '') return fail(shape);
+  if (value.startsWith('/') || value.startsWith('~') || value.includes('\\') || value.includes(':')) return fail(`${shape} — no leading / or ~, no backslash, no drive letter`);
+  const segs = value.split('/').filter((x) => x !== '' && x !== '.');
+  if (segs.length === 0) return fail(shape);
+  if (segs.some((x) => x === '..')) return fail(`${shape} — ".." is not allowed`);
+  if (segs.some((x) => x.startsWith('.'))) return fail(`${shape} — nothing in it may start with a dot`);
+  if (PROTECTED_DIRS.includes(segs[0].toLowerCase())) return fail(`${shape} — not under ${segs[0]}/ (the relay's own code or recordings live there)`);
+  if (field.path === 'file') {
+    const name = segs[segs.length - 1].toLowerCase();
+    if (PROTECTED_FILES.includes(name)) return fail(`${shape} — ${segs[segs.length - 1]} is one of the relay's own files`);
+    if (!name.endsWith(field.ext) || name === field.ext) return fail(shape);
+  }
+  return { value: segs.join('/') };
 }
 
 // What the relay starts with: config.js, with the saved system settings over it. A
@@ -178,8 +208,15 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env }, values) {
     const current = key === 'alarmRecordSeconds' ? alarmRecordSeconds : effective(f, base, overrides, env).value;
     if (f.type !== 'secret' && String(current) === String(r.value)) continue; // unchanged
     if (f.type === 'secret' && current === r.value) continue;
-    if (key === 'alarmRecordSeconds') nextAlarm = r.value;
-    else nextOverrides[key] = r.value;
+    let value = r.value;
+    if (f.path) {
+      const pr = checkRelayPath(f, value);
+      if (pr.error) return { error: pr.error };
+      if (String(current) === pr.value) continue; // the same path, only written differently ("firmware/")
+      value = pr.value;
+    }
+    if (key === 'alarmRecordSeconds') nextAlarm = value;
+    else nextOverrides[key] = value;
     changed.push(key);
     if (f.restart) restartRequired = true;
   }
@@ -199,4 +236,4 @@ function isSupervised(env) {
 // restarts after a non-zero exit. (75 = EX_TEMPFAIL, "try again".)
 const RESTART_EXIT_CODE = 75;
 
-module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, parseOverrides, mergeConfig, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };
+module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };

@@ -61,7 +61,7 @@ function checkUpgrade(req, keyOk) {
   return { ok: true, id };
 }
 
-const REASONS = { 400: 'Bad Request', 401: 'Unauthorized', 404: 'Not Found', 426: 'Upgrade Required', 503: 'Service Unavailable' };
+const REASONS = { 400: 'Bad Request', 401: 'Unauthorized', 404: 'Not Found', 426: 'Upgrade Required', 429: 'Too Many Requests', 503: 'Service Unavailable' };
 
 // The whole refusal, ready to write to the socket before closing it.
 function refusalResponse(status, message) {

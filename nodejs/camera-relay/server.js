@@ -29,6 +29,7 @@ const detectorlink = require('./lib/detectorlink');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
+const { Lockout } = require('./lib/lockout');
 const connection = require('./lib/connection');
 const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
@@ -146,6 +147,43 @@ const writeErrThrottle = new Throttle(10 * 1000); // failing to write recording 
 const suppressedThrottle = new Throttle(60 * 1000); // "ignored a recording request while OFF": once a minute per camera
 const switchAuthThrottle = new Throttle(60 * 1000); // recording on/off requests with a missing or wrong control key
 const dashboardAuthThrottle = new Throttle(60 * 1000); // dashboard-only requests (see requireDashboardKey) with a missing or wrong control key
+
+// ── Making key guessing slow (review R-04) ──
+// The throttles above only keep the LOG quiet. These refuse: AUTH_MAX_FAILURES wrong keys (default 10) from one
+// address within a minute lock that address out for AUTH_LOCK_SECONDS (60), doubling at every repeat up to
+// AUTH_LOCK_MAX_SECONDS (900); while locked out even the right key is refused (HTTP 429 + Retry-After; a push
+// connection is dropped). The camera key and the control key count separately, so a camera with a stale key
+// cannot lock the dashboard out. A request with NO key at all is not a guess and is not counted. Per address
+// (req.socket.remoteAddress — never a header the sender controls). The environment variables exist for the tests.
+const authEnvInt = (name, fallback) => { const v = parseInt(process.env[name], 10); return Number.isSafeInteger(v) && v > 0 ? v : fallback; };
+const lockoutOptions = () => ({ maxFailures: authEnvInt('AUTH_MAX_FAILURES', 10), baseLockMs: authEnvInt('AUTH_LOCK_SECONDS', 60) * 1000, maxLockMs: authEnvInt('AUTH_LOCK_MAX_SECONDS', 900) * 1000 });
+const AUTH_LOCKS = { camera: new Lockout(lockoutOptions()), control: new Lockout(lockoutOptions()) };
+
+// One key check, with the books kept. -> { state: 'ok' | 'bad' | 'locked', retryAfterSec? }
+function keyCheck(kind, ip, presented, expected) {
+  const lock = AUTH_LOCKS[kind];
+  const source = ip || 'unknown';
+  const now = Date.now();
+  const blocked = lock.check(source, now);
+  if (blocked.blocked) return { state: 'locked', retryAfterSec: blocked.retryAfterSec };
+  if (typeof presented !== 'string' || presented === '') return { state: 'bad' };
+  if (auth.safeEqual(presented, expected)) { lock.success(source, now); return { state: 'ok' }; }
+  const f = lock.fail(source, now);
+  if (f.locked) relayLog('WARN', `LOCKED OUT ${source} for ${f.lockSec} s after ${f.failures} wrong ${kind} keys${f.level > 1 ? ` (lock number ${f.level} in a row)` : ''}`, { via: 'relay' });
+  return { state: 'bad' };
+}
+
+// The same for an HTTP request: 'ok' (carry on), 'bad' (the caller refuses in its own way) or 'locked' (answered
+// here with 429, the caller just stops).
+function checkKey(kind, req, res, presented, expected) {
+  const r = keyCheck(kind, logfile.normalizeIp(req.socket.remoteAddress), presented, expected);
+  if (r.state === 'locked') {
+    res.set('Retry-After', String(r.retryAfterSec));
+    res.set('Connection', 'close');
+    res.status(429).json({ error: `too many wrong keys from this address: locked out, try again in ${r.retryAfterSec} s` });
+  }
+  return r.state;
+}
 function suppressedNote(n) {
   return n > 0 ? ` (${n} similar event${n === 1 ? '' : 's'} not logged since the last one)` : '';
 }
@@ -540,7 +578,9 @@ function encodeRecording(rec) {
 // key must be a 403 in the log's WARN line, not a 500 with a stack trace. Constant-time compare; the key may come
 // as ?key= (what the legacy sketches send) or as X-Api-Key. 'Connection: close' so the unread body is dropped.
 function requireCameraKeyForUpload(req, res, next) {
-  if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+  const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = authFailThrottle.check(`upload:${ip}`, Date.now());
   if (t.allow) relayLog('WARN', `rejected a POST /upload from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
@@ -718,7 +758,13 @@ function handleDetectorUpgrade(req, socket, head) {
     setTimeout(() => socket.destroy(), 2000).unref(); // a client that never reads must not keep the socket
   };
 
-  const checked = detectorlink.checkUpgrade(req, (presented) => auth.safeEqual(presented, API_KEY));
+  const locked = AUTH_LOCKS.camera.check(peerIp || 'unknown', Date.now());
+  if (locked.blocked) {
+    const t = authFailThrottle.check(`detector:${peerIp}:429`, Date.now());
+    if (t.allow) relayLog('WARN', `refused a detector uplink request from ${peerIp || 'unknown address'}: locked out after too many wrong keys, ${locked.retryAfterSec} s left${suppressedNote(t.suppressed)}`, { sender, via: 'relay' });
+    return refuse(429, `too many wrong keys from this address: locked out, try again in ${locked.retryAfterSec} s`);
+  }
+  const checked = detectorlink.checkUpgrade(req, (presented) => keyCheck('camera', peerIp, presented, API_KEY).state === 'ok');
   if (!checked.ok) {
     const t = authFailThrottle.check(`detector:${peerIp}:${checked.status}`, Date.now());
     if (t.allow) relayLog('WARN', `refused a detector uplink request from ${peerIp || 'unknown address'} for ${JSON.stringify(String(req.url).slice(0, 100))}: HTTP ${checked.status} — ${checked.error}${suppressedNote(t.suppressed)}`, { sender, via: 'relay' });
@@ -1010,7 +1056,9 @@ function requireDashboardKey(req, res, next) {
     return res.status(503).json({ error: 'this action is disabled: controlKey is not set in the relay config' });
   }
   const provided = req.headers['x-control-key'];
-  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = dashboardAuthThrottle.check(ip || 'unknown', Date.now());
   if (t.allow) relayLog('WARN', `REJECTED ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
@@ -1022,7 +1070,9 @@ function requireControlKey(req, res, next) {
     return res.status(503).json({ error: 'switching is disabled: controlKey is not set in the relay config' });
   }
   const provided = req.headers['x-control-key'];
-  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = switchAuthThrottle.check(ip || 'unknown', Date.now());
   if (t.allow) relayLog('WARN', `REJECTED a recording on/off request from ${ip || 'unknown address'} (${req.method} ${req.path}): missing or wrong control key${suppressedNote(t.suppressed)}`);
@@ -1152,7 +1202,9 @@ function echoCameraLogBatch(batch) {
 
 app.post('/log',
   (req, res, next) => {
-    if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+    const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
+    if (keyState === 'ok') return next();
+    if (keyState === 'locked') return undefined;
     const ip = logfile.normalizeIp(req.socket.remoteAddress);
     const t = authFailThrottle.check(`log:${ip}`, Date.now());
     if (t.allow) relayLog('WARN', `rejected a POST /log from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
@@ -1213,7 +1265,9 @@ function readStagedFile(file) {
 
 app.get('/device-settings/:type/:id',
   (req, res, next) => {
-    if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+    const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
+    if (keyState === 'ok') return next();
+    if (keyState === 'locked') return undefined;
     const ip = logfile.normalizeIp(req.socket.remoteAddress);
     const t = deviceSettingsAuthThrottle.check(`get:${ip}`, Date.now());
     if (t.allow) relayLog('WARN', `rejected a GET ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
@@ -1250,7 +1304,9 @@ app.put(['/device-settings/:type', '/device-settings/:type/:id'],
   (req, res, next) => {
     if (!CONTROL_KEY) return res.status(503).json({ error: 'staging settings is disabled: controlKey is not set in the relay config' });
     const provided = req.headers['x-control-key'];
-    if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+    const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
+    if (keyState === 'ok') return next();
+    if (keyState === 'locked') return undefined;
     const ip = logfile.normalizeIp(req.socket.remoteAddress);
     const t = deviceSettingsAuthThrottle.check(`put:${ip}`, Date.now());
     if (t.allow) relayLog('WARN', `REJECTED a PUT ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
@@ -1294,7 +1350,9 @@ app.put(['/device-settings/:type', '/device-settings/:type/:id'],
 //   GET  /device-settings/:type/:id/state    control key: { reported, pending (names only), last }
 //   PUT  /device-settings/:type/:id/change   control key: queue the line in the body (empty body = cancel what is queued)
 function requireCameraKeyForDevice(req, res, next) {
-  if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+  const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = deviceSettingsAuthThrottle.check(`get:${ip}`, Date.now());
   if (t.allow) relayLog('WARN', `rejected a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
@@ -1303,7 +1361,9 @@ function requireCameraKeyForDevice(req, res, next) {
 function requireControlKeyForDevice(req, res, next) {
   if (!CONTROL_KEY) return res.status(503).json({ error: 'changing device settings is disabled: controlKey is not set in the relay config' });
   const provided = req.headers['x-control-key'];
-  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = deviceSettingsAuthThrottle.check(`put:${ip}`, Date.now());
   if (t.allow) relayLog('WARN', `REJECTED a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
@@ -1419,7 +1479,9 @@ function readPublished(type) {
 }
 
 function requireCameraKeyForOta(req, res, next) {
-  if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+  const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = firmwareAuthThrottle.check(`get:${ip}`, Date.now());
   if (t.allow) relayLog('WARN', `rejected a GET ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
@@ -1429,7 +1491,9 @@ function requireCameraKeyForOta(req, res, next) {
 function requireControlKeyForOta(req, res, next) {
   if (!CONTROL_KEY) return res.status(503).json({ error: 'firmware publishing is disabled: controlKey is not set in the relay config' });
   const provided = req.headers['x-control-key'];
-  if (typeof provided === 'string' && auth.safeEqual(provided, CONTROL_KEY)) return next();
+  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = firmwareAuthThrottle.check(`ctl:${ip}`, Date.now());
   if (t.allow) relayLog('WARN', `REJECTED a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
@@ -1868,6 +1932,14 @@ const pushServer = net.createServer((socket) => {
     return false;
   };
 
+  // An address that is locked out (too many wrong keys) is not even listened to.
+  const lockedOut = AUTH_LOCKS.camera.check(peerIp || 'unknown', Date.now());
+  if (lockedOut.blocked) {
+    socket.on('error', () => {});
+    reject(null, `locked out after too many wrong keys, ${lockedOut.retryAfterSec} s left`);
+    return;
+  }
+
   // Reads the one-time auth line from the buffer. True once the camera is
   // authenticated; false while the line is incomplete or the connection was refused.
   const authenticate = () => {
@@ -1879,7 +1951,9 @@ const pushServer = net.createServer((socket) => {
     const parsed = protocol.parseAuthLine(buf.slice(0, nl));
     buf = buf.slice(nl + 1);
     if (!parsed) return reject(null, 'malformed first line');
-    if (!auth.safeEqual(parsed.key, API_KEY)) return reject(parsed.id, 'wrong key');
+    const keyState = keyCheck('camera', peerIp, parsed.key, API_KEY).state;
+    if (keyState === 'locked') return reject(parsed.id, 'locked out after too many wrong keys');
+    if (keyState !== 'ok') return reject(parsed.id, 'wrong key');
     // Even with the right key the id must be a plain camera id: it names a recordings folder (and a map entry).
     if (!logentry.CAMERA_ID_RE.test(parsed.id)) return reject(null, 'invalid camera id');
     try {

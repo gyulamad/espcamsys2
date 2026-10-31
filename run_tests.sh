@@ -448,6 +448,13 @@ fi
 #     body: a 3 MB body with a wrong or missing key is a 403 with one WARN line (no 500, no stack trace);
 #     with the key a picture is stored, an oversized body is a 413 and an empty one a 400; only POST is
 #     an upload. Override the ports with E2E_UPLOAD_PORT / E2E_UPLOAD_PUSH_PORT.
+#   - tests/e2e/test_relay_lockout_e2e.js: guessing a key gets slower, then impossible. Wrong camera keys
+#     lock the address out (429 + Retry-After) on every camera-key route, the push port and the detector
+#     uplink, even for the right key; a missing key is not a guess; the control key is counted apart; a
+#     spoofed X-Forwarded-For does not help; the lock ends on time and the next is twice as long; one
+#     LOCKED OUT line per lock, no key in the log. Also: POST /system-settings refuses folder settings that
+#     point outside the relay's folder. Takes about 20 seconds. Override the ports with E2E_LOCKOUT_PORT /
+#     E2E_LOCKOUT_PUSH_PORT.
 # With --coverage, the relay processes these tests start also record V8
 # coverage (NODE_V8_COVERAGE is inherited by the relay they spawn; the relay
 # writes it when the test stops it), which is how server.js — the relay itself —
@@ -718,6 +725,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_api_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (key guessing lockout, folder settings confined) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_lockout_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

@@ -142,4 +142,106 @@ test('the restart exit code is non-zero, so systemd Restart=on-failure restarts 
   assertTrue(sc.RESTART_EXIT_CODE > 0);
 });
 
+// ── the four path settings must stay inside the relay's folder (security review R-04) ──
+const field = (key) => sc.FIELDS.find((f) => f.key === key);
+
+test('checkRelayPath: ordinary relative folders and files are accepted and normalised', () => {
+  assertEqual(sc.checkRelayPath(field('firmwareDir'), 'firmware'), { value: 'firmware' });
+  assertEqual(sc.checkRelayPath(field('firmwareDir'), 'data/firmware/'), { value: 'data/firmware' });
+  assertEqual(sc.checkRelayPath(field('firmwareDir'), './fw//images'), { value: 'fw/images' });
+  assertEqual(sc.checkRelayPath(field('deviceSettingsDir'), 'device-settings'), { value: 'device-settings' });
+  assertEqual(sc.checkRelayPath(field('logFile'), 'logs/camera.log'), { value: 'logs/camera.log' });
+  assertEqual(sc.checkRelayPath(field('switchFile'), 'recording-switch.json'), { value: 'recording-switch.json' });
+});
+
+test('checkRelayPath: absolute paths, ~ , drive letters and backslashes are refused', () => {
+  for (const bad of ['/etc', '/var/lib/fw', '~/fw', '~', 'C:/fw', 'C:\\fw', 'fw\\x', '\\\\server\\share', 'file:///x']) {
+    assertTrue(sc.checkRelayPath(field('firmwareDir'), bad).error, bad);
+  }
+});
+
+test('checkRelayPath: ".." anywhere is refused, however it is hidden', () => {
+  for (const bad of ['..', '../x', 'a/..', 'a/../b', 'a/b/../../..', './../x', 'a//../..']) {
+    assertTrue(sc.checkRelayPath(field('firmwareDir'), bad).error, bad);
+  }
+});
+
+test('checkRelayPath: nothing may start with a dot (.git, .ssh, hidden files)', () => {
+  for (const bad of ['.git', '.ssh/keys', 'a/.hidden', '.env']) assertTrue(sc.checkRelayPath(field('deviceSettingsDir'), bad).error, bad);
+});
+
+test('checkRelayPath: empty, "." and "/" alone name no folder', () => {
+  for (const bad of ['', '.', './', './.', '//']) assertTrue(sc.checkRelayPath(field('firmwareDir'), bad).error, JSON.stringify(bad));
+});
+
+test('checkRelayPath: the relay\'s own code and recordings are not valid places to write', () => {
+  for (const bad of ['lib', 'lib/x', 'LIB/x', 'node_modules/x', 'recordings', 'recordings/cam1']) assertTrue(sc.checkRelayPath(field('firmwareDir'), bad).error, bad);
+});
+
+test('checkRelayPath: a file setting needs its own extension and may not be one of the relay\'s own files', () => {
+  const log = field('logFile'); const sw = field('switchFile');
+  for (const bad of ['server.js', 'config.js', 'package.json', 'package-lock.json', 'settings.json', 'system-settings.json', 'logs/config.js', 'camera.txt', 'camera', '.log', 'logs/.log']) {
+    assertTrue(sc.checkRelayPath(log, bad).error, `log ${bad}`);
+  }
+  for (const bad of ['package.json', 'settings.json', 'system-settings.json', 'state.txt', 'server.js', 'x.json/y']) assertTrue(sc.checkRelayPath(sw, bad).error, `switch ${bad}`);
+  assertEqual(sc.checkRelayPath(sw, 'state/switch.JSON'), { value: 'state/switch.JSON' });
+});
+
+test('checkRelayPath: the error says what is allowed', () => {
+  assertTrue(/inside the relay's own folder/.test(sc.checkRelayPath(field('firmwareDir'), '/etc').error));
+  assertTrue(/ending in \.log/.test(sc.checkRelayPath(field('logFile'), 'x.txt').error));
+});
+
+test('applyUpdate: a path setting changed to something outside the relay folder is refused, and nothing is changed', () => {
+  for (const [key, bad] of [['firmwareDir', '/tmp/fw'], ['deviceSettingsDir', '../elsewhere'], ['switchFile', '/etc/cron.d/x.json'], ['logFile', '/var/log/x.log'], ['logFile', 'server.js']]) {
+    const r = sc.applyUpdate(state(), { [key]: bad });
+    assertTrue(r.error, `${key}=${bad}`);
+    assertEqual(r.overrides, undefined);
+  }
+});
+
+test('applyUpdate: one bad path refuses the whole request, even next to good values (all-or-nothing)', () => {
+  const r = sc.applyUpdate(state(), { preRollSeconds: '9', firmwareDir: '/tmp/fw' });
+  assertTrue(r.error);
+  assertEqual(r.overrides, undefined);
+});
+
+test('applyUpdate: a good path is saved normalised, and needs a restart', () => {
+  const r = sc.applyUpdate(state(), { firmwareDir: 'data/fw/' });
+  assertEqual(r.error, undefined);
+  assertEqual(r.overrides.firmwareDir, 'data/fw');
+  assertEqual(r.changed, ['firmwareDir']);
+  assertEqual(r.restartRequired, true);
+});
+
+test('applyUpdate: a path already in force from config.js is not touched when the page sends it back unchanged', () => {
+  const base = Object.assign({}, BASE, { firmwareDir: '/mnt/usb/firmware', logFile: '/var/log/camera.log' });
+  const r = sc.applyUpdate(state({ base }), { firmwareDir: '/mnt/usb/firmware', logFile: '/var/log/camera.log', preRollSeconds: '9' });
+  assertEqual(r.error, undefined);
+  assertEqual(r.changed, ['preRollSeconds']);
+  assertEqual(r.overrides.firmwareDir, undefined);
+});
+
+test('applyUpdate: ...but changing such a path to another outside one is refused', () => {
+  const base = Object.assign({}, BASE, { firmwareDir: '/mnt/usb/firmware' });
+  assertTrue(sc.applyUpdate(state({ base }), { firmwareDir: '/mnt/usb/other' }).error);
+});
+
+test('applyUpdate: the same relative path written differently is no change', () => {
+  const r = sc.applyUpdate(state({ overrides: { firmwareDir: 'data/fw' } }), { firmwareDir: './data/fw/' });
+  assertEqual(r.error, undefined);
+  assertEqual(r.changed, []);
+});
+
+test('parseOverrides: a saved path is still honoured as before (only changes made here are checked)', () => {
+  const r = sc.parseOverrides('{"firmwareDir":"/mnt/usb/firmware"}');
+  assertEqual(r.overrides, { firmwareDir: '/mnt/usb/firmware' });
+});
+
+test('every path setting is marked with what kind it is (so none is missed by the check)', () => {
+  const paths = sc.FIELDS.filter((f) => f.path).map((f) => f.key).sort();
+  assertEqual(paths, ['deviceSettingsDir', 'firmwareDir', 'logFile', 'switchFile']);
+  for (const f of sc.FIELDS.filter((x) => x.type === 'string')) assertTrue(f.path, `${f.key} is a text setting that is not confined`);
+});
+
 summarize();

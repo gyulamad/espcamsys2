@@ -154,7 +154,8 @@ const settingsOf = async () => (await get('/settings')).json;
   const preexisting = fs.existsSync(CAM_DIR);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-relay-dauth-'));
   const logFile = path.join(tmp, 'relay.log');
-  const files = { LOG_FILE: logFile, SETTINGS_FILE: path.join(tmp, 'settings.json'), SWITCH_FILE: path.join(tmp, 'switch.json') };
+  // This test sends dozens of wrong keys on purpose; the lockout (R-04) has its own test, so it is set out of the way here.
+  const files = { LOG_FILE: logFile, SETTINGS_FILE: path.join(tmp, 'settings.json'), SWITCH_FILE: path.join(tmp, 'switch.json'), AUTH_MAX_FAILURES: '100000' };
   const seed = () => {
     fs.mkdirSync(CAM_DIR, { recursive: true });
     for (const n of ['clip1.mp4', 'clip2.mp4']) fs.writeFileSync(clip(n), 'clip ' + n);
