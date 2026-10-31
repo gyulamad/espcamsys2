@@ -27,6 +27,11 @@ $switchConfigured = (string) ($config['relay_control_key'] ?? '') !== '';
 $recordSeconds    = CamLogic::recordSeconds($config);
 $switchOffMinutes = CamLogic::switchOffMinutes($config);
 $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until switched ON';
+
+// The detector's motion area rule (picture size, smallest side), generated from the firmware's own
+// constants: the picture's rectangle below is clamped to it, so a dragged area is always one the
+// detector accepts.
+$areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['motionArea'];
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -321,6 +326,21 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
   }
   .det-pic { position: relative; flex: 0 0 auto; width: 192px; height: 192px; background: #000; border: 1px solid var(--border); }
   .det-pic img { width: 100%; height: 100%; display: block; image-rendering: pixelated; object-fit: contain; }
+  /* The motion area: the part of the picture watched for motion. Drag it to move it, its edges and corners
+     to resize it; what lies outside is dimmed. The handles sit INSIDE the rectangle so the picture's own
+     edge never clips them. */
+  .det-pic { overflow: hidden; }
+  .det-area { position: absolute; border: 1px dashed var(--accent); box-shadow: 0 0 0 400px rgba(0,0,0,.4); cursor: move; touch-action: none; user-select: none; }
+  .det-area[hidden] { display: none; }
+  .det-area.pending { border-color: #fff; border-style: solid; }
+  .det-row.offline .det-area { display: none; }
+  .det-area .h { position: absolute; touch-action: none; }
+  .det-area .h-n, .det-area .h-s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+  .det-area .h-e, .det-area .h-w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+  .det-area .h-n { top: 0; } .det-area .h-s { bottom: 0; } .det-area .h-e { right: 0; } .det-area .h-w { left: 0; }
+  .det-area .h-nw, .det-area .h-ne, .det-area .h-sw, .det-area .h-se { width: 9px; height: 9px; background: var(--accent); opacity: .85; }
+  .det-area .h-nw { top: 0; left: 0; cursor: nwse-resize; } .det-area .h-se { bottom: 0; right: 0; cursor: nwse-resize; }
+  .det-area .h-ne { top: 0; right: 0; cursor: nesw-resize; } .det-area .h-sw { bottom: 0; left: 0; cursor: nesw-resize; }
   .det-pic .det-off {
     position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
     padding: 10px; overflow-y: auto; text-align: center;
@@ -551,6 +571,9 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
           <img data-cam="<?= $camId ?>" id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
                data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>"
                onload="this.dataset.failed=''" onerror="onDetectorImgError(this.dataset.cam)">
+          <div class="det-area" id="detarea-<?= $camId ?>" data-cam="<?= $camId ?>" hidden title="Motion area: only motion inside this rectangle counts. Drag it to move it, drag an edge or corner to resize it, then APPLY.">
+            <?php foreach (['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as $h): ?><span class="h h-<?= $h ?>" data-h="<?= $h ?>"></span><?php endforeach; ?>
+          </div>
           <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
@@ -1297,6 +1320,41 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     detEl('off', id).title = why || '';
   }
 
+  // ── The motion area ──
+  // The rectangle over the detector's picture is the part watched for motion (MOTION_X0/Y0/X1/Y1, in pixels
+  // of the 96x96 picture, left/top inside and right/bottom outside). Pure geometry first (tests/node/
+  // test_area_geometry.js runs exactly this block): it keeps every area inside the picture and at least
+  // AREA_MIN pixels wide and high, which is what the detector accepts.
+  // <area-geometry>
+  const AREA_FRAME = <?= (int) $areaRule['frame'] ?>, AREA_MIN = <?= (int) $areaRule['minSide'] ?>;
+  const AREA_KEYS = { x0: 'MOTION_X0', y0: 'MOTION_Y0', x1: 'MOTION_X1', y1: 'MOTION_Y1' };
+  const isAreaKey = k => Object.values(AREA_KEYS).includes(k);
+  const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+  // `start` moved or resized by (dx, dy) picture pixels. handle: 'move' or n, ne, e, se, s, sw, w, nw.
+  function dragArea(start, handle, dx, dy) {
+    const a = { x0: start.x0, y0: start.y0, x1: start.x1, y1: start.y1 };
+    if (handle === 'move') {
+      const w = start.x1 - start.x0, h = start.y1 - start.y0;
+      a.x0 = clampInt(start.x0 + dx, 0, AREA_FRAME - w); a.x1 = a.x0 + w;
+      a.y0 = clampInt(start.y0 + dy, 0, AREA_FRAME - h); a.y1 = a.y0 + h;
+      return a;
+    }
+    if (handle.includes('w')) a.x0 = clampInt(start.x0 + dx, 0, start.x1 - AREA_MIN);
+    if (handle.includes('e')) a.x1 = clampInt(start.x1 + dx, start.x0 + AREA_MIN, AREA_FRAME);
+    if (handle.includes('n')) a.y0 = clampInt(start.y0 + dy, 0, start.y1 - AREA_MIN);
+    if (handle.includes('s')) a.y1 = clampInt(start.y1 + dy, start.y0 + AREA_MIN, AREA_FRAME);
+    return a;
+  }
+  // The area the detector reports with the not yet applied edges laid over it ({} = none pending).
+  function effectiveArea(reported, pending) {
+    const a = {};
+    Object.keys(AREA_KEYS).forEach(k => { a[k] = pending[AREA_KEYS[k]] !== undefined ? pending[AREA_KEYS[k]] : reported[k]; });
+    return a;
+  }
+  const fmtArea = a => a.x0 + ',' + a.y0 + ' – ' + a.x1 + ',' + a.y1;
+  const isWholePicture = a => a.x0 === 0 && a.y0 === 0 && a.x1 === AREA_FRAME && a.y1 === AREA_FRAME;
+  // </area-geometry>
+
   // ── Dragging the threshold sticks ──
   // Drag a stick along its bar to try a threshold: the stick, the "value/threshold" number and the text
   // under the bar follow the mouse at once. Nothing is sent while dragging — the moved thresholds wait
@@ -1314,6 +1372,7 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     CLEAR_THRESH:  ['personclear',  'personbar', 'pct'],
   };
   const isDragging = (id, key) => !!(detDrag[id] && detDrag[id].key === key);
+  const detKind = k => (DET_STICKS[k] || [0, 0, 'int'])[2];   // how a value is written: int or pct (the area's edges are ints)
 
   function motionScale(id, sc, eff) {
     if (detDrag[id] && detDrag[id].scale) return detDrag[id].scale;
@@ -1322,7 +1381,9 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
 
   // The detector's reported value of a setting, in the same unit as the pending one.
   function reportedThreshold(r, key) {
-    return { DARK_THRESH: r.scene.darkBelow, MOTION_THRESH: r.scene.motionAtLeast, DETECT_THRESH: r.person.detectAt, CLEAR_THRESH: r.person.clearAt }[key];
+    const area = r.scene.area || {};
+    return { DARK_THRESH: r.scene.darkBelow, MOTION_THRESH: r.scene.motionAtLeast, DETECT_THRESH: r.person.detectAt, CLEAR_THRESH: r.person.clearAt,
+             MOTION_X0: area.x0, MOTION_Y0: area.y0, MOTION_X1: area.x1, MOTION_Y1: area.y1 }[key];
   }
   const sameThreshold = (a, b) => Math.abs(a - b) < 0.0051;
 
@@ -1344,8 +1405,9 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     if (!box) return;
     if (!pd) { box.style.display = 'none'; return; }
     const r = detLast[id];
-    const fmt = (k, v) => DET_STICKS[k][2] === 'pct' ? Math.round(v * 100) + ' %' : v;
-    const parts = Object.keys(pd).map(k => k + ' ' + (r ? fmt(k, reportedThreshold(r, k)) + ' → ' : '') + fmt(k, pd[k]));
+    const fmt = (k, v) => detKind(k) === 'pct' ? Math.round(v * 100) + ' %' : v;
+    const parts = Object.keys(pd).filter(k => !isAreaKey(k)).map(k => k + ' ' + (r ? fmt(k, reportedThreshold(r, k)) + ' → ' : '') + fmt(k, pd[k]));
+    if (r && r.scene.area && Object.keys(pd).some(isAreaKey)) parts.push('motion area ' + fmtArea(r.scene.area) + ' → ' + fmtArea(effectiveArea(r.scene.area, pd)));
     const busy = !!detApplying[id];
     detEl('applytxt', id).textContent = (busy ? 'queued — the detector applies it and restarts: ' : 'not applied yet: ') + parts.join(', ');
     detEl('applybtn', id).disabled = busy;
@@ -1440,11 +1502,41 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     startStickDrag(ev, hit[2], key, m);
   });
 
+  // Moving / resizing the motion area on the picture. Nothing is sent while dragging: the edges wait
+  // (white outline) with the thresholds until APPLY queues them in ONE change.
+  function startAreaDrag(ev, id, handle, el) {
+    const r = detLast[id];
+    if (!r || !r.scene.area || ev.button > 0) return;
+    ev.preventDefault();
+    const scale = el.parentElement.clientWidth / AREA_FRAME;   // screen pixels per picture pixel
+    if (!(scale > 0)) return;
+    const start = effectiveArea(r.scene.area, detPending[id] || {});
+    const x = ev.clientX, y = ev.clientY;
+    try { el.setPointerCapture(ev.pointerId); } catch (e) { /* older browser: window listeners below still work */ }
+    const onMove = e => {
+      const a = dragArea(start, handle, (e.clientX - x) / scale, (e.clientY - y) / scale);
+      Object.keys(AREA_KEYS).forEach(k => setPendingThreshold(id, AREA_KEYS[k], a[k]));
+      if (detLast[id]) renderDetector(id, detLastD[id]);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+  document.addEventListener('pointerdown', ev => {
+    const el = ev.target.closest && ev.target.closest('.det-area');
+    if (el && el.dataset.cam) startAreaDrag(ev, el.dataset.cam, ev.target.dataset.h || 'move', el);
+  });
+
   async function applyDetectorThresholds(id) {
     const pd = detPending[id];
     if (!pd || detApplying[id]) return;
     const values = {};
-    Object.keys(pd).forEach(k => { values[k] = DET_STICKS[k][2] === 'pct' ? pd[k].toFixed(2) : String(pd[k]); });
+    Object.keys(pd).forEach(k => { values[k] = detKind(k) === 'pct' ? pd[k].toFixed(2) : String(pd[k]); });
     const txt = detEl('applytxt', id);
     detEl('applybtn', id).disabled = true;
     txt.textContent = 'sending…';
@@ -1531,9 +1623,20 @@ $offFor           = $switchOffMinutes > 0 ? "for $switchOffMinutes min" : 'until
     setW(detEl('motionbar', id), sc.motion / mScale);
     if (!isDragging(id, 'MOTION_THRESH')) placeMark(detEl('motionmark', id), mOn ? eff.MOTION_THRESH / mScale : null);
     detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= eff.MOTION_THRESH ? ' hit' : '');
-    detEl('motionsub', id).textContent = mOn
+    const area = sc.area ? effectiveArea(sc.area, pd) : null;   // null: a detector from before the motion area
+    detEl('motionsub', id).textContent = (mOn
       ? 'moving at ≥ ' + eff.MOTION_THRESH + ' (MOTION_THRESH), detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
-      : 'motion check off (MOTION_THRESH=0)';
+      : 'motion check off (MOTION_THRESH=0)') +
+      (area ? (isWholePicture(area) ? '; whole picture counts' : '; only inside the dashed area ' + fmtArea(area)) : '');
+    const box = detEl('area', id);
+    box.hidden = !area;
+    if (area) {
+      box.style.left = area.x0 / AREA_FRAME * 100 + '%';
+      box.style.top = area.y0 / AREA_FRAME * 100 + '%';
+      box.style.width = (area.x1 - area.x0) / AREA_FRAME * 100 + '%';
+      box.style.height = (area.y1 - area.y0) / AREA_FRAME * 100 + '%';
+      box.classList.toggle('pending', Object.keys(pd).some(isAreaKey));
+    }
 
     // Human score (null while the model is paused: dark / still)
     const hasScore = pe.score !== null && pe.score !== undefined;

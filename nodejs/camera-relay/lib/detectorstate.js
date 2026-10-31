@@ -17,6 +17,8 @@
 
 const MAX_TEXT = 64;
 const STATES = ['dark', 'still', 'active', 'off'];
+// The detector's picture is FRAME_SIZE x FRAME_SIZE pixels (the person model's input).
+const FRAME_SIZE = 96;
 
 function num(v, min, max) {
   return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
@@ -26,11 +28,31 @@ function text(v) {
   return typeof v === 'string' ? v.slice(0, MAX_TEXT) : '';
 }
 
+// The motion area a detector reports in scene.area: the part of its picture it watches for motion,
+// { x0, y0, x1, y1 } whole pixels, left/top inside and right/bottom outside, so 0,0 - 96,96 is the whole
+// picture. Firmware older than the motion area does not send it: that is `null` (the dashboard then
+// shows no area). Anything else that is not a sane rectangle inside the picture is refused: the
+// dashboard draws it as given. (How small an area may be is the firmware's and the settings page's
+// business, not a reason to distrust a reading.)
+//   -> { ok: true, area: {x0,y0,x1,y1} | null } | { ok: false }
+function parseArea(a) {
+  if (a === undefined || a === null) return { ok: true, area: null };
+  if (typeof a !== 'object' || Array.isArray(a)) return { ok: false };
+  const edge = (v) => (Number.isInteger(v) && v >= 0 && v <= FRAME_SIZE ? v : null);
+  const x0 = edge(a.x0);
+  const y0 = edge(a.y0);
+  const x1 = edge(a.x1);
+  const y1 = edge(a.y1);
+  if ([x0, y0, x1, y1].some((v) => v === null) || x0 >= x1 || y0 >= y1) return { ok: false };
+  return { ok: true, area: { x0, y0, x1, y1 } };
+}
+
 // Checks the readings one message carries. Returns { ok: true, report } or { ok: false, error }.
 // Shape (all numbers; thresholds are the detector's own settings):
 //   { ip, fw, uptimeMs, rssi,
 //     gpio:   { pin, high },
-//     scene:  { state, brightness, motion, darkBelow, motionAtLeast, holdS },
+//     scene:  { state, brightness, motion, darkBelow, motionAtLeast, holdS,
+//               area: { x0, y0, x1, y1 }                       <- optional: the part of the picture watched for motion },
 //     person: { score|null, detectAt, clearAt, detected },
 //     link:   { frames, jpegFails, reconnects, heap }          <- optional, diagnostics only }
 function parseStatus(body) {
@@ -50,6 +72,8 @@ function parseStatus(body) {
   if ([pin, brightness, motion, darkBelow, motionAtLeast, holdS, detectAt, clearAt].some((v) => v === null)) {
     return { ok: false, error: 'gpio.pin, scene.* and person.detectAt/clearAt must be numbers in range' };
   }
+  const area = parseArea(s.area);
+  if (!area.ok) return { ok: false, error: `scene.area must be whole numbers x0 < x1 and y0 < y1, all from 0 to ${FRAME_SIZE}` };
   if (typeof g.high !== 'boolean' || typeof p.detected !== 'boolean') return { ok: false, error: 'gpio.high and person.detected must be booleans' };
   if (!STATES.includes(s.state)) return { ok: false, error: `scene.state must be one of ${STATES.join(', ')}` };
   const score = p.score === null || p.score === undefined ? null : num(p.score, 0, 1);
@@ -66,7 +90,7 @@ function parseStatus(body) {
       uptimeMs: num(body.uptimeMs, 0, 4294967295 * 1000),
       rssi: num(body.rssi, -200, 0),
       gpio: { pin, high: g.high },
-      scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, holdS },
+      scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, holdS, area: area.area },
       person: { score, detectAt, clearAt, detected: p.detected },
       link: { frames: num(l.frames, 0, 4294967295), jpegFails: num(l.jpegFails, 0, 4294967295), reconnects: num(l.reconnects, 0, 4294967295), heap: num(l.heap, 0, 16777216) },
     },
@@ -138,4 +162,4 @@ function buildView(det, now) {
   };
 }
 
-module.exports = { parseStatus, buildView, describeAge, STATES, STALE_MS, PICTURE_STALE_MS };
+module.exports = { parseStatus, parseArea, buildView, describeAge, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };

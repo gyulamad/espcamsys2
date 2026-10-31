@@ -184,6 +184,7 @@ int main(int argc, char** argv) {
     cfg.report.darkBelow = 40;
     cfg.report.motionAtLeast = 300;
     cfg.report.holdSec = 10;
+    cfg.report.motionArea = person_scene::MotionArea(10, 20, 60, 90);
     cfg.report.detectAt = 0.6f;
     cfg.report.clearAt = 0.5f;
     cfg.minFrameGapMs = fps > 0 ? (uint32_t)(1000 / fps) : 100;

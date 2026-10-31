@@ -25,6 +25,7 @@ static Config cfg() {
     Config c;
     c.detectorId = "detector-1"; c.fw = "abc 1";
     c.gpioPin = 13; c.darkBelow = 40; c.motionAtLeast = 300; c.holdSec = 10; c.detectAt = 0.6f; c.clearAt = 0.5f;
+    c.motionArea = person_scene::MotionArea(10, 20, 60, 90);
     return c;
 }
 
@@ -79,13 +80,28 @@ TEST(status_json_carries_everything_the_dashboard_shows) {
     TEST_ASSERT(has(j, "\"fw\":\"abc 1\""), "firmware build");
     TEST_ASSERT(has(j, "\"uptimeMs\":123456,\"rssi\":-61"), "uptime and signal");
     TEST_ASSERT(has(j, "\"gpio\":{\"pin\":13,\"high\":true}"), "alarm pin and its level");
-    TEST_ASSERT(has(j, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"holdS\":10}"), "the gate's readings and thresholds");
+    TEST_ASSERT(has(j, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"holdS\":10,\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the gate's readings, thresholds and the motion area");
     TEST_ASSERT(has(j, "\"person\":{\"score\":0.740,\"detectAt\":0.600,\"clearAt\":0.500,\"detected\":true}"), "score, thresholds and verdict");
     TEST_ASSERT(has(j, "\"link\":{\"frames\":5,\"jpegFails\":1,\"reconnects\":2,\"heap\":91000}"), "how the link is doing");
     TEST_ASSERT(j.front() == '{' && j.back() == '}', "one object");
     TEST_ASSERT(j.find('\n') == std::string::npos, "no line breaks");
     TEST_ASSERT(!has(j, "jpeg\":\"") && !has(j, "base64"), "the picture is never inside the readings");
     TEST_ASSERT(j.size() < 400, "small enough to send several times a second");
+}
+
+TEST(status_json_carries_the_motion_area_in_the_scene_object_whatever_its_size) {
+    Config c = cfg();
+    TEST_ASSERT(has(buildStatusJson(c, snap(), 1500, "x", 0, 0, link()), "\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the configured area closes the scene object");
+    c.motionArea = person_scene::MotionArea();
+    std::string j = buildStatusJson(c, snap(), 1500, "x", 0, 0, link());
+    TEST_ASSERT(has(j, "\"area\":{\"x0\":0,\"y0\":0,\"x1\":96,\"y1\":96}}"), "the default is the whole 96x96 picture");
+    TEST_ASSERT(has(j, "\"holdS\":10,\"area\""), "after the hold time, inside the scene object");
+    // The longest scene the firmware can produce still fits the formatting buffer: nothing is cut off.
+    c.darkBelow = 255; c.motionAtLeast = 1000000; c.holdSec = 3600;
+    Snapshot s = snap(); s.brightness = 255; s.motion = 1000000; s.gate = Gate::Active;
+    j = buildStatusJson(c, s, 1500, "x", 0, 0, link());
+    TEST_ASSERT(has(j, "\"holdS\":3600,\"area\":{\"x0\":0,\"y0\":0,\"x1\":96,\"y1\":96}}"), "the largest numbers are printed whole");
+    TEST_ASSERT(j.size() < MAX_STATUS_BYTES, "and the status is far below the relay's limit");
 }
 
 TEST(status_json_scores) {
@@ -568,7 +584,7 @@ TEST(session_sends_a_frame_message_with_readings_and_picture) {
     TEST_ASSERT_EQ(wireAt(m, 0).type, 1, "a frame message");
     TEST_ASSERT_EQ(wireAt(m, 0).jpeg, env.jpeg, "carrying the encoded picture, byte for byte");
     TEST_ASSERT(has(wireAt(m, 0).status, "\"ip\":\"192.168.4.37\"") && has(wireAt(m, 0).status, "\"rssi\":-58"), "the board's address and signal come from the environment");
-    TEST_ASSERT(has(wireAt(m, 0).status, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"holdS\":10}"), "the gate's readings and thresholds");
+    TEST_ASSERT(has(wireAt(m, 0).status, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"holdS\":10,\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the gate's readings, thresholds and the motion area");
     TEST_ASSERT(has(wireAt(m, 0).status, "\"gpio\":{\"pin\":13,\"high\":true}"), "the alarm pin level");
     TEST_ASSERT(has(wireAt(m, 0).status, "\"link\":{\"frames\":0,\"jpegFails\":0,\"reconnects\":0,\"heap\":88000}"), "link statistics, with the live heap");
     TEST_ASSERT(env.logged(Level::Info, "first picture sent to the relay (18 bytes of JPEG)"), "the first picture is logged, once the relay actually has it");
@@ -925,6 +941,7 @@ int main() {
     RUN_TEST(log_url);
     RUN_TEST(gate_names_and_mapping);
     RUN_TEST(status_json_carries_everything_the_dashboard_shows);
+    RUN_TEST(status_json_carries_the_motion_area_in_the_scene_object_whatever_its_size);
     RUN_TEST(status_json_scores);
     RUN_TEST(status_json_other_states);
     RUN_TEST(frame_message_layout_is_what_the_relay_reads);

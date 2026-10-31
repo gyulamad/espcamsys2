@@ -103,6 +103,158 @@ TEST(a_degenerate_sampler_does_not_crash) {
     TEST_ASSERT_EQ((int)stepZero.sampleCount(), 400, "step 0 -> step 1");
 }
 
+// ── the motion area ─────────────────────────────────────────────────────
+//
+// The part of the picture that is watched for motion (MOTION_X0/Y0/X1/Y1): x0/y0 are the first column/row
+// inside it, x1/y1 the first one outside. Only the sample pixels inside it add to the motion reading.
+
+// The frame `base`, with the sample pixel at (x, y) set to `value`.
+static std::vector<uint8_t> frameWith(uint8_t base, int x, int y, uint8_t value) {
+    std::vector<uint8_t> f = frame(base);
+    f[y * W + x] = value;
+    return f;
+}
+
+TEST(the_motion_area_is_the_whole_picture_until_one_is_set) {
+    SceneSampler s(W, H);
+    TEST_ASSERT(s.motionArea() == MotionArea(0, 0, 96, 96), "default 0,0 - 96,96");
+    TEST_ASSERT(MotionArea() == MotionArea(0, 0, FRAME_SIZE, FRAME_SIZE), "the type's own default is the same");
+    TEST_ASSERT(MotionArea(1, 2, 30, 40) != MotionArea(1, 2, 30, 41), "areas compare by all four numbers");
+    SceneSampler odd(25, 11);
+    TEST_ASSERT(odd.motionArea() == MotionArea(0, 0, 25, 11), "on another size, the whole of THAT picture");
+    s.analyze(frame(0).data());
+    TEST_ASSERT_EQ((int)s.analyze(frame(1).data()).motion, 100, "so every sample counts: 100 samples * 1");
+}
+
+TEST(a_motion_area_must_lie_inside_the_picture_and_be_at_least_one_sample_step_wide_and_high) {
+    std::string err;
+    TEST_ASSERT(motionAreaUsable(MotionArea(0, 0, 96, 96), W, H, err), "the whole picture");
+    TEST_ASSERT(motionAreaUsable(MotionArea(86, 86, 96, 96), W, H, err), "10x10 in the corner: the smallest allowed");
+    TEST_ASSERT(motionAreaUsable(MotionArea(5, 5, 15, 15), W, H, err), "10x10 between the grid lines still holds a sample (10,10)");
+
+    TEST_ASSERT(!motionAreaUsable(MotionArea(-1, 0, 96, 96), W, H, err) && has(err, "inside the 96x96 picture"), "left of the picture");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(0, -1, 96, 96), W, H, err), "above the picture");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(0, 0, 97, 96), W, H, err), "right of the picture");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(0, 0, 96, 97), W, H, err), "below the picture");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(0, 0, 9, 96), W, H, err) && has(err, "at least 10 pixels"), "too narrow");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(0, 0, 96, 9), W, H, err), "too low");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(50, 0, 40, 96), W, H, err), "right edge left of the left edge");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(40, 40, 40, 96), W, H, err), "nothing in it at all");
+    TEST_ASSERT(!motionAreaUsable(MotionArea(0, 0, 96, 96), 50, 50, err), "judged against the picture it is given");
+}
+
+TEST(every_usable_motion_area_contains_at_least_one_sample_pixel) {
+    // The reason for the minimum size: an area with no sample in it would read 0 motion forever.
+    for (int x0 = 0; x0 + SAMPLE_STEP <= W; ++x0) {
+        bool found = false;
+        for (int x = x0; x < x0 + SAMPLE_STEP; ++x) if (x % SAMPLE_STEP == 0) found = true;
+        TEST_ASSERT(found, "a 10 wide span always holds a multiple of 10");
+        if (!found) return;
+    }
+}
+
+TEST(only_sample_pixels_inside_the_motion_area_add_to_the_motion_reading) {
+    SceneSampler s(W, H);
+    TEST_ASSERT(s.setMotionArea(MotionArea(20, 30, 60, 70)), "the area is accepted");   // samples x = 20,30,40,50  y = 30,40,50,60
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frame(105).data()).motion, 4 * 4 * 5, "16 samples inside * 5");
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(105, 30, 40, 205).data()).motion, 100, "a change inside counts");
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(105, 80, 40, 5).data()).motion, 100, "the sample inside returning to 105 counts (100), the outside one dropping to 5 does not");
+}
+
+TEST(motion_outside_the_motion_area_is_ignored) {
+    SceneSampler s(W, H);
+    s.setMotionArea(MotionArea(0, 0, 50, 50));      // top left quarter
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 90, 90, 0).data()).motion, 0, "the far corner moves: not watched");
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 50, 50, 0).data()).motion, 0, "just outside (50,50): not watched");
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 90, 0, 0).data()).motion, 0, "right of the area, same rows");
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 0, 90, 0).data()).motion, 0, "below the area, same columns");
+}
+
+TEST(the_left_and_top_edges_are_inside_the_area_and_the_right_and_bottom_edges_are_outside) {
+    SceneSampler s(W, H);
+    s.setMotionArea(MotionArea(20, 20, 60, 60));    // samples 20,30,40,50 in both directions
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 20, 20, 0).data()).motion, 100, "(20,20) is the first sample inside");
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 50, 50, 0).data()).motion, 100, "(50,50) is the last sample inside");
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 60, 60, 0).data()).motion, 0, "(60,60): x1 and y1 are exclusive");
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 10, 10, 0).data()).motion, 0, "(10,10): outside");
+}
+
+TEST(an_area_that_ends_just_after_a_sample_includes_it_and_one_that_starts_just_after_excludes_it) {
+    SceneSampler s(W, H);
+    s.setMotionArea(MotionArea(1, 1, 31, 31));      // samples 10,20,30 (0 is left of x0=1)
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 0, 0, 0).data()).motion, 0, "(0,0) is outside, x0=1");
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 30, 30, 0).data()).motion, 100, "(30,30) is inside, x1=31");
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frame(110).data()).motion, 3 * 3 * 10, "3x3 samples inside");
+}
+
+TEST(brightness_is_always_taken_over_the_whole_picture_not_only_the_motion_area) {
+    SceneSampler s(W, H);
+    s.setMotionArea(MotionArea(0, 0, 20, 20));      // only 4 samples
+    std::vector<uint8_t> f = frame(0);
+    for (int y = 0; y < H; y += 10) for (int x = 0; x < W; x += 10) if (x >= 20 || y >= 20) f[y * W + x] = 200;   // everything but the area is bright
+    TEST_ASSERT_EQ(s.analyze(f.data()).brightness, (96 * 200 + 50) / 100, "96 of the 100 samples at 200, 4 at 0");
+}
+
+TEST(a_refused_motion_area_leaves_the_previous_one_in_place) {
+    SceneSampler s(W, H);
+    TEST_ASSERT(s.setMotionArea(MotionArea(0, 0, 50, 50)), "a good one");
+    TEST_ASSERT(!s.setMotionArea(MotionArea(0, 0, 5, 50)), "too narrow: refused");
+    TEST_ASSERT(!s.setMotionArea(MotionArea(0, 0, 200, 200)), "outside the picture: refused");
+    TEST_ASSERT(s.motionArea() == MotionArea(0, 0, 50, 50), "the good one is still the area");
+    s.analyze(frame(100).data());
+    TEST_ASSERT_EQ((int)s.analyze(frameWith(100, 90, 90, 0).data()).motion, 0, "and it still ignores the far corner");
+}
+
+TEST(changing_the_motion_area_keeps_comparing_with_the_frame_just_before) {
+    // The sampler remembers every sample, not only the ones inside the area, so a new area never compares
+    // against stale or zero data (which would read as a burst of motion).
+    SceneSampler s(W, H);
+    s.setMotionArea(MotionArea(0, 0, 50, 50));
+    s.analyze(frame(100).data());
+    s.analyze(frame(200).data());                   // everything changed, but only the top left was watched
+    s.setMotionArea(MotionArea(0, 0, 96, 96));
+    TEST_ASSERT_EQ((int)s.analyze(frame(200).data()).motion, 0, "the frame did not change: no motion, wherever the area is");
+}
+
+TEST(a_person_sized_movement_in_the_area_switches_the_gate_on_but_a_waving_tree_outside_does_not) {
+    SceneSampler s(W, H);
+    SceneConfig c;
+    c.motionAtLeast = 300;
+    SceneGate g(c);
+    s.setMotionArea(MotionArea(0, 0, 60, 96));      // the left part; the tree stands on the right
+
+    std::vector<uint8_t> still = frame(100);
+    uint32_t t = 0;
+    g.update(t, s.analyze(still.data()), false);
+
+    // The tree: every sample in the right part flips by 80 -> 4 columns * 10 rows * 80 = 3200, far above 300.
+    std::vector<uint8_t> tree = still;
+    for (int y = 0; y < H; ++y) for (int x = 60; x < W; ++x) tree[y * W + x] = 20;
+    t += 100;
+    SceneReading tr = s.analyze(tree.data());
+    SceneVerdict v = g.update(t, tr, false);
+    TEST_ASSERT_EQ((int)tr.motion, 0, "the swaying tree adds nothing to the reading");
+    TEST_ASSERT(v.state == SceneState::Idle && !v.run, "so the scene stays still and the model is not run");
+
+    // A person walks in the watched part: 4 samples change by 100 = 400 >= 300.
+    std::vector<uint8_t> person = tree;
+    for (int y = 30; y < 50; ++y) for (int x = 10; x < 30; ++x) person[y * W + x] = 0;
+    t += 100;
+    SceneReading pr = s.analyze(person.data());
+    v = g.update(t, pr, false);
+    TEST_ASSERT_EQ((int)pr.motion, 400, "2x2 samples * 100");
+    TEST_ASSERT(v.state == SceneState::Active && v.run, "and the gate switches detection on");
+}
+
 // ── the gate ────────────────────────────────────────────────────────────
 
 static SceneReading reading(int brightness, uint32_t motion, bool hasPrevious = true) {
@@ -246,6 +398,18 @@ int main() {
     RUN_TEST(motion_ignores_changes_between_the_sample_pixels);
     RUN_TEST(motion_compares_with_the_frame_just_before_not_with_the_first_one);
     RUN_TEST(a_degenerate_sampler_does_not_crash);
+
+    RUN_TEST(the_motion_area_is_the_whole_picture_until_one_is_set);
+    RUN_TEST(a_motion_area_must_lie_inside_the_picture_and_be_at_least_one_sample_step_wide_and_high);
+    RUN_TEST(every_usable_motion_area_contains_at_least_one_sample_pixel);
+    RUN_TEST(only_sample_pixels_inside_the_motion_area_add_to_the_motion_reading);
+    RUN_TEST(motion_outside_the_motion_area_is_ignored);
+    RUN_TEST(the_left_and_top_edges_are_inside_the_area_and_the_right_and_bottom_edges_are_outside);
+    RUN_TEST(an_area_that_ends_just_after_a_sample_includes_it_and_one_that_starts_just_after_excludes_it);
+    RUN_TEST(brightness_is_always_taken_over_the_whole_picture_not_only_the_motion_area);
+    RUN_TEST(a_refused_motion_area_leaves_the_previous_one_in_place);
+    RUN_TEST(changing_the_motion_area_keeps_comparing_with_the_frame_just_before);
+    RUN_TEST(a_person_sized_movement_in_the_area_switches_the_gate_on_but_a_waving_tree_outside_does_not);
 
     RUN_TEST(with_both_checks_off_the_gate_is_always_active_and_never_reports_a_change);
     RUN_TEST(dark_pictures_pause_detection);

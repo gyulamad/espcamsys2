@@ -191,6 +191,7 @@ async function main() {
     d = r.json && r.json[ID];
     check('GET /detectors lists it as online with a picture and no message', !!d && d.online === true && d.hasPicture === true && d.state === 'online' && d.message === '' && d.ip === '127.0.0.1', JSON.stringify(d));
     check('its numbers and thresholds come back', !!d && d.report.scene.brightness === 130 && d.report.scene.motionAtLeast === 300 &&
+      JSON.stringify(d.report.scene.area) === JSON.stringify({ x0: 10, y0: 20, x1: 60, y1: 90 }) &&
       d.report.person.score === 0.81 && d.report.gpio.high === true && d.report.gpio.pin === 13 && d.report.link.heap === 90000, JSON.stringify(d));
     check('the picture itself is not in the JSON', !!d && d.report.jpeg === undefined && !JSON.stringify(d).includes('/9j') && !JSON.stringify(d).includes('/+A'));
     r = await request('GET', '/status');

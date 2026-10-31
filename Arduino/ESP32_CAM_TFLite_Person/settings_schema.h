@@ -15,6 +15,8 @@
 //   ANNOUNCE_RETRY_SECONDS        -> ANN_RETRY
 //
 // New in the scene gate (scene_logic.h): DARK_THRESH, MOTION_THRESH, MOTION_HOLD_S.
+// New with the motion area: MOTION_X0, MOTION_Y0, MOTION_X1, MOTION_Y1 - the part of the
+// picture that is watched for motion (the whole 96x96 picture is 0, 0, 96, 96).
 //
 // There are no defaults. Everything about the live view (Wi-Fi, the relay it
 // pushes to, and the tuning of that stream) is only asked for while
@@ -34,6 +36,7 @@
 
 #pragma once
 
+#include "scene_logic.h"
 #include "settings_logic.h"
 
 namespace esp32cam_settings {
@@ -54,6 +57,31 @@ inline bool personThresholdsConsistent(const IValues& v, std::string& err) {
     return true;
 }
 
+// The four MOTION_* numbers together must make a usable motion area: inside the picture and big enough
+// that a sample pixel falls in it (person_scene::motionAreaUsable). Each number is also range-checked on
+// its own, so this only judges them as a set - and, like the threshold rule, only once all four are
+// known and are numbers (a missing or malformed one is reported on its own).
+inline bool personMotionAreaConsistent(const IValues& v, std::string& err) {
+    static const char* const names[4] = { "MOTION_X0", "MOTION_Y0", "MOTION_X1", "MOTION_Y1" };
+    long long n[4] = { 0, 0, 0, 0 };
+    for (int i = 0; i < 4; ++i) {
+        std::string text;
+        if (!v.get(names[i], text) || !parseInt(text, n[i])) return true;
+    }
+    person_scene::MotionArea area(static_cast<int>(n[0]), static_cast<int>(n[1]), static_cast<int>(n[2]), static_cast<int>(n[3]));
+    std::string why;
+    if (person_scene::motionAreaUsable(area, person_scene::FRAME_SIZE, person_scene::FRAME_SIZE, why)) return true;
+    err = "MOTION_X0/Y0/X1/Y1 (" + numText(static_cast<double>(n[0])) + "," + numText(static_cast<double>(n[1])) + "," +
+          numText(static_cast<double>(n[2])) + "," + numText(static_cast<double>(n[3])) + "): " + why +
+          " - send all four in one line to change them together";
+    return false;
+}
+
+// Every rule that spans several of the detector's settings; the first one that fails is reported.
+inline bool personRulesHold(const IValues& v, std::string& err) {
+    return personThresholdsConsistent(v, err) && personMotionAreaConsistent(v, err);
+}
+
 static const KeyDef PERSON_KEYS[] = {
     // name              kind             min   max      cond              condKey           condValue  help
     { "PERSON_GPIO",     Kind::Pin,       0,    0,       Cond::Always,     nullptr,          nullptr,
@@ -70,6 +98,15 @@ static const KeyDef PERSON_KEYS[] = {
       "detection runs only after motion: summed pixel change between frames at or above this (about 100-1000 is typical); 0 = motion check off" },
     { "MOTION_HOLD_S", Kind::Int,       0,    3600,    Cond::Always,     nullptr,          nullptr,
       "seconds detection stays on after the last motion (a person standing still stays detected anyway); 0 = only while moving" },
+
+    { "MOTION_X0",     Kind::Int,       0,    person_scene::FRAME_SIZE, Cond::Always, nullptr,        nullptr,
+      "motion area, left edge in pixels of the 96x96 picture (0 = the picture's left edge); only what lies inside the area counts as motion" },
+    { "MOTION_Y0",     Kind::Int,       0,    person_scene::FRAME_SIZE, Cond::Always, nullptr,        nullptr,
+      "motion area, top edge in pixels (0 = the picture's top edge)" },
+    { "MOTION_X1",     Kind::Int,       0,    person_scene::FRAME_SIZE, Cond::Always, nullptr,        nullptr,
+      "motion area, right edge in pixels, first column outside the area (96 = the picture's right edge); at least 10 more than MOTION_X0" },
+    { "MOTION_Y1",     Kind::Int,       0,    person_scene::FRAME_SIZE, Cond::Always, nullptr,        nullptr,
+      "motion area, bottom edge in pixels, first row outside the area (96 = the picture's bottom edge); at least 10 more than MOTION_Y0" },
 
     { "STREAM_ENABLED",  Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
       "1: join Wi-Fi and send the live view (picture + values) to the relay's dashboard; 0: no Wi-Fi at all (everything below is then not needed)" },
@@ -98,7 +135,7 @@ static const KeyDef PERSON_KEYS[] = {
 static const Schema PERSON_SCHEMA = {
     PERSON_KEYS,
     sizeof(PERSON_KEYS) / sizeof(PERSON_KEYS[0]),
-    personThresholdsConsistent
+    personRulesHold
 };
 
 // The settings as the sketch uses them. With STREAM_ENABLED=0 the live-view
@@ -111,6 +148,7 @@ struct PersonSettings {
     int darkThreshold = 0;          // 0 = darkness check off
     uint32_t motionThreshold = 0;   // 0 = motion check off
     uint32_t motionHoldSec = 0;
+    person_scene::MotionArea motionArea;   // the part of the picture watched for motion; default = all of it
 
     bool streamEnabled = false;
     std::vector<WifiNet> wifi;
@@ -165,6 +203,10 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
     s.darkThreshold = static_cast<int>(storedInt(store, "DARK_THRESH"));
     s.motionThreshold = static_cast<uint32_t>(storedInt(store, "MOTION_THRESH"));
     s.motionHoldSec = static_cast<uint32_t>(storedInt(store, "MOTION_HOLD_S"));
+    s.motionArea = person_scene::MotionArea(static_cast<int>(storedInt(store, "MOTION_X0")),
+                                            static_cast<int>(storedInt(store, "MOTION_Y0")),
+                                            static_cast<int>(storedInt(store, "MOTION_X1")),
+                                            static_cast<int>(storedInt(store, "MOTION_Y1")));
 
     s.streamEnabled = store.get("STREAM_ENABLED") == "1";
     if (s.streamEnabled) {

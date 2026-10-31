@@ -541,13 +541,14 @@ camtest_test('the generated schema is complete and the connection settings are t
 
 function camtest_detector_reported(): array {
     return ['PERSON_GPIO' => '13', 'DETECT_THRESH' => '0.6', 'CLEAR_THRESH' => '0.5', 'LOOP_DELAY_MS' => '10', 'DARK_THRESH' => '40',
-            'MOTION_THRESH' => '300', 'MOTION_HOLD_S' => '10', 'STREAM_ENABLED' => '1', 'WIFI' => 'net:********', 'SERVER_HOST' => '192.168.1.117',
+            'MOTION_THRESH' => '300', 'MOTION_HOLD_S' => '10', 'MOTION_X0' => '0', 'MOTION_Y0' => '0', 'MOTION_X1' => '96', 'MOTION_Y1' => '96',
+            'STREAM_ENABLED' => '1', 'WIFI' => 'net:********', 'SERVER_HOST' => '192.168.1.117',
             'HTTP_PORT' => '8080', 'API_KEY' => '********', 'DETECTOR_ID' => 'detector-1', 'STREAM_MAX_FPS' => '10', 'STREAM_JPEG_Q' => '80',
             'STREAM_WR_TMO_S' => '3', 'ANN_HEARTBEAT' => '600', 'ANN_RETRY' => '30'];
 }
 function camtest_detector_change(array $values): array {
     $sc = camtest_schema()['detector'];
-    return CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], camtest_detector_reported(), $values);
+    return CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], camtest_detector_reported(), $values, $sc['rules'] ?? []);
 }
 
 camtest_test('the generated schema has the person detector: the calibration settings are open, the connection and the alarm pin are locked', function () {
@@ -560,7 +561,7 @@ camtest_test('the generated schema has the person detector: the calibration sett
     }
     sort($locked);
     camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'STREAM_ENABLED', 'WIFI']);
-    foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
+    foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
         camtest_assert_true(in_array($n, $names, true), $n);
     }
 });
@@ -570,6 +571,86 @@ camtest_test('buildDeviceChange for a detector: a calibration change becomes a l
     camtest_assert_equal($r['ok'], true);
     camtest_assert_equal($r['changed'], ['DARK_THRESH', 'MOTION_HOLD_S']);
     camtest_assert_equal($r['line'], 'DARK_THRESH=55;MOTION_HOLD_S=20');
+});
+
+// The motion area: the picture the detector watches for motion, as left/top (inside) and right/bottom (outside).
+
+camtest_test('the generated schema hands the dashboard the motion area rule: the picture size and the smallest side, from the firmware', function () {
+    $sc = camtest_schema();
+    camtest_assert_equal($sc['detector']['rules']['motionArea'], ['frame' => 96, 'minSide' => 10]);
+    camtest_assert_true(!isset($sc['recorder']['rules']), 'a recorder has no such rule');
+    foreach (['MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1'] as $name) {
+        $def = null;
+        foreach ($sc['detector']['keys'] as $k) { if ($k['name'] === $name) { $def = $k; } }
+        camtest_assert_true($def !== null && $def['kind'] === 'int' && $def['min'] === 0 && $def['max'] === 96 && $def['locked'] === false, $name);
+    }
+});
+
+camtest_test('motionAreaError: an area inside the picture and big enough is fine', function () {
+    $rule = ['frame' => 96, 'minSide' => 10];
+    $area = fn (int $a, int $b, int $c, int $d) => ['MOTION_X0' => (string) $a, 'MOTION_Y0' => (string) $b, 'MOTION_X1' => (string) $c, 'MOTION_Y1' => (string) $d];
+    camtest_assert_equal(CamLogic::motionAreaError($area(0, 0, 96, 96), $rule), null, 'the whole picture');
+    camtest_assert_equal(CamLogic::motionAreaError($area(86, 86, 96, 96), $rule), null, 'the smallest area, in a corner');
+    camtest_assert_equal(CamLogic::motionAreaError($area(5, 5, 15, 15), $rule), null, '10 x 10 anywhere');
+});
+
+camtest_test('motionAreaError: too small, inverted or outside the picture is refused, in words that name the area', function () {
+    $rule = ['frame' => 96, 'minSide' => 10];
+    $area = fn (int $a, int $b, int $c, int $d) => ['MOTION_X0' => (string) $a, 'MOTION_Y0' => (string) $b, 'MOTION_X1' => (string) $c, 'MOTION_Y1' => (string) $d];
+    $e = CamLogic::motionAreaError($area(20, 30, 29, 80), $rule);
+    camtest_assert_true($e !== null && strpos($e, '20,30 - 29,80') !== false && strpos($e, 'at least 10 pixels') !== false, '9 wide');
+    camtest_assert_true(CamLogic::motionAreaError($area(20, 30, 70, 39), $rule) !== null, '9 high');
+    camtest_assert_true(CamLogic::motionAreaError($area(50, 0, 40, 96), $rule) !== null, 'right edge left of the left edge');
+    camtest_assert_true(CamLogic::motionAreaError($area(40, 40, 40, 90), $rule) !== null, 'nothing in it');
+    $e = CamLogic::motionAreaError($area(0, 0, 97, 96), $rule);
+    camtest_assert_true($e !== null && strpos($e, 'inside the 96x96 picture') !== false, 'right of the picture');
+    camtest_assert_true(CamLogic::motionAreaError($area(0, 0, 96, 200), $rule) !== null, 'below the picture');
+});
+
+camtest_test('motionAreaError: it only judges four known numbers - anything else is reported on its own', function () {
+    $rule = ['frame' => 96, 'minSide' => 10];
+    camtest_assert_equal(CamLogic::motionAreaError([], $rule), null, 'a recorder, or a detector that has not reported');
+    camtest_assert_equal(CamLogic::motionAreaError(['MOTION_X0' => '50', 'MOTION_Y0' => '0', 'MOTION_X1' => '40'], $rule), null, 'one number missing');
+    camtest_assert_equal(CamLogic::motionAreaError(['MOTION_X0' => '50', 'MOTION_Y0' => '0', 'MOTION_X1' => '40', 'MOTION_Y1' => 'abc'], $rule), null, 'one number malformed');
+    camtest_assert_equal(CamLogic::motionAreaError(['MOTION_X0' => '-5', 'MOTION_Y0' => '0', 'MOTION_X1' => '40', 'MOTION_Y1' => '90'], $rule), null, 'a negative number is not a number it understands');
+});
+
+camtest_test('buildDeviceChange for a detector: moving the motion area queues only the edges that moved', function () {
+    $r = camtest_detector_change(['MOTION_X0' => '20', 'MOTION_Y0' => '0', 'MOTION_X1' => '70', 'MOTION_Y1' => '96']);
+    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['changed'], ['MOTION_X0', 'MOTION_X1']);
+    camtest_assert_equal($r['line'], 'MOTION_X0=20;MOTION_X1=70');
+});
+
+camtest_test('buildDeviceChange for a detector: an area that is too small, outside the picture or inverted is refused before it is queued', function () {
+    foreach ([
+        'too narrow' => ['MOTION_X0' => '20', 'MOTION_X1' => '29'],
+        'too low' => ['MOTION_Y0' => '20', 'MOTION_Y1' => '25'],
+        'inverted' => ['MOTION_X0' => '60', 'MOTION_X1' => '30'],
+        'one edge against a stored one' => ['MOTION_X1' => '5'],
+    ] as $why => $values) {
+        $r = camtest_detector_change($values);
+        camtest_assert_equal($r['ok'], false, $why);
+        camtest_assert_true(strpos($r['error'], 'motion area') !== false, $why . ': ' . ($r['error'] ?? ''));
+    }
+    camtest_assert_equal(camtest_detector_change(['MOTION_X1' => '97'])['ok'], false, 'past the picture: the number itself is out of range');
+    camtest_assert_equal(camtest_detector_change(['MOTION_X0' => '-1'])['ok'], false, 'negative');
+    camtest_assert_equal(camtest_detector_change(['MOTION_X0' => '12.5'])['ok'], false, 'not a whole number');
+});
+
+camtest_test('buildDeviceChange for a detector: giving the area back to the whole picture, or no change at all, is fine', function () {
+    $r = camtest_detector_change(['MOTION_X0' => '0', 'MOTION_Y0' => '0', 'MOTION_X1' => '96', 'MOTION_Y1' => '96']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, ''], 'the same as it holds: nothing to queue');
+    $sc = camtest_schema()['detector'];
+    $reported = array_merge(camtest_detector_reported(), ['MOTION_X0' => '30', 'MOTION_Y0' => '30', 'MOTION_X1' => '60', 'MOTION_Y1' => '60']);
+    $r = CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], $reported, ['MOTION_X0' => '0', 'MOTION_Y0' => '0', 'MOTION_X1' => '96', 'MOTION_Y1' => '96'], $sc['rules']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96'], 'back to the whole picture');
+});
+
+camtest_test('buildDeviceChange: without a rules argument (a recorder, an older caller) nothing about the area is checked', function () {
+    $sc = camtest_schema()['detector'];
+    $r = CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], camtest_detector_reported(), ['MOTION_X0' => '60', 'MOTION_X1' => '30']);
+    camtest_assert_equal($r['ok'], true, 'the board still refuses it - this only spares a restart');
 });
 
 camtest_test('buildDeviceChange for a detector: the connection settings and the alarm pin cannot be changed, a value out of range is refused', function () {

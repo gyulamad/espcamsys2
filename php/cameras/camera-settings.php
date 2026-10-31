@@ -134,7 +134,7 @@ $state = camera_state($base, $headers);
 if (empty($state['reported']['settings'])) {
     json_fail(409, 'This ' . ($type === 'detector' ? 'detector' : 'camera') . ' has not reported its settings yet, so a change cannot be checked. It reports after it starts with the firmware that supports remote settings (publish it with ota-deploy.sh) and has reached the relay.');
 }
-$change = CamLogic::buildDeviceChange($keys, $gpios, $state['reported']['settings'], $input['values']);
+$change = CamLogic::buildDeviceChange($keys, $gpios, $state['reported']['settings'], $input['values'], $schema[$type]['rules'] ?? []);
 if (!$change['ok']) {
     json_fail(400, $change['error']);
 }

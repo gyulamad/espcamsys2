@@ -1313,11 +1313,41 @@ class CamLogic
         return $out;
     }
 
+    // The detector's motion area (MOTION_X0, MOTION_Y0, MOTION_X1, MOTION_Y1): the four numbers together
+    // must lie inside the picture and make an area at least $rule['minSide'] pixels wide and high - the same
+    // rule as person_scene::motionAreaUsable in the firmware's scene_logic.h, whose constants arrive in
+    // $rule (the 'motionArea' member of the generated lib/device_schema.php). Left/top are inside the area,
+    // right/bottom outside. $settings holds what the detector WOULD hold ({ SETTING: text }).
+    // -> the problem in words, or null when the area is fine or not all four numbers are known yet.
+    public static function motionAreaError(array $settings, array $rule): ?string
+    {
+        $n = [];
+        foreach (['MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1'] as $name) {
+            if (!isset($settings[$name]) || !is_string($settings[$name]) || !preg_match('/^\d{1,4}$/D', $settings[$name])) {
+                return null;   // missing or malformed: reported on its own, not by this rule
+            }
+            $n[] = (int) $settings[$name];
+        }
+        [$x0, $y0, $x1, $y1] = $n;
+        $frame = (int) ($rule['frame'] ?? 0);
+        $min = (int) ($rule['minSide'] ?? 0);
+        $area = $x0 . ',' . $y0 . ' - ' . $x1 . ',' . $y1;
+        if ($x1 > $frame || $y1 > $frame) {
+            return 'the motion area ' . $area . ' must lie inside the ' . $frame . 'x' . $frame . ' picture';
+        }
+        if ($x1 - $x0 < $min || $y1 - $y0 < $min) {
+            return 'the motion area ' . $area . ' must be at least ' . $min . ' pixels wide and high';
+        }
+        return null;
+    }
+
     // Turns the submitted { SETTING: value } into the line to queue for the camera.
     //   $reported: what the camera says it holds ({ SETTING: text }, secrets masked).
+    //   $rules: the rules over several settings that the device's schema carries (device_schema.php 'rules'),
+    //           e.g. the detector's 'motionArea'; none for a recorder.
     //   -> ['ok' => true, 'line' => '...' ('' when nothing differs), 'changed' => [names]]
     //    | ['ok' => false, 'error' => ...]
-    public static function buildDeviceChange(array $schemaKeys, array $gpios, array $reported, array $values): array
+    public static function buildDeviceChange(array $schemaKeys, array $gpios, array $reported, array $values, array $rules = []): array
     {
         $byName = [];
         foreach ($schemaKeys as $k) {
@@ -1350,6 +1380,12 @@ class CamLogic
         foreach ($schemaKeys as $def) {
             if (self::isDeviceSettingRequired($def, $after) && !isset($after[$def['name']])) {
                 return ['ok' => false, 'error' => $def['name'] . ' is needed too — it has no value yet'];
+            }
+        }
+        if (isset($rules['motionArea']) && is_array($rules['motionArea'])) {
+            $problem = self::motionAreaError($after, $rules['motionArea']);
+            if ($problem !== null) {
+                return ['ok' => false, 'error' => $problem];
             }
         }
         $parts = [];

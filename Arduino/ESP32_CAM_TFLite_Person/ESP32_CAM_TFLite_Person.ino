@@ -324,10 +324,16 @@ bool personDetected = false;
 // brightness and its change since the previous frame; the model only runs on
 // frames that are bright enough and have seen motion lately — see scene_logic.h.
 
+// The scene logic's picture size and the model's must be the same thing: the motion area settings
+// (MOTION_X0..MOTION_Y1) are limited to the former and index the latter.
+static_assert(IMAGE_WIDTH == person_scene::FRAME_SIZE && IMAGE_HEIGHT == person_scene::FRAME_SIZE,
+              "scene_logic.h FRAME_SIZE must equal the model's input size");
+
 person_scene::SceneSampler g_sampler(IMAGE_WIDTH, IMAGE_HEIGHT);
 person_scene::SceneGate g_gate;
 
-// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S settings to the gate.
+// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S settings to the gate and the motion area
+// (MOTION_X0 / Y0 / X1 / Y1) to the sampler.
 void configureScene()
 {
     person_scene::SceneConfig scene;
@@ -335,6 +341,13 @@ void configureScene()
     scene.motionAtLeast = g_cfg.motionThreshold;
     scene.holdMs = g_cfg.motionHoldSec * 1000UL;
     g_gate.configure(scene);
+
+    if (!g_sampler.setMotionArea(g_cfg.motionArea))
+    {
+        // Not reachable: the settings rule refuses such an area. The sampler keeps the whole picture.
+        RLOG_WARN("motion area %d,%d - %d,%d is not usable: watching the whole picture for motion",
+                  g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1);
+    }
 }
 
 
@@ -1233,6 +1246,7 @@ void networkTask(void *)
     ucfg.report.darkBelow = g_cfg.darkThreshold;
     ucfg.report.motionAtLeast = g_cfg.motionThreshold;
     ucfg.report.holdSec = g_cfg.motionHoldSec;
+    ucfg.report.motionArea = g_cfg.motionArea;
     ucfg.report.detectAt = g_cfg.detectThreshold;
     ucfg.report.clearAt = g_cfg.clearThreshold;
 
@@ -1578,13 +1592,14 @@ void logBootInfo()
 #endif
 
     RLOG_INFO(
-        "settings: alarm GPIO %d, detect at %.0f%%, clear below %.0f%%, dark below %d, motion at %u, hold %u s",
+        "settings: alarm GPIO %d, detect at %.0f%%, clear below %.0f%%, dark below %d, motion at %u, hold %u s, motion area %d,%d - %d,%d",
         g_cfg.personGpio,
         g_cfg.detectThreshold * 100.0f,
         g_cfg.clearThreshold * 100.0f,
         g_cfg.darkThreshold,
         (unsigned)g_cfg.motionThreshold,
-        (unsigned)g_cfg.motionHoldSec
+        (unsigned)g_cfg.motionHoldSec,
+        g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1
     );
 
     if (g_cfg.streamEnabled)
@@ -1697,6 +1712,12 @@ void setup()
         "Motion threshold: %u (0 = check off), hold %u s\n",
         (unsigned)g_cfg.motionThreshold,
         (unsigned)g_cfg.motionHoldSec
+    );
+
+    Serial.printf(
+        "Motion area: %d,%d - %d,%d (left, top - right, bottom; whole picture = 0,0 - %d,%d)\n",
+        g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1,
+        IMAGE_WIDTH, IMAGE_HEIGHT
     );
 
 #endif

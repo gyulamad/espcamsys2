@@ -72,6 +72,7 @@ require_once __DIR__ . '/auth.php';
   <div class="kv" id="calib-help" hidden>Calibrating the person detector: keep the dashboard open next to this page and watch the detector's BRIGHTNESS, MOTION and HUMAN readings.
 DARK_THRESH: set it just below the brightness the picture has when it is too dark to see a person.
 MOTION_THRESH: set it above the motion value of a still scene and below what a person walking makes.
+MOTION_X0 / Y0 / X1 / Y1: the part of the picture watched for motion (left, top, right, bottom in pixels of the 96x96 picture; at least 10 wide and high). Easier: drag the dashed rectangle on the detector's picture on the dashboard.
 DETECT_THRESH / CLEAR_THRESH: the HUMAN score that switches the alarm pin on / back off (CLEAR must not be higher than DETECT).
 Applying restarts the detector (about 10 seconds without a picture); then check the readings on the dashboard again.</div>
   <fieldset id="entry" hidden>
