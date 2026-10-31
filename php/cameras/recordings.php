@@ -52,6 +52,7 @@ $seen = $_GET['seen'] ?? null;
 // it responds with, instead of always answering a flat 200 with the whole
 // file — that's what lets the built-in player's seek bar actually work.
 function stream_recording($url, $filename, $disposition) {
+    global $config;
     $reqHeaders = [];
     // Only ONE plain byte range is passed on; anything odd is dropped and the whole file is served (review F-14).
     $range = CamLogic::validRangeHeader($_SERVER['HTTP_RANGE'] ?? null);
@@ -60,7 +61,7 @@ function stream_recording($url, $filename, $disposition) {
     }
 
     // No redirects (review F-08): the Range header and anything else we send must not follow one to another host.
-    $ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 30, implode("\r\n", $reqHeaders))]);
+    $ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 30, relay_read_headers($config) . implode("\r\n", $reqHeaders))]);
     $stream = @fopen($url, 'rb', false, $ctx);
 
     if (!$stream) {
@@ -144,7 +145,7 @@ if ($play !== null) {
 
 // Otherwise: list this camera's saved recordings as JSON.
 header('Content-Type: application/json');
-[$listBody, $listHeaders] = relay_fetch($relayBase, 'GET', 10);
+[$listBody, $listHeaders] = relay_fetch($relayBase, 'GET', 10, relay_read_headers($config));
 if ($listBody === false) {
     json_fail(502, 'Could not reach relay');
 }

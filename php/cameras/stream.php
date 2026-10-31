@@ -10,6 +10,7 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/relay.php';
 
 // ?cam[]=x is an array, not a name: refuse it plainly instead of crashing (review F-16)
 if (CamLogic::firstNonStringParam($_GET, ['cam']) !== null) {
@@ -30,7 +31,7 @@ $streamUrl = rtrim($camera['url'], '/') . '/stream/' . rawurlencode($camera['id'
 
 // Open the stream from the relay
 // (no redirects: review F-08)
-$ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10)]);
+$ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10, relay_read_headers($config))]);
 
 $stream = @fopen($streamUrl, 'rb', false, $ctx);
 

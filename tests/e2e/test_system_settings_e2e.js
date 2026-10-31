@@ -110,7 +110,7 @@ function runRelay(dir, port, supervised) {
 async function waitUp(port, ms = 8000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    const ok = await new Promise((r) => { const q = nodeHttp.get(`http://127.0.0.1:${port}/status`, (res) => { res.resume(); r(res.statusCode === 200); }); q.on('error', () => r(false)); });
+    const ok = await new Promise((r) => { const q = nodeHttp.get(`http://127.0.0.1:${port}/status`, (res) => { res.resume(); r(res.statusCode === 200 || res.statusCode === 401); }); q.on('error', () => r(false)); }); // 401 = up, and asking for the control key (review R-08)
     if (ok) return true;
     await sleep(150);
   }
@@ -185,7 +185,7 @@ async function main() {
 
     const alarm = await relayReq(RELAY_PORT, 'POST', '/system-settings', CONTROL, { alarmRecordSeconds: 30 });
     check('the alarm length is saved with no restart needed', alarm.status === 200 && alarm.json.restartRequired === false && alarm.json.changed[0] === 'alarmRecordSeconds', alarm.text);
-    check('…and applies at once (GET /settings)', (await http(RELAY_PORT, 'GET', '/settings')).json.alarmRecordSeconds === 30);
+    check('…and applies at once (GET /settings)', (await http(RELAY_PORT, 'GET', '/settings', { headers: { 'X-Control-Key': CONTROL } })).json.alarmRecordSeconds === 30);
     check('…without writing the system settings file', !fs.existsSync(path.join(relayDir, 'system-settings.json')));
 
     const same = await relayReq(RELAY_PORT, 'POST', '/system-settings', CONTROL, { port: RELAY_PORT, camKey: '' });

@@ -23,4 +23,4 @@ if (empty($cameras)) {
 
 // Every camera in config.php shares the same relay, so one request covers
 // all of them — no need to loop per camera the way record.php does.
-relay_proxy_json(rtrim($cameras[0]['url'], '/') . '/status', 'GET', 5, '', 'Could not reach relay', false);
+relay_proxy_json(rtrim($cameras[0]['url'], '/') . '/status', 'GET', 5, relay_read_headers($config), 'Could not reach relay', false);

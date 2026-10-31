@@ -147,6 +147,7 @@ const writeErrThrottle = new Throttle(10 * 1000); // failing to write recording 
 const suppressedThrottle = new Throttle(60 * 1000); // "ignored a recording request while OFF": once a minute per camera
 const switchAuthThrottle = new Throttle(60 * 1000); // recording on/off requests with a missing or wrong control key
 const dashboardAuthThrottle = new Throttle(60 * 1000); // dashboard-only requests (see requireDashboardKey) with a missing or wrong control key
+const readAuthThrottle = new Throttle(60 * 1000); // reads (see requireReadKey) with a missing or wrong control key
 
 // ── Making key guessing slow (review R-04) ──
 // The throttles above only keep the LOG quiet. These refuse: AUTH_MAX_FAILURES wrong keys (default 10) from one
@@ -597,7 +598,7 @@ app.post('/upload/:id', requireCameraKeyForUpload, express.raw({ type: '*/*', li
 });
 
 // Browser opens this to watch the live stream (works as an <img src="...">)
-app.get('/stream/:id', (req, res) => {
+app.get('/stream/:id', requireReadKey, (req, res) => {
   const cam = getCamera(req.params.id);
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
@@ -860,7 +861,7 @@ app.get('/detector/:id/uplink', (req, res) => {
 });
 
 // Every detector the relay has heard from: { id: view } — see detectorstate.buildView().
-app.get('/detectors', (req, res) => {
+app.get('/detectors', requireReadKey, (req, res) => {
   const now = Date.now();
   const out = {};
   for (const id of Object.keys(detectors).sort()) out[id] = detectorstate.buildView(detectors[id], now);
@@ -870,7 +871,7 @@ app.get('/detectors', (req, res) => {
 // The detector's picture as MJPEG (works as <img src>), same behaviour as /stream/:id once it flows. A viewer
 // is never left waiting: with no picture to show the answer is an error that says why (and the relay's log
 // says that the dashboard asked), instead of a response that never starts.
-app.get('/detector/:id/stream', (req, res) => {
+app.get('/detector/:id/stream', requireReadKey, (req, res) => {
   const id = req.params.id;
   if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid detector id' });
   const now = Date.now();
@@ -909,7 +910,7 @@ app.get('/detector/:id/stream', (req, res) => {
 });
 
 // Single still image, handy for thumbnails/testing
-app.get('/snapshot/:id', (req, res) => {
+app.get('/snapshot/:id', requireReadKey, (req, res) => {
   const cam = cameras[req.params.id];
   if (!cam || !cam.frame) return res.sendStatus(404);
   res.set('Content-Type', 'image/jpeg');
@@ -950,7 +951,7 @@ const NEVER_SEEN = { lastSeen: null, recording: null, preRoll: null };
 // originate from a click in that browser tab: another tab, another user,
 // or a camera's alarm-trigger GPIO calling /alarm directly. Includes each
 // camera's pre-roll buffer fill, handy for checking the feature is working.
-app.get('/status', async (req, res) => {
+app.get('/status', requireReadKey, async (req, res) => {
   try {
     const ids = [...new Set([...Object.keys(cameras), ...(await recordingFolderIds())])].sort();
     refreshSwitch();
@@ -970,10 +971,10 @@ app.get('/status', async (req, res) => {
 // GET  /settings                         -> { alarmRecordSeconds, preRollSeconds }
 // POST /settings?alarmRecordSeconds=N    -> save it, returns the new settings
 // preRollSeconds is read-only here: it comes from config.js.
-// Reading is open; changing needs the control key (requireDashboardKey — the dashboard now saves
+// Reading and changing both need the control key (requireReadKey / requireDashboardKey — the dashboard now saves
 // through POST /system-settings, so nothing legitimate posts here keyless). Changes take effect on the next alarm; an alarm
 // recording that's already running keeps the length it was started with.
-app.get('/settings', (req, res) => {
+app.get('/settings', requireReadKey, (req, res) => {
   res.json(settingsView());
 });
 
@@ -1044,7 +1045,7 @@ app.post('/restart', requireControlKey, (req, res) => {
 //   POST /recording/camera/:id/on
 //   POST /recording/all/off?minutes=N          the same for every camera the relay knows right now
 //   POST /recording/all/on
-//   GET  /recording/state                      who is OFF (no key needed)
+//   GET  /recording/state                      who is OFF (needs the control key once one is set)
 // The four POSTs need `X-Control-Key: <controlKey>`; see the notes at the switch above.
 // Guards what only the dashboard does — changing settings, starting/stopping/extending a recording by hand, deleting
 // or marking recordings (review R-03). The dashboard's PHP already sends X-Control-Key on exactly these calls; the
@@ -1061,6 +1062,25 @@ function requireDashboardKey(req, res, next) {
   if (keyState === 'locked') return undefined;
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const t = dashboardAuthThrottle.check(ip || 'unknown', Date.now());
+  if (t.allow) relayLog('WARN', `REJECTED ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
+  return res.status(401).json({ error: 'missing or wrong control key' });
+}
+
+// Guards what the cameras SEE: live video, snapshots, recordings, and the lists of who is connected and what
+// state it is in. Only the dashboard's PHP asks for these (it sends X-Control-Key on every one; the browser never
+// talks to the relay), and the camera boards use none of them. Anyone who could reach this port used to be able to
+// watch and download everything. Unlike the routes that CHANGE things (requireDashboardKey fails closed with 503),
+// this one lets the request through when no controlKey is configured at all: there is then nothing to check
+// against, and refusing would blank the dashboard of an installation that has not set one yet — the relay says so
+// in its log at startup, and INSTALL.md says to set one.
+function requireReadKey(req, res, next) {
+  if (!CONTROL_KEY) return next();
+  const provided = req.headers['x-control-key'];
+  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = readAuthThrottle.check(ip || 'unknown', Date.now());
   if (t.allow) relayLog('WARN', `REJECTED ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
   return res.status(401).json({ error: 'missing or wrong control key' });
 }
@@ -1146,7 +1166,7 @@ app.post('/recording/camera/:id/on', requireControlKey, switchHandler('on', oneC
 app.post('/recording/all/off', requireControlKey, switchHandler('off', everyKnownCamera));
 app.post('/recording/all/on', requireControlKey, switchHandler('on', everyKnownCamera));
 
-app.get('/recording/state', (req, res) => {
+app.get('/recording/state', requireReadKey, (req, res) => {
   refreshSwitch();
   res.json({ off: describeOffStates(recSwitch.offIds(Date.now())), controlEnabled: CONTROL_KEY !== '', defaultMinutes: DEFAULT_OFF_MINUTES });
 });
@@ -1684,7 +1704,7 @@ app.post('/record/:id/stop', requireDashboardKey, (req, res) => {
 });
 
 // Current recording status/progress for one camera.
-app.get('/record/:id', (req, res) => {
+app.get('/record/:id', requireReadKey, (req, res) => {
   const cam = cameras[req.params.id];
   if (!cam || !cam.recording) return res.json({ recording: false });
   const { elapsed, remaining } = timing.computeElapsedRemaining(
@@ -1735,7 +1755,7 @@ function requireExistingRecording(req, res, next) {
 
 // List saved recordings for a camera, newest first. `seen` says whether the
 // clip has been played or downloaded yet (see seenMarkerPath above).
-app.get('/recordings/:id', (req, res) => {
+app.get('/recordings/:id', requireReadKey, (req, res) => {
   const dir = cameraDir(req.params.id);
   const files = recordingFileNames(dir)
     .map((f) => {
@@ -1764,7 +1784,7 @@ app.delete('/recordings/:id', requireDashboardKey, (req, res) => {
 // Express's res.download()/sendFile() — that's what lets the dashboard's
 // inline <video> player seek/scrub instead of only ever playing from the
 // start, as long as recordings.php forwards the Range header through.
-app.get('/recordings/:id/:filename', requireExistingRecording, (req, res) => {
+app.get('/recordings/:id/:filename', requireReadKey, requireExistingRecording, (req, res) => {
   res.download(req.recordingPath);
 });
 
@@ -1795,7 +1815,12 @@ app.use((err, req, res, next) => {
   return res.sendStatus(500);
 });
 
-const httpServer = app.listen(PORT, () => console.log(`Camera relay (HTTP) listening on :${PORT}`));
+const httpServer = app.listen(PORT, () => {
+  console.log(`Camera relay (HTTP) listening on :${PORT}`);
+  if (!CONTROL_KEY) {
+    relayLog('WARN', `controlKey is not set: live video, snapshots, recordings and the camera list can be read by anyone who can reach port ${PORT}, and recording on/off, deleting, record and the settings are disabled. Set controlKey in config.js (and relay_control_key in the dashboard's config.php).`);
+  }
+});
 // A person detector opens its uplink with an HTTP Upgrade (see the "Person detectors" section above).
 httpServer.on('upgrade', handleDetectorUpgrade);
 

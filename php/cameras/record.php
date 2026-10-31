@@ -35,7 +35,7 @@ $base = rtrim($camera['url'], '/') . '/record/' . rawurlencode($camera['id']);
 $unreachable = 'Could not reach relay for ' . $camera['name'];
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    relay_proxy_json($base, 'GET', 5, '', $unreachable);
+    relay_proxy_json($base, 'GET', 5, relay_read_headers($config), $unreachable);
     exit;
 }
 

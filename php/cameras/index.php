@@ -12,8 +12,9 @@ $cols  = CamLogic::computeGridColumns($count);
 // if it's down the page must still appear promptly (just without numbers;
 // the live status poll fills them in once it's reachable). See
 // CamLogic::collectRecordingCounts() for exactly what is asked of the relay.
-$recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $url): ?string {
-    [$body] = relay_fetch($url, 'GET', 2);
+$readHeaders = relay_read_headers($config);
+$recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $url) use ($readHeaders): ?string {
+    [$body] = relay_fetch($url, 'GET', 2, $readHeaders);
     return $body === false ? null : $body;
 });
 

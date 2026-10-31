@@ -48,7 +48,7 @@ if ($detectorId === null) {
 
 $streamUrl = rtrim($camera['url'], '/') . '/detector/' . rawurlencode($detectorId) . '/stream';
 // (no redirects: review F-08)
-$stream = @fopen($streamUrl, 'rb', false, stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10)]));
+$stream = @fopen($streamUrl, 'rb', false, stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10, relay_read_headers($config))]));
 if (!$stream) {
     $failure = CamLogic::detectorStreamFailure(null, '', (string) $camera['name'], CamLogic::transportReason(last_php_error()));
     detector_stream_fail($failure['status'], $failure['message'], $detectorId, last_php_error());

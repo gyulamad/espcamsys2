@@ -8,8 +8,8 @@
 //     the query string — and a refused request changes nothing (settings, clips, seen flags, recordings);
 //   - with the control key they work, and who did it (X-Actor) is logged;
 //   - with NO controlKey configured they answer 503 (closed, not open), even to an empty key;
-//   - what stays open stays open: GET /settings, GET /status, GET /record/:id, GET /recordings/..., and
-//     POST /alarm/:id and /alarm/all (the camera boards' keyless HTTP fallback cannot send a key);
+//   - POST /alarm/:id and /alarm/all stay open (the camera boards' keyless HTTP fallback cannot send a key);
+//     reads need the key too, see test_relay_read_auth_e2e.js;
 //   - refusals are logged, and neither key ever appears in the log.
 //
 // Independent client (no require() of lib/ or server.js), own ports, throwaway log/settings/switch files in a
@@ -101,9 +101,12 @@ function stopRelay(relay) {
 }
 
 // An HTTP request returning status, headers, the raw body, and the body parsed as JSON when it is.
+// What reads the cameras' pictures, recordings and status needs the control key (review R-08); added here for those
+// GETs alone, unless the test sends its own X-Control-Key.
+const isRead = (method, p) => method === 'GET' && /^\/(stream\/|snapshot\/|status|settings|detectors|detector\/[^/]+\/stream|record\/|recording\/state|recordings\/)/.test(p);
 function request(method, urlPath, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const h = Object.assign({}, headers);
+    const h = Object.assign({}, isRead(method, urlPath) ? { 'X-Control-Key': CONTROL_KEY } : {}, headers);
     if (body !== undefined) h['Content-Length'] = body.length;
     const req = nodeHttp.request(`http://127.0.0.1:${PORT}${urlPath}`, { method, headers: h }, (res) => {
       const chunks = [];
@@ -207,15 +210,16 @@ const settingsOf = async () => (await get('/settings')).json;
     const log1 = readFile(logFile);
     check('...and neither the control key, the camera key nor the wrong key ever appears in the log', !log1.includes(CONTROL_KEY) && !log1.includes(CAM_KEY) && !log1.includes(WRONG_KEY));
 
-    // ── 3. what stays open stays open ─────────────────────────────────
+    // ── 3. what stays open: only what the camera boards need ──────────
+    // (Reads need the control key as well since review R-08 — tests/e2e/test_relay_read_auth_e2e.js; here they carry it.)
     r = await get('/settings');
-    check('GET /settings is still open (200)', r.status === 200 && r.json && r.json.alarmRecordSeconds === 60, `got ${r.status}`);
-    check('GET /status is still open (200)', (await get('/status')).status === 200);
-    check('GET /record/<id> is still open (200)', (await get(`/record/${CAM}`)).status === 200);
+    check('GET /settings, with the key, answers (200)', r.status === 200 && r.json && r.json.alarmRecordSeconds === 60, `got ${r.status}`);
+    check('GET /status, with the key, answers (200)', (await get('/status')).status === 200);
+    check('GET /record/<id>, with the key, answers (200)', (await get(`/record/${CAM}`)).status === 200);
     r = await get(`/recordings/${CAM}`);
-    check('GET /recordings/<id> is still open (200)', r.status === 200 && r.json.length === 2, `got ${r.status}`);
+    check('GET /recordings/<id>, with the key, answers (200)', r.status === 200 && r.json.length === 2, `got ${r.status}`);
     r = await get(`/recordings/${CAM}/clip1.mp4`);
-    check('downloading a clip is still open (200)', r.status === 200 && r.text === 'clip clip1.mp4', `got ${r.status}`);
+    check('downloading a clip, with the key, works (200)', r.status === 200 && r.text === 'clip clip1.mp4', `got ${r.status}`);
     r = await post(`/alarm/${CAM}`);
     check('POST /alarm/<id> is still open: the boards\' HTTP fallback sends no key (200)', r.status === 200, `got ${r.status} ${r.text.slice(0, 80)}`);
     r = await post('/alarm/all');

@@ -241,6 +241,34 @@ async function main() {
     check('(control) a manual recording still caps at 3600 seconds', r.status === 400);
 
     // ── F-20: the relay is unreachable: the browser is not told where it lives ──
+    // ── R-08: every READ the dashboard makes from the relay carries the control key ──
+    // The relay answers live video, pictures, recordings, the lists and the status only to a caller that holds the
+    // key, so each page that reads from it has to send it — and send nothing else along (no other secret).
+    mode = {};
+    const reads = [
+      ['stream.php?cam=cam-a', '/stream/cam-a'],
+      ['detector-stream.php?cam=cam-a', '/detector/det-a/stream'],
+      ['status.php', '/status'],
+      ['settings.php', '/settings'],
+      ['detector-status.php', '/detectors'],
+      ['record.php?cam=cam-a', '/record/cam-a'],
+      ['recordings.php?cam=cam-a', '/recordings/cam-a'],
+      [`recordings.php?cam=cam-a&play=${FILE}`, `/recordings/cam-a/${FILE}`],
+      [`recordings.php?cam=cam-a&download=${FILE}`, `/recordings/cam-a/${FILE}`],
+    ];
+    for (const [page, relayPath] of reads) {
+      const n = relayCalls();
+      r = await dash('GET', page);
+      const calls = seen.slice(n).filter((c) => c.url.split('?')[0] === relayPath);
+      check(`${page} reads ${relayPath} from the relay WITH the control key`, calls.length >= 1 && calls.every((c) => c.headers['x-control-key'] === KEY), `status=${r.status} saw ${JSON.stringify(seen.slice(n).map((c) => [c.url, c.headers['x-control-key'] ? 'key' : 'NO KEY']))}`);
+    }
+    const nIdx = relayCalls();
+    r = await dash('GET', 'index.php');
+    const idxCalls = seen.slice(nIdx);
+    check('the dashboard page itself asks for each camera\'s recording count WITH the control key', r.status === 200 && idxCalls.length >= 1 && idxCalls.every((c) => c.headers['x-control-key'] === KEY), `status=${r.status} saw ${JSON.stringify(idxCalls.map((c) => [c.url, c.headers['x-control-key'] ? 'key' : 'NO KEY']))}`);
+    r = await dash('GET', `recordings.php?cam=cam-a&play=${FILE}`, { Range: 'bytes=0-3' });
+    check('a ranged play still carries the key AND passes the range on, together', lastSeen().headers['x-control-key'] === KEY && lastSeen().headers.range === 'bytes=0-3', JSON.stringify(lastSeen().headers));
+
     await new Promise((resolve) => relay.close(resolve));   // port closed: "connection refused"
     // log_throttled() writes the same line only once per 5 minutes, using marker files in PHP's temp folder (phpTmp,
     // private to this run). The refusals above already logged under the same key, so clear the markers: the line we

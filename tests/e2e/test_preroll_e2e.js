@@ -261,7 +261,7 @@ class FakeCamera {
 function openViewer(id) {
   const v = { frames: 0, bad: 0, req: null };
   let buf = Buffer.alloc(0);
-  v.req = nodeHttp.get(`${BASE}/stream/${id}`, (res) => {
+  v.req = nodeHttp.get(`${BASE}/stream/${id}`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
     res.on('data', (d) => {
       buf = Buffer.concat([buf, d]);
       for (;;) {

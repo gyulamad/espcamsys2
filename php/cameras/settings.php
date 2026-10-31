@@ -33,4 +33,4 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     header('Allow: GET');
     json_fail(405, 'Read-only. Change settings with system-settings.php');
 }
-relay_proxy_json($relayUrl);
+relay_proxy_json($relayUrl, 'GET', 5, relay_read_headers($config));

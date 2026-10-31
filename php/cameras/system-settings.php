@@ -200,7 +200,7 @@ if ($restartRequired) {
         $newBase = rtrim((string) $newConfig['relay_url'], '/');
         sleep(1);
         for ($i = 0; $i < 20; $i++) {
-            [$up, $upResp] = relay_fetch($newBase . '/status', 'GET', 2);
+            [$up, $upResp] = relay_fetch($newBase . '/status', 'GET', 2, relay_read_headers($newConfig));
             if ($up !== false && (CamLogic::extractStatusCode($upResp) ?? 0) === 200) {
                 $restart = 'done';
                 break;

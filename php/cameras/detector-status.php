@@ -25,7 +25,7 @@ if (empty($paired)) {
     exit;
 }
 
-[$body, $responseHeaders] = relay_fetch(rtrim($cameras[0]['url'], '/') . '/detectors', 'GET', 3);
+[$body, $responseHeaders] = relay_fetch(rtrim($cameras[0]['url'], '/') . '/detectors', 'GET', 3, relay_read_headers($config));
 if ($body === false) {
     log_throttled('detector-status:unreachable', 'detector-status.php: could not reach the relay for GET /detectors (' . (last_php_error() ?: 'no reason given') . ')');
     json_fail(502, 'The dashboard cannot reach the relay (the web server\'s error log has the reason)');

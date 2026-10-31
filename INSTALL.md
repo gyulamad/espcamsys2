@@ -309,7 +309,7 @@ Things worth knowing:
    You should see `Camera relay (HTTP) listening on :8080` and `Camera relay (raw push) listening on :8081`. Leave it running and check that a camera shows up:
 
    ```
-   curl http://localhost:8080/status
+   curl -H "X-Control-Key: YOUR_CONTROL_KEY" http://localhost:8080/status
    ```
 
 5. Once a camera is pushing frames, stop the test run (Ctrl+C) and set it up as a systemd service so it survives reboots:
@@ -336,7 +336,7 @@ Things worth knowing:
    sudo systemctl status camrelay
    ```
 
-6. **Important:** the relay's `/stream`, `/snapshot`, `/status`, `/record`, `/alarm`, and `/settings` routes have no auth of their own — only `/upload` (the camera's push endpoint) is key-protected. Make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
+6. **Important:** every route of the relay needs a key except `POST /alarm/...` (see the notes under "Switching recording ON / OFF" below): the cameras' routes (`/upload`, `/log`, the push port, settings and firmware) need the camera key, and everything the dashboard does — watching (`/stream`, `/snapshot`, `/status`, `/recordings`, ...) as well as changing things — needs the control key, which is why **setting `controlKey` in the relay's `config.js` (and the same value as `relay_control_key` in the dashboard's `config.php`) is part of the installation, not an extra**. Still make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
 
 ---
 
@@ -440,7 +440,7 @@ Things worth knowing:
 ## 6. Verify end-to-end
 
 - [ ] Each camera's serial monitor shows `Connected, IP: ...` and no repeated `Push failed` errors
-- [ ] `curl http://localhost:8080/status` on the Pi shows a recent `lastSeen` for every camera
+- [ ] `curl -H "X-Control-Key: YOUR_CONTROL_KEY" http://localhost:8080/status` on the Pi shows a recent `lastSeen` for every camera
 - [ ] `http://127.0.0.1:80/` on the Pi (with `-u user:pass`) shows all cameras live
 - [ ] Starting a recording from the dashboard (or `POST /record/:id?seconds=10`) produces a playable `.mp4` under the relay's `recordings/` folder — if it doesn't, check `ffmpeg` is installed and on `$PATH`
 - [ ] The `.onion` address, opened in Tor Browser, prompts for Basic Auth and then shows all cameras live
@@ -670,7 +670,7 @@ curl -X POST -H "X-Control-Key: <key>"  http://localhost:8080/recording/all/on
 curl http://localhost:8080/recording/state          # who is OFF (no key needed to read)
 ```
 
-Notes: **the same control key now also protects everything that changes things from the dashboard**: saving the alarm length (`POST /settings`), the RECORD / STOP buttons (`POST /record/...`), and deleting or marking recordings (`DELETE /recordings/...`, `POST /recordings/.../seen`). The dashboard already sends it on those calls, so with `relay_control_key` / `controlKey` set as above nothing changes for you. **Without `controlKey` in the relay's `config.js` those actions are refused (503), never left open** — if RECORD or DELETE suddenly stops working after an update, that is the first thing to check; direct calls need `-H "X-Control-Key: <key>"` like the examples above. What stays open (no key): everything that only *reads* (`GET /status`, `/settings`, `/record/<id>`, `/recordings/...`, `/snapshot`, `/stream`), and `POST /alarm/<id>` / `POST /alarm/all`, which a camera board falls back to over plain HTTP when its in-band alarm can't be sent — the firmware has no key for that call, so it cannot be protected without reflashing the boards. An alarm can only start a recording; it can't delete or reconfigure anything. Reading is still open, so keep the relay's port 8080 on a trusted network (firewall it to the dashboard and the cameras).
+Notes: **the same control key now also protects everything that changes things from the dashboard**: saving the alarm length (`POST /settings`), the RECORD / STOP buttons (`POST /record/...`), and deleting or marking recordings (`DELETE /recordings/...`, `POST /recordings/.../seen`). The dashboard already sends it on those calls, so with `relay_control_key` / `controlKey` set as above nothing changes for you. **Without `controlKey` in the relay's `config.js` those actions are refused (503), never left open** — if RECORD or DELETE suddenly stops working after an update, that is the first thing to check; direct calls need `-H "X-Control-Key: <key>"` like the examples above. **Watching needs the control key too.** Live video, snapshots, recordings, `GET /status`, `/settings`, `/record/<id>`, `/detectors` and `/recording/state` answer **401** without it — before this, anyone who could reach port 8080 could watch the cameras and download the recordings. The dashboard already sends the key on every one of these calls (and the browser never talks to the relay directly), so nothing changes for you once `controlKey` / `relay_control_key` are set. **One deliberate difference from the routes that change things:** with *no* `controlKey` at all the relay lets reads through instead of refusing them (there is nothing to check against, and a dashboard that goes blank after an update is no help to anyone); it says so in its log at every start (`controlKey is not set: live video, snapshots, recordings ... can be read by anyone ...`) — treat that line as an error to fix. What stays open (no key): only `POST /alarm/<id>` / `POST /alarm/all`, which a camera board falls back to over plain HTTP when its in-band alarm can't be sent — the firmware has no key for that call, so it cannot be protected without reflashing the boards. An alarm can only start a recording; it can't delete or reconfigure anything. Even so, keep the relay's port 8080 on a trusted network (firewall it to the dashboard and the cameras).
 
 **Guessing a key is slowed down, then stopped.** After 10 wrong keys from one address within a minute, the relay refuses that address for 60 seconds — HTTP **429** with a `Retry-After` header (a camera's push connection is simply dropped) — and every further lock doubles in length, up to 15 minutes. While an address is locked out even the *right* key is refused, and the log gets one `LOCKED OUT` line. The camera key and the control key are counted separately, so a camera with an old key cannot lock the dashboard out; a request with *no* key at all is not counted. If you see 429 after changing a key, fix the key and wait out the `Retry-After` (or restart the relay, which forgets all locks). The numbers can be changed with the environment variables `AUTH_MAX_FAILURES`, `AUTH_LOCK_SECONDS` and `AUTH_LOCK_MAX_SECONDS`.
 
@@ -750,7 +750,7 @@ Notes: the **recorder** and the **person detector** (`ESP32_CAM_TFLite_Person`) 
 
 Start with the log (`tail -n 200 nodejs/camera-relay/logs/camera.log`) — it usually answers the question directly.
 
-1. **Is the relay actually running the new code?** `curl -s http://<relay>:8080/status` — every camera should have a `preRoll` entry, and the log starts each run with `relay started (pid …)`. If not, the relay process was never restarted after the files were copied.
+1. **Is the relay actually running the new code?** `curl -s -H "X-Control-Key: YOUR_CONTROL_KEY" http://<relay>:8080/status` — every camera should have a `preRoll` entry, and the log starts each run with `relay started (pid …)`. If not, the relay process was never restarted after the files were copied.
 2. **Did the alarm reach the relay?** Look for `alarm received (in-band)` followed by `recording started (…)` (or `recording extended`) for that camera. If a recording could not start you will instead see `error handling a alarm from the push connection …` with a stack trace and the reason (full disk, folder permissions, …) — the relay itself keeps running and the camera keeps streaming; fix the reason and the next alarm works.
 3. **What did the camera do?** Its own entries show which route the alarm took: `alarm sent in-band on the push connection`, `relay hasn't announced in-band alarm support … using the HTTP request`, or `alarm: no push connection — using the HTTP request`. (On a camera with a serial monitor attached the same lines appear there.)
 4. **Did a camera drop or restart?** Look for `camera disconnected after …s (reason)` from the relay and, from the camera, `booted after an abnormal restart: …`. If the relay itself restarted there is a `relay started` line, and just before it either `relay stopping (SIGTERM)` (on purpose) or `FATAL: uncaught exception` with its stack trace.

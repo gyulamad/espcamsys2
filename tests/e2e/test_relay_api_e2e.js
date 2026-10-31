@@ -103,9 +103,11 @@ function stopRelay(relay) {
 }
 
 // An HTTP request returning status, headers, the raw body, and the body parsed as JSON when it is.
-// The routes only the dashboard uses need the control key (review R-03). Added here for those routes alone, so a
+// The routes only the dashboard uses need the control key (review R-03, and R-08 for the reads). Added here for those routes alone, so a
 // test that wants to be REFUSED sends its own headers ({ noKey: true } sends none).
-const needsDashboardKey = (method, p) => (method === 'POST' && /^\/(record\/|settings)/.test(p)) || ((method === 'DELETE' || method === 'POST') && /^\/recordings\//.test(p));
+const needsDashboardKey = (method, p) => (method === 'POST' && /^\/(record\/|settings)/.test(p)) || ((method === 'DELETE' || method === 'POST') && /^\/recordings\//.test(p))
+  // ...and, since review R-08, everything that READS what the cameras see
+  || (method === 'GET' && /^\/(stream\/|snapshot\/|status|settings|detectors|detector\/[^/]+\/stream|record\/|recording\/state|recordings\/)/.test(p));
 function request(method, urlPath, { headers = {}, body, noKey = false } = {}) {
   return new Promise((resolve, reject) => {
     const h = Object.assign({}, !noKey && needsDashboardKey(method, urlPath) ? { 'X-Control-Key': CONTROL_KEY } : {}, headers);

@@ -41,6 +41,14 @@ function relay_actor_headers(array $config, bool $withLength = true): string
     return $headers;
 }
 
+// Headers for a READ from the relay (live video, pictures, recordings, status): the relay answers these only
+// to a caller that holds the control key, once one is configured (review R-08). Empty when config.php has no key,
+// so an installation that has not set one yet keeps working, exactly as the relay lets it.
+function relay_read_headers(array $config): string
+{
+    return (string) ($config['relay_control_key'] ?? '') === '' ? '' : relay_actor_headers($config, false);
+}
+
 // One line in the web server's error log for a destructive action, so there is a trail of who did what.
 function audit_log(string $what): void
 {

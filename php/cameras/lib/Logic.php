@@ -779,9 +779,18 @@ class CamLogic
 
     // Did this look like the relay's /status? (200 and a JSON object or list — an empty relay answers {}.)
     // The settings page asks before saving a new relay address; a web server that merely answers is not enough.
+    // A relay that wants the control key (401, with its own error text) is a relay too: the probe carries no
+    // key on purpose (see system-settings.php), so a protected relay answers it exactly like that.
     public static function isRelayStatusAnswer($body, ?int $status): bool
     {
-        return is_string($body) && $status === 200 && is_array(json_decode($body, true));
+        if (!is_string($body)) {
+            return false;
+        }
+        $json = json_decode($body, true);
+        if ($status === 200) {
+            return is_array($json);
+        }
+        return $status === 401 && is_array($json) && is_string($json['error'] ?? null) && $json['error'] === 'missing or wrong control key';
     }
 
     // The same address with another port (the relay's port changed, and the dashboard

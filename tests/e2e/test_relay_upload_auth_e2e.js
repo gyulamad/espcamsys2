@@ -97,9 +97,12 @@ function stopRelay(relay) {
 }
 
 // An HTTP request returning status, headers, the raw body, and the body parsed as JSON when it is.
+// What reads the cameras' pictures, recordings and status needs the control key (review R-08); added here for those
+// GETs alone, unless the test sends its own X-Control-Key.
+const isRead = (method, p) => method === 'GET' && /^\/(stream\/|snapshot\/|status|settings|detectors|detector\/[^/]+\/stream|record\/|recording\/state|recordings\/)/.test(p);
 function request(method, urlPath, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const h = Object.assign({}, headers);
+    const h = Object.assign({}, isRead(method, urlPath) ? { 'X-Control-Key': CONTROL_KEY } : {}, headers);
     if (body !== undefined) h['Content-Length'] = body.length;
     const req = nodeHttp.request(`http://127.0.0.1:${PORT}${urlPath}`, { method, headers: h }, (res) => {
       const chunks = [];

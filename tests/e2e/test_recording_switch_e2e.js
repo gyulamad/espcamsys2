@@ -121,7 +121,8 @@ function request(method, urlPath, { headers = {} } = {}) {
     req.end();
   });
 }
-const get = (p) => request('GET', p);
+// Reads need the control key too (review R-08); with no controlKey configured the relay lets them through, key or not.
+const get = (p) => request('GET', p, { headers: { 'X-Control-Key': CONTROL_KEY } });
 // /record/... is dashboard-only and needs the control key (review R-03); everything else here is sent as it is.
 const post = (p) => (p.startsWith('/record/') ? request('POST', p, { headers: { 'X-Control-Key': CONTROL_KEY } }) : request('POST', p));
 const ctl = (p, extra) => request('POST', p, { headers: Object.assign({ 'X-Control-Key': CONTROL_KEY }, extra) });
@@ -183,7 +184,7 @@ async function main() {
     // ── 1. reading is open, changing needs the key ──────────────────
     relay = await startRelay(Object.assign({ CONTROL_KEY }, files));
     let r = await get('/recording/state');
-    check('GET /recording/state needs no key and starts empty', r.status === 200 && JSON.stringify(r.json.off) === '{}' && r.json.controlEnabled === true && r.json.defaultMinutes === 60, JSON.stringify(r));
+    check('GET /recording/state starts empty', r.status === 200 && JSON.stringify(r.json.off) === '{}' && r.json.controlEnabled === true && r.json.defaultMinutes === 60, JSON.stringify(r));
 
     await startCam(A); await startCam(B); await startCam(C); await startCam(D);
     await sleep(300);

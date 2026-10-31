@@ -977,6 +977,26 @@ camtest_test('isRelayStatusAnswer wants 200 and a JSON object/list, nothing else
     }
 });
 
+camtest_test('isRelayStatusAnswer: a relay that asks for the control key (401 with its own text) is a relay too', function () {
+    camtest_assert_true(CamLogic::isRelayStatusAnswer('{"error":"missing or wrong control key"}', 401), 'the answer of a protected relay to a probe without a key');
+    // ...but only that exact answer: any other 401, another JSON, another status, another text is not the relay
+    foreach ([
+        ['{"error":"Unauthorized"}', 401],
+        ['{"error":"missing or wrong control key"}', 403],
+        ['{"error":"missing or wrong control key"}', 200 + 1],
+        ['{"error":"missing or wrong control key"}', 500],
+        ['{"message":"missing or wrong control key"}', 401],
+        ['{"error":["missing or wrong control key"]}', 401],
+        ['missing or wrong control key', 401],
+        ['<html>401</html>', 401],
+        ['', 401],
+        [false, 401],
+        [null, 401],
+    ] as [$b, $s]) {
+        camtest_assert_true(!CamLogic::isRelayStatusAnswer($b, $s), var_export($b, true) . ' ' . var_export($s, true));
+    }
+});
+
 // ── F-05: nothing from the relay or config.php may become markup ─────
 
 camtest_test('sanitizeRecordingList keeps clean names and drops everything else', function () {
