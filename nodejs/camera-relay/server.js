@@ -184,8 +184,6 @@ app.param('id', (req, res, next, id) => {
   return next();
 });
 
-// Raw binary body for camera uploads (JPEG bytes, not JSON/form)
-app.use('/upload/:id', express.raw({ type: '*/*', limit: '2mb' }));
 
 const cameras = Object.create(null); // id -> { frame, emitter, lastSeen, socket, ip, recording, preRoll, lastRecordedUntil }
 const MAX_CAMERAS = 64; // a wrong or hostile id must not grow memory without bound (same idea as MAX_DETECTORS)
@@ -537,8 +535,23 @@ function encodeRecording(rec) {
 }
 
 // Camera pushes a frame here
-app.post('/upload/:id', (req, res) => {
-  if (req.query.key !== API_KEY) return res.sendStatus(403);
+// The camera key is checked BEFORE the body is read, like every other keyed route (/log, /ota, /device-settings):
+// an unauthenticated client must not make the relay buffer and parse a request (review R-05/R-06), and a wrong
+// key must be a 403 in the log's WARN line, not a 500 with a stack trace. Constant-time compare; the key may come
+// as ?key= (what the legacy sketches send) or as X-Api-Key. 'Connection: close' so the unread body is dropped.
+function requireCameraKeyForUpload(req, res, next) {
+  if (auth.safeEqual(auth.extractKey(req), API_KEY)) return next();
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = authFailThrottle.check(`upload:${ip}`, Date.now());
+  if (t.allow) relayLog('WARN', `rejected a POST /upload from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
+  res.set('Connection', 'close');
+  return res.sendStatus(403);
+}
+
+// Raw binary body (JPEG bytes, not JSON/form), read only after the key is accepted.
+app.post('/upload/:id', requireCameraKeyForUpload, express.raw({ type: '*/*', limit: '2mb' }), (req, res) => {
+  // No body (or no usable one) is not a picture: refuse it rather than store `undefined` as the camera's frame.
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'the request body must be the JPEG frame' });
   ingestFrame(getCamera(req.params.id), req.body); // pre-roll buffer, latest frame, live viewers and any active recording
   res.sendStatus(200);
 });
@@ -1514,6 +1527,14 @@ app.get('/ota/:type/firmware.bin', requireCameraKeyForOta, (req, res) => {
 app.use('/ota', (err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 3 MB)' });
+  return next(err);
+});
+
+// An oversized or unreadable upload from a camera with the right key gets a clear answer, not Express's HTML
+// error page and an ERROR stack trace in the log.
+app.use('/upload', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request too large (limit 2 MB)' });
   return next(err);
 });
 

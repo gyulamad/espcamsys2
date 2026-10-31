@@ -444,6 +444,10 @@ fi
 #     refused request changes nothing; works with the key, and who did it is logged; answers 503 (closed,
 #     not open) when no controlKey is configured; reads and POST /alarm stay open; no key in the log.
 #     Override the ports with E2E_DASHAUTH_PORT / E2E_DASHAUTH_PUSH_PORT.
+#   - tests/e2e/test_relay_upload_auth_e2e.js: POST /upload/:id checks the camera key BEFORE it reads the
+#     body: a 3 MB body with a wrong or missing key is a 403 with one WARN line (no 500, no stack trace);
+#     with the key a picture is stored, an oversized body is a 413 and an empty one a 400; only POST is
+#     an upload. Override the ports with E2E_UPLOAD_PORT / E2E_UPLOAD_PUSH_PORT.
 # With --coverage, the relay processes these tests start also record V8
 # coverage (NODE_V8_COVERAGE is inherited by the relay they spawn; the relay
 # writes it when the test stops it), which is how server.js — the relay itself —
@@ -714,6 +718,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_api_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (HTTP upload checks the key before reading the body) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_upload_auth_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
