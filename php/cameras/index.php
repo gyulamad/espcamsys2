@@ -633,14 +633,20 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     return [...document.querySelectorAll('.cam-card')].map(el => el.id.replace('card-', ''));
   }
 
+  // True while the live pictures are closed on purpose to make room for footage (see "Making room for footage").
+  // Declared up here because the early-event replay below runs before the rest of the script.
+  let streamsPaused = false;
+
   // ── Stream state callbacks ──
   function onStreamLoad(id) {
+    if (streamsPaused) return;   // the picture was stopped on purpose (see "Making room for footage")
     clearStreamWatchdog(id);
     setStatus(id, 'live', 'LIVE');
     hideOverlay(id);
   }
 
   function onStreamError(id) {
+    if (streamsPaused) return;
     clearStreamWatchdog(id);
     setStatus(id, 'error', 'ERROR');
     showOverlay(id, '✕', 'STREAM ERROR', true);
@@ -707,8 +713,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function reloadStream(id) {
     const img  = document.getElementById('img-' + id);
 
-    // Only reload if not hidden
-    if (img.dataset.hidden === '1') return;
+    // Only reload if not hidden, and not while the pictures are paused to make room for footage
+    if (img.dataset.hidden === '1' || streamsPaused) return;
 
     setStatus(id, 'connecting', 'CONNECTING');
     const overlay = document.getElementById('overlay-' + id);
@@ -763,16 +769,107 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     } else {
       // Hide — stop the stream by clearing src
       img.dataset.hidden = '1';
-      clearStreamWatchdog(id);
-      img.src = '';
-      const di = document.getElementById('detimg-' + id);
-      if (di) di.src = '';
+      stopPictures(id);
       btn.textContent = '▶ SHOW';
       btn.classList.add('danger');
       setStatus(id, 'hidden', 'HIDDEN');
       showOverlay(id, '◼', 'FEED PAUSED', false);
       document.getElementById('overlay-' + id).append(
         h('button', { className: 'cam-btn', textContent: '▶ RESTORE', onclick: () => toggleHide(id) }));
+    }
+  }
+
+  // Closes the live connections of one camera: its picture and its detector's picture.
+  function stopPictures(id) {
+    clearStreamWatchdog(id);
+    document.getElementById('img-' + id).src = '';
+    const di = document.getElementById('detimg-' + id);
+    if (di) di.src = '';
+  }
+
+  // Opens them again (cameras the user pressed HIDE on stay closed: both functions skip them).
+  function restartAllPictures() {
+    for (const id of getAllCameraIds()) {
+      reloadStream(id);
+      if (document.getElementById('detimg-' + id)) reconnectDetectorImg(id);
+    }
+  }
+
+  // ── Making room for footage ──
+  // Every live picture is a connection that never ends, and a browser allows only about 6 at a time to
+  // one address (Brave and Chrome; Firefox copes better). A dashboard with 4 cameras and a detector has
+  // 5 of them open, so the file list, a clip that is playing (it needs two connections to seek), a
+  // download or a delete waits in the browser's queue and never starts: the list stays empty and the video
+  // loads forever. So while the user is waiting for footage, ALL live pictures are closed, and they come
+  // back when nothing needs the room any more. Requests nest (a list load while a clip plays): the pictures
+  // return only when the last one is done. Pressing the browser's stop button used to be the only cure.
+  // <stream-pause>
+  function createStreamPauser(pauseAll, resumeAll) {
+    let holds = 0;
+    return {
+      // Asks for room. Returns the function that gives it back (safe to call more than once).
+      acquire() {
+        holds += 1;
+        if (holds === 1) pauseAll();
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          holds -= 1;
+          if (holds === 0) resumeAll();
+        };
+      },
+    };
+  }
+  // </stream-pause>
+
+  const streamPauser = createStreamPauser(pauseLiveStreams, resumeLiveStreams);
+
+  function pauseLiveStreams() {
+    streamsPaused = true;
+    for (const id of getAllCameraIds()) {
+      if (document.getElementById('img-' + id).dataset.hidden === '1') continue;   // already closed by the user
+      stopPictures(id);
+      setStatus(id, 'hidden', 'PAUSED');
+      showOverlay(id, '◼', 'LIVE VIEW PAUSED WHILE FOOTAGE LOADS', false);
+    }
+  }
+
+  function resumeLiveStreams() {
+    streamsPaused = false;
+    restartAllPictures();
+  }
+
+  // Runs one request for footage with the live pictures closed.
+  async function withLiveViewPaused(request) {
+    const release = streamPauser.acquire();
+    try {
+      return await request();
+    } finally {
+      release();
+    }
+  }
+
+  // A download is handed to the browser, which tells the page nothing about it: give its request
+  // time to get started (it keeps its connection afterwards), then let the pictures come back.
+  const DOWNLOAD_START_MS = 5000;
+  function holdLiveViewPausedWhileDownloadStarts() {
+    const release = streamPauser.acquire();
+    setTimeout(release, DOWNLOAD_START_MS);
+  }
+
+  // A clip being played holds the room until it is closed or has played to its end (and is also let go
+  // when the list is drawn again, which removes the player).
+  let playerRelease = null;
+  function updatePlayerHold() {
+    const playing = Array.from(document.querySelectorAll('.files-player video')).some(video => !video.ended);
+    if (playing && !playerRelease) {
+      playerRelease = streamPauser.acquire();
+      return;
+    }
+    if (!playing && playerRelease) {
+      playerRelease();
+      playerRelease = null;
     }
   }
 
@@ -1057,7 +1154,14 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   async function toggleRecordingsPanel(id) {
     const panel = document.getElementById('files-' + id);
     const open = panel.classList.toggle('open');
-    if (open) await refreshRecordingsList(id);
+    if (!open) return;
+    await withLiveViewPaused(() => refreshRecordingsList(id));
+  }
+
+  // Draws the list panel (which also removes any player in it, so the hold for a playing clip is re-checked).
+  function setPanelContent(panel, ...nodes) {
+    panel.replaceChildren(...nodes);
+    updatePlayerHold();
   }
 
   async function refreshRecordingsList(id) {
@@ -1068,7 +1172,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       const files = await res.json();
       if (Array.isArray(files)) setFilesCount(id, files.length); // keep the button in step with what the list shows
       if (!Array.isArray(files) || files.length === 0) {
-        panel.replaceChildren(h('div', { className: 'files-empty', textContent: 'No recordings yet.' }));
+        setPanelContent(panel, h('div', { className: 'files-empty', textContent: 'No recordings yet.' }));
         return;
       }
       // Keep whatever was ticked across a re-render (the list refreshes itself when a recording finishes).
@@ -1086,7 +1190,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
           h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => { markRecordingSeen(id, f.filename); togglePlayRecording(id, f.filename); } }),
-          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}`, onclick: () => markRecordingSeen(id, f.filename) }),
+          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}`, onclick: () => { holdLiveViewPausedWhileDownloadStarts(); markRecordingSeen(id, f.filename); } }),
           h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteRecording(id, f.filename) })),
         h('div', { className: 'files-player', id: `player-${id}-${f.filename}` }),
       ]);
@@ -1095,10 +1199,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         h('button', { className: 'cam-btn', id: `files-sel-seen-${id}`, textContent: '☑ SELECT ALL SEEN', onclick: () => toggleSelectAll(id, true) }),
         h('button', { className: 'cam-btn', id: `files-dl-selected-${id}`, disabled: true, textContent: '⬇ DOWNLOAD SELECTED (0)', onclick: () => downloadSelectedRecordings(id) }),
         h('button', { className: 'cam-btn danger', id: `files-del-selected-${id}`, disabled: true, textContent: '🗑 DELETE SELECTED (0)', onclick: () => deleteSelectedRecordings(id) }));
-      panel.replaceChildren(header, ...rows, footer);
+      setPanelContent(panel, header, ...rows, footer);
       updateSelectionUI(id);
     } catch (e) {
-      panel.replaceChildren(h('div', { className: 'files-empty', textContent: 'Could not load recordings.' }));
+      setPanelContent(panel, h('div', { className: 'files-empty', textContent: 'Could not load recordings.' }));
     }
   }
 
@@ -1168,11 +1272,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (container.dataset.open === '1') {
       container.replaceChildren(); // also stops playback — removing the <video> drops its media element
       container.dataset.open = '0';
+      updatePlayerHold();
       return;
     }
     const src = `recordings.php?cam=${encodeURIComponent(id)}&play=${encodeURIComponent(filename)}`;
-    container.replaceChildren(h('video', { controls: true, autoplay: true, src }));
+    container.replaceChildren(h('video', { controls: true, autoplay: true, src, onended: updatePlayerHold }));
     container.dataset.open = '1';
+    updatePlayerHold();
   }
 
   // POSTs a delete request to recordings.php and refreshes the camera's list.
@@ -1187,8 +1293,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   async function postRecordingsDelete(id, query, failureText) {
     try {
-      await recordingsPost(id, query);
-      await refreshRecordingsList(id);
+      await withLiveViewPaused(async () => {
+        await recordingsPost(id, query);
+        await refreshRecordingsList(id);
+      });
     } catch (e) {
       alert(`${failureText}: ${e.message}`);
     }
@@ -1211,11 +1319,14 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const names = selectedRecordings(id);
     if (names.length === 0) return;
     if (!confirm(`Delete ${names.length} selected recording${names.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
-    const results = await Promise.allSettled(
-      names.map(name => recordingsPost(id, `delete=${encodeURIComponent(name)}`))
-    );
+    const results = await withLiveViewPaused(async () => {
+      const settled = await Promise.allSettled(
+        names.map(name => recordingsPost(id, `delete=${encodeURIComponent(name)}`))
+      );
+      await refreshRecordingsList(id);
+      return settled;
+    });
     const failed = results.filter(r => r.status === 'rejected');
-    await refreshRecordingsList(id);
     if (failed.length > 0) {
       alert(`Could not delete ${failed.length} of ${names.length} recordings: ${failed[0].reason.message}`);
     }
@@ -1227,6 +1338,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // Each clip counts as seen, same as the GET button.
   async function downloadSelectedRecordings(id) {
     const names = selectedRecordings(id);
+    if (names.length > 0) holdLiveViewPausedWhileDownloadStarts();
     for (let i = 0; i < names.length; i++) {
       const link = document.createElement('a');
       link.href = `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(names[i])}`;
@@ -1246,12 +1358,14 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const btn = document.getElementById('btn-delete-all');
     btn.disabled = true;
     try {
-      await Promise.all(getAllCameraIds().map(id =>
-        fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } }).catch(() => null)
-      ));
-      // Refresh any panels currently open so deleted files disappear immediately.
-      await Promise.all(getAllCameraIds().map(refreshRecordingsList));
-      await pollAllStatuses(); // update the FILES counts of cameras whose list panel is closed right away
+      await withLiveViewPaused(async () => {
+        await Promise.all(getAllCameraIds().map(id =>
+          fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } }).catch(() => null)
+        ));
+        // Refresh any panels currently open so deleted files disappear immediately.
+        await Promise.all(getAllCameraIds().map(refreshRecordingsList));
+        await pollAllStatuses(); // update the FILES counts of cameras whose list panel is closed right away
+      });
     } finally {
       btn.disabled = false;
     }
@@ -1708,7 +1822,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     delete detImgTimers[id];
     const img = document.getElementById('detimg-' + id);
     const cam = document.getElementById('img-' + id);
-    if (!img || document.hidden || (cam && cam.dataset.hidden === '1')) return;
+    if (!img || document.hidden || streamsPaused || (cam && cam.dataset.hidden === '1')) return;
     img.dataset.failed = '';
     img.dataset.lastTry = String(Date.now());
     img.src = img.dataset.src + '&_=' + Date.now();
@@ -1719,6 +1833,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (img && img.dataset.failed === '1' && Date.now() - Number(img.dataset.lastTry || 0) > 2000) reconnectDetectorImg(id);
   }
   function onDetectorImgError(id) {
+    if (streamsPaused) return;
     const img = document.getElementById('detimg-' + id);
     if (img) img.dataset.failed = '1';
     clearTimeout(detImgTimers[id]);
@@ -1732,10 +1847,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   const RESUME_AFTER_HIDDEN_MS = 3000;   // shorter than this is a tab switch, not a lock: the streams are fine
   let hiddenSince = null;
   function resumeAfterHidden() {
-    for (const id of getAllCameraIds()) {
-      reloadStream(id);
-      if (document.getElementById('detimg-' + id)) reconnectDetectorImg(id);
-    }
+    restartAllPictures();
     pollAllStatuses();
     if (document.querySelector('.det-row')) pollDetectors();
   }
