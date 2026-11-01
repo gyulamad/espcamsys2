@@ -1392,4 +1392,53 @@ camtest_test('logoutRefusalStatus refuses a POST another website caused with 403
     camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'same-site']), 403);
 });
 
+// ── rebootMenu ───────────────────────────────────────────────────────
+
+camtest_test('rebootMenu (system): the four targets in the listed order, REBOOT ALL is the default', function () {
+    $menu = CamLogic::rebootMenu('system');
+    camtest_assert_equal(array_keys($menu['options']), ['nodejs', 'php', 'relay', 'all']);
+    camtest_assert_equal($menu['default'], 'all');
+    camtest_assert_equal($menu['mainLabel'], 'REBOOT ALL');
+    camtest_assert_equal($menu['options']['nodejs']['label'], 'REBOOT NODEJS ONLY');
+    camtest_assert_equal($menu['options']['php']['label'], 'REBOOT PHP ONLY');
+    camtest_assert_equal($menu['options']['relay']['label'], 'REBOOT RELAY (BOTH SERVERS)');
+    camtest_assert_equal($menu['options']['all']['label'], 'REBOOT and RESET ALL');
+});
+
+camtest_test('rebootMenu (camera): camera, detector, both — RESET (both) is the default', function () {
+    $menu = CamLogic::rebootMenu('camera');
+    camtest_assert_equal(array_keys($menu['options']), ['camera', 'detector', 'both']);
+    camtest_assert_equal($menu['default'], 'both');
+    camtest_assert_equal($menu['mainLabel'], 'RESET');
+    camtest_assert_equal($menu['options']['camera']['label'], 'RESET CAMERA');
+    camtest_assert_equal($menu['options']['detector']['label'], 'RESET DETECTOR');
+    camtest_assert_equal($menu['options']['both']['label'], 'RESET (BOTH)');
+});
+
+camtest_test('rebootMenu (camera): without a paired detector there is only the camera to reset', function () {
+    $menu = CamLogic::rebootMenu('camera', false);
+    camtest_assert_equal(array_keys($menu['options']), ['camera']);
+    camtest_assert_equal($menu['default'], 'camera');
+});
+
+camtest_test('rebootMenu: every menu names a default that exists, and every option asks before it acts', function () {
+    foreach ([['system', true], ['camera', true], ['camera', false]] as [$scope, $hasDetector]) {
+        $menu = CamLogic::rebootMenu($scope, $hasDetector);
+        camtest_assert_true(isset($menu['options'][$menu['default']]), "$scope: the default is one of the options");
+        foreach ($menu['options'] as $target => $option) {
+            camtest_assert_true($option['label'] !== '' && $option['confirm'] !== '', "$scope/$target has a label and a confirmation text");
+        }
+    }
+});
+
+camtest_test('rebootMenu: an unknown scope is a programming error, not a silent empty menu', function () {
+    $threw = false;
+    try {
+        CamLogic::rebootMenu('everything');
+    } catch (InvalidArgumentException $e) {
+        $threw = true;
+    }
+    camtest_assert_true($threw, 'InvalidArgumentException expected');
+});
+
 exit(camtest_summarize());
