@@ -32,7 +32,14 @@ class PreferencesStore : public esp32cam_settings::ISettingsStore {
   void clearAll() override { g_flash.clearAll(); }
 };
 static int g_restarts = 0;
-void restartBoard() { g_restarts++; }
+static int g_postsAtFirstRestart = -1;   // how many POSTs (reports) had been sent when the board first restarted
+void restartBoard() {
+  if (g_restarts == 0) {
+    g_postsAtFirstRestart = 0;
+    for (size_t i = 0; i < fake::g().methods.size(); i++) if (fake::g().methods[i] == "POST") g_postsAtFirstRestart++;
+  }
+  g_restarts++;
+}
 static std::string g_log;
 static void logCapture(const char* fmt, ...) {
   char buf[512]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
@@ -60,7 +67,15 @@ static void setUp() {
   for (size_t i = 0; i < c.pairs.size(); ++i) g_flash.set(c.pairs[i].key, c.pairs[i].value);
   g_cfg = PersonSettings();
   g_cfg.serverHost = "relay.lan"; g_cfg.httpPort = 8080; g_cfg.detectorId = "detector-1"; g_cfg.apiKey = "KEY123";
-  g_restarts = 0; g_log.clear();
+  g_restarts = 0; g_postsAtFirstRestart = -1; g_log.clear();
+}
+// The answers (POST .../report) the detector sent, as their bodies.
+static std::vector<std::string> reportsSent() {
+  std::vector<std::string> out;
+  for (size_t i = 0; i < fake::g().methods.size(); i++) {
+    if (fake::g().methods[i] == "POST" && fake::g().requests[i].find("/device-settings/detector/detector-1/report") != std::string::npos) out.push_back(fake::g().bodies[i]);
+  }
+  return out;
 }
 static void route(const std::string& part, int code, const std::string& body = "") {
   fake::Route r; r.part = part; r.code = code; r.body = body; fake::g().routes.push_back(r);
@@ -120,6 +135,31 @@ TEST(both_thresholds_changed_together_are_accepted) {
   TEST_ASSERT(g_restarts >= 1, "restarts");
 }
 
+TEST(a_reboot_from_the_dashboard_is_answered_then_logged_as_such_and_restarts_the_detector) {
+  setUp(); route("/change", 200, "900\n!reboot\n"); route("/report", 200);
+  std::map<std::string, std::string> flashBefore = g_flash.m;
+  runSeconds(60);
+  TEST_ASSERT(g_restarts >= 1, "the detector restarts");
+  TEST_ASSERT(g_flash.m == flashBefore, "no stored setting is touched");
+  std::vector<std::string> sent = reportsSent();
+  bool answered = false;
+  for (size_t i = 0; i < sent.size(); i++) if (sent[i].compare(0, 12, "900\napplied\n") == 0) answered = true;
+  TEST_ASSERT(answered, "the relay was told 'applied' for command 900");
+  TEST_ASSERT(g_postsAtFirstRestart >= 2, "...and that answer (after the boot report) went out BEFORE the restart");
+  TEST_ASSERT(g_log.find("restart requested from the dashboard") != std::string::npos, "the log says why it restarted");
+  TEST_ASSERT(g_log.find("settings changed") == std::string::npos, "...and does not claim settings changed");
+}
+
+TEST(a_reboot_whose_answer_does_not_get_through_does_not_restart_the_detector_until_it_does) {
+  // Otherwise: restart, ask again, find the same command still queued, restart again ... until it expires.
+  setUp(); route("/change", 200, "901\n!reboot\n"); route("/report", 500);
+  runSeconds(120);
+  TEST_ASSERT_EQ(g_restarts, 0, "the relay could not be told: no restart");
+  fake::g().routes.clear(); route("/change", 200, "901\n!reboot\n"); route("/report", 200);
+  runSeconds(60);
+  TEST_ASSERT(g_restarts >= 1, "once the answer gets through it restarts");
+}
+
 TEST(a_wifi_that_is_down_asks_nothing) {
   setUp(); fake::g().wifiUp = false; route("/change", 200, "784\nDARK_THRESH=55\n");
   runSeconds(120);
@@ -133,6 +173,8 @@ int main() {
   RUN_TEST(the_connection_settings_and_the_alarm_pin_are_refused_by_the_sketch_wiring);
   RUN_TEST(a_clear_threshold_above_the_detect_threshold_is_refused);
   RUN_TEST(both_thresholds_changed_together_are_accepted);
+  RUN_TEST(a_reboot_from_the_dashboard_is_answered_then_logged_as_such_and_restarts_the_detector);
+  RUN_TEST(a_reboot_whose_answer_does_not_get_through_does_not_restart_the_detector_until_it_does);
   RUN_TEST(a_wifi_that_is_down_asks_nothing);
   return test::summarize();
 }

@@ -108,6 +108,10 @@ class SettingsSync {
 #endif
   }
 
+  // true: the restart tick() asked for was requested by the dashboard (a command), not caused by new
+  // settings — so the log says so instead of listing no settings.
+  bool rebootRequested() const { return poller_.rebootRequested(); }
+
   // Names only, for the log (values can be passwords).
   std::string changedNames() const {
     std::string out;

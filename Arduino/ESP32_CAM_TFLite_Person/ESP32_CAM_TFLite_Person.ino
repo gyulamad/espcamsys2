@@ -768,7 +768,8 @@ void settingsSyncTick() {
     g_sync = new SettingsSync(esp32cam_settings::PERSON_SCHEMA, *g_syncStore, "detector", esp32cam_settings::personLockedKeys());
   }
   if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId)) {
-    RLOG_INFO("settings changed from the dashboard (%s) - restarting to apply them", g_sync->changedNames().c_str());
+    if (g_sync->rebootRequested()) RLOG_INFO("restart requested from the dashboard - restarting");
+    else RLOG_INFO("settings changed from the dashboard (%s) - restarting to apply them", g_sync->changedNames().c_str());
     restartBoard();
   }
 }

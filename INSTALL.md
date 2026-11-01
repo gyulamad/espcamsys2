@@ -607,6 +607,17 @@ A detector that is paired with a dashboard camera (`'detector' => 'detector-1'` 
 - **Needs:** the detector flashed with a firmware that includes `settings_sync.h` (it reports its settings to the relay when it boots; until then the page says it has not reported yet), `relay_control_key` in `config.php` (as for the recorder's settings page) and the relay's `controlKey`. A detector that has never reached the relay cannot be calibrated this way: use the serial console once.
 - After changing a `settings_schema.h`, run `tools/gen_device_schema.sh`; it now generates the dashboard's table for both sketches.
 
+
+## Resetting a detector from the browser
+
+Each camera that has a person detector paired to it has a reset menu on its card (**RESET** with an arrow). Choosing **RESET DETECTOR** hard-resets that camera's detector board (a full restart, which also releases its alarm pin). The other entries of that menu and the menu at the top of the page are not built yet and answer "not available yet".
+
+- **How it works:** the dashboard calls `POST reboot.php?target=detector&cam=<camera id>`, which asks the relay (`POST /device-settings/detector/<DETECTOR_ID>/reboot`, control key) to queue a reset. The detector's network task finds it on its next poll (up to about 30 seconds), tells the relay *applied* **first** and only then restarts, so a reset whose answer cannot get through is not carried out, and a board never restarts in a loop over one command.
+- **Expiry:** a queued reset that the board has not picked up within 10 minutes is dropped, so a detector that was off does not reset itself when it comes back hours later. A newer queued change replaces it.
+- **Refused with 409** while the relay has never heard from that detector (it would sit queued for a board that may not exist).
+- **Needs:** the detector flashed with this firmware (an older one answers *rejected* and does nothing; publish with `ota-deploy.sh`, and copy the new `nodejs/camera-relay/` to the Pi **before** the board), `STREAM_ENABLED=1` (the detector must be on Wi-Fi to hear the request), `relay_control_key` in `config.php` and the relay's `controlKey`.
+- The recorder firmware gets the same ability from the shared `settings_logic.h`, but no dashboard button uses it yet.
+
 ## Over-the-air firmware updates
 
 Recompile on one machine, run one script, and every camera updates itself. The cameras can't be reached from outside (NAT), so they **poll**: about once a minute each board asks the relay which firmware is current; if that differs from what it runs it downloads it, flashes it and reboots. The version is the **git revision** you built from, and "different" (not "newer") triggers the update, so checking out an older commit and deploying it **downgrades** the cameras the same way.

@@ -1409,8 +1409,15 @@ public:
                         const std::string& settingsLine) = 0;
 };
 
+// What the relay queues when the dashboard asks for a restart: a command, not settings. It travels in
+// the same slot as a change (same number, same answer back) but is this reserved word instead of
+// KEY=value — a settings line always contains '=', so the two can't be confused. The relay's side is
+// "Commands" in nodejs/camera-relay/lib/devicesettings.js (the two must agree).
+static const char* const COMMAND_REBOOT = "!reboot";
+
 // Asks now and then; applies what arrives; says so. Drive it with tick(millis()) from a
-// background task. Restart: settings were stored — restart the board so they take effect.
+// background task. Restart: settings were stored, or a restart was asked for (rebootRequested()) —
+// restart the board so they take effect.
 class ChangePoller {
 public:
     enum Status { Idle, Restart };
@@ -1418,7 +1425,7 @@ public:
     ChangePoller(const Schema& schema, ISettingsStore& store, IChangeLink& link,
                  const std::vector<std::string>& lockedKeys, uint32_t firstDelayMs, uint32_t gapMs)
         : schema_(schema), store_(store), link_(link), locked_(lockedKeys), firstDelayMs_(firstDelayMs),
-          gapMs_(gapMs), armed_(false), nextAt_(0), reported_(false) {}
+          gapMs_(gapMs), armed_(false), nextAt_(0), reported_(false), rebootRequested_(false) {}
 
     Status tick(uint32_t nowMs) {
         if (!armed_) { armed_ = true; nextAt_ = nowMs + firstDelayMs_; }
@@ -1430,6 +1437,8 @@ public:
 
         std::string rev, line;
         if (link_.fetchChange(rev, line) != FetchResult::Got) return Idle;
+        rebootRequested_ = false;
+        if (line == COMMAND_REBOOT) return reboot(rev);
 
         ChangeResult r = applyChangeLine(schema_, store_, line, locked_);
         changed_ = r.changed;
@@ -1452,8 +1461,23 @@ public:
     const std::string& lastResult() const { return lastResult_; }
     const std::string& lastMessage() const { return lastMessage_; }
     const std::vector<std::string>& lastChanged() const { return changed_; }
+    // true when the Restart the last tick returned was asked for by the dashboard, not caused by new settings.
+    bool rebootRequested() const { return rebootRequested_; }
 
 private:
+    // The dashboard asked for a restart. The board restarts only once the relay has the answer: the
+    // relay keeps offering the command until it gets one, so a board that restarted without being able
+    // to answer would ask again after the restart, and restart again, until the command runs out. If the
+    // answer does not get through, nothing happens now and the next ask tries again.
+    Status reboot(const std::string& rev) {
+        changed_.clear();
+        lastResult_ = "applied";
+        lastMessage_ = "restarting on request from the dashboard";
+        rebootRequested_ = link_.report(rev, lastResult_, lastMessage_, renderReport(schema_, store_));
+        if (!rebootRequested_) lastMessage_ = "restart asked for, but the relay could not be told - not restarting yet";
+        return rebootRequested_ ? Restart : Idle;
+    }
+
     const Schema& schema_;
     ISettingsStore& store_;
     IChangeLink& link_;
@@ -1462,6 +1486,7 @@ private:
     bool armed_;
     uint32_t nextAt_;
     bool reported_;
+    bool rebootRequested_;
     std::vector<std::string> changed_;
     std::string lastResult_, lastMessage_;
 };
