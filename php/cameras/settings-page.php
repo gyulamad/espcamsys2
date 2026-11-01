@@ -268,5 +268,6 @@ require_once __DIR__ . '/lib/Layout.php';
   revertBtn.addEventListener('click', () => { for (const f of fields) { const i = $('f-' + f.key); i.value = original[f.key]; i.classList.remove('changed'); } updateButtons(); setStatus('Reverted.', ''); });
   load();
 </script>
+<?= CamLayout::storageWarningScript() ?>
 </body>
 </html>

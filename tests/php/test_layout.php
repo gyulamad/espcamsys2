@@ -20,6 +20,31 @@ camtest_test('logoutForm needs no JavaScript and carries nothing a page could be
     camtest_assert_true(!preg_match('/<input/i', $html), 'no fields: nothing to forge, nothing to leak');
 });
 
+// ── storageWarningScript ─────────────────────────────────────────────
+
+camtest_test('storageWarningScript is one script that asks storage.php and alerts the server\'s own message', function () {
+    $html = CamLayout::storageWarningScript();
+    camtest_assert_true(strpos($html, '<script>') === 0 && substr($html, -9) === '</script>', 'one script, nothing around it');
+    camtest_assert_equal(substr_count($html, '<script'), 1);
+    camtest_assert_true(strpos($html, "fetch('storage.php'") !== false, 'asks storage.php');
+    camtest_assert_true(strpos($html, 'alert(d.message)') !== false, 'shows the message in an alert box');
+});
+
+camtest_test('storageWarningScript only alerts for a real low answer with a text message, and never reports its own failure', function () {
+    $html = CamLayout::storageWarningScript();
+    camtest_assert_true(strpos($html, 'd.low === true') !== false, 'strict: only an actual true');
+    camtest_assert_true(strpos($html, "typeof d.message === 'string'") !== false, 'only text');
+    camtest_assert_true(strpos($html, '.catch(function () {})') !== false, 'a failed request is silent');
+    camtest_assert_true(strpos($html, 'r.ok ?') !== false, 'an error status is not read as a warning');
+});
+
+camtest_test('storageWarningScript asks with the login, never from cache, and writes nothing into the page', function () {
+    $html = CamLayout::storageWarningScript();
+    camtest_assert_true(strpos($html, "credentials: 'same-origin'") !== false);
+    camtest_assert_true(strpos($html, "cache: 'no-store'") !== false);
+    camtest_assert_true(!preg_match('/innerHTML|document\.write|eval\(|localStorage/', $html), 'the message goes to alert() only');
+});
+
 // ── loggedOutPage ────────────────────────────────────────────────────
 
 camtest_test('loggedOutPage says logged out and links back to the dashboard', function () {

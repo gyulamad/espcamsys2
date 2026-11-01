@@ -43,6 +43,43 @@ test('parseOverrides: a missing, empty, corrupt or non-object file means no over
   assertEqual(sc.parseOverrides('').warnings, []);
 });
 
+// ── minFreeStorageMB: the low-storage warning threshold ──
+
+test('minFreeStorageMB is a Recording setting that applies at once (no restart) and 0 switches it off', () => {
+  const f = sc.FIELDS.find((x) => x.key === 'minFreeStorageMB');
+  assertTrue(f, 'field exists');
+  assertEqual([f.type, f.group, f.restart, f.min, f.default], ['int', 'Recording', false, 0, 1024]);
+  assertEqual(sc.checkValue(f, '0'), { value: 0 });
+  for (const bad of ['-1', '1.5', 'abc', '', null, String(1024 * 1024 + 1)]) assertTrue(sc.checkValue(f, bad).error, String(bad));
+});
+
+test('minFreeStorageMB: a save is stored, needs no restart, and is shown by buildView', () => {
+  const r = sc.applyUpdate(state(), { minFreeStorageMB: '2048' });
+  assertEqual([r.changed, r.restartRequired, r.overrides.minFreeStorageMB], [['minFreeStorageMB'], false, 2048]);
+  const view = sc.buildView(state({ overrides: r.overrides })).fields.find((x) => x.key === 'minFreeStorageMB');
+  assertEqual([view.value, view.source], [2048, 'settings']);
+});
+
+test('minFreeStorageMB: an invalid value is refused and changes nothing', () => {
+  const r = sc.applyUpdate(state(), { minFreeStorageMB: '-5', preRollSeconds: 9 });
+  assertTrue(r.error && !r.overrides, JSON.stringify(r));
+});
+
+test('currentInt: environment, then saved settings, then config.js, then the default', () => {
+  assertEqual(sc.currentInt('minFreeStorageMB', state()), 1024);
+  assertEqual(sc.currentInt('minFreeStorageMB', state({ base: { minFreeStorageMB: 300 } })), 300);
+  assertEqual(sc.currentInt('minFreeStorageMB', state({ base: { minFreeStorageMB: 300 }, overrides: { minFreeStorageMB: 500 } })), 500);
+  assertEqual(sc.currentInt('minFreeStorageMB', state({ overrides: { minFreeStorageMB: 500 }, env: { MIN_FREE_STORAGE_MB: '700' } })), 700);
+});
+
+test('currentInt: a value that is not valid (hand-edited config.js, bad environment) falls back to the default, and 0 stays 0', () => {
+  for (const bad of ['lots', -3, 1.5, 99999999999, {}]) {
+    assertEqual(sc.currentInt('minFreeStorageMB', state({ base: { minFreeStorageMB: bad } })), 1024, JSON.stringify(bad));
+  }
+  assertEqual(sc.currentInt('minFreeStorageMB', state({ env: { MIN_FREE_STORAGE_MB: 'x' } })), 1024);
+  assertEqual(sc.currentInt('minFreeStorageMB', state({ base: { minFreeStorageMB: 0 } })), 0);
+});
+
 test('parseOverrides: the live alarm value is not an override (it lives in settings.json)', () => {
   assertEqual(sc.parseOverrides('{"alarmRecordSeconds":5}').overrides, {});
 });

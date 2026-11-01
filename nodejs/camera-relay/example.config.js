@@ -23,6 +23,11 @@ module.exports = {
   // preRollMaxBytes: 8 * 1024 * 1024, // optional RAM cap per camera (default 8 MiB); the
   //                                   // buffer drops its oldest frames first if it's hit
 
+  // Low-storage warning: when the free space on the disk holding the recordings drops below this many
+  // MB, every dashboard page shows an alert asking the user to delete old recordings. 0 = no warning.
+  // Also editable on the dashboard's SETTINGS page (applies at once).
+  // minFreeStorageMB: 1024,            // 0–1048576, default 1024
+
   // Log file: what the cameras report (instead of printing to a serial port nobody can
   // see) plus what the relay observes — cameras connecting/dropping, recordings, errors
   // with stack traces. Plain text, `tail -f` friendly. All optional:

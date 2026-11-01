@@ -1764,5 +1764,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   const saved = localStorage.getItem('esp32-layout');
   if (saved) setLayout(saved);
 </script>
+<?= CamLayout::storageWarningScript() ?>
 </body>
 </html>

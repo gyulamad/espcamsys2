@@ -194,6 +194,31 @@ class CamLogic
         return $out;
     }
 
+    // The text of the low-storage warning (shown in the browser's alert box, so plain text — nothing in
+    // it is ever read as HTML). $freeMB is a whole number the caller has already checked.
+    public static function storageWarningMessage(int $freeMB): string
+    {
+        return sprintf('The recording storage is almost empty (only %d MB is free). Please delete old files.', $freeMB);
+    }
+
+    // What the relay says about its recording storage (GET /storage), cut down to what the browser needs:
+    // PHP is the trust boundary, so nothing but a plain flag, a whole number and OUR message text goes on.
+    //   low => true, freeMB, message   only when the relay says the free space is below the minimum
+    //   low => false                   in every other case: fine, unknown, switched off, or an answer that is not
+    //                                  what the relay sends (an error body, junk) — a warning needs a clear reason
+    public static function sanitizeStorageStatus($decoded): array
+    {
+        $none = ['low' => false];
+        if (!is_array($decoded) || ($decoded['low'] ?? null) !== true) {
+            return $none;
+        }
+        $freeMB = $decoded['freeMB'] ?? null;
+        if (!is_int($freeMB) || $freeMB < 0) {
+            return $none;
+        }
+        return ['low' => true, 'freeMB' => $freeMB, 'message' => self::storageWarningMessage($freeMB)];
+    }
+
     // Finds one camera by its 'id' in the $cameras array built above.
     // Returns null if there's no match — the "camera not found" case every
     // proxying endpoint checks before doing anything else.
@@ -664,7 +689,7 @@ class CamLogic
     // The relay settings the dashboard is allowed to change (review F-09). An ALLOW-list, so a setting the
     // relay gains later stays out of reach until it is added here on purpose. Numbers, ports and keys only.
     const RELAY_SETTING_KEYS = [
-        'alarmRecordSeconds', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort',
+        'alarmRecordSeconds', 'minFreeStorageMB', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort',
         'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles',
     ];
 

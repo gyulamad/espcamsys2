@@ -1128,10 +1128,59 @@ camtest_test('onlyValidCameras drops ids that are not plain ids and reports them
     camtest_assert_equal(CamLogic::onlyValidCameras('not an array'), []);
 });
 
+// ── Low recording storage warning ─────────────────────────────────────
+
+camtest_test('storageWarningMessage names the free megabytes and asks for old files to be deleted', function () {
+    camtest_assert_equal(
+        CamLogic::storageWarningMessage(312),
+        'The recording storage is almost empty (only 312 MB is free). Please delete old files.'
+    );
+    camtest_assert_equal(
+        CamLogic::storageWarningMessage(0),
+        'The recording storage is almost empty (only 0 MB is free). Please delete old files.'
+    );
+});
+
+camtest_test('sanitizeStorageStatus passes a low answer on with OUR message and a plain number', function () {
+    $r = CamLogic::sanitizeStorageStatus(['known' => true, 'freeMB' => 97, 'minFreeMB' => 1024, 'low' => true]);
+    camtest_assert_equal($r, [
+        'low' => true,
+        'freeMB' => 97,
+        'message' => 'The recording storage is almost empty (only 97 MB is free). Please delete old files.',
+    ]);
+});
+
+camtest_test('sanitizeStorageStatus: no warning when the disk is fine, unknown or the warning is off', function () {
+    foreach ([
+        ['known' => true, 'freeMB' => 5000, 'minFreeMB' => 1024, 'low' => false],
+        ['known' => false, 'minFreeMB' => 1024, 'low' => false],
+        ['known' => true, 'freeMB' => 0, 'minFreeMB' => 0, 'low' => false],
+    ] as $answer) {
+        camtest_assert_equal(CamLogic::sanitizeStorageStatus($answer), ['low' => false], json_encode($answer));
+    }
+});
+
+camtest_test('sanitizeStorageStatus: an answer that is not what the relay sends never becomes a warning', function () {
+    foreach ([
+        null, 'low', 7, [], ['error' => 'missing or wrong control key'],
+        ['low' => 'true', 'freeMB' => 10], ['low' => 1, 'freeMB' => 10], ['low' => true],
+        ['low' => true, 'freeMB' => '10'], ['low' => true, 'freeMB' => 10.5], ['low' => true, 'freeMB' => -1],
+        ['low' => true, 'freeMB' => null], ['low' => true, 'freeMB' => [10]],
+    ] as $answer) {
+        camtest_assert_equal(CamLogic::sanitizeStorageStatus($answer), ['low' => false], json_encode($answer));
+    }
+});
+
+camtest_test('sanitizeStorageStatus: text the relay sends along is never passed to the browser', function () {
+    $r = CamLogic::sanitizeStorageStatus(['low' => true, 'freeMB' => 5, 'message' => '<script>alert(1)</script>', 'path' => '/home/pi/secret']);
+    camtest_assert_equal(array_keys($r), ['low', 'freeMB', 'message']);
+    camtest_assert_true(strpos($r['message'], '<') === false && strpos($r['message'], '/home/pi') === false, $r['message']);
+});
+
 // ── F-09: the dashboard must not set file or folder paths on the relay ─
 
 camtest_test('splitSettingsValues passes every allowed relay setting on, and the dashboard\'s own to the dashboard', function () {
-    $values = ['alarmRecordSeconds' => 60, 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608, 'port' => 8080, 'pushPort' => 8081,
+    $values = ['alarmRecordSeconds' => 60, 'minFreeStorageMB' => '1024', 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608, 'port' => 8080, 'pushPort' => 8081,
                'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'auth_user' => 'bob'];
     $r = CamLogic::splitSettingsValues($values);
     camtest_assert_true($r['ok'] === true);

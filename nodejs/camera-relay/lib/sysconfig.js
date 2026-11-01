@@ -28,6 +28,8 @@ const MIB = 1024 * 1024;
 const FIELDS = [
   { key: 'alarmRecordSeconds', type: 'int', min: 1, max: 3600, default: 60, env: null, group: 'Recording', restart: false,
     label: 'Alarm recording length (seconds)', help: 'How long a recording started by a camera\'s alarm input runs. Applies to the next alarm — no restart.' },
+  { key: 'minFreeStorageMB', type: 'int', min: 0, max: 1024 * 1024, default: 1024, env: 'MIN_FREE_STORAGE_MB', group: 'Recording', restart: false,
+    label: 'Minimum free recording storage (MB)', help: 'When the free space on the disk holding the recordings falls below this, every dashboard page warns you to delete old recordings. 0 switches the warning off. Applies at once — no restart.' },
   { key: 'preRollSeconds', type: 'int', min: 0, max: 60, default: 5, env: 'PREROLL_SECONDS', group: 'Recording', restart: true,
     label: 'Pre-roll (seconds)', help: 'Footage from BEFORE the trigger that every recording starts with. 0 switches it off.' },
   { key: 'preRollMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 8 * MIB, env: 'PREROLL_MAX_BYTES', group: 'Recording', restart: true,
@@ -160,6 +162,15 @@ function effective(field, base, overrides, env) {
   return { value: field.default, source: 'default' };
 }
 
+// The value an int setting has right now, checked like a saved one. A value that is no longer valid
+// (config.js edited by hand, an environment variable with text in it) falls back to the default, so a
+// bad value can never break the code that reads it.   -> number
+function currentInt(key, { base, overrides, env }) {
+  const f = BY_KEY[key];
+  const r = checkValue(f, effective(f, base, overrides, env).value);
+  return r.error ? f.default : r.value;
+}
+
 // What GET /system-settings returns: the schema plus the current values. Secrets are
 // NEVER sent back — only whether one is set.
 function buildView({ base, overrides, alarmRecordSeconds, env }) {
@@ -236,4 +247,4 @@ function isSupervised(env) {
 // restarts after a non-zero exit. (75 = EX_TEMPFAIL, "try again".)
 const RESTART_EXIT_CODE = 75;
 
-module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };
+module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, currentInt, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };

@@ -4,7 +4,7 @@ const dgram = require('dgram');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const baseConfig = require('./config'); // gitignored — see example.config.js
 
@@ -34,6 +34,7 @@ const connection = require('./lib/connection');
 const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 const sysconfig = require('./lib/sysconfig');
+const diskspace = require('./lib/diskspace');
 
 // What the dashboard's settings page saved (ports, keys, pre-roll, log, folders) is laid
 // over config.js, so config.js itself never has to be rewritten. See lib/sysconfig.js.
@@ -965,6 +966,26 @@ app.get('/status', requireReadKey, async (req, res) => {
     relayLog('ERROR', `GET /status failed: ${err.message}`, { trace: err && err.stack });
     res.sendStatus(500);
   }
+});
+
+// ── Recording storage ──
+// GET /storage -> { known, freeMB?, minFreeMB, low }   how much room the recordings' disk has left, and whether
+// that is below the minimum set on the dashboard's settings page (minFreeStorageMB; 0 = no warning). The dashboard
+// shows an alert on every page load while `low` is true, so old recordings are deleted before the disk is full.
+// The minimum is read on every request, so a change saved on the settings page applies at once.
+// A disk the system will not report on answers known: false, low: false — never an error, never a false alarm.
+const DISK_QUERY_TIMEOUT_MS = 5000;
+const diskDeps = {
+  statfs: typeof fsp.statfs === 'function' ? (dir) => fsp.statfs(dir) : undefined,
+  execFile: (cmd, args) => new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: DISK_QUERY_TIMEOUT_MS }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+  }),
+};
+
+app.get('/storage', requireReadKey, async (req, res) => {
+  const minFreeMB = sysconfig.currentInt('minFreeStorageMB', systemSettingsState());
+  const freeBytes = await diskspace.readFreeBytes(RECORDINGS_DIR, diskDeps);
+  return res.json(diskspace.buildStorageView(freeBytes, minFreeMB));
 });
 
 // ── Settings ──

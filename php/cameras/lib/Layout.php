@@ -15,6 +15,28 @@ class CamLayout
             . '</form>';
     }
 
+    // The low-storage warning: asks storage.php on every page load and, when the Pi's recording disk is
+    // nearly full, shows the server's message in a browser alert box — on top of everything, and closed with
+    // one click, so the dashboard stays usable. Put once at the end of <body> of each page that has the
+    // dashboard header. Silent in every other case (disk fine, relay down, request failed): a warning
+    // that cannot be read must not become an error box. The message is shown with alert(), which
+    // never interprets HTML, and only when it is text.
+    public static function storageWarningScript(): string
+    {
+        return <<<'HTML'
+<script>
+  (function () {
+    fetch('storage.php', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && d.low === true && typeof d.message === 'string' && d.message !== '') alert(d.message);
+      })
+      .catch(function () {});
+  })();
+</script>
+HTML;
+    }
+
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser
     // forget the login — HTTP Basic Auth has no other way), so the page has to explain that prompt.
     public static function loggedOutPage(): string

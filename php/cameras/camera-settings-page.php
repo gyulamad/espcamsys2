@@ -289,5 +289,6 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 
   load();
 </script>
+<?= CamLayout::storageWarningScript() ?>
 </body>
 </html>
