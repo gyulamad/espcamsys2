@@ -663,6 +663,18 @@ else
 fi
 
 hr
+echo "DOM (the dashboard page after the phone was locked: pictures start over) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_resume_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
 echo "End-to-end (relay logging) test"
 hr
 if ! command -v node >/dev/null 2>&1; then

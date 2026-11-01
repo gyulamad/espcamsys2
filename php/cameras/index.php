@@ -1721,6 +1721,30 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     clearTimeout(detImgTimers[id]);
     detImgTimers[id] = setTimeout(() => reconnectDetectorImg(id), 5000);
   }
+  // ── Coming back to the page ──
+  // A locked phone (or a tab left in the background for a while) cannot keep its connections: the streams
+  // die without a sound and the pictures are blank when the page is shown again. So after the page has been
+  // hidden for a while, every picture starts over from a new connection and the numbers are asked for at
+  // once. Cameras the user pressed HIDE on stay hidden (reloadStream / reconnectDetectorImg both skip them).
+  const RESUME_AFTER_HIDDEN_MS = 3000;   // shorter than this is a tab switch, not a lock: the streams are fine
+  let hiddenSince = null;
+  function resumeAfterHidden() {
+    for (const id of getAllCameraIds()) {
+      reloadStream(id);
+      if (document.getElementById('detimg-' + id)) reconnectDetectorImg(id);
+    }
+    pollAllStatuses();
+    if (document.querySelector('.det-row')) pollDetectors();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenSince = Date.now(); return; }
+    const away = hiddenSince === null ? Infinity : Date.now() - hiddenSince;   // shown without ever being seen hidden: reload too
+    hiddenSince = null;
+    if (away >= RESUME_AFTER_HIDDEN_MS) resumeAfterHidden();
+  });
+  // Back/forward cache: the page returns exactly as it was left, with the connections the browser closed meanwhile.
+  window.addEventListener('pageshow', (ev) => { if (ev.persisted) resumeAfterHidden(); });
+
   if (document.querySelector('.det-row')) {
     pollDetectors();
     setInterval(pollDetectors, DETECTOR_POLL_MS);
