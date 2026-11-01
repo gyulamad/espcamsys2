@@ -371,8 +371,8 @@ fi
 # ── End-to-end tests ─────────────────────────────────────────────────────
 # Both spawn the real relay on their own ports (never the real 8080/8081)
 # with a throwaway settings file — a real settings.json is never touched.
-# Both need `npm install` to have been run in nodejs/camera-relay/ (the relay
-# itself needs express).
+# Both need the relay's packages in nodejs/camera-relay/ (the relay itself needs express):
+# this script installs them with `npm ci` when they are missing (see ensure_npm_deps).
 #   - tests/e2e/test_alarm_settings_e2e.js: over real HTTP, checks that an
 #     alarm records for the length stored via /settings rather than a
 #     hardcoded value, that it persists across a restart, etc. Override the
@@ -494,6 +494,10 @@ echo "Shell tests (the dashboard's privileged power helper)"
 hr
 "$ROOT_DIR/tests/shell/test_camdash_power.sh"
 [ $? -ne 0 ] && overall_status=1
+
+# The relay itself needs its packages (express ...) for every end-to-end test below: installed here from
+# the lockfile when missing or out of date (a normal run costs nothing). Needs node and npm on the PATH.
+ensure_npm_deps "$ROOT_DIR/nodejs/camera-relay" "the relay (end-to-end tests)"
 
 hr
 echo "End-to-end (alarm settings) test"
