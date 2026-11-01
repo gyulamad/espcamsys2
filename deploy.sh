@@ -69,6 +69,24 @@ else
     echo "deploy: NOTE there is no $DEST/config.php yet — copy example.config.php to config.php and fill it in."
 fi
 
+# The dashboard's reset menu can restart the web server and reboot the Pi. Only through this: a tiny
+# root-owned helper that takes one of two fixed words, and a sudo rule that lets the web server's user run
+# exactly those two commands. Needs root and the www-data user. Without it the other reset targets
+# (boards, relay) work and these two answer "not set up".
+HELPER_DEST=/usr/local/sbin/camdash-power
+SUDOERS_DEST=/etc/sudoers.d/camdash-power
+if [ "$(id -u)" -eq 0 ] && id www-data >/dev/null 2>&1 && command -v visudo >/dev/null 2>&1; then
+    install -o root -g root -m 755 ./tools/camdash-power.sh "$HELPER_DEST"
+    if visudo -cf ./apache/camdash-power.sudoers >/dev/null; then
+        install -o root -g root -m 440 ./apache/camdash-power.sudoers "$SUDOERS_DEST"
+        echo "deploy: installed $HELPER_DEST and $SUDOERS_DEST (the dashboard may restart Apache and reboot the Pi)."
+    else
+        echo "deploy: NOTE apache/camdash-power.sudoers did not pass visudo, so it was NOT installed."
+    fi
+else
+    echo "deploy: NOTE not run as root (or no www-data / visudo): the dashboard's 'restart PHP' and 'reboot the Pi' stay off."
+fi
+
 # A previous version of this script copied into /var/www/camdash instead — a second, unused copy.
 if [ -d "$STRAY" ] && [ "$STRAY" != "$DEST" ]; then
     echo

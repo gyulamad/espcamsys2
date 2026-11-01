@@ -171,6 +171,34 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .switch-note.err { color: var(--accent2); }
   .cam-btn.switched-off { opacity: .45; }
 
+  /* Reboot / reset drop-down (CamLayout::rebootMenu): a split button — the main action plus an arrow
+     that opens the list of every target. In the header (.btn) and on each camera card (.cam-btn). */
+  .reboot-menu { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .reboot-split { position: relative; display: inline-flex; }
+  .reboot-menu .danger { border-color: #7a2e3a; color: var(--accent2); }
+  .reboot-menu .danger:hover:not(:disabled),
+  .reboot-menu .reboot-caret[aria-expanded="true"] {
+    border-color: var(--accent2); color: var(--accent2);
+    box-shadow: 0 0 8px rgba(255,79,94,.25); position: relative; z-index: 1;
+  }
+  .reboot-menu .reboot-main  { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .reboot-menu .reboot-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding-left: 7px; padding-right: 7px; }
+  .reboot-list {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 50; min-width: 100%;
+    display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border-light); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 4px;
+  }
+  .reboot-list[hidden] { display: none; }
+  .reboot-list.align-right { left: auto; right: 0; }   /* set by the page when the list would stick out of its card / the window */
+  .reboot-item {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .04em; text-align: left; white-space: nowrap;
+    padding: 7px 10px; border: 0; border-radius: 3px; background: transparent; color: var(--text); cursor: pointer;
+  }
+  .reboot-item:hover, .reboot-item:focus-visible { background: rgba(255,79,94,.12); color: var(--accent2); outline: none; }
+  .reboot-item:disabled { opacity: .5; cursor: default; }
+  .reboot-item.default::after { content: '  · default'; color: var(--muted); }
+
   /* ── Main grid ── */
   main { flex: 1; padding: 24px 32px; }
 
@@ -489,6 +517,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
               title="Switch recording back ON for every camera">⏻ ALL ON</button>
       <span class="switch-note" id="switch-all-note"></span>
     </span>
+    <?= CamLayout::rebootMenu(CamLogic::rebootMenu('system'), 'btn') ?>
   </div>
 </header>
 
@@ -513,6 +542,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <button data-cam="<?= $camId ?>" class="cam-btn" onclick="reloadStream(this.dataset.cam)">↺ RELOAD</button>
           <a class="cam-btn" id="settings-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>"
              title="Settings of this camera: name, icon and everything stored in the board">⚙ SETTINGS</a>
+          <?= CamLayout::rebootMenu(CamLogic::rebootMenu('camera', CamLogic::detectorIdOf($cam) !== null), 'cam-btn', $cam['id']) ?>
           <button data-cam="<?= $camId ?>" class="cam-btn danger" id="hide-<?= $camId ?>"
                   onclick="toggleHide(this.dataset.cam)">✕ HIDE</button>
         </div>
@@ -941,14 +971,18 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     renderSwitchAll();
   }
 
-  const switchNoteTimers = {};
-  function setSwitchNote(id, text, isError) {
-    const el = document.getElementById(id === null ? 'switch-all-note' : 'sw-note-' + id);
+  // A short message next to a button (a .switch-note element) that clears itself after 8 s.
+  const noteTimers = new WeakMap();
+  function setNote(el, text, isError) {
     if (!el) return;
     el.textContent = text;
-    el.className = 'switch-note' + (isError ? ' err' : '');
-    clearTimeout(switchNoteTimers[id]);
-    if (text) switchNoteTimers[id] = setTimeout(() => { el.textContent = ''; }, 8000);
+    el.classList.toggle('err', !!isError);
+    clearTimeout(noteTimers.get(el));
+    if (text) noteTimers.set(el, setTimeout(() => { el.textContent = ''; }, 8000));
+  }
+
+  function setSwitchNote(id, text, isError) {
+    setNote(document.getElementById(id === null ? 'switch-all-note' : 'sw-note-' + id), text, isError);
   }
 
   // scope: 'camera' (with id) or 'all'; action: 'on' or 'off'.
@@ -997,6 +1031,68 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       buttons.forEach(b => { if (b) b.disabled = false; });
     }
   }
+
+  // ── Reboot / reset menus (CamLayout::rebootMenu): in the header for the system, on a camera card for
+  // that camera and/or its detector. The main button runs the menu's default target, the arrow opens
+  // the list of the others. A hard reset cannot be taken back, so every target asks first. The server
+  // side is reboot.php?target=<target>[&cam=<id>]: POST, with the same anti-forgery header as the other
+  // buttons. One listener (below) serves every menu. ──
+  function closeRebootLists() {
+    document.querySelectorAll('.reboot-list:not([hidden])').forEach(list => {
+      list.hidden = true;
+      list.parentElement.querySelector('.reboot-caret').setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function toggleRebootList(caret) {
+    const list = caret.parentElement.querySelector('.reboot-list');
+    const opening = list.hidden;
+    closeRebootLists();
+    if (!opening) return;
+    list.hidden = false;
+    caret.setAttribute('aria-expanded', 'true');
+    // Open towards the left when the list would stick out of its card (cards clip) or the window.
+    list.classList.remove('align-right');
+    const limit = (list.closest('.cam-card') || document.documentElement).getBoundingClientRect().right;
+    if (list.getBoundingClientRect().right > limit) list.classList.add('align-right');
+  }
+
+  async function requestReboot(menu, target, confirmText) {
+    if (!confirm(confirmText)) return;
+    let url = `reboot.php?target=${encodeURIComponent(target)}`;
+    if (menu.dataset.cam) url += `&cam=${encodeURIComponent(menu.dataset.cam)}`;
+    const note = menu.querySelector('.reboot-note');
+    const buttons = menu.querySelectorAll('button');
+    buttons.forEach(b => { b.disabled = true; });
+    setNote(note, 'Sending…', false);
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* not JSON */ }
+      if (res.ok && data && data.ok) setNote(note, data.message || 'Reboot requested', false);
+      else setNote(note, (data && data.error) || `Request failed (HTTP ${res.status})`, true);
+    } catch (e) {
+      setNote(note, 'Could not reach the dashboard server', true);
+    } finally {
+      buttons.forEach(b => { b.disabled = false; });
+    }
+  }
+
+  document.addEventListener('click', ev => {
+    const caret = ev.target.closest('.reboot-caret');
+    if (caret) { toggleRebootList(caret); return; }
+    closeRebootLists();   // any other click closes an open list
+    const action = ev.target.closest('.reboot-main, .reboot-item');
+    if (action) requestReboot(action.closest('.reboot-menu'), action.dataset.target, action.dataset.confirm);
+  });
+
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape') return;
+    const open = document.querySelector('.reboot-list:not([hidden])');
+    if (!open) return;
+    closeRebootLists();
+    open.parentElement.querySelector('.reboot-caret').focus();
+  });
 
   // Keep the "N min left" text ticking between status polls.
   setInterval(() => { getAllCameraIds().forEach(renderSwitch); }, 1000);

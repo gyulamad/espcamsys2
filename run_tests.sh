@@ -395,6 +395,12 @@ fi
 #     anti-forgery header, POST only, key added server-side and never sent to
 #     the browser, input validation. Skips itself if php is missing. Override the
 #     ports with E2E_SWDASH_PORT / E2E_SWDASH_RELAY_PORT / E2E_SWDASH_DEAD_PORT.
+#   - tests/e2e/test_dashboard_reboot_e2e.js: the dashboard's reboot.php (reset a camera, its person
+#     detector, the relay, PHP, the Pi) — real php -S in front of a recording fake relay: login, anti-forgery header, POST
+#     only, control key added server-side, the relay's refusals passed back,
+#     bad input never forwarded; the relay and host targets with a fake relay and a fake power helper.
+#     Skips itself if php is missing. Override the ports with
+#     E2E_REBOOT_PORT / E2E_REBOOT_RELAY_PORT / E2E_REBOOT_DEAD_PORT.
 #   - tests/e2e/test_logging_e2e.js: the relay's log file and POST /log — key
 #     authentication, entries filed under the time they HAPPENED with the
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
@@ -484,6 +490,12 @@ run_node_e2e() {
 }
 
 hr
+echo "Shell tests (the dashboard's privileged power helper)"
+hr
+"$ROOT_DIR/tests/shell/test_camdash_power.sh"
+[ $? -ne 0 ] && overall_status=1
+
+hr
 echo "End-to-end (alarm settings) test"
 hr
 if ! command -v node >/dev/null 2>&1; then
@@ -568,6 +580,8 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_switch_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_reboot_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

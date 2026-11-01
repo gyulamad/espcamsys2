@@ -37,6 +37,44 @@ class CamLayout
 HTML;
     }
 
+    // A reboot / reset drop-down: a split button. The main button runs the menu's default target at
+    // once (after the page's confirmation); the arrow opens a list with every target. $menu comes from
+    // CamLogic::rebootMenu(); $btnClass is the page's button style ('btn' in the header, 'cam-btn' on a
+    // camera card); $camId is the camera it belongs to (null = the whole system).
+    //
+    // No inline handlers: the buttons only carry data-target / data-confirm, and ONE listener in the
+    // page (index.php) does the rest, so nothing here depends on JavaScript being allowed inline and
+    // nothing from config.php (a camera id) can become script. Everything is escaped.
+    public static function rebootMenu(array $menu, string $btnClass, ?string $camId = null): string
+    {
+        $esc = static function ($s): string {
+            // &#10; keeps the line breaks of a confirmation text in an attribute for sure
+            return str_replace("\n", '&#10;', htmlspecialchars((string) $s, ENT_QUOTES));
+        };
+        $default = $menu['default'];
+        $defaultOption = $menu['options'][$default];
+
+        $items = '';
+        foreach ($menu['options'] as $target => $option) {
+            $items .= '<button type="button" role="menuitem" class="reboot-item' . ($target === $default ? ' default' : '') . '"'
+                . ' data-target="' . $esc($target) . '" data-confirm="' . $esc($option['confirm']) . '">'
+                . $esc($option['label']) . '</button>';
+        }
+
+        return '<span class="reboot-menu"' . ($camId === null ? '' : ' data-cam="' . $esc($camId) . '"') . '>'
+            . '<span class="reboot-split">'
+            . '<button type="button" class="' . $esc($btnClass) . ' danger reboot-main"'
+            . ' data-target="' . $esc($default) . '" data-confirm="' . $esc($defaultOption['confirm']) . '"'
+            . ' title="' . $esc('Hard reset: ' . $defaultOption['label'] . ' (the arrow lists the other options)') . '">'
+            . '⟳ ' . $esc($menu['mainLabel']) . '</button>'
+            . '<button type="button" class="' . $esc($btnClass) . ' danger reboot-caret" aria-haspopup="true" aria-expanded="false"'
+            . ' aria-label="More reboot options" title="More reboot options">▾</button>'
+            . '<span class="reboot-list" role="menu" hidden>' . $items . '</span>'
+            . '</span>'
+            . '<span class="switch-note reboot-note" role="status"></span>'
+            . '</span>';
+    }
+
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser
     // forget the login — HTTP Basic Auth has no other way), so the page has to explain that prompt.
     public static function loggedOutPage(): string

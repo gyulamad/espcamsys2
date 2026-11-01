@@ -252,16 +252,67 @@ function applyReport(state, rep, nowMs) {
   return next;
 }
 
+// ── Commands: a queued line that is not a change of settings ──
+//
+// "Restart this board" travels the same way a settings change does — one slot per device, the same
+// number, the board's own answer ("applied" / "rejected", which the dashboard shows) — but its line is
+// a reserved word instead of KEY=value. A settings line always contains "=" (checkStagedLine insists), so
+// the two can never be confused, and nothing sent to the settings routes can ever become a command: only
+// queueCommand() makes one. A board whose firmware knows no commands answers "rejected" (not KEY=value)
+// instead of ignoring it, so the dashboard says so.
+//
+// A command is time-limited. "Reboot now" is meaningless a week later, when a board that was switched
+// off comes back and would restart for no reason; past COMMAND_TTL_MS the relay stops offering it (and
+// stops showing it as waiting) — the slot is simply free again.
+
+const COMMAND_LINES = { reboot: '!reboot' };
+const COMMAND_TTL_MS = 10 * 60 * 1000;
+
+// The command a pending entry carries ('reboot'), or null for an ordinary change.
+function commandOf(pending) {
+  if (!pending) return null;
+  for (const [name, line] of Object.entries(COMMAND_LINES)) if (pending.line === line) return name;
+  return null;
+}
+
+// The pending entry that is still worth offering: an ordinary change always; a command until it is
+// COMMAND_TTL_MS old. Pass `nowMs` to apply the expiry (without it nothing expires).
+function livePending(state, nowMs) {
+  const p = state.pending;
+  if (!p) return null;
+  if (typeof nowMs === 'number' && commandOf(p) !== null && nowMs - p.at > COMMAND_TTL_MS) return null;
+  return p;
+}
+
+// Queues a command for the board (replacing what was waiting, like any change).
+//   -> { state, rev } like queueChange; an unknown name throws (a programming error)
+function queueCommand(state, name, nowMs, by) {
+  if (!Object.prototype.hasOwnProperty.call(COMMAND_LINES, name)) throw new Error(`unknown device command: ${name}`);
+  return queueChange(state, COMMAND_LINES[name], nowMs, by);
+}
+
+// Why a command can not be queued for this device, or null. A board the relay has never heard from
+// either does not exist, runs a firmware that does not talk to the relay about settings (and so would
+// never fetch the command), or has the wrong id: queueing would only look like it worked.
+function commandRefusal(state) {
+  if (state.reported) return null;
+  return 'the relay has not heard from this device yet (it reports when it starts with a firmware that supports remote commands), so a command to it would never be picked up';
+}
+
 // For the board: what to answer to "is a change queued?" -> `<rev>\n<line>\n` or null.
-function changeReply(state) {
-  return state.pending ? `${state.pending.rev}\n${state.pending.line}\n` : null;
+function changeReply(state, nowMs) {
+  const p = livePending(state, nowMs);
+  return p ? `${p.rev}\n${p.line}\n` : null;
 }
 
 // For the dashboard. The queued line's VALUES are not included (names only), the same rule as the log.
-function viewState(state) {
+// A command shows as `command: 'reboot'` (and no keys).
+function viewState(state, nowMs) {
+  const p = livePending(state, nowMs);
+  const command = commandOf(p);
   return {
     reported: state.reported ? { settings: parseSettingsLine(state.reported.line), at: state.reported.at } : null,
-    pending: state.pending ? { rev: state.pending.rev, keys: keyNames(state.pending.line), at: state.pending.at, by: state.pending.by } : null,
+    pending: p ? { rev: p.rev, keys: keyNames(p.line), at: p.at, by: p.by, ...(command ? { command } : {}) } : null,
     last: state.last,
   };
 }
@@ -269,4 +320,5 @@ function viewState(state) {
 module.exports = {
   TYPES, MAX_LINE, isType, isId, parseNeed, checkStagedLine, keyNames, fileFor, pickStaged, FetchLogGate,
   MAX_REPORT_LINE, stateFile, emptyState, parseState, parseSettingsLine, parseReportBody, nextRev, queueChange, applyReport, changeReply, viewState,
+  COMMAND_LINES, COMMAND_TTL_MS, commandOf, livePending, queueCommand, commandRefusal,
 };

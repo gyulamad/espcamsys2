@@ -1422,6 +1422,8 @@ app.put(['/device-settings/:type', '/device-settings/:type/:id'],
 //   POST /device-settings/:type/:id/report   camera key:  body "<number>\n<boot|applied|rejected>\n<message>\n<KEY=value;...>"
 //   GET  /device-settings/:type/:id/state    control key: { reported, pending (names only), last }
 //   PUT  /device-settings/:type/:id/change   control key: queue the line in the body (empty body = cancel what is queued)
+//   POST /device-settings/:type/:id/reboot   control key: queue a restart of the board — a command, not a change
+//                                            (see "Commands" in lib/devicesettings.js); the board answers it like a change
 function requireCameraKeyForDevice(req, res, next) {
   const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
   if (keyState === 'ok') return next();
@@ -1465,10 +1467,14 @@ app.get('/device-settings/:type/:id/change', requireCameraKeyForDevice, checkDev
     relayLog('ERROR', `could not read the settings state of ${id}: ${errorMessage(err)}`, { sender: id });
     return res.status(500).json({ error: 'could not read the state' });
   }
-  const reply = devicesettings.changeReply(state);
+  const now = Date.now();
+  const reply = devicesettings.changeReply(state, now);
   if (reply === null) return res.status(404).type('text/plain').send('nothing queued');
-  if (deviceSettingsLogGate.check(`${id}:change`, state.pending.rev, Date.now())) {
-    relayLog('INFO', `${id} (${type}) asked for its queued settings change and was sent it (${devicesettings.keyNames(state.pending.line).join(', ') || 'no settings'})`, { sender: id });
+  if (deviceSettingsLogGate.check(`${id}:change`, state.pending.rev, now)) {
+    const command = devicesettings.commandOf(state.pending);
+    relayLog('INFO', command
+      ? `${id} (${type}) asked for its queued ${command} and was sent it`
+      : `${id} (${type}) asked for its queued settings change and was sent it (${devicesettings.keyNames(state.pending.line).join(', ') || 'no settings'})`, { sender: id });
   }
   return res.type('text/plain').send(reply);
 });
@@ -1490,7 +1496,8 @@ app.post('/device-settings/:type/:id/report', requireCameraKeyForDevice, checkDe
 
 app.get('/device-settings/:type/:id/state', requireControlKeyForDevice, checkDeviceParams, (req, res) => {
   try {
-    return res.json({ ...devicesettings.viewState(loadDeviceState(req.params.type, req.params.id)), now: Date.now() });
+    const now = Date.now();
+    return res.json({ ...devicesettings.viewState(loadDeviceState(req.params.type, req.params.id), now), now });
   } catch (err) {
     relayLog('ERROR', `could not read the settings state of ${req.params.id}: ${errorMessage(err)}`);
     return res.status(500).json({ error: 'could not read the state' });
@@ -1518,6 +1525,25 @@ app.put('/device-settings/:type/:id/change', requireControlKeyForDevice, checkDe
   // Names only: the values may be sensitive.
   relayLog('INFO', `${actorOf(req)} queued a settings change for ${type} ${id}: ${keys.join(', ') || 'none'} (number ${queued.rev})`);
   return res.json({ ok: true, rev: queued.rev, keys });
+});
+
+// Restart a board. No body: the command is the route. Refused (409) for a device the relay has never heard
+// from — it would never be picked up — and expires by itself if the board does not ask in time.
+app.post('/device-settings/:type/:id/reboot', requireControlKeyForDevice, checkDeviceParams, (req, res) => {
+  const { type, id } = req.params;
+  let queued;
+  try {
+    const state = loadDeviceState(type, id);
+    const refusal = devicesettings.commandRefusal(state);
+    if (refusal) return res.status(409).json({ error: refusal });
+    queued = devicesettings.queueCommand(state, 'reboot', Date.now(), actorOf(req));
+    saveDeviceState(type, id, queued.state);
+  } catch (err) {
+    relayLog('ERROR', `could not queue a reboot for ${id}: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not save the command' });
+  }
+  relayLog('INFO', `${actorOf(req)} queued a reboot for ${type} ${id} (number ${queued.rev})`);
+  return res.json({ ok: true, rev: queued.rev, command: 'reboot' });
 });
 
 // An oversized or unreadable staging body gets a clear answer, not Express's HTML error page.

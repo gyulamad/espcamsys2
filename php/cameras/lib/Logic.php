@@ -1457,4 +1457,50 @@ class CamLogic
         }
         return ['ok' => true, 'line' => implode(';', $parts), 'changed' => array_keys($changes)];
     }
+
+    // ── Reboot / reset menus ──
+    // The drop-down buttons that hard-reset parts of the system: one at the top of the dashboard
+    // (scope 'system': the relay's servers, or everything) and one on every camera card (scope
+    // 'camera': the camera board, its person detector, or both). The MAIN button of a menu runs its
+    // default target; the other targets are in the list the arrow opens. The target names are what
+    // the page sends to the server (reboot.php?target=<name>), so they are part of that contract.
+    //
+    // -> ['default' => target, 'mainLabel' => text, 'options' => [target => ['label' => ..., 'confirm' => ...], ...]]
+    // The options are in the order they are listed. 'confirm' is what the user is asked before
+    // anything is sent: a hard reset cannot be taken back, and it takes the part offline for a while.
+    // A camera without a paired person detector has nothing to reset but the camera itself.
+    public static function rebootMenu(string $scope, bool $hasDetector = true): array
+    {
+        if ($scope === 'system') {
+            return [
+                'default'   => 'all',
+                'mainLabel' => 'REBOOT ALL',
+                'options'   => [
+                    'nodejs' => ['label' => 'REBOOT NODEJS ONLY',
+                                 'confirm' => "Restart the relay's Node.js server?\n\nLive pictures and recording pause for a few seconds while it restarts."],
+                    'php'    => ['label' => 'REBOOT PHP ONLY',
+                                 'confirm' => "Restart the dashboard's PHP web server?\n\nThis page is unreachable for a few seconds while it restarts."],
+                    'relay'  => ['label' => 'REBOOT RELAY (BOTH SERVERS)',
+                                 'confirm' => "Restart BOTH the relay's Node.js server and the dashboard's PHP web server?\n\nLive pictures, recording and this page are unreachable for a short while."],
+                    'all'    => ['label' => 'REBOOT and RESET ALL',
+                                 'confirm' => "HARD RESET EVERYTHING?\n\nEvery camera and detector is reset, both servers restart and the Raspberry Pi itself reboots. Nothing is watched or recorded until it is all back, which takes a few minutes."],
+                ],
+            ];
+        }
+        if ($scope !== 'camera') {
+            throw new InvalidArgumentException('unknown reboot menu scope: ' . $scope);
+        }
+        $options = [
+            'camera' => ['label' => 'RESET CAMERA',
+                         'confirm' => "Hard-reset this camera?\n\nIts picture is gone for about a minute while the board restarts."],
+        ];
+        if (!$hasDetector) {
+            return ['default' => 'camera', 'mainLabel' => 'RESET', 'options' => $options];
+        }
+        $options['detector'] = ['label' => 'RESET DETECTOR',
+                                'confirm' => "Hard-reset this camera's person detector?\n\nIt restarts and its alarm line is released for about 10 seconds."];
+        $options['both']     = ['label' => 'RESET (BOTH)',
+                                'confirm' => "Hard-reset this camera AND its person detector?\n\nBoth boards restart; the picture is gone for about a minute."];
+        return ['default' => 'both', 'mainLabel' => 'RESET', 'options' => $options];
+    }
 }

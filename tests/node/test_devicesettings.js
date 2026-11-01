@@ -206,6 +206,94 @@ test('parseState: round-trips, and anything damaged is just an empty state', () 
   assertEqual(ds.parseState(JSON.stringify({ lastRev: 'x' })).lastRev, 0);
 });
 
+// ── commands (a reboot) ─────────────────────────────────────────────────
+
+const HEARD = ds.applyReport(ds.emptyState(), { rev: '0', result: 'boot', message: '', line: 'A=1' }, 10);
+
+test('queueCommand: the reboot is a queued line like a change — same slot, same number, who asked', () => {
+  const q = ds.queueCommand(HEARD, 'reboot', 5000, 'alice@10.0.0.2');
+  assertEqual([q.rev, q.state.pending.line, q.state.pending.by], ['5000', ds.COMMAND_LINES.reboot, 'alice@10.0.0.2']);
+  assertEqual(q.state.reported, HEARD.reported);   // what the board reported is kept
+  assertEqual(ds.commandOf(q.state.pending), 'reboot');
+});
+
+test('queueCommand: replaces a waiting settings change, and a settings change replaces it', () => {
+  const change = ds.queueChange(HEARD, 'A=2', 100, '').state;
+  const reboot = ds.queueCommand(change, 'reboot', 200, '');
+  assertEqual(reboot.state.pending.line, ds.COMMAND_LINES.reboot);
+  assertEqual(ds.queueChange(reboot.state, 'A=3', 300, '').state.pending.line, 'A=3');
+});
+
+test('queueCommand: an unknown command is a programming error, never a queued line', () => {
+  for (const bad of ['format', 'REBOOT', '', '__proto__', 'constructor', undefined]) {
+    let threw = false;
+    try { ds.queueCommand(HEARD, bad, 1, ''); } catch (e) { threw = true; }
+    assertTrue(threw, String(bad));
+  }
+});
+
+test('a command line can never come from the settings routes: checkStagedLine insists on KEY=value', () => {
+  assertEqual(ds.checkStagedLine(ds.COMMAND_LINES.reboot).ok, false);
+  assertEqual(ds.checkStagedLine('!reboot\n').ok, false);
+  assertEqual(ds.commandOf({ line: 'A=1' }), null);
+  assertEqual(ds.commandOf({ line: 'A=!reboot' }), null);   // only the whole line is the command
+  assertEqual(ds.commandOf(null), null);
+});
+
+test('changeReply: a reboot is offered to the board as "<number>\\n!reboot\\n" until it is COMMAND_TTL_MS old', () => {
+  const st = ds.queueCommand(HEARD, 'reboot', 1000, '').state;
+  assertEqual(ds.changeReply(st, 1000), '1000\n!reboot\n');
+  assertEqual(ds.changeReply(st, 1000 + ds.COMMAND_TTL_MS), '1000\n!reboot\n');   // exactly at the limit: still valid
+  assertEqual(ds.changeReply(st, 1000 + ds.COMMAND_TTL_MS + 1), null);             // one ms later: gone
+});
+
+test('changeReply: only commands expire — a settings change waits as long as it takes, and no clock means no expiry', () => {
+  const change = ds.queueChange(HEARD, 'A=2', 1000, '').state;
+  assertEqual(ds.changeReply(change, 1000 + 100 * ds.COMMAND_TTL_MS), '1000\nA=2\n');
+  const reboot = ds.queueCommand(HEARD, 'reboot', 1000, '').state;
+  assertEqual(ds.changeReply(reboot), '1000\n!reboot\n');
+});
+
+test('an expired reboot is not shown as waiting either, and the slot is free for the next one', () => {
+  const st = ds.queueCommand(HEARD, 'reboot', 1000, '').state;
+  assertEqual(ds.viewState(st, 1000 + ds.COMMAND_TTL_MS + 1).pending, null);
+  assertEqual(ds.viewState(st, 1000 + 5).pending.command, 'reboot');
+  const again = ds.queueCommand(st, 'reboot', 1000 + ds.COMMAND_TTL_MS + 1, '');
+  assertEqual(ds.changeReply(again.state, 1000 + ds.COMMAND_TTL_MS + 2), `${again.rev}\n!reboot\n`);
+});
+
+test('viewState: a reboot shows as command "reboot" with no keys; an ordinary change has no command field at all', () => {
+  const v = ds.viewState(ds.queueCommand(HEARD, 'reboot', 1000, 'carol').state, 1001);
+  assertEqual([v.pending.command, v.pending.keys, v.pending.by], ['reboot', [], 'carol']);
+  const plain = ds.viewState(ds.queueChange(HEARD, 'A=2', 1000, 'carol').state, 1001);
+  assertTrue(!('command' in plain.pending), 'the shape of a settings change is unchanged');
+});
+
+test('applyReport: the board\'s "applied" for the reboot clears it, so it is not offered again after the restart', () => {
+  const q = ds.queueCommand(HEARD, 'reboot', 1000, '');
+  const s = ds.applyReport(q.state, { rev: q.rev, result: 'applied', message: 'restarting on request', line: 'A=1' }, 1500);
+  assertEqual(s.pending, null);
+  assertEqual(ds.changeReply(s, 1600), null);
+  assertEqual(s.last.message, 'restarting on request');
+});
+
+test('applyReport: a board that does not know commands says "rejected", which clears it and tells the dashboard', () => {
+  const q = ds.queueCommand(HEARD, 'reboot', 1000, '');
+  const s = ds.applyReport(q.state, { rev: q.rev, result: 'rejected', message: 'the line is not KEY=value', line: 'A=1' }, 1500);
+  assertEqual([s.pending, s.last.result], [null, 'rejected']);
+});
+
+test('commandRefusal: only a device the relay has heard from can be sent a command', () => {
+  assertTrue(typeof ds.commandRefusal(ds.emptyState()) === 'string', 'never heard from: refused, with a reason');
+  assertEqual(ds.commandRefusal(HEARD), null);
+});
+
+test('parseState: a queued command survives the file round trip', () => {
+  const st = ds.queueCommand(HEARD, 'reboot', 1000, 'x').state;
+  assertEqual(ds.parseState(JSON.stringify(st)), st);
+  assertEqual(ds.commandOf(ds.parseState(JSON.stringify(st)).pending), 'reboot');
+});
+
 test('stateFile: under the type, in its own folder, so it can never collide with a staged line', () => {
   assertEqual(ds.stateFile('/d', 'recorder', 'cam1'), path.join('/d', 'recorder', 'state', 'cam1.json'));
   assertTrue(ds.stateFile('/d', 'recorder', 'cam1') !== ds.fileFor('/d', 'recorder', 'cam1'));

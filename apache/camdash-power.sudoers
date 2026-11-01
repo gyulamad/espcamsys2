@@ -1,0 +1,4 @@
+# Lets the dashboard's web server restart itself and reboot the Pi — these two commands, exactly, no others.
+# deploy.sh installs it as /etc/sudoers.d/camdash-power (mode 0440) after checking it with visudo.
+# Arguments in a sudoers line must match exactly, so "camdash-power anything-else" is refused.
+www-data ALL=(root) NOPASSWD: /usr/local/sbin/camdash-power restart-php, /usr/local/sbin/camdash-power reboot

@@ -279,6 +279,82 @@ TEST(an_unreachable_relay_or_nothing_queued_does_nothing) {
     TEST_ASSERT(p.tick(2000) == ChangePoller::Idle, "nothing queued");
 }
 
+// ── a restart asked for by the dashboard (COMMAND_REBOOT) ──────────────
+
+TEST(a_reboot_command_is_answered_first_and_then_the_board_restarts) {
+    MemoryStore st; fill(st); FakeLink link;
+    link.next = FetchResult::Got; link.line = COMMAND_REBOOT;
+    std::map<std::string, std::string> before = st.m;
+    ChangePoller p(RECORDER_SCHEMA, st, link, locked(), 0, 1000);
+    TEST_ASSERT(p.tick(10) == ChangePoller::Restart, "restart");
+    TEST_ASSERT(p.rebootRequested(), "and the sketch can tell it was asked for, not caused by settings");
+    const FakeLink::Rep& last = link.reports.back();
+    TEST_ASSERT_EQ(last.result, std::string("applied"), "answered as applied, so the relay stops offering it");
+    TEST_ASSERT_EQ(last.rev, std::string("42"), "for the right command");
+    TEST_ASSERT(last.message.find("restarting") != std::string::npos, "says what happens");
+    TEST_ASSERT(last.settings.find("PUSH_GAP_MUL=1.5") != std::string::npos, "the answer still carries what the board holds");
+    TEST_ASSERT(last.settings.find("s3cret") == std::string::npos, "...with secrets masked");
+    TEST_ASSERT(st.m == before, "a restart changes no stored setting");
+    TEST_ASSERT(p.lastChanged().empty(), "nothing counts as changed");
+}
+
+TEST(a_reboot_is_not_carried_out_while_the_answer_cannot_be_delivered) {
+    // The relay keeps offering the command until it is answered. A board that restarted anyway would ask
+    // again after the restart and restart again, over and over, until the command expires.
+    MemoryStore st; fill(st); FakeLink link;
+    link.next = FetchResult::Got; link.line = COMMAND_REBOOT;
+    link.reportOk = false;
+    ChangePoller p(RECORDER_SCHEMA, st, link, locked(), 0, 1000);
+    p.tick(10);   // the boot report is attempted first and fails too; what matters is the reboot below
+    size_t reportsBefore = link.reports.size();
+    TEST_ASSERT(p.tick(2000) == ChangePoller::Idle, "no restart without having told the relay");
+    TEST_ASSERT(!p.rebootRequested(), "not requested yet");
+    TEST_ASSERT(link.reports.size() > reportsBefore, "it did try to tell the relay");
+    TEST_ASSERT(p.lastMessage().find("not restarting") != std::string::npos, "and says why");
+    link.reportOk = true;
+    TEST_ASSERT(p.tick(4000) == ChangePoller::Restart, "the next ask, once the answer gets through, restarts");
+    TEST_ASSERT(p.rebootRequested(), "now it is");
+}
+
+TEST(only_the_exact_reserved_line_is_a_command) {
+    const char* notCommands[] = { "!REBOOT", " !reboot", "!reboot ", "!reboot;LOG_HEARTBEAT=900", "LOG_HEARTBEAT=900;!reboot", "reboot", "!restart" };
+    for (size_t i = 0; i < 7; ++i) {
+        MemoryStore st; fill(st); FakeLink link;
+        link.next = FetchResult::Got; link.line = notCommands[i];
+        ChangePoller p(RECORDER_SCHEMA, st, link, locked(), 0, 1000);
+        TEST_ASSERT(p.tick(10) == ChangePoller::Idle, std::string("no restart for: ") + notCommands[i]);
+        TEST_ASSERT(!p.rebootRequested(), std::string("not a command: ") + notCommands[i]);
+        TEST_ASSERT_EQ(link.reports.back().result, std::string("rejected"), std::string("refused like any bad line: ") + notCommands[i]);
+    }
+}
+
+TEST(a_board_that_gets_a_command_it_does_not_know_refuses_it_with_a_reason) {
+    // What an OLD firmware does with "!reboot": it is not KEY=value, so it is rejected — the dashboard shows that.
+    MemoryStore st; fill(st); FakeLink link;
+    link.next = FetchResult::Got; link.line = "!something-new";
+    ChangePoller p(RECORDER_SCHEMA, st, link, locked(), 0, 1000);
+    TEST_ASSERT(p.tick(10) == ChangePoller::Idle, "nothing happens");
+    TEST_ASSERT_EQ(link.reports.back().result, std::string("rejected"), "and the relay is told, so it stops offering it");
+    TEST_ASSERT(!link.reports.back().message.empty(), "with a reason");
+}
+
+TEST(a_settings_restart_after_a_reboot_is_not_taken_for_one) {
+    MemoryStore st; fill(st); FakeLink link;
+    link.next = FetchResult::Got; link.line = COMMAND_REBOOT;
+    ChangePoller p(RECORDER_SCHEMA, st, link, locked(), 0, 1000);
+    TEST_ASSERT(p.tick(10) == ChangePoller::Restart && p.rebootRequested(), "reboot");
+    link.line = "LOG_HEARTBEAT=900";
+    TEST_ASSERT(p.tick(2000) == ChangePoller::Restart, "settings change restarts");
+    TEST_ASSERT(!p.rebootRequested(), "and is reported as what it is");
+}
+
+TEST(the_relays_reply_for_a_reboot_parses_like_any_change) {
+    std::string rev, line;
+    TEST_ASSERT(parseChangeReply("1760600000123\n!reboot\n", rev, line), "parsed");
+    TEST_ASSERT_EQ(rev, std::string("1760600000123"), "number");
+    TEST_ASSERT(line == COMMAND_REBOOT, "the reserved line, without the newline");
+}
+
 TEST(the_poller_survives_the_millis_counter_wrapping_around) {
     MemoryStore st; fill(st); FakeLink link;
     ChangePoller p(RECORDER_SCHEMA, st, link, locked(), 10000, 5000);
@@ -315,6 +391,12 @@ int main() {
     RUN_TEST(a_change_that_changes_nothing_is_reported_as_applied_without_a_restart);
     RUN_TEST(the_board_restarts_even_if_the_report_could_not_be_delivered);
     RUN_TEST(an_unreachable_relay_or_nothing_queued_does_nothing);
+    RUN_TEST(a_reboot_command_is_answered_first_and_then_the_board_restarts);
+    RUN_TEST(a_reboot_is_not_carried_out_while_the_answer_cannot_be_delivered);
+    RUN_TEST(only_the_exact_reserved_line_is_a_command);
+    RUN_TEST(a_board_that_gets_a_command_it_does_not_know_refuses_it_with_a_reason);
+    RUN_TEST(a_settings_restart_after_a_reboot_is_not_taken_for_one);
+    RUN_TEST(the_relays_reply_for_a_reboot_parses_like_any_change);
     RUN_TEST(the_poller_survives_the_millis_counter_wrapping_around);
     return test::summarize();
 }
