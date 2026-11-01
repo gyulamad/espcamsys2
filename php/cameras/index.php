@@ -61,6 +61,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     --accent2: #ff4f5e;
     --text:    #cdd8f0;
     --muted:   #4a5780;
+    --seen:    #858c99;   /* footage already played or downloaded: a neutral gray, readable on the panel (about 5.5:1) */
     --mono:    'Share Tech Mono', monospace;
     --sans:    'Barlow', sans-serif;
     --radius:  6px;
@@ -413,10 +414,12 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px solid var(--border);
   }
   .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .files-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .files-size { flex-shrink: 0; }
-  /* Footage nobody has played or downloaded yet is bold; seen footage is normal. */
-  .files-row.unseen .files-name, .files-row.unseen .files-size { font-weight: 700; }
+  /* A row is "seen" (normal weight, gray) unless it carries .unseen. Weight alone is hard to tell apart
+     on phones and some browsers, so colour carries the difference too. */
+  .files-name { color: var(--seen); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .files-size { color: var(--seen); font-weight: 400; flex-shrink: 0; }
+  /* Footage nobody has played or downloaded yet is bold and bright. */
+  .files-row.unseen .files-name, .files-row.unseen .files-size { color: var(--text); font-weight: 700; }
   .files-select { flex-shrink: 0; margin: 0; cursor: pointer; accent-color: var(--accent2); }
   /* Bulk actions for the ticked footage sit at the bottom of the list. */
   .files-panel-footer {

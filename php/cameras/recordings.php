@@ -11,7 +11,7 @@
 // POST recordings.php?cam=ID&delete=FILENAME    -> deletes one recording
 // POST recordings.php?cam=ID&deleteAll=1        -> deletes every recording for this camera
 // POST recordings.php?cam=ID&seen=FILENAME      -> marks one recording as seen (the list's
-//                                                  "seen" flag; unseen ones are shown in bold)
+//                                                  "seen" flag; unseen ones are shown bold and bright, seen ones gray)
 //
 // The three POSTs need the dashboard's X-Requested-With header and a same-origin request (see
 // CamLogic::isDashboardMutationAllowed); they reach the relay with the control key and X-Actor,
