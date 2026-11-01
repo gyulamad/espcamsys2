@@ -149,8 +149,13 @@ async function main() {
     let r = await req('POST', 'logout.php');
     check('POST from the dashboard: 401 with exactly the login prompt\'s challenge (same realm, or the browser keeps the login)',
       r.status === 401 && r.headers['www-authenticate'] === prompt.headers['www-authenticate'], detail(r));
-    check('...and an HTML "logged out" page that says to press Cancel and links back to index.php',
-      /text\/html/.test(r.headers['content-type'] || '') && /LOGGED OUT/.test(r.text) && /Cancel/.test(r.text) && /href="index\.php"/.test(r.text), detail(r));
+    check('...and an HTML "logged out" page that says to press Cancel',
+      /text\/html/.test(r.headers['content-type'] || '') && /LOGGED OUT/.test(r.text) && /Cancel/.test(r.text), detail(r));
+    const back = (r.text.match(/<a class="btn" href="([^"]*)">LOG IN AGAIN/) || [])[1];
+    check('...whose LOG IN AGAIN link goes to the dashboard folder (".../camdash/"), not to its index.php',
+      back !== undefined && new URL(back, 'http://pi.local/camdash/logout.php').pathname === '/camdash/', `href=${back}`);
+    const folder = await req('GET', '', { auth: false });
+    check('...and that folder address is the dashboard\'s login prompt', folder.status === 401 && folder.headers['www-authenticate'] === prompt.headers['www-authenticate'], detail(folder));
     check('...with the safe headers, no-store, and no cookie (nothing is kept on either side)', safe(r) && !r.headers['set-cookie'], detail(r));
     await sleep(100);
     check('...and one audit line in the error log, naming who logged out', auditLines().length === before + 1 && /camdash audit: e2e-user@127\.0\.0\.1 logged out/.test(phpLog), phpLog.slice(-300));

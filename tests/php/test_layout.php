@@ -26,7 +26,8 @@ camtest_test('loggedOutPage says logged out and links back to the dashboard', fu
     $html = CamLayout::loggedOutPage();
     camtest_assert_true(strpos($html, '<!DOCTYPE html>') === 0);
     camtest_assert_true(stripos($html, 'LOGGED OUT') !== false);
-    camtest_assert_true(strpos($html, 'href="index.php"') !== false, 'a way back to the login');
+    camtest_assert_true(strpos($html, 'href="./"') !== false, 'a way back to the dashboard folder (".../camdash/")');
+    camtest_assert_true(strpos($html, 'index.php') === false, 'never the .../index.php address: the browser does not ask for the login again there');
 });
 
 camtest_test('loggedOutPage explains the login prompt that comes with it', function () {

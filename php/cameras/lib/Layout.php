@@ -42,7 +42,7 @@ class CamLayout
   <h1>⏻ LOGGED OUT</h1>
   <p>This browser was told to forget the dashboard login.</p>
   <p>It may now show a login prompt. <strong>Press Cancel</strong> to stay logged out; a login typed into that prompt only asks for this page again.</p>
-  <p><a class="btn" href="index.php">LOG IN AGAIN</a></p>
+  <p><a class="btn" href="./">LOG IN AGAIN</a></p>
   <p class="note">Browsers differ in how well they forget a login. To be sure, close every window of this browser (Tor Browser: New Identity).</p>
 </main>
 </body>
