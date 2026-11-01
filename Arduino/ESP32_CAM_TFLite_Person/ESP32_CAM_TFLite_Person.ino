@@ -399,7 +399,9 @@ static bool initCameraOnce()
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
 
-    config.xclk_freq_hz = 15000000;
+    // The picture the dashboard shows, and the numbers beside it, can only be as fast as the camera hands
+    // over frames. 20 MHz is what the recorder runs its camera at; at 15 MHz the sensor itself was slower.
+    config.xclk_freq_hz = 20000000;
 
     // The v1.3.3 model expects 96x96 grayscale input.
     config.pixel_format = PIXFORMAT_GRAYSCALE;
@@ -407,10 +409,13 @@ static bool initCameraOnce()
 
     config.jpeg_quality = 12;
 
-    // Only one frame is needed.
-    config.fb_count = 1;
+    // Two buffers (9 KB each) and always the NEWEST frame: with one buffer that is refilled only after
+    // the loop has returned it, every frame that arrives while the loop is busy is lost and the rate
+    // roughly halves (about 4.7 pictures a second was measured). The camera now keeps capturing on its
+    // own and esp_camera_fb_get() returns the latest finished frame, never an old one.
+    config.fb_count = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.grab_mode = CAMERA_GRAB_LATEST;
 
     cameraPowerCycle();
 
