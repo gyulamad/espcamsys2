@@ -356,7 +356,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .det-line .k { color: var(--muted); letter-spacing: .06em; }
   .det-line .v { color: var(--text); text-align: right; }
   .det-bar { position: relative; height: 8px; background: #060810; border: 1px solid var(--border); border-radius: 2px; }
-  .det-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: .75; transition: width .25s; }
+  .det-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: .75; }
   .det-bar .fill.hit { background: #2dd67b; }
   .det-bar .fill.warn { background: #f0a500; }
   .det-bar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent2); }
@@ -366,7 +366,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .det-bar .mark::before { content: ''; position: absolute; top: -4px; bottom: -4px; left: -6px; right: -6px; }
   .det-bar .mark.pending { box-shadow: 0 0 0 1px #fff, 0 0 6px 1px rgba(255,255,255,.6); }
   .det-bar .mark.dragging { box-shadow: 0 0 0 1px #fff, 0 0 8px 2px rgba(255,255,255,.8); }
-  .det-bar.live-drag .fill { transition: none; }
   .det-apply { display: none; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border: 1px dashed #f0a500; border-radius: 4px; padding: 5px 8px; color: #f0a500; }
   .det-apply .det-apply-btns { display: flex; gap: 6px; }
   .det-sub { color: var(--muted); font-size: .58rem; }
@@ -1418,7 +1417,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // and SEE the effect: a bar per value, a red mark at the threshold the value has to cross, and the
   // alarm pin level the detector is driving. When the detector is not showing, the picture says WHY
   // (the relay works it out: never connected, connection lost, no picture, ...).
-  const DETECTOR_POLL_MS = 1000;
+  const DETECTOR_POLL_MS = 1000;           // the polling fallback's interval
+  const DETECTOR_LIVE_MS = 3500;           // the live stream counts as delivering if its last message is younger than this (the relay pushes at least every 1 s)
+  const DETECTOR_EVENTS_RETRY_MS = 5000;   // after the live stream was refused, try it again this often
   const detEl = (k, id) => document.getElementById('det' + k + '-' + id);
   const setW = (e, frac) => { e.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%'; };
   function placeMark(e, frac) {
@@ -1576,7 +1577,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const startX = ev.clientX;
     let decided = !tied;
     try { mark.setPointerCapture(ev.pointerId); } catch (e) { /* older browser: window listeners below still work */ }
-    bar.classList.add('live-drag');
     const place = (k, el) => {
       const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
       const v = thresholdFromX(id, k, frac);
@@ -1600,7 +1600,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
-      bar.classList.remove('live-drag');
       mark.classList.remove('dragging');
       delete detDrag[id];
       redraw();
@@ -1788,27 +1787,81 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     detEl('info', id).textContent = info.join(' · ');
   }
 
+  // Shows one { camId: status } answer on every detector row. Both the live stream and the polling fallback
+  // end up here. Applied at most once per animation frame, and only the newest answer: when messages come
+  // faster than the screen draws, the ones in between are skipped, never queued.
+  let pendingDetectorData = null;
+  function showDetectorData(data) {
+    const schedule = pendingDetectorData === null;
+    pendingDetectorData = data;
+    if (!schedule) return;
+    requestAnimationFrame(() => {
+      const latest = pendingDetectorData;
+      pendingDetectorData = null;
+      document.querySelectorAll('.det-row').forEach(row => renderDetector(row.dataset.cam, latest[row.dataset.cam]));
+    });
+  }
+  function showDetectorProblem(why) {
+    pendingDetectorData = null;
+    document.querySelectorAll('.det-row').forEach(row => renderDetectorProblem(row.dataset.cam, 'NO DATA', why));
+  }
+  const isStatusMap = (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error;
+
+  // LIVE: the dashboard keeps one Server-Sent Events stream open (detector-events.php) and the relay pushes
+  // the numbers the moment a detector sends them — no polling interval in between. If the stream cannot be
+  // had (an older relay, a proxy that buffers, a network hiccup) the polling below takes over by itself.
+  let detectorEvents = null;
+  let detectorEventsAt = 0;     // when the last message arrived
+  let detectorEventsTimer = null;
+  const detectorStreamIsLive = () => Date.now() - detectorEventsAt < DETECTOR_LIVE_MS;
+  function closeDetectorEvents() {
+    clearTimeout(detectorEventsTimer);
+    detectorEventsTimer = null;
+    if (detectorEvents) detectorEvents.close();
+    detectorEvents = null;
+  }
+  function openDetectorEvents() {
+    closeDetectorEvents();
+    if (document.hidden || typeof EventSource === 'undefined') return;
+    const source = new EventSource('detector-events.php');
+    detectorEvents = source;
+    source.addEventListener('detectors', (e) => {
+      let data = null;
+      try { data = JSON.parse(e.data); } catch (err) { /* not JSON: ignore this message */ }
+      if (!isStatusMap(data)) return;
+      detectorEventsAt = Date.now();
+      detectorPollFailures = 0;
+      showDetectorData(data);
+    });
+    source.onerror = () => {
+      // The browser retries by itself while it is CONNECTING; once CLOSED (an HTTP error answer) it never does.
+      if (source.readyState !== EventSource.CLOSED) return;
+      if (detectorEvents === source) detectorEvents = null;
+      clearTimeout(detectorEventsTimer);
+      detectorEventsTimer = setTimeout(openDetectorEvents, DETECTOR_EVENTS_RETRY_MS);
+    };
+  }
+
+  // FALLBACK: ask once a second while no live stream is delivering.
   let detectorsPolling = false;
   let detectorPollFailures = 0;
   async function pollDetectors() {
-    if (detectorsPolling || document.hidden) return;
+    if (detectorsPolling || document.hidden || detectorStreamIsLive()) return;
     detectorsPolling = true;
     try {
       const res = await fetch('detector-status.php', { cache: 'no-store' });
       let data = null;
       try { data = await res.json(); } catch (e) { /* not JSON */ }
-      if (!res.ok || !data || typeof data !== 'object' || Array.isArray(data) || data.error) {
+      if (!res.ok || !isStatusMap(data)) {
         throw new Error((data && data.error) || ('the dashboard got HTTP ' + res.status));
       }
+      if (detectorStreamIsLive()) return; // the stream delivered while this answer was on its way: it is newer
       detectorPollFailures = 0;
-      document.querySelectorAll('.det-row').forEach(row => renderDetector(row.dataset.cam, data[row.dataset.cam]));
+      showDetectorData(data);
     } catch (e) {
       // One failed round is a blip; two in a row mean the numbers on screen are no longer live — say so.
       detectorPollFailures += 1;
-      if (detectorPollFailures >= 2) {
-        const why = String((e && e.message) || e);
-        document.querySelectorAll('.det-row').forEach(row => renderDetectorProblem(row.dataset.cam, 'NO DATA', why));
-      }
+      if (detectorPollFailures >= 2) showDetectorProblem(String((e && e.message) || e));
     } finally {
       detectorsPolling = false;
     }
@@ -1861,8 +1914,11 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   window.addEventListener('pageshow', (ev) => { if (ev.persisted) resumeAfterHidden(); });
 
   if (document.querySelector('.det-row')) {
+    openDetectorEvents();
     pollDetectors();
     setInterval(pollDetectors, DETECTOR_POLL_MS);
+    // A hidden tab needs no live numbers (and holds no connection); coming back reopens the stream.
+    document.addEventListener('visibilitychange', () => { if (document.hidden) closeDetectorEvents(); else openDetectorEvents(); });
   }
 
   const STATUS_POLL_MS = 4000;

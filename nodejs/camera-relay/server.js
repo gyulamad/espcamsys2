@@ -26,6 +26,7 @@ const devicesettings = require('./lib/devicesettings');
 const firmware = require('./lib/firmware');
 const detectorstate = require('./lib/detectorstate');
 const detectorlink = require('./lib/detectorlink');
+const detectorevents = require('./lib/detectorevents');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
@@ -650,6 +651,8 @@ const MAX_DETECTORS = 64;                     // a wrong or hostile id must not 
 const NO_PICTURE_WARN_MS = connection.parseTimeoutMs(fromEnv('DETECTOR_NO_PICTURE_WARN_MS'), 10 * 1000); // connected and reporting numbers, but no picture for this long: say so
 const MAX_BAD_MESSAGES_IN_A_ROW = 25;         // then the connection is not a detector's: drop it
 const detectors = {}; // id -> record, see getDetector()
+const detectorBus = new EventEmitter();        // 'change' whenever any detector's readings or connection change: feeds /detectors/events
+detectorBus.setMaxListeners(detectorevents.MAX_VIEWERS + 4);
 const detectorViewThrottle = new Throttle(5 * 60 * 1000); // the dashboard asking for a picture that is not there: once per 5 min per detector and state
 
 function getDetector(id) {
@@ -723,6 +726,7 @@ function handleDetectorPayload(id, det, socket, payload) {
     const now = Date.now();
     det.report = parsed.report;
     det.receivedAt = now;
+    detectorBus.emit('change');
     if (m.jpeg) {
       det.frame = m.jpeg;
       det.frameAt = now;
@@ -842,6 +846,7 @@ function handleDetectorUpgrade(req, socket, head) {
       det.connected = false;
       det.lastDisconnectAt = Date.now();
       det.lastDisconnectWhy = why;
+      detectorBus.emit('change');
     }
     if (retiredSockets.has(socket)) return;
     const t = eventThrottle.check(`${id}:detector-disconnect`, Date.now());
@@ -862,11 +867,38 @@ app.get('/detector/:id/uplink', (req, res) => {
 });
 
 // Every detector the relay has heard from: { id: view } — see detectorstate.buildView().
-app.get('/detectors', requireReadKey, (req, res) => {
+function detectorViews() {
   const now = Date.now();
   const out = {};
   for (const id of Object.keys(detectors).sort()) out[id] = detectorstate.buildView(detectors[id], now);
-  res.json(out);
+  return out;
+}
+app.get('/detectors', requireReadKey, (req, res) => res.json(detectorViews()));
+
+// The same { id: view } map, PUSHED (Server-Sent Events): one message the moment any detector's readings
+// change, plus one every REFRESH_MS so ages and "offline" keep moving. A viewer that cannot keep up gets
+// only the newest state (see detectorevents.createFeed), never a backlog.
+let detectorViewers = 0;
+app.get('/detectors/events', requireReadKey, (req, res) => {
+  if (detectorViewers >= detectorevents.MAX_VIEWERS) {
+    return res.status(503).set('Cache-Control', 'no-store').json({ error: `already ${detectorevents.MAX_VIEWERS} viewers of the live detector stream` });
+  }
+  detectorViewers += 1;
+  res.writeHead(200, detectorevents.HEADERS);
+  res.flushHeaders();
+  req.socket.setNoDelay(true);
+  const feed = detectorevents.createFeed((text) => res.write(text), detectorViews);
+  const onChange = () => feed.notify();
+  const tick = setInterval(onChange, detectorevents.REFRESH_MS);
+  res.on('drain', () => feed.drain());
+  detectorBus.on('change', onChange);
+  feed.notify(); // the current state at once
+  req.on('close', () => {
+    detectorViewers -= 1;
+    clearInterval(tick);
+    detectorBus.off('change', onChange);
+  });
+  return undefined;
 });
 
 // The detector's picture as MJPEG (works as <img src>), same behaviour as /stream/:id once it flows. A viewer

@@ -251,6 +251,7 @@ async function main() {
       ['status.php', '/status'],
       ['settings.php', '/settings'],
       ['detector-status.php', '/detectors'],
+      ['detector-events.php', '/detectors/events'],
       ['record.php?cam=cam-a', '/record/cam-a'],
       ['recordings.php?cam=cam-a', '/recordings/cam-a'],
       [`recordings.php?cam=cam-a&play=${FILE}`, `/recordings/cam-a/${FILE}`],
