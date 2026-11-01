@@ -1433,46 +1433,6 @@ class CamLogic
         return ['ok' => true, 'line' => implode(';', $parts), 'changed' => array_keys($changes)];
     }
 
-    // ── Reboot / reset requests ──
-    // Which targets of rebootMenu() the server can already carry out. The others are named (so the
-    // buttons already work and answer "not available yet", not "unknown") and are added one by one.
-    const REBOOT_IMPLEMENTED = ['detector'];
-    const REBOOT_PLANNED = ['camera', 'both', 'nodejs', 'php', 'relay', 'all'];
-
-    // Checks a reboot request (reboot.php?target=..&cam=..) and turns it into what to call on the relay.
-    // -> ['ok' => true, 'url' => ..., 'target' => ..., 'cam' => <camera id>]
-    //  | ['ok' => false, 'status' => 400|404|501, 'error' => ...]
-    public static function buildRebootRequest(array $query, array $cameras): array
-    {
-        $target = is_string($query['target'] ?? null) ? $query['target'] : '';
-        if (!in_array($target, self::REBOOT_IMPLEMENTED, true) && !in_array($target, self::REBOOT_PLANNED, true)) {
-            return ['ok' => false, 'status' => 400, 'error' => 'unknown target'];
-        }
-        if (!in_array($target, self::REBOOT_IMPLEMENTED, true)) {
-            return ['ok' => false, 'status' => 501, 'error' => 'Resetting "' . $target . '" is not available yet'];
-        }
-        $camera = self::findCameraById($cameras, is_string($query['cam'] ?? null) ? $query['cam'] : '');
-        if (!$camera) {
-            return ['ok' => false, 'status' => 404, 'error' => 'Camera not found'];
-        }
-        $detectorId = self::detectorIdOf($camera);
-        if ($detectorId === null) {
-            return ['ok' => false, 'status' => 404, 'error' => 'This camera has no person detector paired'];
-        }
-        return [
-            'ok' => true,
-            'target' => $target,
-            'cam' => $camera['id'],
-            'url' => rtrim($camera['url'], '/') . '/device-settings/detector/' . rawurlencode($detectorId) . '/reboot',
-        ];
-    }
-
-    // What the dashboard tells the user once the relay has queued a reset.
-    public static function rebootQueuedMessage(string $target): string
-    {
-        return 'Reset of the ' . $target . ' requested. It restarts within about 30 seconds.';
-    }
-
     // ── Reboot / reset menus ──
     // The drop-down buttons that hard-reset parts of the system: one at the top of the dashboard
     // (scope 'system': the relay's servers, or everything) and one on every camera card (scope

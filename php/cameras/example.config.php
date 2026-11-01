@@ -29,6 +29,9 @@ return [
     // (This server adds it when it passes your click on to the relay; the browser never
     // sees it. Left empty, the buttons are disabled.)
     'relay_control_key' => '',
+    // The command the reset menu uses to restart the web server / reboot the Pi (installed by `sudo ./deploy.sh`).
+    // Only needed if you installed the helper somewhere else; the action is added as the last argument.
+    // 'power_command' => ['sudo', '-n', '/usr/local/sbin/camdash-power'],
 
     // Recording buttons on the dashboard (both also editable on the SETTINGS page).
     // Length of a manual recording (RECORD / RECORD ALL), in seconds.
