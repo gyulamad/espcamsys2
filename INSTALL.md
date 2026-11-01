@@ -35,8 +35,13 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
    - `remote_log.h`
    - `settings_logic.h`
    - `settings_schema.h`
+   - `settings_sync.h`
    - `ota_logic.h`
    - `ota.h`
+   - `relay_find_logic.h`
+   - `relay_find.h`
+
+   (Simply copy every file of `Arduino/ESP32_CAM_Recorder/` — the sketch will not compile with one of them missing. `fw_version.h`, which the sketch includes only if it exists, is written by `ota-deploy.sh`; a sketch built by hand without it reports the firmware version `dev`.)
 
    There is **no config file to edit any more**: the camera's settings (Wi-Fi, relay address, camera id, API key, ...) are stored in the board's flash and typed in over the serial port after the first flash — see step 5 below.
 3. Wire the FTDI programmer to the ESP32-CAM (GPIO0 to GND to enter flash mode), select the correct serial port, and hit **Upload**.
@@ -113,6 +118,10 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    - `settings_logic.h`
    - `settings_schema.h`
    - `settings_sync.h`
+   - `relay_find_logic.h`
+   - `relay_find.h`
+
+   (Again: simply copy every file of `Arduino/ESP32_CAM_TFLite_Person/`.)
 
    There is **no config file to edit any more**: like the recorder, the detector keeps its settings in the board's flash and you type them in over the serial port after the first flash (step 7).
 
@@ -280,7 +289,7 @@ Things worth knowing:
    sudo apt install -y nodejs ffmpeg
    ```
 
-2. Copy the whole `nodejs/camera-relay/` folder (including `server.js`, `example.config.js`, `package.json`, and the `lib/` folder) onto the Pi, e.g. `/opt/camrelay/`.
+2. Copy the whole `nodejs/camera-relay/` folder (including `server.js`, `example.config.js`, `package.json`, `package-lock.json`, and the `lib/` folder) onto the Pi, e.g. `/opt/camrelay/`.
 3. Create the real config:
 
    ```
@@ -354,12 +363,18 @@ Things worth knowing:
    sudo a2enmod headers
    ```
 
-2. Copy the whole `php/cameras/` folder — `index.php`, `stream.php`, `cameras.php`, `auth.php`, `relay.php`, `record.php`, `recordings.php`, `recording-switch.php`, `settings.php`, `status.php`, `example.config.php`, and the `lib/` folder (`lib/Logic.php`) — into your web root, e.g. `/var/www/html/camdash/` (that is the folder `deploy.sh` copies to; it is then at `http://<the Pi>/camdash/`).
+2. Copy the dashboard into the web root with the script in this repo. From the repo root on the Pi:
+
+   ```
+   sudo ./deploy.sh
+   ```
+
+   It copies every page of `php/cameras/`, the `lib/` folder, the self-hosted `fonts/` and the hidden `.htaccess` (a plain `cp *.php` or a file manager would miss the last one) into `/var/www/html/camdash/`, so the dashboard is at `http://<the Pi>/camdash/` (another folder: `sudo CAMDASH_DIR=/your/folder ./deploy.sh`). Run it again after every update of the dashboard. The first time it says there is no `config.php` yet: the next item creates it.
 3. Create the real config:
 
    ```
    cd /var/www/html/camdash
-   cp example.config.php config.php
+   sudo cp example.config.php config.php
    ```
 
    Edit `config.php`:
@@ -369,6 +384,7 @@ Things worth knowing:
        'auth_user' => 'pick-a-username',
        'auth_pass' => '<long random password>',
        'relay_url' => 'http://127.0.0.1:8080',   // or the relay's LAN IP if on a different host
+       'relay_control_key' => '<the same value as controlKey in the relay config.js>',
        'cameras' => [
            ['id' => 'cam1', 'name' => 'Front Door', 'icon' => '🚪'],
            ['id' => 'cam2', 'name' => 'Back Yard',  'icon' => '🌿'],
@@ -377,7 +393,9 @@ Things worth knowing:
    ];
    ```
 
-4. Protect that folder with the config file shipped in this repo (`apache/camdash-protect.conf`). It is **not** a new site: nothing is disabled and your existing Apache setup keeps serving the dashboard exactly as before, on your **LAN** (`http://<the Pi>/camdash/`) and over **Tor** (step 6). It only adds rules for the dashboard folder: no folder listings, `lib/`, `config.php` and every copy or backup of it are never served, the security headers, and (with the second file) Apache stops announcing its version.
+   `relay_control_key` is part of the installation, not an extra: with the relay's `controlKey` set, the relay refuses everything the dashboard does (watching as well as changing things) unless the dashboard sends that key. Then run `sudo ./deploy.sh` once more from the repo root: it makes `config.php` read-only for the web server (see "Where settings live" below).
+
+4. Protect that folder with the config file shipped in this repo (`apache/camdash-protect.conf`). It is **not** a new site: nothing is disabled and your existing Apache setup keeps serving the dashboard exactly as before, on your **LAN** (`http://<the Pi>/camdash/`) and over **Tor** (step 5). It only adds rules for the dashboard folder: no folder listings, `lib/`, `config.php` and every copy or backup of it are never served, the security headers, and (with the second file) Apache stops announcing its version.
 
    ```
    sudo cp apache/camdash-protect.conf /etc/apache2/conf-available/camdash-protect.conf
@@ -438,26 +456,26 @@ Things worth knowing:
    sudo cat /var/lib/tor/camdash/hostname
    ```
 
-4. On a device with the Tor Browser (or any Tor-enabled client), visit `http://<your-address>.onion/`. You should hit the Basic Auth prompt, then see your cameras.
+4. On a device with the Tor Browser (or any Tor-enabled client), visit `http://<your-address>.onion/camdash/` (without `/camdash/` if the dashboard folder is your site's web root). You should hit the Basic Auth prompt, then see your cameras.
 
 ---
 
 ## 6. Verify end-to-end
 
-- [ ] Each camera's serial monitor shows `Connected, IP: ...` and no repeated `Push failed` errors
+- [ ] Each camera reports `connected to WiFi '<network>', IP <address>` and no repeated `push write failed` warnings — on its serial monitor (while `LOG_ECHO=1`) or in the relay's log (`grep "connected to WiFi" nodejs/camera-relay/logs/camera.log`)
 - [ ] `curl -H "X-Control-Key: YOUR_CONTROL_KEY" http://localhost:8080/status` on the Pi shows a recent `lastSeen` for every camera
-- [ ] `http://127.0.0.1:80/` on the Pi (with `-u user:pass`) shows all cameras live
+- [ ] `http://127.0.0.1/camdash/` on the Pi (with `-u user:pass`) shows all cameras live
 - [ ] Starting a recording from the dashboard (or `POST /record/:id?seconds=10`) produces a playable `.mp4` under the relay's `recordings/` folder — if it doesn't, check `ffmpeg` is installed and on `$PATH`
-- [ ] The `.onion` address, opened in Tor Browser, prompts for Basic Auth and then shows all cameras live
+- [ ] The `.onion` address (`http://<your-address>.onion/camdash/`), opened in Tor Browser, prompts for Basic Auth and then shows all cameras live
 - [ ] **⏻ LOG OUT** shows the "logged out" page; after pressing Cancel on the login prompt, reloading the dashboard asks for the login again (try it in each browser you use — see section 7)
-- [ ] Port 8080 and 8081 are **not** reachable from outside your LAN (check your router's port-forwarding list — there should be none for this project)
+- [ ] Ports 8080 and 8081 (and UDP 8082, see "Cameras find the relay by themselves") are **not** reachable from outside your LAN (check your router's port-forwarding list — there should be none for this project)
 - [ ] *(If you flashed the optional person detector)* its Serial Monitor prints changing `Person: NN% No person: NN%` lines and flips to `>>> PERSON DETECTED - GPIO HIGH <<<` when someone steps in front of it
 
 ---
 
 ## 7. Before you consider this done
 
-- Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js`, and re-flash every camera's `config.h` with the same value.
+- Rotate the `camKey` / `API_KEY` — the one currently in the files was sitting in tracked source before this cleanup. Generate a new one (`openssl rand -hex 24`), put it in the Pi's `config.js` as `camKey`, and set the same value as `API_KEY` on every recorder and every detector with the live view on. `API_KEY` is one of the settings that connect a board to the relay, so it is changed over the serial port only (settings mode: `API_KEY=<the new key>`, see step 1, item 5), not from the dashboard and not over the air. Do the boards promptly and then restart the relay: a board still holding the old key counts as a key guesser, and after 10 wrong keys its address is locked out for a while (see "Guessing a key is slowed down, then stopped"); restarting the relay clears every lock.
 - Pick a real Basic Auth password in `config.php` — don't leave it at any placeholder.
   The dashboard enforces this: with an empty username or password, a password under 8 characters, or the template's `change-me`, it answers **503** and shows nothing (the reason is in the web server's error log). Generate one with `openssl rand -base64 24`.
 - Wrong logins are logged (`camdash: failed login for user ...` in the Apache error log) and slowed down: after 10 wrong logins in a row every attempt gets **429** for 15 s, doubling up to 15 minutes — even with the right password. Over Tor every visitor looks like 127.0.0.1, so the counter is global: someone guessing can lock the owner out for a while. Tor v3 *client authorization* (an `authorized_clients/*.auth` file in the hidden service directory) keeps strangers from reaching the login over Tor at all and is the recommended second lock for the `.onion` address; on the LAN the equivalent is the optional HTTPS plus a password only you know.
