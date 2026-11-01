@@ -11,8 +11,6 @@ final class CamEventStream
     public const EVENT_NAME = 'detectors';
     // The relay pushes at least once a second; this long without a byte means the stream is dead.
     public const RELAY_SILENCE_SECONDS = 10;
-    // How often the relay's stream is looked at when nothing has come: the most a push is held back.
-    public const POLL_MICROSECONDS = 5000;
 
     // Takes the bytes read so far ($buffer, which keeps any incomplete tail) and returns the `data` of every
     // COMPLETE message in it (messages end with a blank line; comments and other fields are ignored).

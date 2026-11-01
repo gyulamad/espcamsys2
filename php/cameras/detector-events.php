@@ -50,22 +50,15 @@ ignore_user_abort(false);
 echo CamEventStream::preamble();
 flush();
 
-// Read without blocking: a blocking fread() on the relay's stream waits for a whole buffer of data, so a push
-// would sit there until the next one. (The stream cannot be stream_select()ed — it is decoded through a
-// filter — so poll it; 5 ms is the most a push is ever held back.)
-stream_set_blocking($stream, false);
+// (Read without blocking: see relay_read_available() in relay.php.)
+relay_stream_nonblocking($stream);
 $buffer = '';
 $lastDataAt = microtime(true);
-while (!feof($stream) && !connection_aborted()) {
-    $chunk = fread($stream, 8192);
-    if ($chunk === false || $chunk === '') {
-        if (microtime(true) - $lastDataAt > CamEventStream::RELAY_SILENCE_SECONDS) {
-            break; // the relay pushes at least once a second: silence means it is gone; the browser reconnects
-        }
-        usleep(CamEventStream::POLL_MICROSECONDS);
+// (the relay pushes at least once a second, so a few seconds of silence mean it is gone)
+while (!connection_aborted() && ($chunk = relay_read_available($stream, $lastDataAt, CamEventStream::RELAY_SILENCE_SECONDS)) !== null) {
+    if ($chunk === '') {
         continue;
     }
-    $lastDataAt = microtime(true);
     $buffer .= $chunk;
     $messages = CamEventStream::takeMessages($buffer);
     if ($messages === null) {

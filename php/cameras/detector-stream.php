@@ -77,8 +77,13 @@ header('X-Accel-Buffering: no');
 
 set_time_limit(0);
 ignore_user_abort(false);
-while (!feof($stream) && !connection_aborted()) {
-    echo fread($stream, 8192);
+relay_stream_nonblocking($stream);
+$lastDataAt = microtime(true);
+while (!connection_aborted() && ($chunk = relay_read_available($stream, $lastDataAt)) !== null) {
+    if ($chunk === '') {
+        continue;
+    }
+    echo $chunk;
     flush();
 }
 fclose($stream);

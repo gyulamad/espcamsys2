@@ -9,6 +9,45 @@
 // Header for POSTs that carry no body, the way the relay expects them.
 const RELAY_EMPTY_POST_HEADER = "Content-Length: 0\r\n";
 
+// Reading a LIVE stream from the relay (pictures, pushed numbers).
+// A blocking fread() on the relay's stream does not return what has arrived: it waits until it has a whole
+// buffer (8 KB). A small picture — the detector's 96x96 JPEG is 1-3 KB — then sits in PHP until three or
+// four more have followed, and the browser gets them in bursts about once a second instead of one by one.
+// So live streams are read without blocking, and relay_read_available() takes a short nap when nothing has
+// come yet (the stream cannot be stream_select()ed: PHP decodes it through a filter). 5 ms is the most a
+// picture is ever held back.
+const RELAY_POLL_MICROSECONDS = 5000;
+const RELAY_SILENCE_SECONDS = 15;      // a live stream with no byte for this long is given up on
+
+function relay_stream_nonblocking($stream): void
+{
+    stream_set_blocking($stream, false);
+}
+
+// What the relay has sent so far: bytes, '' when nothing is there yet (after the nap), null at the end of the
+// stream — or when the relay has sent nothing at all for $silenceSeconds (a stalled relay must not keep a PHP
+// worker spinning for a browser that has long gone; the browser reconnects if it is still there).
+// $lastDataAt (start it with microtime(true)) is kept up to date here. Needs relay_stream_nonblocking() first.
+function relay_read_available($stream, float &$lastDataAt, int $silenceSeconds = RELAY_SILENCE_SECONDS): ?string
+{
+    if (feof($stream)) {
+        return null;
+    }
+    $chunk = fread($stream, 8192);
+    if ($chunk === false) {
+        return null;
+    }
+    if ($chunk !== '') {
+        $lastDataAt = microtime(true);
+        return $chunk;
+    }
+    if (microtime(true) - $lastDataAt > $silenceSeconds) {
+        return null;
+    }
+    usleep(RELAY_POLL_MICROSECONDS);
+    return '';
+}
+
 // Answers with a JSON error and stops.
 function json_fail(int $status, string $message): void
 {
