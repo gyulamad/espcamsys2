@@ -113,15 +113,28 @@ class CamLogic
 
     // Decides whether a request to logout.php may log the browser out: null if it may, else the
     // HTTP status to refuse it with — 405 when it is not a POST (a link, an <img> or a prefetch must
-    // not be able to log the owner out), 403 when the browser says it came from another website
-    // (same Origin / Sec-Fetch-Site rule as every state-changing endpoint, see isSameOriginRequest()).
+    // not be able to log the owner out), 403 when the browser says it came from another website.
     // The custom X-Requested-With header is NOT required here, on purpose: the LOG OUT button is a
     // plain <form> POST that works without JavaScript, and logging out gives an attacker nothing
     // but a nuisance.
+    //
+    // Why this is not just isSameOriginRequest(): every page sends "Referrer-Policy: no-referrer", and
+    // a browser then sends "Origin: null" even on a form POST to the page's own site. So:
+    //   - Sec-Fetch-Site, when the browser sends it, decides alone (page script cannot forge it);
+    //   - a browser too old to send it and sending "Origin: null" is let through (the nuisance case
+    //     above is all a forged request could achieve);
+    //   - otherwise the usual Origin-must-match-Host rule applies.
     public static function logoutRefusalStatus(array $server): ?int
     {
         if (($server['REQUEST_METHOD'] ?? '') !== 'POST') {
             return 405;
+        }
+        $site = $server['HTTP_SEC_FETCH_SITE'] ?? '';
+        if ($site !== '') {
+            return ($site === 'same-origin' || $site === 'none') ? null : 403;
+        }
+        if (($server['HTTP_ORIGIN'] ?? '') === 'null') {
+            return null;
         }
         return self::isSameOriginRequest($server) ? null : 403;
     }

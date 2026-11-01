@@ -5,7 +5,7 @@
 // 401 + login prompt for the same realm (that is what makes a browser forget a saved login). Checks that:
 //   - every page that has a header (dashboard, settings, camera settings) carries the button, as a
 //     plain POST <form> to logout.php (no JavaScript), and the form's own action works
-//   - a logged-in POST from the dashboard's origin gets the 401 + the SAME login prompt header the
+//   - a logged-in POST the way a real browser sends the button's form (Origin: null, Sec-Fetch-Site: same-origin) gets the 401 + the SAME login prompt header the
 //     dashboard's login uses, and a "logged out" page that tells the owner to press Cancel
 //   - the answer carries the safe headers and no-store, sets no cookie, and the server keeps no state:
 //     logging out many times never locks the owner out (it is not a failed login)
@@ -86,14 +86,17 @@ function stopProc(child) {
 }
 
 // One request, the way a browser (or curl) would send it. `kind` picks the headers a browser adds:
-//   'own'   - the dashboard's own <form> POST (Origin + Sec-Fetch-Site: same-origin)
+//   'form'  - what a real browser sends for the dashboard's own <form> POST: Sec-Fetch-Site: same-origin and
+//             "Origin: null" (every page sends Referrer-Policy: no-referrer, which makes browsers send a null Origin)
+//   'own'   - a request with a matching Origin + Sec-Fetch-Site: same-origin
 //   'curl'  - neither header (curl, old browsers)
 //   'xsite' - a form on another website (foreign Origin, Sec-Fetch-Site: cross-site)
-function req(method, p, { auth = true, kind = 'own' } = {}) {
+function req(method, p, { auth = true, kind = 'form' } = {}) {
   return new Promise((resolve, reject) => {
     const h = { Host: HOST };
     if (auth) h.Authorization = 'Basic ' + Buffer.from(`${AUTH.user}:${AUTH.pass}`).toString('base64');
     if (method === 'POST') h['Content-Length'] = 0;
+    if (kind === 'form') Object.assign(h, { Origin: 'null', 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/x-www-form-urlencoded' });
     if (kind === 'own') Object.assign(h, { Origin: `http://${HOST}`, 'Sec-Fetch-Site': 'same-origin' });
     if (kind === 'xsite') Object.assign(h, { Origin: 'http://evil.example', 'Sec-Fetch-Site': 'cross-site', 'Content-Type': 'application/x-www-form-urlencoded' });
     const r = nodeHttp.request(`http://${HOST}/${p}`, { method, headers: h }, (res) => {
@@ -152,6 +155,8 @@ async function main() {
     await sleep(100);
     check('...and one audit line in the error log, naming who logged out', auditLines().length === before + 1 && /camdash audit: e2e-user@127\.0\.0\.1 logged out/.test(phpLog), phpLog.slice(-300));
 
+    r = await req('POST', 'logout.php', { kind: 'own' });
+    check('POST with a matching Origin works too', r.status === 401 && /LOGGED OUT/.test(r.text), detail(r));
     r = await req('POST', 'logout.php', { kind: 'curl' });
     check('POST without Origin / Sec-Fetch-Site (curl, old browsers) works the same', r.status === 401 && r.headers['www-authenticate'] === prompt.headers['www-authenticate'] && /LOGGED OUT/.test(r.text), detail(r));
 

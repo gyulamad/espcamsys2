@@ -1370,6 +1370,14 @@ camtest_test('logoutRefusalStatus lets a same-origin POST through', function () 
     camtest_assert_equal(CamLogic::logoutRefusalStatus(['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'h']), null, 'curl / old browsers send neither header');
 });
 
+camtest_test('logoutRefusalStatus lets the real browser form POST through: Origin is "null" because of Referrer-Policy: no-referrer', function () {
+    $post = ['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'abc.onion', 'HTTP_ORIGIN' => 'null'];
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'same-origin']), null, 'modern browser');
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post), null, 'old browser without Sec-Fetch-Site');
+    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'cross-site']), 403, 'but never when the browser says cross-site');
+    camtest_assert_equal(CamLogic::logoutRefusalStatus(['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'h', 'HTTP_ORIGIN' => 'http://evil.example']), 403, 'a foreign Origin without Sec-Fetch-Site');
+});
+
 camtest_test('logoutRefusalStatus refuses everything that is not a POST with 405 (links, images, prefetches)', function () {
     foreach (['GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS', 'post', ''] as $method) {
         camtest_assert_equal(CamLogic::logoutRefusalStatus(['REQUEST_METHOD' => $method, 'HTTP_HOST' => 'h']), 405, "method '$method'");
@@ -1380,7 +1388,6 @@ camtest_test('logoutRefusalStatus refuses everything that is not a POST with 405
 camtest_test('logoutRefusalStatus refuses a POST another website caused with 403', function () {
     $post = ['REQUEST_METHOD' => 'POST', 'HTTP_HOST' => 'abc.onion'];
     camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_ORIGIN' => 'http://evil.example']), 403);
-    camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_ORIGIN' => 'null']), 403);
     camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'cross-site']), 403);
     camtest_assert_equal(CamLogic::logoutRefusalStatus($post + ['HTTP_SEC_FETCH_SITE' => 'same-site']), 403);
 });
