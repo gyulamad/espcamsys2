@@ -497,6 +497,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     <button class="btn active" id="btn-grid" onclick="setLayout('grid')">⊞ GRID</button>
     <button class="btn"        id="btn-list" onclick="setLayout('list')">☰ LIST</button>
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
+    <a class="btn" id="btn-simple-list" href="simple-list.php"
+       title="Every camera as a small picture on one plain page; click one to see it large">▦ SIMPLE LIST</a>
+    <a class="btn" id="btn-simple-view" href="simple-view.php"
+       title="One camera large, with PREV / NEXT and a slideshow — for a big screen">▣ SIMPLE VIEW</a>
     <a class="btn" id="btn-settings" href="settings-page.php"
        title="Settings of the whole system: recording lengths, relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
     <?= CamLayout::logoutForm() ?>

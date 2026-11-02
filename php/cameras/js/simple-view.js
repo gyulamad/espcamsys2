@@ -1,0 +1,112 @@
+'use strict';
+// simple-view.js — simple-view.php: shows one camera, the pager, the status line and the slideshow. The
+// decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
+// them to the page, status.php (recording) and detector-status.php (motion).
+
+(function () {
+  const S = window.CamSimple;
+  const root = document.getElementById('view');
+  if (!S || !root) return;
+
+  const POLL_MS = 2000;     // how often the relay is asked what the cameras do
+  const TICK_MS = 1000;     // clock, and how often the slideshow looks at the situation
+  const RETRY_MS = 3000;    // a broken picture stream is opened again after this long
+  const DEFAULT_SLIDESHOW_SECONDS = 10;
+
+  function readCameras() {
+    try {
+      const list = JSON.parse(root.dataset.cameras);
+      return Array.isArray(list) ? list.filter((c) => c && typeof c.id === 'string') : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  const cameras = readCameras();
+  const ids = cameras.map((c) => c.id);
+  const nameOf = (id) => (cameras.find((c) => c.id === id) || { name: id }).name;
+  const slideshowMs = (Number(root.dataset.slideshowSeconds) || DEFAULT_SLIDESHOW_SECONDS) * 1000;
+
+  const el = (id) => document.getElementById(id);
+  const picture = el('picture');
+  let current = ids.includes(root.dataset.current) ? root.dataset.current : ids[0];
+  let slideshow = null;            // the running slideshow, or null
+  let status = null;               // the last answers of the relay (null: not known)
+  let detectors = null;
+  let retryTimer = null;
+
+  function renderRecording() {
+    const rec = el('rec');
+    const known = status && status[current];
+    const on = known && status[current].recording === true;
+    rec.textContent = 'RECORDING: ' + (status === null ? '–' : on ? 'ON' : 'off');
+    rec.className = on ? 'rec-on' : 'rec-off';
+  }
+
+  // The stream is a never-ending picture: switching the camera replaces it, which closes the old connection.
+  function show(id) {
+    current = id;
+    picture.src = 'stream.php?cam=' + encodeURIComponent(id);
+    picture.alt = nameOf(id);
+    el('cam-name').textContent = nameOf(id);
+    document.title = nameOf(id) + ' — ESP32-CAM Dashboard';
+    try { history.replaceState(null, '', 'simple-view.php?cam=' + encodeURIComponent(id)); } catch (e) { /* not allowed here: the address just stays */ }
+    renderRecording();
+  }
+
+  function step(direction) {
+    const id = S.neighbor(ids, current, direction);
+    if (id === null) return;
+    if (slideshow) slideshow.show(id, Date.now());   // the viewer's choice gets a full time
+    show(id);
+  }
+
+  function setSlideshow(on) {
+    slideshow = on ? S.createSlideshow(ids, current, slideshowMs, Date.now()) : null;
+    const button = el('slideshow');
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    button.textContent = on ? '⏸ SLIDESHOW ON' : '▶ SLIDESHOW';
+  }
+
+  function tick() {
+    el('clock').textContent = S.formatClock(new Date());
+    if (!slideshow) return;
+    const next = slideshow.tick(Date.now(), S.priorities(ids, status, detectors));
+    if (next !== null) show(next);
+  }
+
+  async function getJson(url) {
+    try {
+      const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data && typeof data === 'object' && !Array.isArray(data) && !data.error ? data : null;
+    } catch (e) {
+      return null;   // the relay is out of reach this round; the next poll tries again
+    }
+  }
+
+  async function poll() {
+    [status, detectors] = await Promise.all([getJson('status.php'), getJson('detector-status.php')]);
+    renderRecording();
+    tick();   // a camera that has just started recording is shown now, not at the next second
+  }
+
+  picture.addEventListener('error', () => {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => show(current), RETRY_MS);
+  });
+  el('prev').addEventListener('click', () => step(-1));
+  el('next').addEventListener('click', () => step(1));
+  el('slideshow').addEventListener('click', () => setSlideshow(slideshow === null));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+  });
+
+  tick();
+  setInterval(tick, TICK_MS);
+  poll();
+  setInterval(poll, POLL_MS);
+})();

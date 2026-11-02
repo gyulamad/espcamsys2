@@ -245,6 +245,27 @@ class CamLogic
         return null;
     }
 
+    // The camera a page was asked to show: the one whose id is $requested, or — when no id was given ('') — the
+    // first one. Null when there is no such camera (an unknown id, or no cameras at all).
+    public static function selectCamera(array $cameras, string $requested): ?array
+    {
+        if ($requested === '') {
+            return $cameras[0] ?? null;
+        }
+        return self::findCameraById($cameras, $requested);
+    }
+
+    // What the simple pages' scripts need to know of every camera, nothing more: [{id, name}]
+    // (a camera without a name is shown by its id).
+    public static function cameraSummaries(array $cameras): array
+    {
+        return array_map(static function (array $cam): array {
+            $id = (string) $cam['id'];
+            $name = trim((string) ($cam['name'] ?? ''));
+            return ['id' => $id, 'name' => $name === '' ? $id : $name];
+        }, array_values($cameras));
+    }
+
     // Grid column count for the dashboard: 1 camera -> 1 column, up to 4 ->
     // 2 columns, more than that -> 3 columns. Pure presentation logic, but
     // easy to get subtly wrong at the boundaries, so worth pinning down.
@@ -638,39 +659,66 @@ class CamLogic
              'label' => 'Dashboard password', 'help' => 'At least 8 characters. Leave empty to keep the current one.'],
             ['key' => 'relay_url', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
              'label' => 'Relay address', 'help' => 'Where this dashboard reaches the relay, e.g. http://127.0.0.1:8080. A new address is tested before it is saved.'],
-            ['key' => 'record_seconds', 'type' => 'int', 'group' => 'Recording', 'restart' => false, 'scope' => 'dashboard',
-             'min' => 1, 'max' => 3600, 'default' => self::DEFAULT_RECORD_SECONDS,
-             'label' => 'Manual recording length (seconds)', 'help' => 'How long the RECORD and RECORD ALL buttons on the dashboard record for. Pressing them again mid-recording extends it by this many seconds from that moment.'],
-            ['key' => 'switch_off_minutes', 'type' => 'int', 'group' => 'Recording', 'restart' => false, 'scope' => 'dashboard',
-             'min' => self::MIN_SWITCH_OFF_MINUTES, 'max' => self::MAX_SWITCH_OFF_MINUTES, 'default' => self::DEFAULT_SWITCH_OFF_MINUTES,
-             'label' => 'Recording OFF time (minutes)', 'help' => 'How long the dashboard\'s recording OFF buttons keep recording switched off before it switches itself back ON. 0 or -1 = off until you press ON.'],
+            self::intField('record_seconds', 'Recording',
+             'Manual recording length (seconds)', 'How long the RECORD and RECORD ALL buttons on the dashboard record for. Pressing them again mid-recording extends it by this many seconds from that moment.'),
+            self::intField('switch_off_minutes', 'Recording',
+             'Recording OFF time (minutes)', 'How long the dashboard\'s recording OFF buttons keep recording switched off before it switches itself back ON. 0 or -1 = off until you press ON.'),
+            self::intField('slideshow_seconds', 'Dashboard',
+             'Slideshow time per camera (seconds)', 'How long the SLIDESHOW on the simple view page shows one camera before it moves on to the next. A camera that starts recording, or whose person detector sees motion, is shown at once.'),
         ];
     }
 
     const DEFAULT_RECORD_SECONDS = 60;
     const DEFAULT_SWITCH_OFF_MINUTES = 60;
-    // The same limits the SETTINGS page enforces (dashboardFields below): -1 = until switched back ON, at most a week.
+    // The same limits the SETTINGS page enforces (dashboardFields above): -1 = until switched back ON, at most a week.
     const MIN_SWITCH_OFF_MINUTES = -1;
     const MAX_SWITCH_OFF_MINUTES = 10080;
+    const DEFAULT_SLIDESHOW_SECONDS = 10;
+
+    // The dashboard's whole-number settings: key => [lowest, highest, default]. ONE place for the limits, so
+    // the settings page, the check of a save, the file loader and the readers below cannot disagree.
+    const INT_SETTINGS = [
+        'record_seconds'     => [1, 3600, self::DEFAULT_RECORD_SECONDS],
+        'switch_off_minutes' => [self::MIN_SWITCH_OFF_MINUTES, self::MAX_SWITCH_OFF_MINUTES, self::DEFAULT_SWITCH_OFF_MINUTES],
+        'slideshow_seconds'  => [2, 300, self::DEFAULT_SLIDESHOW_SECONDS],
+    ];
+
+    // The description of one whole-number setting for the settings page, from INT_SETTINGS.
+    private static function intField(string $key, string $group, string $label, string $help): array
+    {
+        [$min, $max, $default] = self::INT_SETTINGS[$key];
+        return ['key' => $key, 'type' => 'int', 'group' => $group, 'restart' => false, 'scope' => 'dashboard',
+                'min' => $min, 'max' => $max, 'default' => $default, 'label' => $label, 'help' => $help];
+    }
+
+    // A whole-number setting as it is in effect: the configured value if it is a whole number inside its
+    // limits, else its default (a hand-edited config.php must never break a page).
+    public static function intSetting(array $config, string $key): int
+    {
+        [$min, $max, $default] = self::INT_SETTINGS[$key];
+        $v = $config[$key] ?? null;
+        if (!is_int($v) && !(is_string($v) && preg_match('/^\s*-?\d+\s*$/D', $v))) {
+            return $default;
+        }
+        return (int) $v >= $min && (int) $v <= $max ? (int) $v : $default;
+    }
 
     // The dashboard's manual recording length in seconds (what the RECORD buttons use).
     public static function recordSeconds(array $config): int
     {
-        $v = $config['record_seconds'] ?? null;
-        if ((is_int($v) || (is_string($v) && preg_match('/^\s*\d+\s*$/D', $v))) && (int) $v >= 1 && (int) $v <= 3600) {
-            return (int) $v;
-        }
-        return self::DEFAULT_RECORD_SECONDS;
+        return self::intSetting($config, 'record_seconds');
     }
 
     // Minutes the dashboard's OFF buttons switch recording off for (0 or negative = until switched ON).
     public static function switchOffMinutes(array $config): int
     {
-        $v = $config['switch_off_minutes'] ?? null;
-        if ((is_int($v) || (is_string($v) && preg_match('/^\s*-?\d+\s*$/D', $v))) && (int) $v >= self::MIN_SWITCH_OFF_MINUTES && (int) $v <= self::MAX_SWITCH_OFF_MINUTES) {
-            return (int) $v;
-        }
-        return self::DEFAULT_SWITCH_OFF_MINUTES;
+        return self::intSetting($config, 'switch_off_minutes');
+    }
+
+    // Seconds the simple view's slideshow shows one camera.
+    public static function slideshowSeconds(array $config): int
+    {
+        return self::intSetting($config, 'slideshow_seconds');
     }
 
     public static function isDashboardKey(string $key): bool
@@ -912,15 +960,13 @@ class CamLogic
                     }
                     $changes[$key] = $v;
                 }
-            } elseif ($key === 'record_seconds' || $key === 'switch_off_minutes') {
-                [$lo, $hi] = $key === 'record_seconds' ? [1, 3600] : [-1, 10080];
+            } elseif (isset(self::INT_SETTINGS[$key])) {
+                [$lo, $hi] = self::INT_SETTINGS[$key];
                 if (!preg_match('/^\s*-?\d+\s*$/D', $value) || (int) $value < $lo || (int) $value > $hi) {
                     return ['ok' => false, 'error' => $key . ' must be a whole number between ' . $lo . ' and ' . $hi];
                 }
-                $v = (int) $value;
-                $now = $key === 'record_seconds' ? self::recordSeconds($current) : self::switchOffMinutes($current);
-                if ($v !== $now) {
-                    $changes[$key] = $v;
+                if ((int) $value !== self::intSetting($current, $key)) {
+                    $changes[$key] = (int) $value;
                 }
             } else {
                 return ['ok' => false, 'error' => 'unknown dashboard setting: ' . $key];
@@ -942,7 +988,7 @@ class CamLogic
     // edited). What the settings pages change is kept in a small JSON file the web server may write —
     // not code, so a bug can never turn it into code that runs — and laid over config.php when the
     // config is loaded. Only these keys can be overridden; anything else in the file is ignored.
-    const CONFIG_OVERRIDE_KEYS = ['auth_user', 'auth_pass', 'relay_url', 'relay_control_key', 'record_seconds', 'switch_off_minutes', 'cameras'];
+    const CONFIG_OVERRIDE_KEYS = ['auth_user', 'auth_pass', 'relay_url', 'relay_control_key', 'record_seconds', 'switch_off_minutes', 'slideshow_seconds', 'cameras'];
 
     // What of a decoded settings.json may be used: only the known keys, each with the right type, and
     // cameras with a valid id. Anything else is dropped, so a damaged or tampered file can neither add
@@ -958,7 +1004,7 @@ class CamLogic
                 $out[$k] = $decoded[$k];
             }
         }
-        foreach (['record_seconds', 'switch_off_minutes'] as $k) {
+        foreach (array_keys(self::INT_SETTINGS) as $k) {
             if (isset($decoded[$k]) && is_int($decoded[$k])) {
                 $out[$k] = $decoded[$k];
             }

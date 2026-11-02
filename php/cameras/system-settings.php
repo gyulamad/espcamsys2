@@ -80,9 +80,9 @@ if ($method === 'GET') {
         if ($f['type'] === 'secret') {
             $f['isSet'] = (string) ($config[$f['key']] ?? '') !== '';
         } else {
-            $f['value'] = $f['key'] === 'record_seconds' ? (string) CamLogic::recordSeconds($config)
-                : ($f['key'] === 'switch_off_minutes' ? (string) CamLogic::switchOffMinutes($config)
-                : (string) ($config[$f['key']] ?? ''));
+            $f['value'] = $f['type'] === 'int'
+                ? (string) CamLogic::intSetting($config, $f['key'])
+                : (string) ($config[$f['key']] ?? '');
         }
         $f['source'] = 'config.php';
         $fields[] = $f;

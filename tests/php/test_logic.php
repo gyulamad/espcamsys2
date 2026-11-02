@@ -1490,4 +1490,72 @@ camtest_test('rebootMenu: an unknown scope is a programming error, not a silent 
     camtest_assert_true($threw, 'InvalidArgumentException expected');
 });
 
+// ── slideshow_seconds, and the whole-number settings table ───────────
+
+camtest_test('slideshowSeconds: configured value, or the default 10 when missing or out of range', function () {
+    camtest_assert_equal(CamLogic::slideshowSeconds([]), 10);
+    camtest_assert_equal(CamLogic::slideshowSeconds(['slideshow_seconds' => 30]), 30);
+    camtest_assert_equal(CamLogic::slideshowSeconds(['slideshow_seconds' => '45']), 45);
+    camtest_assert_equal(CamLogic::slideshowSeconds(['slideshow_seconds' => 2]), 2);
+    camtest_assert_equal(CamLogic::slideshowSeconds(['slideshow_seconds' => 300]), 300);
+    foreach ([1, 0, -5, 301, 99999, 'abc', '', null, 2.5, [], true] as $bad) {
+        camtest_assert_equal(CamLogic::slideshowSeconds(['slideshow_seconds' => $bad]), 10, var_export($bad, true));
+    }
+});
+
+camtest_test('validateDashboardUpdate: slideshow_seconds is checked (2-300) and only a real change is returned', function () {
+    $cur = ['slideshow_seconds' => 10];
+    camtest_assert_equal(CamLogic::validateDashboardUpdate(['slideshow_seconds' => '10'], $cur), ['ok' => true, 'changes' => []]);
+    camtest_assert_equal(CamLogic::validateDashboardUpdate(['slideshow_seconds' => '25'], $cur), ['ok' => true, 'changes' => ['slideshow_seconds' => 25]]);
+    camtest_assert_equal(CamLogic::validateDashboardUpdate(['slideshow_seconds' => '10'], []), ['ok' => true, 'changes' => []], 'the default is not a change');
+    foreach (['1', '301', '0', '-3', 'abc', '', '5.5', '1e2', '5 s'] as $bad) {
+        $r = CamLogic::validateDashboardUpdate(['slideshow_seconds' => $bad], $cur);
+        camtest_assert_equal($r['ok'], false, var_export($bad, true));
+        camtest_assert_true(strpos($r['error'], 'slideshow_seconds must be a whole number between 2 and 300') === 0, $r['error']);
+    }
+});
+
+camtest_test('the settings page describes every whole-number setting with the limits the checks use', function () {
+    $ints = [];
+    foreach (CamLogic::dashboardFields() as $f) {
+        if ($f['type'] === 'int') {
+            $ints[$f['key']] = [$f['min'], $f['max'], $f['default']];
+            camtest_assert_true(CamLogic::isDashboardKey($f['key']));
+        }
+    }
+    camtest_assert_equal($ints, CamLogic::INT_SETTINGS);
+    camtest_assert_true(isset($ints['slideshow_seconds']));
+});
+
+camtest_test('slideshow_seconds is a saved setting: kept from settings.json only as a whole number, laid over config.php', function () {
+    camtest_assert_true(in_array('slideshow_seconds', CamLogic::CONFIG_OVERRIDE_KEYS, true));
+    camtest_assert_equal(CamLogic::sanitizeOverrides(['slideshow_seconds' => 20]), ['slideshow_seconds' => 20]);
+    camtest_assert_equal(CamLogic::sanitizeOverrides(['slideshow_seconds' => '20']), []);
+    camtest_assert_equal(CamLogic::mergeConfig(['slideshow_seconds' => 10], ['slideshow_seconds' => 20])['slideshow_seconds'], 20);
+    camtest_assert_equal(CamLogic::configOverrides(['slideshow_seconds' => 10], ['slideshow_seconds' => 20]), ['slideshow_seconds' => 20]);
+});
+
+// ── selectCamera / cameraSummaries ───────────────────────────────────
+
+camtest_test('selectCamera: the named camera, the first one when none is named, null otherwise', function () {
+    $cams = [['id' => 'a', 'name' => 'A'], ['id' => 'b', 'name' => 'B']];
+    camtest_assert_equal(CamLogic::selectCamera($cams, 'b'), $cams[1]);
+    camtest_assert_equal(CamLogic::selectCamera($cams, ''), $cams[0]);
+    camtest_assert_equal(CamLogic::selectCamera($cams, 'zzz'), null);
+    camtest_assert_equal(CamLogic::selectCamera($cams, 'B'), null, 'ids are case sensitive');
+    camtest_assert_equal(CamLogic::selectCamera($cams, '../b'), null);
+    camtest_assert_equal(CamLogic::selectCamera([], ''), null);
+    camtest_assert_equal(CamLogic::selectCamera([], 'a'), null);
+});
+
+camtest_test('cameraSummaries: id and name only; a missing or blank name falls back to the id', function () {
+    camtest_assert_equal(CamLogic::cameraSummaries([
+        ['id' => 'a', 'name' => 'Front', 'icon' => 'x', 'url' => 'http://secret', 'detector' => 'd'],
+        ['id' => 'b'],
+        ['id' => 'c', 'name' => '  '],
+    ]), [['id' => 'a', 'name' => 'Front'], ['id' => 'b', 'name' => 'b'], ['id' => 'c', 'name' => 'c']]);
+    camtest_assert_equal(CamLogic::cameraSummaries([]), []);
+    camtest_assert_equal(CamLogic::cameraSummaries([5 => ['id' => 'a', 'name' => 'A']]), [['id' => 'a', 'name' => 'A']], 'reindexed');
+});
+
 exit(camtest_summarize());

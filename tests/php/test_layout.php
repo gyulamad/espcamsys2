@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/framework.php';
+require_once __DIR__ . '/../../php/cameras/lib/Logic.php';
 require_once __DIR__ . '/../../php/cameras/lib/Layout.php';
 
 // ── logoutForm ───────────────────────────────────────────────────────
@@ -115,6 +116,118 @@ camtest_test('loggedOutPage explains the login prompt that comes with it', funct
 camtest_test('loggedOutPage is self-contained: no script, no outside resource', function () {
     $html = CamLayout::loggedOutPage();
     camtest_assert_true(!preg_match('/<script|https?:\/\/|@import|<link|<img|<iframe/i', $html));
+});
+
+// ── the simple camera pages ──────────────────────────────────────────
+
+// The names of every attribute that is an event handler (onclick, onerror ...) on any element of the page,
+// found by parsing it the way a browser would — text that merely contains "onerror=" inside an escaped
+// attribute value is not a handler.
+function layout_handler_attributes(string $html): array
+{
+    $doc = new DOMDocument();
+    @$doc->loadHTML('<?xml encoding="UTF-8">' . $html);
+    $found = [];
+    foreach ($doc->getElementsByTagName('*') as $el) {
+        foreach ($el->attributes as $attr) {
+            if (stripos($attr->name, 'on') === 0) {
+                $found[] = $el->nodeName . '@' . $attr->name;
+            }
+        }
+    }
+    return $found;
+}
+
+$SIMPLE_CAMS = [
+    ['id' => 'cam1', 'name' => 'Front Door', 'url' => 'http://secret-relay:8080'],
+    ['id' => 'cam-2', 'name' => 'Garage'],
+];
+$HOSTILE = [['id' => 'cam1', 'name' => '"><script>window.__pwned=1</script>'], ['id' => 'a.b-c', 'name' => "x' onerror='alert(1)"]];
+
+camtest_test('simpleListPage: one thumbnail per camera, a live picture that links to its large view', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleListPage($SIMPLE_CAMS);
+    camtest_assert_true(strpos($html, '<!DOCTYPE html>') === 0);
+    camtest_assert_equal(substr_count($html, 'class="thumb"'), 2);
+    camtest_assert_true(strpos($html, 'href="simple-view.php?cam=cam1"') !== false);
+    camtest_assert_true(strpos($html, 'src="stream.php?cam=cam-2"') !== false);
+    camtest_assert_true(strpos($html, 'Front Door') !== false && strpos($html, 'Garage') !== false);
+    camtest_assert_true(strpos($html, 'data-count="2"') !== false);
+    camtest_assert_true(strpos($html, '2 CAMERAS') !== false);
+});
+
+camtest_test('simpleListPage: loads the logic and the list script, links the storage warning, leaks no relay address', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleListPage($SIMPLE_CAMS);
+    camtest_assert_true(strpos($html, '<script src="js/simple-logic.js">') !== false);
+    camtest_assert_true(strpos($html, '<script src="js/simple-list.js">') !== false);
+    camtest_assert_true(strpos($html, "fetch('storage.php'") !== false);
+    camtest_assert_true(strpos($html, 'secret-relay') === false, 'the relay address is not the browser\'s business');
+    camtest_assert_true(strpos($html, 'href="fonts/fonts.css"') !== false && !preg_match('/googleapis|gstatic/', $html));
+});
+
+camtest_test('simpleListPage: one camera says CAMERA, none says so and has no grid', function () {
+    camtest_assert_true(strpos(CamLayout::simpleListPage([['id' => 'x', 'name' => 'X']]), '1 CAMERA<') !== false);
+    $html = CamLayout::simpleListPage([]);
+    camtest_assert_true(strpos($html, 'No cameras are configured') !== false);
+    camtest_assert_true(strpos($html, 'id="thumbs"') === false);
+});
+
+camtest_test('simpleListPage: a hostile camera name or id never becomes markup, script or an inline handler', function () use ($HOSTILE) {
+    $html = CamLayout::simpleListPage($HOSTILE);
+    camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
+    camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
+    camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 3, 'only our two script files and the storage warning');
+});
+
+camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
+    $html = CamLayout::simpleListPage([['id' => 'a b&c', 'name' => 'x']]);
+    camtest_assert_true(strpos($html, 'simple-view.php?cam=a%20b%26c') !== false);
+    camtest_assert_true(strpos($html, 'stream.php?cam=a%20b%26c') !== false);
+});
+
+camtest_test('simpleViewPage: the picture, pager, status line and slideshow button for the chosen camera', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[1], 15);
+    camtest_assert_true(strpos($html, '<img id="picture" src="stream.php?cam=cam-2"') !== false);
+    foreach (['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Garage<', 'id="rec"', 'id="slideshow"'] as $needle) {
+        camtest_assert_true(strpos($html, $needle) !== false, $needle);
+    }
+    camtest_assert_true(strpos($html, 'RECORDING: –') !== false, 'unknown until the relay has been asked');
+    camtest_assert_true(strpos($html, '<title>Garage — ESP32-CAM Dashboard</title>') !== false);
+    camtest_assert_true(strpos($html, 'href="simple-list.php"') !== false && strpos($html, 'href="./"') !== false, 'ways back');
+    camtest_assert_true(strpos($html, '<script src="js/simple-view.js">') !== false && strpos($html, 'js/simple-logic.js') !== false);
+});
+
+camtest_test('simpleViewPage: the scripts get the camera list, the current camera and the slideshow time as data attributes', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 25);
+    camtest_assert_true(preg_match('/id="view" data-cameras="([^"]*)" data-current="([^"]*)" data-slideshow-seconds="(\d+)"/', $html, $m) === 1);
+    camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true), [['id' => 'cam1', 'name' => 'Front Door'], ['id' => 'cam-2', 'name' => 'Garage']]);
+    camtest_assert_equal($m[2], 'cam1');
+    camtest_assert_equal($m[3], '25');
+    camtest_assert_true(strpos($html, 'secret-relay') === false, 'only id and name leave the server');
+});
+
+camtest_test('simpleViewPage: a hostile camera name or id stays text, in the page and in the data attribute', function () use ($HOSTILE) {
+    $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
+    camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
+    camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 3);
+    preg_match('/data-cameras="([^"]*)"/', $html, $m);
+    camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
+    $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
+    camtest_assert_true(strpos($html, "x' onerror=") === false && strpos($html, 'x&#039; onerror=&#039;alert(1)') !== false);
+});
+
+camtest_test('simpleViewPage: no cameras gives a plain notice and no scripts; a nameless camera is shown by its id', function () {
+    $html = CamLayout::simpleViewPage([], null, 10);
+    camtest_assert_true(strpos($html, 'No cameras are configured') !== false);
+    camtest_assert_true(strpos($html, 'id="picture"') === false && strpos($html, 'js/simple-view.js') === false);
+    $one = [['id' => 'solo']];
+    camtest_assert_true(strpos(CamLayout::simpleViewPage($one, $one[0], 10), 'id="cam-name">solo<') !== false);
+});
+
+camtest_test('the simple pages carry the storage warning like every other page with the dashboard look', function () use ($SIMPLE_CAMS) {
+    camtest_assert_true(strpos(CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), "fetch('storage.php'") !== false);
+    camtest_assert_true(strpos(CamLayout::simpleListPage([]), "fetch('storage.php'") !== false);
 });
 
 exit(camtest_summarize());
