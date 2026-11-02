@@ -230,4 +230,28 @@ camtest_test('the simple pages carry the storage warning like every other page w
     camtest_assert_true(strpos(CamLayout::simpleListPage([]), "fetch('storage.php'") !== false);
 });
 
+// The look of the simple pages is pinned where a regression was reported: a link's caption took the browser's
+// blue on the dark page, and a big screen showed the stream at its own small size instead of filling the room.
+function layout_css_rule(string $html, string $selector): string
+{
+    return preg_match('/(?:^|\s|\})' . preg_quote($selector, '/') . '\s*\{([^}]*)\}/', $html, $m) === 1 ? $m[1] : '';
+}
+
+camtest_test('simple list: the thumbnail link and its caption have their own readable colour, not the browser\'s link blue', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleListPage($SIMPLE_CAMS);
+    camtest_assert_true(preg_match('/color:\s*var\(--text\)/', layout_css_rule($html, '.thumb')) === 1, '.thumb sets a colour (an <a> would be blue, and purple once visited)');
+    camtest_assert_true(strpos(layout_css_rule($html, '.thumb'), 'text-decoration: none') !== false);
+    camtest_assert_true(preg_match('/color:\s*var\(--text\)/', layout_css_rule($html, '.thumb .cap')) === 1, 'the caption too');
+});
+
+camtest_test('simple view: the picture fills the whole free area — it is laid over it, not capped at its own size', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    $area = layout_css_rule($html, '.picture');
+    $img = layout_css_rule($html, '.picture img');
+    camtest_assert_true(strpos($area, 'position: relative') !== false && strpos($area, 'flex: 1 1 auto') !== false && strpos($area, 'min-height: 0') !== false, $area);
+    camtest_assert_true(strpos($img, 'position: absolute') !== false && strpos($img, 'width: 100%') !== false && strpos($img, 'height: 100%') !== false, $img);
+    camtest_assert_true(strpos($img, 'object-fit: contain') !== false, 'the shape of the stream is kept');
+    camtest_assert_true(strpos($img, 'max-width') === false && strpos($img, 'max-height') === false, 'a max-* size can only shrink a picture, never enlarge it');
+});
+
 exit(camtest_summarize());

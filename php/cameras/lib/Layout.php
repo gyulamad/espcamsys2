@@ -129,15 +129,19 @@ HTML;
   .simple-list .bar { display: flex; gap: 12px; align-items: center; padding: 8px 12px; font-family: var(--mono); color: var(--muted); }
   .thumbs { --thumb-w: 160px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--thumb-w), 1fr)); gap: 8px; padding: 0 12px 12px; justify-content: center; }
   .thumbs.fitted { grid-template-columns: repeat(var(--cols), var(--thumb-w)); }
-  .thumb { position: relative; display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3; }
+  /* an <a>: without its own colour the caption would take the browser's link blue, unreadable on this dark page */
+  .thumb { position: relative; display: block; color: var(--text); text-decoration: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3; }
   .thumb:hover, .thumb:focus-visible { border-color: var(--accent); }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .8rem; background: rgba(11,14,20,.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* the large view: the picture takes everything the status line leaves */
   .simple-view-root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-  .picture { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; }
-  .picture img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  /* The picture fills ALL the room the status line leaves, however big the screen and however small the stream:
+     max-width / max-height would only ever shrink it, never enlarge it. The image is laid over the whole area
+     and object-fit: contain keeps its shape (black bars where the shapes differ). */
+  .picture { position: relative; flex: 1 1 auto; min-height: 0; background: #000; }
+  .picture img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
   .status { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 14px; background: var(--surface); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 1.1rem; }
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
