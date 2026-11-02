@@ -721,6 +721,21 @@ The **📼 ALL FILES** button in the dashboard header opens one list with the sa
 
 Nothing new is exposed: the page asks `recordings.php` for each camera's list and for every play, download, delete and "seen" mark, so the dashboard login, the anti-forgery header, the file-name check and the audit log are the same as for the per-camera lists. The list code lives in one file, `php/cameras/lib/recordings-list.js`, which both the dashboard and the ALL FILES page include (`deploy.sh` copies it to `lib/`, which the web server never serves; PHP writes it into the pages).
 
+## The simple camera pages (dashboard → ▦ SIMPLE LIST / ▣ SIMPLE VIEW)
+
+Two plain pages for a wall screen or a quick look, behind the same login as the dashboard:
+
+- **▦ SIMPLE LIST** (`simple-list.php`): every camera as a live thumbnail and nothing else. The thumbnails are as big as all of them fit on the screen, but never narrower than 160 px (below that a picture is no longer recognisable): with many cameras the page scrolls instead. Click a thumbnail to open it in the simple view.
+- **▣ SIMPLE VIEW** (`simple-view.php?cam=<id>`, no `cam` = the first camera): one camera in large, a **← PREV** / **NEXT →** pager (the arrow keys work too) and a status line: time, camera name and **RECORDING: ON / off** (`–` while the relay cannot be asked).
+- **▶ SLIDESHOW** (button on the simple view): shows the cameras one after the other, each for **Slideshow time per camera** seconds (⚙ SETTINGS, `slideshow_seconds` in `config.php`, 2-300, default 10). Cameras that are busy come first:
+  1. A camera that **starts recording**, or whose paired person detector reports **motion at or above its MOTION_THRESH**, is shown at once, without waiting for the time to run out. Motion does not pull the view away from a camera that is recording; a new recording does.
+  2. When the time is up, only the cameras of the highest priority take part: while any camera records, the ones that do not are skipped; with none recording, the ones in motion; with none of either, all of them. Recording beats motion, motion beats the rest.
+  3. Pressing PREV / NEXT during a slideshow shows that camera for a full time. Pressing the button again ends the slideshow.
+
+  Motion needs a person detector paired with the camera (see the detector section): a camera without one can only take part by recording.
+
+The pages' scripts are the files in `js/` (copied by `deploy.sh`); they are plain files with no secrets, everything they show comes from the dashboard's own pages behind the login.
+
 ## The SETTINGS page (dashboard → ⚙ SETTINGS)
 
 Every setting of the main system can be changed from the dashboard instead of editing `config.js` / `config.php` over ssh: the relay's ports, camera key, control key, pre-roll, alarm recording length and log rotation size, plus the dashboard's own login and relay address. **File and folder paths are not on this page, on purpose:** `logFile`, `firmwareDir`, `deviceSettingsDir` and `switchFile` decide where the relay writes and serves files as its own user, and anyone who can save settings here (or who borrows the dashboard login) could otherwise point them at any folder on the Pi. Change those on the Pi itself, in the relay's `config.js` (or its environment variables `LOG_FILE`, `FIRMWARE_DIR`, `DEVICE_SETTINGS_DIR`, `SWITCH_FILE`) and restart the relay; the dashboard refuses to send them even if asked. The form is generated from the relay's list of settings, so each one comes with its description and limits.

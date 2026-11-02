@@ -5,7 +5,7 @@
 // the repo (so the developer's own php/cameras/config.php, which is gitignored and may well exist, can
 // never change the result), against throwaway destination folders (CAMDASH_DIR / CAMDASH_STRAY_DIR).
 // Works as root and as a normal user. Checks that:
-//   - the pages, lib/, fonts/ and .htaccess are copied; a stale control.php and config.php.bak are removed
+//   - the pages, lib/, js/, fonts/ and .htaccess are copied; a stale control.php and config.php.bak are removed
 //   - a config.php already in the web folder is left alone when the repo has none
 //   - a config.php kept in php/cameras/ is copied along, as the script always did — and when that
 //     REPLACES a different one the owner is told first (settings saved on the dashboard would be lost)
@@ -66,6 +66,7 @@ try {
   check('the LOG OUT pieces are copied too (logout.php and lib/Layout.php)', fs.existsSync(path.join(dest, 'logout.php')) && fs.existsSync(path.join(dest, 'lib/Layout.php')));
   check('the ALL FILES page and the footage list script it shares with the dashboard are copied', fs.existsSync(path.join(dest, 'all-recordings.php')) && fs.existsSync(path.join(dest, 'lib/recordings-list.js')));
   check('.htaccess is copied', fs.existsSync(path.join(dest, '.htaccess')));
+  check('the simple camera pages are copied with their scripts (js/)', ['simple-list.php', 'simple-view.php', 'js/simple-logic.js', 'js/simple-list.js', 'js/simple-view.js'].every((f) => fs.existsSync(path.join(dest, f))));
   // F-19: the typefaces come from fonts/ in the web folder — no page asks Google for them
   const fontCss = fs.existsSync(path.join(dest, 'fonts/fonts.css')) ? fs.readFileSync(path.join(dest, 'fonts/fonts.css'), 'utf8') : '';
   const fontFiles = [...fontCss.matchAll(/url\('([^']+)'\)/g)].map((m) => m[1]);

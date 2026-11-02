@@ -390,6 +390,11 @@ fi
 #     plain POST form; logout.php answers a logged-in same-origin POST with 401 + the login's own realm and
 #     a "logged out" page; a GET or a cross-site POST is refused and never prompts; one audit line per real
 #     logout; logging out never feeds the guess throttle. Override the port with E2E_LOGOUT_PORT.
+#   - tests/e2e/test_dashboard_simple_pages_e2e.js: the simple camera pages (real php -S): the dashboard's
+#     SIMPLE LIST / SIMPLE VIEW buttons, both pages behind the login, one thumbnail per camera linking to its
+#     large view, the camera asked for (default the first; unknown 404, array / traversal ids refused), the
+#     camera list and slideshow time handed to the script (setting, default, settings.json), hostile names
+#     staying text, the scripts served. Override the port with E2E_SIMPLE_PORT.
 #   - tests/e2e/test_dashboard_switch_e2e.js: the dashboard's recording-switch.php
 #     proxy (real php -S in front of a recording fake relay) — login, the
 #     anti-forgery header, POST only, key added server-side and never sent to
@@ -630,6 +635,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_logout_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (simple camera pages: list, large view, slideshow time) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_simple_pages_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

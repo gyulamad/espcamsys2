@@ -38,6 +38,9 @@ return [
     'record_seconds' => 60,
     // How long the recording OFF buttons keep recording off, in minutes (0 or -1 = until switched ON).
     'switch_off_minutes' => 60,
+    // How long the SLIDESHOW on the simple view page (simple-view.php) shows one camera, in seconds (2-300).
+    // A camera that starts recording, or whose person detector sees motion, is shown at once.
+    'slideshow_seconds' => 10,
 
     // Cameras shown on the dashboard. 'id' must exactly match the
     // CAMERA_ID configured in that device's sketch (its CAMERA_ID setting).
