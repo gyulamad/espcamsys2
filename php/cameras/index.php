@@ -254,18 +254,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   a.cam-btn { text-decoration: none; display: inline-block; }
   .cam-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
-  .cam-btn {
-    font-family: var(--mono); font-size: .65rem;
-    padding: 3px 8px; border-radius: 3px;
-    border: 1px solid var(--border-light);
-    background: transparent; color: var(--text);
-    cursor: pointer; text-decoration: none;
-    transition: all .15s; letter-spacing: .04em;
-  }
-  .cam-btn:hover               { border-color: var(--accent);  color: var(--accent); }
-  .cam-btn.danger:hover        { border-color: var(--accent2); color: var(--accent2); }
-  .cam-btn.danger              { border-color: #7a2e3a; color: var(--accent2); }
-  .cam-btn:disabled            { opacity: .5; cursor: default; }
+  <?= CamLayout::recordingsListStyle() ?>
   .cam-btn.recording {
     border-color: var(--accent2); color: var(--accent2);
     box-shadow: 0 0 6px rgba(255,79,94,.3);
@@ -425,40 +414,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .status-pill.error      { color: var(--accent2); border-color: #4d1a1a; }
   .status-pill.hidden     { color: var(--muted); }
 
-  /* Recordings list panel */
-  .files-panel {
-    display: none; flex-direction: column; gap: 4px;
-    padding: 8px 14px; border-top: 1px solid var(--border);
-    background: rgba(0,0,0,.25);
-    font-family: var(--mono); font-size: .62rem; color: var(--muted);
-    /* Deliberately NO max-height / overflow: the list is as long as it needs
-       to be and the page itself scrolls. A scroll box inside a scrolling page
-       is awkward to use on touch devices (the finger scrolls the wrong one). */
-  }
-  .files-panel.open { display: flex; }
-  .files-panel-header {
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px solid var(--border);
-  }
-  .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  /* A row is "seen" (normal weight, gray) unless it carries .unseen. Weight alone is hard to tell apart
-     on phones and some browsers, so colour carries the difference too. */
-  .files-name { color: var(--seen); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .files-size { color: var(--seen); font-weight: 400; flex-shrink: 0; }
-  /* Footage nobody has played or downloaded yet is bold and bright. */
-  .files-row.unseen .files-name, .files-row.unseen .files-size { color: var(--text); font-weight: 700; }
-  .files-select { flex-shrink: 0; margin: 0; cursor: pointer; accent-color: var(--accent2); }
-  /* Bulk actions for the ticked footage sit at the bottom of the list. */
-  .files-panel-footer {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--border);
-  }
-  .files-empty { color: var(--muted); padding: 4px 0; }
-  .files-player video {
-    width: 100%; max-height: 220px; border-radius: 4px;
-    margin: 2px 0 6px; display: block; background: #000;
-  }
-
   /* ── Footer ── */
   footer {
     padding: 12px 32px; border-top: 1px solid var(--border);
@@ -499,6 +454,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
     <a class="btn" id="btn-settings" href="settings-page.php"
        title="Settings of the whole system: recording lengths, relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
+    <?= CamLayout::allFilesLink('btn') ?>
     <?= CamLayout::logoutForm() ?>
     <span class="record-controls">
       <button class="btn" id="btn-record-all" onclick="recordAll()"
@@ -649,6 +605,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   <span id="footer-time"></span>
 </footer>
 
+<?= CamLayout::recordingsListScript() ?>
 <script>
   // ── Clock ──
   function tick() {
@@ -721,14 +678,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // strings — so nothing that came from the relay or config.php (names, ids, messages) can ever become
   // markup or script (security review F-05). `h('div', {className: 'x'}, child, 'text', ...)`.
   function h(tag, props, ...children) {
-    const el = document.createElement(tag);
-    for (const [k, v] of Object.entries(props || {})) {
-      if (k === 'dataset') Object.assign(el.dataset, v);
-      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-      else el[k] = v;   // className, id, textContent, href, value, type, disabled, title, checked ...
-    }
-    el.append(...children);
-    return el;
+    return CamRecordingsList.h(tag, props, ...children);   // lib/recordings-list.js: the one implementation
   }
 
   function showOverlay(id, icon, msg, showRetry) {
@@ -1227,7 +1177,12 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
 
   // ── Recordings list panel — browse, play, download and delete saved footage ──
+  // The list itself (rows, buttons, selection, play / download / delete) is lib/recordings-list.js, the
+  // same code the all-files page runs. This page adds what only the dashboard needs: the live pictures are
+  // closed while footage loads (a list per camera panel, see recordingsListOf), and the FILES button
+  // shows the recording count.
 
+  // <recordings-panels>
   // Shows how many recordings a camera has right on its FILES button —
   // "📼 FILES (3)" — so you don't have to open the list to know. The page
   // arrives with the number already in it (PHP wrote it, see the top of this
@@ -1237,13 +1192,31 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // a whole number (a folder the relay couldn't read) leaves the button
   // showing whatever it showed before rather than a wrong number. The text
   // must match CamLogic::formatFilesButtonLabel() in lib/Logic.php.
-  // Same as CamLogic::SAFE_FILENAME_PATTERN in lib/Logic.php: what a recording's name may look like.
-  const SAFE_FILENAME = new RegExp(<?= json_encode(CamLogic::SAFE_FILENAME_REGEX, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES) ?>);
-
   function setFilesCount(id, count) {
     if (!Number.isInteger(count) || count < 0) return;
     const btn = document.getElementById('files-btn-' + id);
     if (btn) btn.textContent = `📼 FILES (${count})`;
+  }
+
+  const recordingLists = {};   // camera id -> the list drawn in its panel
+  function recordingsListOf(id) {
+    if (!recordingLists[id]) {
+      recordingLists[id] = CamRecordingsList.create({
+        panel: document.getElementById('files-' + id),
+        prefix: id,
+        cams: [id],
+        camLabel: null,   // one camera: no need to say which
+        deleteAllConfirm: 'Delete ALL recordings for this camera? This cannot be undone.',
+        hooks: {
+          withPaused: withLiveViewPaused,
+          holdForDownload: holdLiveViewPausedWhileDownloadStarts,
+          playersChanged: updatePlayerHold,
+          // keep the button in step with what the list shows (but never from a list that could not be read in full)
+          loaded: (files, failed) => { if (failed.length === 0) setFilesCount(id, files.length); },
+        },
+      });
+    }
+    return recordingLists[id];
   }
 
   async function toggleRecordingsPanel(id) {
@@ -1253,198 +1226,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     await withLiveViewPaused(() => refreshRecordingsList(id));
   }
 
-  // Draws the list panel (which also removes any player in it, so the hold for a playing clip is re-checked).
-  function setPanelContent(panel, ...nodes) {
-    panel.replaceChildren(...nodes);
-    updatePlayerHold();
-  }
-
+  // Redraws a camera's list if its panel is open (the list refreshes itself when a recording finishes).
   async function refreshRecordingsList(id) {
     const panel = document.getElementById('files-' + id);
     if (!panel || !panel.classList.contains('open')) return;
-    try {
-      const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}`);
-      const files = await res.json();
-      if (Array.isArray(files)) setFilesCount(id, files.length); // keep the button in step with what the list shows
-      if (!Array.isArray(files) || files.length === 0) {
-        setPanelContent(panel, h('div', { className: 'files-empty', textContent: 'No recordings yet.' }));
-        return;
-      }
-      // Keep whatever was ticked across a re-render (the list refreshes itself when a recording finishes).
-      const keep = new Set(selectedRecordings(id));
-      const header = h('div', { className: 'files-panel-header' },
-        h('span', { textContent: `${files.length} recording${files.length === 1 ? '' : 's'}` }),
-        h('button', { className: 'cam-btn danger', textContent: '🗑 DELETE ALL', onclick: () => deleteAllRecordings(id) }));
-      // f.seen comes from the relay; an older relay that doesn't send it counts as seen, so nothing is bold by mistake.
-      // recordings.php already drops every name that is not a clean recording filename; the check is repeated here
-      // so a name could never reach an id, a URL or the page even if that filter were ever bypassed.
-      const rows = files.filter(f => f && typeof f.filename === 'string' && SAFE_FILENAME.test(f.filename)).flatMap(f => [
-        h('div', { className: 'files-row' + (f.seen === false ? ' unseen' : ''), id: `row-${id}-${f.filename}` },
-          h('input', { type: 'checkbox', className: 'files-select', value: f.filename, checked: keep.has(f.filename),
-                       ariaLabel: `Select ${f.filename}`, dataset: { seen: f.seen === false ? '0' : '1' }, onchange: () => updateSelectionUI(id) }),
-          h('span', { className: 'files-name', textContent: f.filename }),
-          h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
-          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => { markRecordingSeen(id, f.filename); togglePlayRecording(id, f.filename); } }),
-          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(f.filename)}`, onclick: () => { holdLiveViewPausedWhileDownloadStarts(); markRecordingSeen(id, f.filename); } }),
-          h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteRecording(id, f.filename) })),
-        h('div', { className: 'files-player', id: `player-${id}-${f.filename}` }),
-      ]);
-      const footer = h('div', { className: 'files-panel-footer' },
-        h('button', { className: 'cam-btn', id: `files-sel-all-${id}`, textContent: '☑ SELECT ALL', onclick: () => toggleSelectAll(id, false) }),
-        h('button', { className: 'cam-btn', id: `files-sel-seen-${id}`, textContent: '☑ SELECT ALL SEEN', onclick: () => toggleSelectAll(id, true) }),
-        h('button', { className: 'cam-btn', id: `files-dl-selected-${id}`, disabled: true, textContent: '⬇ DOWNLOAD SELECTED (0)', onclick: () => downloadSelectedRecordings(id) }),
-        h('button', { className: 'cam-btn danger', id: `files-del-selected-${id}`, disabled: true, textContent: '🗑 DELETE SELECTED (0)', onclick: () => deleteSelectedRecordings(id) }));
-      setPanelContent(panel, header, ...rows, footer);
-      updateSelectionUI(id);
-    } catch (e) {
-      setPanelContent(panel, h('div', { className: 'files-empty', textContent: 'Could not load recordings.' }));
-    }
+    await recordingsListOf(id).refresh();
   }
-
-  // Filenames of the footage ticked in this camera's list.
-  function selectedRecordings(id) {
-    const panel = document.getElementById('files-' + id);
-    if (!panel) return [];
-    return Array.from(panel.querySelectorAll('.files-select:checked')).map(box => box.value);
-  }
-
-  // The checkboxes a bulk button applies to: all of them, or only the seen clips.
-  function selectableBoxes(id, onlySeen) {
-    const panel = document.getElementById('files-' + id);
-    if (!panel) return [];
-    return Array.from(panel.querySelectorAll('.files-select')).filter(box => !onlySeen || box.dataset.seen === '1');
-  }
-
-  // "Select all" / "Select all seen": ticks every target, or — when they are
-  // all ticked already — unticks them. The seen variant leaves unseen clips alone.
-  function toggleSelectAll(id, onlySeen) {
-    const boxes = selectableBoxes(id, onlySeen);
-    const allTicked = boxes.length > 0 && boxes.every(box => box.checked);
-    boxes.forEach(box => { box.checked = !allTicked; });
-    updateSelectionUI(id);
-  }
-
-  // Keeps the bottom buttons' labels and enabled states in step with the ticks.
-  function updateSelectionUI(id) {
-    const n = selectedRecordings(id).length;
-    const set = (key, disabled, text) => {
-      const btn = document.getElementById(`files-${key}-${id}`);
-      if (!btn) return;
-      btn.disabled = disabled;
-      btn.textContent = text;
-    };
-    set('del-selected', n === 0, `🗑 DELETE SELECTED (${n})`);
-    set('dl-selected', n === 0, `⬇ DOWNLOAD SELECTED (${n})`);
-    const all = selectableBoxes(id, false), seen = selectableBoxes(id, true);
-    set('sel-all', all.length === 0, all.length > 0 && all.every(b => b.checked) ? '☐ UNSELECT ALL' : '☑ SELECT ALL');
-    set('sel-seen', seen.length === 0, seen.length > 0 && seen.every(b => b.checked) ? '☐ UNSELECT ALL SEEN' : '☑ SELECT ALL SEEN');
-  }
-
-  // Playing or downloading a clip counts as seeing it: the row stops being bold
-  // right away, and the relay is told (fire and forget — if that fails the clip
-  // simply shows as unseen again the next time the list loads).
-  function markRecordingSeen(id, filename) {
-    const row = document.getElementById(`row-${id}-${filename}`);
-    if (row) {
-      row.classList.remove('unseen');
-      const box = row.querySelector('.files-select');
-      if (box) box.dataset.seen = '1';
-    }
-    updateSelectionUI(id);
-    fetch(`recordings.php?cam=${encodeURIComponent(id)}&seen=${encodeURIComponent(filename)}`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } }).catch(() => null);
-  }
-
-  // Toggles a plain HTML5 <video> element in place under the clicked
-  // file's row — the browser's own built-in player handles playback, no
-  // extra library needed. recordings.php's ?play= streams the same bytes
-  // as ?download= but with an inline Content-Disposition and Range-header
-  // forwarding, so seeking/scrubbing works. Filenames only ever contain
-  // [A-Za-z0-9_.-], enforced server-side, so it's safe to use one directly
-  // in a DOM id/URL without extra escaping here.
-  function togglePlayRecording(id, filename) {
-    const container = document.getElementById(`player-${id}-${filename}`);
-    if (!container) return;
-    if (container.dataset.open === '1') {
-      container.replaceChildren(); // also stops playback — removing the <video> drops its media element
-      container.dataset.open = '0';
-      updatePlayerHold();
-      return;
-    }
-    const src = `recordings.php?cam=${encodeURIComponent(id)}&play=${encodeURIComponent(filename)}`;
-    container.replaceChildren(h('video', { controls: true, autoplay: true, src, onended: updatePlayerHold }));
-    container.dataset.open = '1';
-    updatePlayerHold();
-  }
-
-  // POSTs a delete request to recordings.php and refreshes the camera's list.
-  // `query` is the part after cam=...; failures are shown to the user.
-  async function recordingsPost(id, query) {
-    const res = await fetch(`recordings.php?cam=${encodeURIComponent(id)}&${query}`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || ('HTTP ' + res.status));
-    }
-  }
-
-  async function postRecordingsDelete(id, query, failureText) {
-    try {
-      await withLiveViewPaused(async () => {
-        await recordingsPost(id, query);
-        await refreshRecordingsList(id);
-      });
-    } catch (e) {
-      alert(`${failureText}: ${e.message}`);
-    }
-  }
-
-  async function deleteRecording(id, filename) {
-    if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
-    await postRecordingsDelete(id, `delete=${encodeURIComponent(filename)}`, 'Could not delete recording');
-  }
-
-  async function deleteAllRecordings(id) {
-    if (!confirm('Delete ALL recordings for this camera? This cannot be undone.')) return;
-    await postRecordingsDelete(id, 'deleteAll=1', 'Could not delete recordings');
-  }
-
-  // Deletes every ticked clip with the same single-file delete the DEL button
-  // uses, then reloads the list once. Anything that fails stays in the list
-  // and stays ticked, and the user is told how many did not go.
-  async function deleteSelectedRecordings(id) {
-    const names = selectedRecordings(id);
-    if (names.length === 0) return;
-    if (!confirm(`Delete ${names.length} selected recording${names.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
-    const results = await withLiveViewPaused(async () => {
-      const settled = await Promise.allSettled(
-        names.map(name => recordingsPost(id, `delete=${encodeURIComponent(name)}`))
-      );
-      await refreshRecordingsList(id);
-      return settled;
-    });
-    const failed = results.filter(r => r.status === 'rejected');
-    if (failed.length > 0) {
-      alert(`Could not delete ${failed.length} of ${names.length} recordings: ${failed[0].reason.message}`);
-    }
-  }
-
-  // Downloads every ticked clip. A browser only takes one download per click,
-  // so this starts them one after another through a hidden link, with a short
-  // pause between (many browsers ask once to "allow multiple downloads").
-  // Each clip counts as seen, same as the GET button.
-  async function downloadSelectedRecordings(id) {
-    const names = selectedRecordings(id);
-    if (names.length > 0) holdLiveViewPausedWhileDownloadStarts();
-    for (let i = 0; i < names.length; i++) {
-      const link = document.createElement('a');
-      link.href = `recordings.php?cam=${encodeURIComponent(id)}&download=${encodeURIComponent(names[i])}`;
-      link.download = names[i];
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      markRecordingSeen(id, names[i]);
-      if (i < names.length - 1) await new Promise(resolve => setTimeout(resolve, 500));
-    }
-  }
+  // </recordings-panels>
 
   // Global "DELETE ALL FOOTAGE" button — fans out a deleteAll request to
   // every configured camera, same pattern as recordAll()/stopRecordAll().
@@ -1455,7 +1243,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     try {
       await withLiveViewPaused(async () => {
         await Promise.all(getAllCameraIds().map(id =>
-          fetch(`recordings.php?cam=${encodeURIComponent(id)}&deleteAll=1`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } }).catch(() => null)
+          CamRecordingsList.post(id, 'deleteAll=1', fetch).catch(() => null)
         ));
         // Refresh any panels currently open so deleted files disappear immediately.
         await Promise.all(getAllCameraIds().map(refreshRecordingsList));
@@ -1464,12 +1252,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     } finally {
       btn.disabled = false;
     }
-  }
-
-  function formatBytes(n) {
-    if (n < 1024) return n + ' B';
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-    return (n / 1024 / 1024).toFixed(1) + ' MB';
   }
 
   // ── Status polling — the single mechanism that keeps the dashboard in

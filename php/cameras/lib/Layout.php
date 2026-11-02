@@ -3,8 +3,87 @@
 // copy them (and a change is made once). Only builds text; no request, no session, no output.
 // Unit tested in tests/php/test_layout.php.
 
+require_once __DIR__ . '/Logic.php';
+
 class CamLayout
 {
+    // The look of the footage list and of the small buttons in it (.cam-btn): one copy, used by the
+    // dashboard (index.php) and the all-files page (all-recordings.php). Needs the page's colour variables
+    // (--text --muted --seen --border --border-light --accent --accent2 --mono).
+    public static function recordingsListStyle(): string
+    {
+        return <<<'CSS'
+  .cam-btn {
+    font-family: var(--mono); font-size: .65rem;
+    padding: 3px 8px; border-radius: 3px;
+    border: 1px solid var(--border-light);
+    background: transparent; color: var(--text);
+    cursor: pointer; text-decoration: none;
+    transition: all .15s; letter-spacing: .04em;
+  }
+  .cam-btn:hover               { border-color: var(--accent);  color: var(--accent); }
+  .cam-btn.danger:hover        { border-color: var(--accent2); color: var(--accent2); }
+  .cam-btn.danger              { border-color: #7a2e3a; color: var(--accent2); }
+  .cam-btn:disabled            { opacity: .5; cursor: default; }
+
+  /* Recordings list panel */
+  .files-panel {
+    display: none; flex-direction: column; gap: 4px;
+    padding: 8px 14px; border-top: 1px solid var(--border);
+    background: rgba(0,0,0,.25);
+    font-family: var(--mono); font-size: .62rem; color: var(--muted);
+    /* Deliberately NO max-height / overflow: the list is as long as it needs
+       to be and the page itself scrolls. A scroll box inside a scrolling page
+       is awkward to use on touch devices (the finger scrolls the wrong one). */
+  }
+  .files-panel.open { display: flex; }
+  .files-panel-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px solid var(--border);
+  }
+  .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  /* A row is "seen" (normal weight, gray) unless it carries .unseen. Weight alone is hard to tell apart
+     on phones and some browsers, so colour carries the difference too. */
+  .files-name { color: var(--seen); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .files-size { color: var(--seen); font-weight: 400; flex-shrink: 0; }
+  /* Which camera a clip is from (shown on the all-files page only). */
+  .files-cam { color: var(--accent); flex-shrink: 0; }
+  /* Footage nobody has played or downloaded yet is bold and bright. */
+  .files-row.unseen .files-name, .files-row.unseen .files-size { color: var(--text); font-weight: 700; }
+  .files-select { flex-shrink: 0; margin: 0; cursor: pointer; accent-color: var(--accent2); }
+  /* Bulk actions for the ticked footage sit at the bottom of the list. */
+  .files-panel-footer {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--border);
+  }
+  .files-empty { color: var(--muted); padding: 4px 0; }
+  .files-player video {
+    width: 100%; max-height: 220px; border-radius: 4px;
+    margin: 2px 0 6px; display: block; background: #000;
+  }
+CSS;
+    }
+
+    // The footage list's script (lib/recordings-list.js) as one <script>, with the file-name rule of
+    // CamLogic. Put it before the page's own script, which calls CamRecordingsList.create(...).
+    public static function recordingsListScript(): string
+    {
+        $js = file_get_contents(__DIR__ . '/recordings-list.js');
+        if ($js === false || $js === '') {
+            throw new RuntimeException('lib/recordings-list.js is missing: the footage list cannot be drawn');
+        }
+        $rule = json_encode(CamLogic::SAFE_FILENAME_REGEX, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES);
+        return "<script>\n" . $js . "\nCamRecordingsList.SAFE_FILENAME = new RegExp(" . $rule . ");\n</script>";
+    }
+
+    // The ALL FILES button of the dashboard header: a plain link to the page that lists the footage of
+    // every camera (works without JavaScript).
+    public static function allFilesLink(string $btnClass): string
+    {
+        return '<a class="' . htmlspecialchars($btnClass, ENT_QUOTES) . '" id="btn-all-files" href="all-recordings.php"'
+            . ' title="Every saved recording of every camera in one list, newest first">📼 ALL FILES</a>';
+    }
+
     // The LOG OUT button. A real <form> POST to logout.php — not a link (a link can be triggered by
     // another website or a prefetch) and not JavaScript (so it works with scripts blocked). The
     // browser's own same-origin headers are what logout.php checks, see CamLogic::logoutRefusalStatus().

@@ -117,4 +117,42 @@ camtest_test('loggedOutPage is self-contained: no script, no outside resource', 
     camtest_assert_true(!preg_match('/<script|https?:\/\/|@import|<link|<img|<iframe/i', $html));
 });
 
+// ── recordingsListStyle / recordingsListScript / allFilesLink ────────
+
+camtest_test('recordingsListStyle holds the footage list and its small buttons, and is only CSS', function () {
+    $css = CamLayout::recordingsListStyle();
+    foreach (['.cam-btn {', '.files-panel {', '.files-panel.open', '.files-row', '.files-cam', '.files-row.unseen', '.files-panel-footer', '.files-player video'] as $needle) {
+        camtest_assert_true(strpos($css, $needle) !== false, $needle . ' is styled');
+    }
+    camtest_assert_true(!preg_match('/<|@import|url\(|expression\(/i', $css), 'no markup, no import, no external file');
+});
+
+camtest_test('recordingsListScript is the list script with the file-name rule of CamLogic, in one <script>', function () {
+    $html = CamLayout::recordingsListScript();
+    camtest_assert_true(strpos($html, '<script>') === 0 && substr($html, -9) === '</script>', 'one script, nothing around it');
+    camtest_assert_equal(substr_count($html, '<script'), 1);
+    camtest_assert_equal(substr_count($html, '</script'), 1, 'nothing inside can end the script early');
+    camtest_assert_true(strpos($html, 'CamRecordingsList') !== false, 'the list code is there');
+    camtest_assert_true(strpos($html, 'CamRecordingsList.SAFE_FILENAME = new RegExp(') !== false, 'the rule is set from PHP');
+    camtest_assert_true(strpos($html, json_encode(CamLogic::SAFE_FILENAME_REGEX, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES)) !== false, 'and it is the one CamLogic has');
+});
+
+camtest_test('recordingsListScript never builds markup from text (no innerHTML, document.write, eval)', function () {
+    camtest_assert_true(!preg_match('/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function/', CamLayout::recordingsListScript()));
+});
+
+camtest_test('allFilesLink is a plain link to all-recordings.php that needs no JavaScript', function () {
+    $html = CamLayout::allFilesLink('btn');
+    camtest_assert_true(strpos($html, '<a ') === 0 && substr($html, -4) === '</a>');
+    camtest_assert_true(strpos($html, 'href="all-recordings.php"') !== false);
+    camtest_assert_true(strpos($html, 'class="btn"') !== false);
+    camtest_assert_true(strpos($html, 'ALL FILES') !== false);
+    camtest_assert_true(!preg_match('/<script|\bon[a-z]+\s*=|javascript:/i', $html));
+});
+
+camtest_test('allFilesLink escapes the class it is given', function () {
+    $html = CamLayout::allFilesLink('x" onclick="alert(1)');
+    camtest_assert_true(strpos($html, 'onclick="alert') === false, 'the quote cannot end the attribute');
+});
+
 exit(camtest_summarize());

@@ -235,6 +235,18 @@ class CamLogic
         return null;
     }
 
+    // Camera id => the text that names the camera on a page that mixes cameras ("🚪 Front Door"). Plain
+    // text; the page shows it with textContent. Ids are unique in $cameras, so none is lost.
+    public static function cameraLabels(array $cameras): array
+    {
+        $labels = [];
+        foreach ($cameras as $cam) {
+            $id = (string) $cam['id'];
+            $labels[$id] = trim((string) ($cam['icon'] ?? '') . ' ' . (string) ($cam['name'] ?? $id));
+        }
+        return $labels;
+    }
+
     public static function findCameraById(array $cameras, string $id): ?array
     {
         foreach ($cameras as $cam) {

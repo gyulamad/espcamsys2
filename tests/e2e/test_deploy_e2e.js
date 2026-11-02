@@ -64,12 +64,13 @@ try {
   check('deploy.sh succeeds', r.status === 0, r.out);
   check('the pages and lib/ are copied', fs.existsSync(path.join(dest, 'index.php')) && fs.existsSync(path.join(dest, 'lib/Logic.php')) && fs.existsSync(path.join(dest, 'auth.php')));
   check('the LOG OUT pieces are copied too (logout.php and lib/Layout.php)', fs.existsSync(path.join(dest, 'logout.php')) && fs.existsSync(path.join(dest, 'lib/Layout.php')));
+  check('the ALL FILES page and the footage list script it shares with the dashboard are copied', fs.existsSync(path.join(dest, 'all-recordings.php')) && fs.existsSync(path.join(dest, 'lib/recordings-list.js')));
   check('.htaccess is copied', fs.existsSync(path.join(dest, '.htaccess')));
   // F-19: the typefaces come from fonts/ in the web folder — no page asks Google for them
   const fontCss = fs.existsSync(path.join(dest, 'fonts/fonts.css')) ? fs.readFileSync(path.join(dest, 'fonts/fonts.css'), 'utf8') : '';
   const fontFiles = [...fontCss.matchAll(/url\('([^']+)'\)/g)].map((m) => m[1]);
   check('fonts/ is copied: fonts.css, the licence and every font file fonts.css points at', fontFiles.length === 7 && fontFiles.every((f) => fs.existsSync(path.join(dest, 'fonts', f)) && fs.statSync(path.join(dest, 'fonts', f)).size > 1000) && fs.existsSync(path.join(dest, 'fonts/OFL.txt')), fontFiles.join(','));
-  check('no page loads anything from Google Fonts, all three link fonts/fonts.css', ['index.php', 'settings-page.php', 'camera-settings-page.php'].every((f) => { const t = fs.readFileSync(path.join(dest, f), 'utf8'); return !/googleapis|gstatic/.test(t) && t.includes('href="fonts/fonts.css"'); }));
+  check('no page loads anything from Google Fonts, all four link fonts/fonts.css', ['index.php', 'settings-page.php', 'camera-settings-page.php', 'all-recordings.php'].every((f) => { const t = fs.readFileSync(path.join(dest, f), 'utf8'); return !/googleapis|gstatic/.test(t) && t.includes('href="fonts/fonts.css"'); }));
   check('no config.php is invented — and the owner is told to create one', !fs.existsSync(path.join(dest, 'config.php')) && /no .*config\.php yet/.test(r.out), r.out);
   check('no note about a stray folder when there is none', !/stray/.test(r.out), r.out);
   if (IS_ROOT && HAS_WWW_DATA) {

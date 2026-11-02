@@ -73,10 +73,22 @@ test('after everything was given back, the next request pauses again', () => {
 });
 
 test('the page wires every footage request through the pauser', () => {
-  const names = ['withLiveViewPaused(() => refreshRecordingsList(id))', 'holdLiveViewPausedWhileDownloadStarts();', 'updatePlayerHold();'];
+  // the dashboard hands the shared footage list (lib/recordings-list.js) the pauser's three entry points...
+  const names = ['withLiveViewPaused(() => refreshRecordingsList(id))', 'withPaused: withLiveViewPaused,',
+    'holdForDownload: holdLiveViewPausedWhileDownloadStarts,', 'playersChanged: updatePlayerHold,'];
   for (const snippet of names) assertTrue(page.includes(snippet), `missing: ${snippet}`);
   // the early-event replay runs at the top of the script: the flag it reads must be declared before it
   assertTrue(page.indexOf('let streamsPaused') < page.indexOf('function replayEarlyStreamEvents'), 'streamsPaused is declared after its first use');
+});
+
+test('the shared footage list asks for room around every request that needs it', () => {
+  // ...and the list must really use them: deletes inside withPaused, downloads and players announced
+  const list = fs.readFileSync(path.join(__dirname, '../../php/cameras/lib/recordings-list.js'), 'utf8');
+  for (const snippet of ['hooks.withPaused(async () => {', 'hooks.holdForDownload()', 'hooks.playersChanged()']) {
+    assertTrue(list.includes(snippet), `recordings-list.js does not call: ${snippet}`);
+  }
+  // one hold for a GET click, one for DOWNLOAD SELECTED
+  assertEqual(list.split('hooks.holdForDownload()').length - 1, 2);
 });
 
 summarize();

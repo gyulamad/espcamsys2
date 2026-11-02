@@ -2,14 +2,17 @@
 
 // test_recording_styles.js — the dashboard's recordings list must make seen and unseen footage easy to tell
 // apart: unseen is bold AND bright, seen is normal weight AND a readable gray. (Weight alone looked almost the
-// same on phones and in some browsers.) This reads the <style> block of php/cameras/index.php as text — no PHP,
+// same on phones and in some browsers.) This reads the <style> block of php/cameras/index.php and the shared list style in lib/Layout.php as text — no PHP,
 // no browser needed — and checks the rules a human would otherwise have to eyeball.
 
 const fs = require('fs');
 const path = require('path');
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
 
-const SOURCE = fs.readFileSync(path.join(__dirname, '../../php/cameras/index.php'), 'utf8');
+// The colours (:root) are the dashboard page's own; the list's rules live in CamLayout::recordingsListStyle()
+// (lib/Layout.php), which the dashboard and the ALL FILES page share.
+const read = (rel) => fs.readFileSync(path.join(__dirname, '../../php/cameras', rel), 'utf8');
+const SOURCE = read('index.php') + '\n' + read('lib/Layout.php');
 const PANEL_BACKGROUND = '#0d1019';   // .files-panel: rgba(0,0,0,.25) over --surface (#111520), rounded
 const MIN_CONTRAST = 4.5;             // WCAG AA for normal text
 const MIN_SEEN_UNSEEN_DISTANCE = 1.5; // contrast ratio between the two colours: clearly not "almost the same"
@@ -81,6 +84,18 @@ test('seen and unseen colours are clearly different, not "almost the same"', () 
 
 test('name and size share one seen colour (no drift between the two rules)', () => {
   assertEqual(declaration(ruleBody('.files-size'), 'color'), declaration(ruleBody('.files-name'), 'color'));
+});
+
+test('the ALL FILES page defines the same seen colour as the dashboard, so its list is as readable', () => {
+  const seen = (text) => /--seen:\s*(#[0-9a-fA-F]{6})/.exec(text)[1].toLowerCase();
+  assertEqual(seen(read('all-recordings.php')), seen(read('index.php')));
+});
+
+test('the ALL FILES page defines every colour variable the shared list style uses', () => {
+  const css = /recordingsListStyle\(\): string[\s\S]*?<<<'CSS'\n([\s\S]*?)\nCSS;/.exec(read('lib/Layout.php'))[1];
+  const used = [...new Set([...css.matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1]))];
+  const page = read('all-recordings.php');
+  for (const v of used) assertTrue(new RegExp(`${v}\\s*:`).test(page), `all-recordings.php does not define ${v}`);
 });
 
 summarize();

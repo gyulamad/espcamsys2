@@ -27,6 +27,28 @@ camtest_test('attachRelayUrl adds url to every camera and trims a trailing slash
     camtest_assert_equal($cams[1]['url'], 'http://host:8080');
 });
 
+// ── cameraLabels ─────────────────────────────────────────────────────
+
+camtest_test('cameraLabels maps each camera id to "icon name"', function () {
+    $cams = [
+        ['id' => 'cam1', 'name' => 'Front Door', 'icon' => '🚪'],
+        ['id' => 'cam2', 'name' => 'Back Yard', 'icon' => '🌿'],
+    ];
+    camtest_assert_equal(CamLogic::cameraLabels($cams), ['cam1' => '🚪 Front Door', 'cam2' => '🌿 Back Yard']);
+});
+
+camtest_test('cameraLabels copes with a missing icon or name, and with no cameras', function () {
+    camtest_assert_equal(CamLogic::cameraLabels([['id' => 'a', 'name' => 'A']]), ['a' => 'A']);
+    camtest_assert_equal(CamLogic::cameraLabels([['id' => 'b']]), ['b' => 'b']);
+    camtest_assert_equal(CamLogic::cameraLabels([]), []);
+});
+
+camtest_test('cameraLabels keeps ids that look like numbers as text keys', function () {
+    $labels = CamLogic::cameraLabels([['id' => '7', 'name' => 'Seven', 'icon' => '']]);
+    camtest_assert_equal(array_keys($labels), [7], 'PHP turns "7" into 7 as an array key; the page encodes the map as an object so it stays a map');
+    camtest_assert_equal(json_encode($labels, JSON_FORCE_OBJECT), '{"7":"Seven"}');
+});
+
 // ── findCameraById ───────────────────────────────────────────────────
 
 camtest_test('findCameraById finds a matching camera', function () {

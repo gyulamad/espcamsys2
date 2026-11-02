@@ -24,6 +24,8 @@ fi
 mkdir -p "$DEST/lib"
 cp ./php/cameras/*.php "$DEST"
 cp ./php/cameras/lib/*.php "$DEST/lib"
+# the footage list's script is not a page: PHP reads it and writes it into the pages (lib/ is never served)
+cp ./php/cameras/lib/*.js "$DEST/lib"
 # the two typefaces (Share Tech Mono, Barlow) are served from here, not from Google Fonts (review F-19)
 mkdir -p "$DEST/fonts"
 cp ./php/cameras/fonts/* "$DEST/fonts"
