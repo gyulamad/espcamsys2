@@ -434,6 +434,12 @@ fi
 #     sending at once still are, silent connections are dropped while slow
 #     trickling ones are kept. Override the ports with E2E_PUSHCONN_PORT /
 #     E2E_PUSHCONN_PUSH_PORT.
+#   - tests/e2e/test_dashboard_pictures_e2e.js: the dashboard's live pictures in a REAL browser
+#     (Chromium through Playwright, real php -S, fake relay): a picture whose stream ended is started
+#     again by itself, RELOAD ALL also reloads the detector's picture, a crowded dashboard (more
+#     pictures than a browser's ~6 connections) still opens SIMPLE LIST at once, and a detector row
+#     without numbers says "WAITING FOR DATA…" / "NO DATA", never "DETECTOR OFFLINE". Skips itself,
+#     saying so, if php or Playwright is missing. Override the ports with E2E_PICTURES_PORT.
 #   - tests/e2e/test_dashboard_counts_e2e.js: renders the real dashboard page
 #     with php -S and checks each camera's FILES button already shows its
 #     recording count in the HTML of the FIRST load (no JavaScript involved),
@@ -578,6 +584,17 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_stream_smooth_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "End-to-end (live pictures keep running in a real browser, dashboard) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_pictures_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

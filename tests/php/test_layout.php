@@ -142,6 +142,15 @@ camtest_test('recordingsListScript never builds markup from text (no innerHTML, 
     camtest_assert_true(!preg_match('/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function/', CamLayout::recordingsListScript()));
 });
 
+camtest_test('livePicturesScript is the live-pictures rules in one <script> that nothing inside can end early', function () {
+    $html = CamLayout::livePicturesScript();
+    camtest_assert_true(strpos($html, '<script>') === 0 && substr($html, -9) === '</script>', 'one script, nothing around it');
+    camtest_assert_equal(substr_count($html, '<script'), 1);
+    camtest_assert_equal(substr_count($html, '</script'), 1, 'nothing inside can end the script early');
+    camtest_assert_true(strpos($html, 'CamLivePictures') !== false, 'the rules are there');
+    camtest_assert_true(!preg_match('/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function/', $html), 'never builds markup from text');
+});
+
 camtest_test('allFilesLink is a plain link to all-recordings.php that needs no JavaScript', function () {
     $html = CamLayout::allFilesLink('btn');
     camtest_assert_true(strpos($html, '<a ') === 0 && substr($html, -4) === '</a>');

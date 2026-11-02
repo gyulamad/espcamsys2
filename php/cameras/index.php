@@ -568,7 +568,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <div class="det-area" id="detarea-<?= $camId ?>" data-cam="<?= $camId ?>" hidden title="Motion area: only motion inside this rectangle counts. Drag it to move it, drag an edge or corner to resize it, then APPLY.">
             <?php foreach (['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as $h): ?><span class="h h-<?= $h ?>" data-h="<?= $h ?>"></span><?php endforeach; ?>
           </div>
-          <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
+          <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">WAITING FOR DATA…</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
           <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
@@ -610,6 +610,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </footer>
 
 <?= CamLayout::recordingsListScript() ?>
+<?= CamLayout::livePicturesScript() ?>
 <script>
   // ── Clock ──
   function tick() {
@@ -627,6 +628,15 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // Declared up here because the early-event replay below runs before the rest of the script.
   let streamsPaused = false;
 
+  // One pending retry per picture ('camera:<id>', 'detector:<id>'), backing off while it keeps failing
+  // (js/live-pictures.js). Declared up here for the same reason as streamsPaused.
+  const pictureRetries = CamLivePictures.createRetryScheduler(setTimeout, clearTimeout);
+  // A picture whose pixels have not changed for this long has stopped (see "A picture that stopped moving").
+  const STALL_MS = 10000;
+  const pictureStalls = CamLivePictures.createStallDetector(STALL_MS);
+  // True from a click that leaves the page until the page is gone (see "Leaving the page").
+  let leavingPage = false;
+
   // ── Stream state callbacks ──
   function onStreamLoad(id) {
     if (streamsPaused) return;   // the picture was stopped on purpose (see "Making room for footage")
@@ -640,6 +650,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     clearStreamWatchdog(id);
     setStatus(id, 'error', 'ERROR');
     showOverlay(id, '✕', 'STREAM ERROR', true);
+    pictureRetries.schedule('camera:' + id, () => reloadStream(id));   // the relay may just be restarting
   }
 
   // A stream that is still "connecting" after this long is retried by itself (what pressing RELOAD
@@ -699,6 +710,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     // Only reload if not hidden, and not while the pictures are paused to make room for footage
     if (img.dataset.hidden === '1' || streamsPaused) return;
 
+    pictureRetries.cancel('camera:' + id);
+    pictureStalls.forget('camera:' + id);
     setStatus(id, 'connecting', 'CONNECTING');
     const overlay = document.getElementById('overlay-' + id);
     overlay.replaceChildren(h('div', { className: 'spinner' }), h('span', { textContent: 'CONNECTING…' }));
@@ -709,11 +722,14 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     armStreamWatchdog(id);
   }
 
+  // Every picture over again — the cameras' AND the detectors' — and the numbers behind them.
   function reloadAll() {
-    document.querySelectorAll('img.stream').forEach(img => {
-      const id = img.id.replace('img-', '');
-      reloadStream(id);
-    });
+    restartAllPictures();
+    pollAllStatuses();
+    if (document.querySelector('.det-row')) {
+      openDetectorEvents();
+      pollDetectors();
+    }
   }
 
   // ── Fullscreen — click the stream image to blow it up, click it again
@@ -765,6 +781,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // Closes the live connections of one camera: its picture and its detector's picture.
   function stopPictures(id) {
     clearStreamWatchdog(id);
+    pictureRetries.cancel('camera:' + id);
+    pictureRetries.cancel('detector:' + id);
+    pictureStalls.forget('camera:' + id);
+    pictureStalls.forget('detector:' + id);
     document.getElementById('img-' + id).src = '';
     const di = document.getElementById('detimg-' + id);
     if (di) di.src = '';
@@ -814,7 +834,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       if (document.getElementById('img-' + id).dataset.hidden === '1') continue;   // already closed by the user
       stopPictures(id);
       setStatus(id, 'hidden', 'PAUSED');
-      showOverlay(id, '◼', 'LIVE VIEW PAUSED WHILE FOOTAGE LOADS', false);
+      showOverlay(id, '◼', 'LIVE VIEW PAUSED', false);
     }
   }
 
@@ -1674,6 +1694,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // faster than the screen draws, the ones in between are skipped, never queued.
   let pendingDetectorData = null;
   function showDetectorData(data) {
+    armDetectorNoDataWatch();
     const schedule = pendingDetectorData === null;
     pendingDetectorData = data;
     if (!schedule) return;
@@ -1686,6 +1707,21 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function showDetectorProblem(why) {
     pendingDetectorData = null;
     document.querySelectorAll('.det-row').forEach(row => renderDetectorProblem(row.dataset.cam, 'NO DATA', why));
+  }
+  // No answer about the detectors for this long (the relay cannot be reached, or the browser has no free
+  // connection for the request — it allows about 6 per address and the live pictures hold them): say so,
+  // instead of leaving whatever the rows showed before. A detector is never called offline just because
+  // the dashboard has heard nothing: only the relay knows that.
+  const DETECTOR_NO_DATA_MS = 8000;
+  let detectorNoDataTimer = null;
+  function disarmDetectorNoDataWatch() {
+    clearTimeout(detectorNoDataTimer);
+    detectorNoDataTimer = null;
+  }
+  function armDetectorNoDataWatch() {
+    disarmDetectorNoDataWatch();
+    detectorNoDataTimer = setTimeout(() => showDetectorProblem(
+      'no answer about the detectors for ' + DETECTOR_NO_DATA_MS / 1000 + ' s: the relay cannot be reached, or the browser has no free connection'), DETECTOR_NO_DATA_MS);
   }
   const isStatusMap = (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error;
 
@@ -1728,7 +1764,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   let detectorsPolling = false;
   let detectorPollFailures = 0;
   async function pollDetectors() {
-    if (detectorsPolling || document.hidden || detectorStreamIsLive()) return;
+    if (detectorsPolling || document.hidden || leavingPage || detectorStreamIsLive()) return;
     detectorsPolling = true;
     try {
       const res = await fetch('detector-status.php', { cache: 'no-store' });
@@ -1751,10 +1787,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   // The picture stream: the relay answers at once (frames, or an error saying why there are none), so a
   // detector that is offline just makes this fail quickly and retry every few seconds.
-  const detImgTimers = {};
   function reconnectDetectorImg(id) {
-    clearTimeout(detImgTimers[id]);
-    delete detImgTimers[id];
+    pictureRetries.cancel('detector:' + id);
+    pictureStalls.forget('detector:' + id);
     const img = document.getElementById('detimg-' + id);
     const cam = document.getElementById('img-' + id);
     if (!img || document.hidden || streamsPaused || (cam && cam.dataset.hidden === '1')) return;
@@ -1771,8 +1806,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (streamsPaused) return;
     const img = document.getElementById('detimg-' + id);
     if (img) img.dataset.failed = '1';
-    clearTimeout(detImgTimers[id]);
-    detImgTimers[id] = setTimeout(() => reconnectDetectorImg(id), 5000);
+    pictureRetries.schedule('detector:' + id, () => reconnectDetectorImg(id));
   }
   // ── Coming back to the page ──
   // A locked phone (or a tab left in the background for a while) cannot keep its connections: the streams
@@ -1795,12 +1829,82 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // Back/forward cache: the page returns exactly as it was left, with the connections the browser closed meanwhile.
   window.addEventListener('pageshow', (ev) => { if (ev.persisted) resumeAfterHidden(); });
 
+  // ── A picture that stopped moving ──
+  // The relay restarted, went quiet, or the network dropped: the response of the picture is over, but the
+  // browser says nothing and keeps the last frame on screen — a frozen picture, and only RELOAD helped.
+  // A live camera never sends the same pixels twice (sensor noise), so every few seconds a small copy of
+  // each picture is looked at, and one that has not changed for STALL_MS is started again, with a growing
+  // pause while it keeps stalling (js/live-pictures.js).
+  const STALL_SAMPLE_MS = 2000;
+  const sampler = document.createElement('canvas');
+  sampler.width = 64;
+  sampler.height = 48;
+  function fingerprintOf(img) {
+    if (!img || !img.naturalWidth) return null;   // nothing on screen yet (or stopped on purpose)
+    try {
+      const context = sampler.getContext('2d', { willReadFrequently: true });
+      context.drawImage(img, 0, 0, sampler.width, sampler.height);
+      return CamLivePictures.fingerprint(context.getImageData(0, 0, sampler.width, sampler.height).data);
+    } catch (err) {
+      return null;   // the browser would not let the page read this picture: it cannot be judged, so leave it alone
+    }
+  }
+  function livePictures() {
+    const pictures = [];
+    for (const id of getAllCameraIds()) {
+      pictures.push({ key: 'camera:' + id, img: document.getElementById('img-' + id), restart: () => reloadStream(id) });
+      const detector = document.getElementById('detimg-' + id);
+      if (detector) pictures.push({ key: 'detector:' + id, img: detector, restart: () => reconnectDetectorImg(id) });
+    }
+    return pictures;
+  }
+  function restartStalledPictures() {
+    if (document.hidden || streamsPaused || leavingPage) return;   // closed on purpose: nothing is stalled
+    for (const { key, img, restart } of livePictures()) {
+      const print = fingerprintOf(img);
+      if (print === null) { pictureStalls.forget(key); continue; }
+      const stalled = pictureStalls.observe(key, print, Date.now());
+      if (!stalled) continue;
+      pictureStalls.forget(key);
+      pictureRetries.schedule(key, restart, stalled.playedMs);
+    }
+  }
+  setInterval(restartStalledPictures, STALL_SAMPLE_MS);
+
+  // ── Leaving the page ──
+  // The live pictures hold every connection the browser allows to this address. A click on SIMPLE LIST,
+  // SIMPLE VIEW, ALL FILES... then waits in the browser's queue behind them, the top bar spins forever, and
+  // only its stop button helped. So a click that leaves the page closes the pictures and the number
+  // stream first. If the page is still here after the grace time (the click went nowhere), they return.
+  const LEAVE_GRACE_MS = 10000;
+  function releaseConnectionsForNavigation() {
+    if (leavingPage) return;
+    leavingPage = true;
+    const giveRoomBack = streamPauser.acquire();
+    closeDetectorEvents();
+    setTimeout(() => {
+      leavingPage = false;
+      giveRoomBack();
+      if (document.querySelector('.det-row')) openDetectorEvents();
+    }, LEAVE_GRACE_MS);
+  }
+  document.addEventListener('click', (ev) => {
+    const anchor = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+    const link = anchor && { href: anchor.href, target: anchor.target, download: anchor.getAttribute('download') };
+    if (CamLivePictures.leavesPage(ev, link, location.href)) releaseConnectionsForNavigation();
+  }, true);
+
   if (document.querySelector('.det-row')) {
     openDetectorEvents();
     pollDetectors();
+    armDetectorNoDataWatch();
     setInterval(pollDetectors, DETECTOR_POLL_MS);
     // A hidden tab needs no live numbers (and holds no connection); coming back reopens the stream.
-    document.addEventListener('visibilitychange', () => { if (document.hidden) closeDetectorEvents(); else openDetectorEvents(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { closeDetectorEvents(); disarmDetectorNoDataWatch(); return; }
+      openDetectorEvents();
+      armDetectorNoDataWatch();
+    });
   }
 
   const STATUS_POLL_MS = 4000;

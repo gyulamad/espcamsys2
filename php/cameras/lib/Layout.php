@@ -68,12 +68,27 @@ CSS;
     // CamLogic. Put it before the page's own script, which calls CamRecordingsList.create(...).
     public static function recordingsListScript(): string
     {
-        $js = file_get_contents(__DIR__ . '/recordings-list.js');
-        if ($js === false || $js === '') {
-            throw new RuntimeException('lib/recordings-list.js is missing: the footage list cannot be drawn');
-        }
+        $js = self::readScript('recordings-list.js', 'the footage list cannot be drawn');
         $rule = json_encode(CamLogic::SAFE_FILENAME_REGEX, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES);
         return "<script>\n" . $js . "\nCamRecordingsList.SAFE_FILENAME = new RegExp(" . $rule . ");\n</script>";
+    }
+
+    // The rules that keep the live pictures alive (js/live-pictures.js) as one <script>: noticing that a
+    // picture's stream ended, the retry back-off, and when a click leaves the page. Put it before the
+    // page's own script, which uses CamLivePictures.
+    public static function livePicturesScript(): string
+    {
+        return "<script>\n" . self::readScript('../js/live-pictures.js', 'the live pictures cannot be kept alive') . "\n</script>";
+    }
+
+    // The text of one of this folder's script files, or an exception that says what is lost without it.
+    private static function readScript(string $relativePath, string $whatIsLost): string
+    {
+        $js = file_get_contents(__DIR__ . '/' . $relativePath);
+        if ($js === false || $js === '') {
+            throw new RuntimeException(basename($relativePath) . ' is missing: ' . $whatIsLost);
+        }
+        return $js;
     }
 
     // The ALL FILES button of the dashboard header: a plain link to the page that lists the footage of
