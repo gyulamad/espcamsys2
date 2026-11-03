@@ -734,21 +734,22 @@ sudo apt install -y python3-opencv python3-numpy
 python3 -c "import cv2, numpy; print(cv2.__version__)"
 ```
 
-### 2. Get the model (on your laptop, once)
+### 2. Get the model (once, on your laptop or on the Pi)
 
-The detector reads a standard Ultralytics YOLO model exported to ONNX (class 0 = person, the COCO order every Ultralytics model uses). Both the classic output (YOLOv5/v8/v11, `1 × 84 × N`) and the end-to-end output (YOLOv10/YOLO26, `1 × N × 6`) are understood. Export a **nano** model at 640 px:
-
-```
-pip install ultralytics
-yolo export model=yolo26n.pt format=onnx imgsz=640 opset=12 simplify=True   # or yolo11n.pt if yolo26n is not available to you
-```
-
-(Model weights are published by Ultralytics under the AGPL-3.0 licence — check it fits your use. Use a `yolo*n` model first; the larger `s` model is more accurate but several times slower on a Pi.) Copy the resulting `.onnx` file to the relay folder on the Pi as `models/person.onnx`:
+The detector reads a standard Ultralytics YOLO model exported to ONNX (class 0 = person, the COCO order every Ultralytics model uses). Both the classic output (YOLOv5/v8/v11, `1 × 84 × N`) and the end-to-end output (YOLOv10/YOLO26, `1 × N × 6`) are understood. Export a **nano** model at 640 px. The export tool is only needed for this one step, so install it in a throwaway virtual environment (Raspberry Pi OS / Debian refuse `pip install` system-wide: `error: externally-managed-environment` — do not work around that with `--break-system-packages`). The relay itself keeps using the system `python3-opencv` from step 1:
 
 ```
-ssh pi@<pi> 'mkdir -p /opt/camrelay/models'
-scp yolo26n.onnx pi@<pi>:/opt/camrelay/models/person.onnx
+sudo apt install -y python3-venv
+python3 -m venv ~/yolo-export
+~/yolo-export/bin/pip install ultralytics onnx
+cd ~ && ~/yolo-export/bin/yolo export model=yolo26n.pt format=onnx imgsz=640 opset=12   # or yolo11n.pt if yolo26n is not available to you
+mkdir -p /opt/camrelay/models && cp ~/yolo26n.onnx /opt/camrelay/models/person.onnx
+rm -rf ~/yolo-export        # optional: it pulls in PyTorch (about 1 GB)
 ```
+
+(If you export on a laptop instead, do the same there and `scp yolo26n.onnx pi@<pi>:/opt/camrelay/models/person.onnx`.)
+
+(Model weights are published by Ultralytics under the AGPL-3.0 licence — check it fits your use. Use a `yolo*n` model first; the larger `s` model is more accurate but several times slower on a Pi.)
 
 ### 3. Try it on one clip (on the Pi)
 
