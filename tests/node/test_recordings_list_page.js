@@ -124,7 +124,7 @@ async function main() {
     check('only the clips nobody has seen are marked unseen', same(rows(panel).map((r) => r.classes().includes('unseen')), [false, true, true, false]));
     check('the bottom buttons are the same as a camera\'s own panel',
       same(panel.querySelector('.files-panel-footer').querySelectorAll('.cam-btn').map((b) => b.text()),
-        ['☑ SELECT ALL', '☑ SELECT ALL SEEN', '⬇ DOWNLOAD SELECTED (0)', '🗑 DELETE SELECTED (0)']));
+        ['☑ SELECT ALL', '☑ SELECT ALL SEEN', '⬇ DOWNLOAD SELECTED (0)', '🧑 SORT OUT SELECTED (0)', '🗑 DELETE SELECTED (0)']));
     check('download / delete selected start disabled', byId(doc, 'files-dl-selected-all').disabled && byId(doc, 'files-del-selected-all').disabled);
     check('the loaded hook hears of the list', same(events.loaded, [{ files: 4, failed: [] }]));
     check('a GET changes nothing on the server', server.posts().length === 0);

@@ -87,7 +87,7 @@ test('sortNewestFirst of nothing is nothing', () => {
 
 test('tagFiles tags every clip with its camera and keeps name, size and seen', () => {
   assertEqual(list.tagFiles('cam1', [{ filename: 'a.mp4', sizeBytes: 5, seen: false }]),
-    [{ cam: 'cam1', filename: 'a.mp4', sizeBytes: 5, seen: false }]);
+    [{ cam: 'cam1', filename: 'a.mp4', sizeBytes: 5, seen: false, person: false, scan: null }]);
 });
 
 test('tagFiles: a relay that does not say "seen" means seen (nothing is bold by mistake)', () => {
@@ -149,6 +149,37 @@ test('the default file-name rule is the one CamLogic::SAFE_FILENAME_REGEX has', 
   assertTrue(!!m, 'Logic.php has the rule');
   // PHP single quotes keep the backslash as written, so the text is already a JS-readable pattern
   assertEqual(list.SAFE_FILENAME.source, new RegExp(m[1]).source);
+});
+
+// ── person check: what the list shows ────────────────────────────────────
+
+test('tagFiles keeps "person" only when it is exactly true, and the scan state only in its known shapes', () => {
+  const t = (extra) => list.tagFiles('c', [{ filename: 'a.mp4', sizeBytes: 1, ...extra }])[0];
+  assertEqual([t({ person: true }).person, t({ person: 'yes' }).person, t({}).person], [true, false, false]);
+  assertEqual(t({ scan: { state: 'processing' } }).scan, { state: 'processing' });
+  assertEqual(t({ scan: { state: 'queued', evil: '<b>' } }).scan, { state: 'queued' });
+  assertEqual(t({ scan: { state: 'error', reason: 'no model' } }).scan, { state: 'error', reason: 'no model' });
+  assertEqual(t({ scan: { state: 'error', reason: 5 } }).scan, { state: 'error', reason: '' });
+  for (const bad of [null, 'processing', { state: 'weird' }, { state: 5 }, []]) assertEqual(t({ scan: bad }).scan, null, JSON.stringify(bad));
+});
+
+test('scanLabel says what is going on, and why a check failed', () => {
+  assertEqual(list.scanLabel(null), '');
+  assertEqual(list.scanLabel({ state: 'processing' }), '⏳ processing…');
+  assertEqual(list.scanLabel({ state: 'queued' }), '⏳ waiting to be checked…');
+  assertEqual(list.scanLabel({ state: 'error', reason: 'no model' }), '⚠ check failed: no model');
+  assertEqual(list.scanLabel({ state: 'error', reason: '' }), '⚠ check failed');
+});
+
+test('hasPendingScan: queued or processing keeps the list reloading, a failure does not', () => {
+  assertEqual(list.hasPendingScan([{ scan: null }, { scan: { state: 'error', reason: '' } }]), false);
+  assertEqual(list.hasPendingScan([{ scan: null }, { scan: { state: 'queued' } }]), true);
+  assertEqual(list.hasPendingScan([{ scan: { state: 'processing' } }]), true);
+  assertEqual(list.hasPendingScan([]), false);
+});
+
+test('thumbUrl names the camera and the clip, encoded', () => {
+  assertEqual(list.thumbUrl('cam 1', 'a b.mp4'), 'recordings.php?cam=cam%201&thumb=a%20b.mp4');
 });
 
 summarize();

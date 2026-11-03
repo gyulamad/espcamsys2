@@ -291,7 +291,7 @@ Things worth knowing:
    sudo apt install -y nodejs ffmpeg
    ```
 
-2. Copy the whole `nodejs/camera-relay/` folder (including `server.js`, `example.config.js`, `package.json`, `package-lock.json`, and the `lib/` folder) onto the Pi, e.g. `/opt/camrelay/`.
+2. Copy the whole `nodejs/camera-relay/` folder (including `server.js`, `example.config.js`, `package.json`, `package-lock.json`, and the `lib/` and `tools/` folders) onto the Pi, e.g. `/opt/camrelay/`. (Optional: to have recordings without a person sorted out automatically, also do [Sorting out footage without a person](#sorting-out-footage-without-a-person) once the relay runs.)
 3. Create the real config:
 
    ```
@@ -720,6 +720,64 @@ Notes: **the same control key now also protects everything that changes things f
 The **📼 ALL FILES** button in the dashboard header opens one list with the saved recordings of **every camera**, newest first (by the time in the clip's name, which is the moment the recording was triggered). Each row names its camera and has the same buttons as a camera's own **📼 FILES** list: **▶ PLAY**, **⬇ GET**, **🗑 DEL** and a tick box, and at the bottom **SELECT ALL / SELECT ALL SEEN / DOWNLOAD SELECTED / DELETE SELECTED**; **DELETE ALL** at the top deletes the recordings of every camera (after a confirmation). Clips nobody has played or downloaded yet are bold and bright; playing or downloading one marks it seen for every device, as on the dashboard. **↺ REFRESH** loads the list again (the page does not redraw itself while you watch a clip). If one camera's recordings cannot be read, the others are still listed and the list says which camera is missing.
 
 Nothing new is exposed: the page asks `recordings.php` for each camera's list and for every play, download, delete and "seen" mark, so the dashboard login, the anti-forgery header, the file-name check and the audit log are the same as for the per-camera lists. The list code lives in one file, `php/cameras/lib/recordings-list.js`, which both the dashboard and the ALL FILES page include (`deploy.sh` copies it to `lib/`, which the web server never serves; PHP writes it into the pages).
+
+## Sorting out footage without a person
+
+A badly tuned motion/person alarm records a lot of clips with nobody in them. The relay can check every recording with a YOLO person detector (OpenCV's DNN module on the Pi's CPU — no GPU, no PyTorch on the Pi) and set the empty ones aside.
+
+How it works, per clip: the detector reads the recording frame by frame in colour and **stops at the first frame with a person** — that frame (person boxed) is saved next to the clip as `<clip>.mp4.thumb.jpg` and shown as a small picture in the file list, so you see who it is without playing it. Only if the **whole** clip was read and nobody was found is it "without a person": it is then **moved** to `recordings/<camera>/no-person/` (default, nothing is lost) or **deleted** (`action: 'delete'`). Every failure — model missing, detector crashed or timed out, clip unreadable or cut short, clip still being written — leaves the clip exactly where it is and shows `⚠ check failed: <reason>` next to it. Clips are checked one at a time, at low priority, so cameras keep being served.
+
+### 1. Install the detector's packages (on the Pi)
+
+```
+sudo apt install -y python3-opencv python3-numpy
+python3 -c "import cv2, numpy; print(cv2.__version__)"
+```
+
+### 2. Get the model (on your laptop, once)
+
+The detector reads a standard Ultralytics YOLO model exported to ONNX (class 0 = person, the COCO order every Ultralytics model uses). Both the classic output (YOLOv5/v8/v11, `1 × 84 × N`) and the end-to-end output (YOLOv10/YOLO26, `1 × N × 6`) are understood. Export a **nano** model at 640 px:
+
+```
+pip install ultralytics
+yolo export model=yolo26n.pt format=onnx imgsz=640 opset=12 simplify=True   # or yolo11n.pt if yolo26n is not available to you
+```
+
+(Model weights are published by Ultralytics under the AGPL-3.0 licence — check it fits your use. Use a `yolo*n` model first; the larger `s` model is more accurate but several times slower on a Pi.) Copy the resulting `.onnx` file to the relay folder on the Pi as `models/person.onnx`:
+
+```
+ssh pi@<pi> 'mkdir -p /opt/camrelay/models'
+scp yolo26n.onnx pi@<pi>:/opt/camrelay/models/person.onnx
+```
+
+### 3. Try it on one clip (on the Pi)
+
+```
+cd /opt/camrelay
+python3 tools/person_scan.py --model models/person.onnx --video recordings/<camera>/<some clip>.mp4 --thumbnail /tmp/test-thumb.jpg
+```
+
+It prints one line of JSON: `{"ok": true, "person": true, "confidence": 0.81, "frameIndex": 42, ...}` (and writes `/tmp/test-thumb.jpg`) or `{"ok": true, "person": false, ...}`; `"ok": false` carries the reason. Try a clip you know has a person and one that is empty before switching anything on. Time it: on a Pi 5 expect a few frames per second at 640 px — if clips take too long, raise `stride` (every Nth frame is analysed; a person is on screen for many frames, so `stride: 3` loses little).
+
+### 4. Switch it on (relay `config.js`)
+
+```
+  personScan: {
+    enabled: true,
+    auto: true,              // check every recording right after it is saved
+    action: 'move',          // 'move' to recordings/<camera>/no-person/ (safe), or 'delete'
+    confidence: 0.4,         // lower keeps more doubtful clips
+    stride: 1,
+  },
+```
+
+All the options are listed in `example.config.js`. Restart the relay process (copying files does not change the running one). A bad value is reported at start (`[config] personScan...`) and the default is used.
+
+### 5. Use it from the dashboard
+
+In every file list (a camera's **📼 FILES** and **📼 ALL FILES**): **🧑 SORT OUT ALL** checks every clip not checked yet, **🧑 SORT OUT SELECTED** only the ticked ones. A clip waiting or being checked shows `⏳ processing…`; the list reloads itself until all are done (not while a clip is playing). Clips with a person get their picture in the row. To get a moved clip back, copy it from `recordings/<camera>/no-person/` into `recordings/<camera>/`. With the person check switched off, the buttons answer "the person check is switched off".
+
+**Safety notes.** `no-person/` is not shown in the lists and is not cleaned up by the relay — delete it by hand when you trust the detector (`recordings/*/no-person/`). Judge `confidence` on your own footage: night, small or partly hidden people are the clips a detector misses; start with `action: 'move'` and look in `no-person/` for a week before ever using `'delete'`. The check needs the dashboard control key like every other action that changes recordings.
 
 ## The simple camera pages (dashboard → ▦ SIMPLE LIST / ▣ SIMPLE VIEW)
 

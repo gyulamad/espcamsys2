@@ -46,6 +46,11 @@ class CamLayout
      on phones and some browsers, so colour carries the difference too. */
   .files-name { color: var(--seen); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .files-size { color: var(--seen); font-weight: 400; flex-shrink: 0; }
+  /* The first person found in a clip, so who is in it is visible without playing it. */
+  .files-thumb { width: 96px; height: auto; flex-shrink: 0; border-radius: 3px; border: 1px solid var(--border); }
+  /* "processing…" / why a person check failed. */
+  .files-scan { color: var(--accent); flex-shrink: 0; font-size: 0.85em; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .files-scan.error { color: #e57373; }
   /* Which camera a clip is from (shown on the all-files page only). */
   .files-cam { color: var(--accent); flex-shrink: 0; }
   /* Footage nobody has played or downloaded yet is bold and bright. */

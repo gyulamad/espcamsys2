@@ -12,8 +12,12 @@
 // POST recordings.php?cam=ID&deleteAll=1        -> deletes every recording for this camera
 // POST recordings.php?cam=ID&seen=FILENAME      -> marks one recording as seen (the list's
 //                                                  "seen" flag; unseen ones are shown bold and bright, seen ones gray)
+// GET  recordings.php?cam=ID&thumb=FILENAME     -> the picture of the first person found in that clip (JPEG)
+// POST recordings.php?cam=ID&scan=FILENAME      -> sorts one clip out: checks it for a person, a clip with nobody in it is
+//                                                  moved aside (or deleted, relay setting) — see INSTALL.md
+// POST recordings.php?cam=ID&scanAll=1          -> the same for every clip of this camera not checked yet
 //
-// The three POSTs need the dashboard's X-Requested-With header and a same-origin request (see
+// The POSTs need the dashboard's X-Requested-With header and a same-origin request (see
 // CamLogic::isDashboardMutationAllowed); they reach the relay with the control key and X-Actor,
 // and deletes leave a line in the web server's error log.
 //
@@ -27,7 +31,7 @@ require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/relay.php';
 
 // ?cam[]=x, ?play[]=x ... are arrays, not names: refuse them plainly instead of crashing (review F-16)
-if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen']) !== null) {
+if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen', 'thumb', 'scan', 'scanAll']) !== null) {
     http_response_code(400);
     exit('Invalid parameter');
 }
@@ -43,6 +47,9 @@ $play = $_GET['play'] ?? null;
 $delete = $_GET['delete'] ?? null;
 $deleteAll = isset($_GET['deleteAll']);
 $seen = $_GET['seen'] ?? null;
+$thumb = $_GET['thumb'] ?? null;
+$scan = $_GET['scan'] ?? null;
+$scanAll = isset($_GET['scanAll']);
 
 // Streams a recording to the browser. Shared by $download and $play — the only
 // difference between them is the Content-Disposition we send back; the byte
@@ -91,6 +98,28 @@ function stream_recording($url, $filename, $disposition) {
     exit;
 }
 
+// Streams the picture of the first person found in a clip, after checking the clip's name. The relay
+// answers 404 for a clip without one; only a real JPEG status is passed on.
+function stream_thumbnail($relayBase, $filename) {
+    global $config;
+    if (!CamLogic::isSafeFilename($filename)) {
+        http_response_code(400);
+        exit('Invalid filename');
+    }
+    [$body, $headers] = relay_fetch($relayBase . '/' . rawurlencode($filename) . '/thumbnail', 'GET', 10, relay_read_headers($config));
+    // PHP is the trust boundary: only a real JPEG goes on to the browser.
+    if ($body === false || CamLogic::extractStatusCode($headers ?? []) !== 200 || strncmp($body, "\xFF\xD8\xFF", 3) !== 0) {
+        http_response_code(404);
+        exit('No picture');
+    }
+    while (ob_get_level()) ob_end_clean();
+    header('Content-Type: image/jpeg');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: private, max-age=3600');
+    echo $body;
+    exit;
+}
+
 // Streams one recording, after checking its name is one the relay would generate.
 function stream_named_recording($relayBase, $filename, $disposition) {
     if (!CamLogic::isSafeFilename($filename)) {
@@ -111,6 +140,27 @@ if ($seen !== null) {
     }
     relay_proxy_json($relayBase . '/' . rawurlencode($seen) . '/seen', 'POST', 10, relay_actor_headers($config));
     exit;
+}
+
+if ($scan !== null || $scanAll) {
+    header('Content-Type: application/json');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_fail(405, 'Use POST to sort out recordings');
+    }
+    require_dashboard_mutation();
+    if ($scanAll) {
+        relay_proxy_json($relayBase . '/scan', 'POST', 30, relay_actor_headers($config));
+        exit;
+    }
+    if (!CamLogic::isSafeFilename($scan)) {
+        json_fail(400, 'Invalid filename');
+    }
+    relay_proxy_json($relayBase . '/' . rawurlencode($scan) . '/scan', 'POST', 10, relay_actor_headers($config));
+    exit;
+}
+
+if ($thumb !== null) {
+    stream_thumbnail($relayBase, $thumb);
 }
 
 if ($deleteAll || $delete !== null) {

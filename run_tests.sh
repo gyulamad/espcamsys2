@@ -368,6 +368,23 @@ else
     fi
 fi
 
+# ── Python (person detector script) tests ────────────────────────────────
+# tools/person_scan.py decides whether a recording shows a person. Needs python3 with numpy and OpenCV
+# (sudo apt install python3-opencv); without them the suite is reported as a failure like any missing tool.
+hr
+echo "Python (person detector) tests"
+hr
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "FAIL: python3 not found on PATH"
+    overall_status=1
+elif ! python3 -c 'import cv2, numpy' >/dev/null 2>&1; then
+    echo "FAIL: python3 needs numpy and OpenCV for the detector tests (sudo apt install python3-opencv)"
+    overall_status=1
+else
+    python3 -I -m unittest discover -s "$ROOT_DIR/tests/python" -t "$ROOT_DIR/tests/python"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 # ── End-to-end tests ─────────────────────────────────────────────────────
 # Both spawn the real relay on their own ports (never the real 8080/8081)
 # with a throwaway settings file — a real settings.json is never touched.

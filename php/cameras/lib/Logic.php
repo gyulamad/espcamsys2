@@ -172,6 +172,23 @@ class CamLogic
     // PHP is the trust boundary, so a name that is not a clean recording filename never reaches the
     // browser (where it would become a page id, a URL and a button label). Null when it is not a list.
     // Each entry: filename (checked by isSafeFilename), sizeBytes (a whole number, else 0), seen (only a real boolean).
+    // The person-check state of one clip as the relay reports it: null (nothing going on), or
+    // ['state' => 'queued'|'processing'] / ['state' => 'error', 'reason' => text]. Anything else is dropped.
+    public static function sanitizeScanState($scan): ?array
+    {
+        if (!is_array($scan) || !isset($scan['state']) || !is_string($scan['state'])) {
+            return null;
+        }
+        if ($scan['state'] === 'queued' || $scan['state'] === 'processing') {
+            return ['state' => $scan['state']];
+        }
+        if ($scan['state'] !== 'error') {
+            return null;
+        }
+        $reason = isset($scan['reason']) && is_string($scan['reason']) ? mb_substr($scan['reason'], 0, 200) : '';
+        return ['state' => 'error', 'reason' => $reason];
+    }
+
     public static function sanitizeRecordingList($decoded): ?array
     {
         if (!is_array($decoded) || ($decoded !== [] && array_keys($decoded) !== range(0, count($decoded) - 1))) {
@@ -188,6 +205,13 @@ class CamLogic
             ];
             if (isset($f['seen']) && is_bool($f['seen'])) {
                 $entry['seen'] = $f['seen'];
+            }
+            if (isset($f['person']) && is_bool($f['person'])) {
+                $entry['person'] = $f['person'];
+            }
+            $scan = self::sanitizeScanState($f['scan'] ?? null);
+            if ($scan !== null) {
+                $entry['scan'] = $scan;
             }
             $out[] = $entry;
         }

@@ -68,7 +68,30 @@
         filename: f.filename,
         sizeBytes: Number.isInteger(f.sizeBytes) && f.sizeBytes >= 0 ? f.sizeBytes : 0,
         seen: f.seen !== false,   // an older relay does not say: counts as seen, so nothing is bold by mistake
+        person: f.person === true,
+        scan: scanOf(f.scan),
       }));
+  }
+
+  // The person check's state of one clip, or null: only the three known shapes get through.
+  function scanOf(scan) {
+    if (!scan || typeof scan.state !== 'string') return null;
+    if (scan.state === 'queued' || scan.state === 'processing') return { state: scan.state };
+    if (scan.state === 'error') return { state: 'error', reason: typeof scan.reason === 'string' ? scan.reason : '' };
+    return null;
+  }
+
+  // Text shown next to a clip that is being (or was tried to be) checked; '' when there is nothing to say.
+  function scanLabel(scan) {
+    if (!scan) return '';
+    if (scan.state === 'queued') return '⏳ waiting to be checked…';
+    if (scan.state === 'processing') return '⏳ processing…';
+    return `⚠ check failed${scan.reason ? `: ${scan.reason}` : ''}`;
+  }
+
+  // Is any clip still waiting for / in the middle of its check? (the list then reloads itself)
+  function hasPendingScan(files) {
+    return files.some((f) => f.scan && f.scan.state !== 'error');
   }
 
   // results: [{ cam, files } | { cam, error }] -> { files (merged, newest first), failed: [cam, ...] }
@@ -85,6 +108,7 @@
   function recordingUrl(cam, query) {
     return `${ENDPOINT}?cam=${encodeURIComponent(cam)}&${query}`;
   }
+  const thumbUrl = (cam, filename) => recordingUrl(cam, `thumb=${encodeURIComponent(filename)}`);
   const downloadUrl = (cam, filename) => recordingUrl(cam, `download=${encodeURIComponent(filename)}`);
   const playUrl = (cam, filename) => recordingUrl(cam, `play=${encodeURIComponent(filename)}`);
 
@@ -145,6 +169,7 @@
   //   cams       the camera ids this list shows
   //   camLabel   (cam) => text shown in front of each row, or null for no label (a single camera's panel)
   //   deleteAllConfirm   the question asked before DELETE ALL
+  //   scanPollMs         how often the list reloads while clips are being checked for a person (default 4000; 0 = never)
   //   fetch      defaults to window.fetch (tests pass a fake)
   //   hooks      what the page adds around a request, all optional:
   //     withPaused(fn)        runs a request that needs room (the dashboard closes its live pictures meanwhile)
@@ -184,6 +209,7 @@
       };
       set('del-selected', n === 0, `🗑 DELETE SELECTED (${n})`);
       set('dl-selected', n === 0, `⬇ DOWNLOAD SELECTED (${n})`);
+      set('sort-selected', n === 0, `🧑 SORT OUT SELECTED (${n})`);
       const all = boxes(false), seen = boxes(true);
       set('sel-all', all.length === 0, all.length > 0 && all.every((b) => b.checked) ? '☐ UNSELECT ALL' : '☑ SELECT ALL');
       set('sel-seen', seen.length === 0, seen.length > 0 && seen.every((b) => b.checked) ? '☐ UNSELECT ALL SEEN' : '☑ SELECT ALL SEEN');
@@ -277,6 +303,39 @@
       }
     }
 
+    // "Sort out": the relay checks the clips for a person; one without any is moved aside (or deleted, as the
+    // relay is set up). Asks first, since clips leave the list. Then the list is reloaded and keeps reloading
+    // while anything is queued or processing.
+    async function sortOut(requests, question) {
+      if (!hooks.confirm(question)) return;
+      const settled = await Promise.allSettled(requests);
+      const failed = settled.filter((r) => r.status === 'rejected');
+      if (failed.length > 0) hooks.alert(`Could not start the person check${failed.length === requests.length ? '' : ` (${failed.length} of ${requests.length})`}: ${failed[0].reason.message}`);
+      await refresh();
+    }
+
+    function sortOutSelected() {
+      const picked = selected();
+      if (picked.length === 0) return Promise.resolve();
+      return sortOut(picked.map((p) => post(p.cam, `scan=${encodeURIComponent(p.filename)}`, fetchFn)),
+        `Check ${plural(picked.length, 'selected recording')} for a person? Recordings without a person are removed from this list.`);
+    }
+
+    function sortOutAll() {
+      return sortOut(cams.map((cam) => post(cam, 'scanAll=1', fetchFn)),
+        'Check every recording not checked yet for a person? Recordings without a person are removed from this list.');
+    }
+
+    let pollTimer = null;
+    const playerOpen = () => panel.querySelector('.files-player[data-open="1"]') !== null;
+    // Reload while clips are being checked — but never while a clip is playing (a reload would close the player).
+    function schedulePoll(files) {
+      clearTimeout(pollTimer);
+      const ms = options.scanPollMs ?? 4000;
+      if (ms <= 0 || !hasPendingScan(files)) return;
+      pollTimer = setTimeout(() => (playerOpen() ? schedulePoll(files) : refresh()), ms);
+    }
+
     function row(f, keep) {
       const label = options.camLabel ? options.camLabel(f.cam) : null;
       return [
@@ -284,8 +343,10 @@
           h('input', { type: 'checkbox', className: 'files-select', value: f.filename, checked: keep.has(`${f.cam}/${f.filename}`),
                        ariaLabel: `Select ${f.filename}`, dataset: { cam: f.cam, seen: f.seen ? '1' : '0' }, onchange: updateSelectionUI }),
           ...(label === null ? [] : [h('span', { className: 'files-cam', textContent: label })]),
+          ...(f.person ? [h('img', { className: 'files-thumb', src: thumbUrl(f.cam, f.filename), alt: `Person in ${f.filename}`, loading: 'lazy', width: 96 })] : []),
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
+          ...(f.scan ? [h('span', { className: 'files-scan' + (f.scan.state === 'error' ? ' error' : ''), textContent: scanLabel(f.scan) })] : []),
           h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => { markSeen(f.cam, f.filename); togglePlay(f.cam, f.filename); } }),
           h('a', { className: 'cam-btn', textContent: '⬇ GET', href: downloadUrl(f.cam, f.filename), onclick: () => { hooks.holdForDownload(); markSeen(f.cam, f.filename); } }),
           h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteOne(f.cam, f.filename) })),
@@ -298,6 +359,7 @@
         h('button', { className: 'cam-btn', id: elId('sel-all'), textContent: '☑ SELECT ALL', onclick: () => toggleSelectAll(false) }),
         h('button', { className: 'cam-btn', id: elId('sel-seen'), textContent: '☑ SELECT ALL SEEN', onclick: () => toggleSelectAll(true) }),
         h('button', { className: 'cam-btn', id: elId('dl-selected'), disabled: true, textContent: '⬇ DOWNLOAD SELECTED (0)', onclick: downloadSelected }),
+        h('button', { className: 'cam-btn', id: elId('sort-selected'), disabled: true, textContent: '🧑 SORT OUT SELECTED (0)', onclick: sortOutSelected }),
         h('button', { className: 'cam-btn danger', id: elId('del-selected'), disabled: true, textContent: '🗑 DELETE SELECTED (0)', onclick: deleteSelected }));
     }
 
@@ -308,6 +370,7 @@
       try {
         const { files, failed } = await loadCameras(cams, fetchFn);
         hooks.loaded(files, failed);
+        schedulePoll(files);
         if (cams.length > 0 && failed.length === cams.length) {   // every camera failed (no cameras is just an empty list)
           setContent(empty('Could not load recordings.'));
           return;
@@ -321,6 +384,7 @@
         const keep = new Set(selected().map((p) => `${p.cam}/${p.filename}`));
         const header = h('div', { className: 'files-panel-header' },
           h('span', { textContent: plural(files.length, 'recording') }),
+          h('button', { className: 'cam-btn', id: elId('sort-all'), textContent: '🧑 SORT OUT ALL', onclick: sortOutAll }),
           h('button', { className: 'cam-btn danger', id: elId('delete-all'), textContent: '🗑 DELETE ALL', onclick: deleteAll }));
         setContent(header, ...notice, ...files.flatMap((f) => row(f, keep)), footer());
         updateSelectionUI();
@@ -334,7 +398,7 @@
 
   Object.assign(api, {
     create, loadCameras, fetchCameraFiles, post, recordedAtMs, sortNewestFirst, tagFiles, mergeResults,
-    recordingUrl, downloadUrl, playUrl, formatBytes, h,
+    recordingUrl, downloadUrl, playUrl, thumbUrl, scanOf, scanLabel, hasPendingScan, formatBytes, h,
   });
 
   root.CamRecordingsList = api;

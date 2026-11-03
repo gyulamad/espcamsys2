@@ -30,3 +30,4 @@ Arduino/ESP32_CAM_TFLite_Person/build/
 nodejs/camera-relay/system-settings.json
 nodejs/camera-relay/system-settings.json.tmp
 php/cameras/config.php.bak
+__pycache__/

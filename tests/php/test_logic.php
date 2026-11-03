@@ -1122,6 +1122,21 @@ camtest_test('sanitizeRecordingList keeps clean names and drops everything else'
     ]);
 });
 
+camtest_test('sanitizeRecordingList: person flag and person-check state pass only in their known shapes', function () {
+    $r = CamLogic::sanitizeRecordingList([
+        ['filename' => 'a.mp4', 'person' => true, 'scan' => ['state' => 'processing', 'x' => '<script>']],
+        ['filename' => 'b.mp4', 'person' => 'true', 'scan' => ['state' => 'error', 'reason' => '<b>no model</b>']],
+        ['filename' => 'c.mp4', 'scan' => ['state' => 'weird']],
+        ['filename' => 'd.mp4', 'scan' => 'processing'],
+        ['filename' => 'e.mp4', 'scan' => ['state' => 'error', 'reason' => str_repeat('x', 500)]],
+    ]);
+    camtest_assert_equal($r[0], ['filename' => 'a.mp4', 'sizeBytes' => 0, 'person' => true, 'scan' => ['state' => 'processing']]);
+    camtest_assert_equal($r[1], ['filename' => 'b.mp4', 'sizeBytes' => 0, 'scan' => ['state' => 'error', 'reason' => '<b>no model</b>']]);
+    camtest_assert_equal($r[2], ['filename' => 'c.mp4', 'sizeBytes' => 0]);
+    camtest_assert_equal($r[3], ['filename' => 'd.mp4', 'sizeBytes' => 0]);
+    camtest_assert_equal(strlen($r[4]['scan']['reason']), 200);
+});
+
 camtest_test('sanitizeRecordingList: an empty list is a list; anything that is not a list is refused', function () {
     camtest_assert_equal(CamLogic::sanitizeRecordingList([]), []);
     foreach ([null, 'text', 5, true, ['error' => 'boom'], ['a.mp4' => ['filename' => 'a.mp4']], [1 => ['filename' => 'a.mp4']]] as $bad) {

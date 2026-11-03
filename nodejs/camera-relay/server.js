@@ -36,6 +36,10 @@ const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = r
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 const sysconfig = require('./lib/sysconfig');
 const diskspace = require('./lib/diskspace');
+const personscan = require('./lib/personscan');
+const { createSorter } = require('./lib/sorter');
+const { ScanQueue } = require('./lib/scanqueue');
+const { runProcess } = require('./lib/runprocess');
 
 // What the dashboard's settings page saved (ports, keys, pre-roll, log, folders) is laid
 // over config.js, so config.js itself never has to be rewritten. See lib/sysconfig.js.
@@ -58,6 +62,9 @@ const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in e
 
 const RECORDINGS_DIR = path.join(__dirname, 'recordings');
 fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+// ── Sorting out footage without a person (see lib/personscan.js, INSTALL.md) ──
+const scanCfg = personscan.resolveScanConfig(config.personScan, __dirname);
+for (const w of scanCfg.warnings) console.warn(`[config] ${w}`);
 const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
 const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
@@ -572,6 +579,7 @@ function encodeRecording(rec) {
     }
     camLog('INFO', rec.id, `recording saved as ${path.basename(outputPath)}`);
     removeTempDir(rec);
+    if (scanCfg.enabled && scanCfg.auto) queueScan(rec.id, path.basename(outputPath));
   });
 }
 
@@ -1818,6 +1826,42 @@ function isSeen(clipPath) {
 function removeClip(clipPath) {
   fs.unlinkSync(clipPath);
   fs.rmSync(seenMarkerPath(clipPath), { force: true });
+  fs.rmSync(personscan.thumbnailPath(clipPath), { force: true });
+}
+
+// The person check: one clip at a time (lib/scanqueue.js), each judged by lib/sorter.js, which only ever
+// moves/deletes a clip on a clear "nobody in it" answer. Disk access is injected here.
+const sorter = createSorter({
+  config: scanCfg,
+  files: {
+    mtimeMs: (p) => fs.statSync(p).mtimeMs,
+    exists: (p) => fs.existsSync(p),
+    move: (from, to) => {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(from, to);
+      fs.rmSync(seenMarkerPath(from), { force: true });
+    },
+    remove: removeClip,
+    removeThumbnail: (p) => fs.rmSync(personscan.thumbnailPath(p), { force: true }),
+  },
+  runDetector: (args) => runProcess(scanCfg.python, args, { env: personscan.scanEnv(process.env), timeoutMs: scanCfg.timeoutMs }),
+});
+const scanQueue = new ScanQueue({
+  work: (job) => sorter.sort(job.payload.clipPath),
+  onFinished: (job, outcome) => {
+    const name = path.basename(job.payload.clipPath);
+    const detail = { state: outcome.state, ...(outcome.reason ? { reason: outcome.reason } : {}) };
+    relayLog(outcome.state === 'error' ? 'WARN' : 'INFO', `person check of ${name}: ${detail.state}${detail.reason ? ` (${detail.reason})` : ''}`, { sender: job.payload.camId });
+  },
+});
+const scanKey = (camId, filename) => `${camId}/${filename}`;
+
+// Queues one clip. A clip that already has its person picture was checked before and is skipped.
+// -> 'queued' | 'duplicate' | 'done'
+function queueScan(camId, filename) {
+  const clipPath = path.join(cameraDir(camId), filename);
+  if (fs.existsSync(personscan.thumbnailPath(clipPath))) return 'done';
+  return scanQueue.enqueue(scanKey(camId, filename), { camId, clipPath });
 }
 
 // Resolves /recordings/:id/:filename to req.recordingPath, or answers 400 (not a
@@ -1839,7 +1883,12 @@ app.get('/recordings/:id', requireReadKey, (req, res) => {
   const files = recordingFileNames(dir)
     .map((f) => {
       const stat = fs.statSync(path.join(dir, f));
-      return { filename: f, sizeBytes: stat.size, createdAt: stat.birthtime, seen: isSeen(path.join(dir, f)) };
+      const clipPath = path.join(dir, f);
+      return {
+        filename: f, sizeBytes: stat.size, createdAt: stat.birthtime, seen: isSeen(clipPath),
+        person: fs.existsSync(personscan.thumbnailPath(clipPath)),
+        scan: scanQueue.stateOf(scanKey(req.params.id, f)),
+      };
     })
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   res.json(files);
@@ -1878,6 +1927,35 @@ app.delete('/recordings/:id/:filename', requireDashboardKey, requireExistingReco
 app.post('/recordings/:id/:filename/seen', requireDashboardKey, requireExistingRecording, (req, res) => {
   fs.writeFileSync(seenMarkerPath(req.recordingPath), '');
   res.json({ seen: req.params.filename });
+});
+
+// The picture of the first person found in a clip (written by tools/person_scan.py).
+app.get('/recordings/:id/:filename/thumbnail', requireReadKey, requireExistingRecording, (req, res) => {
+  const thumb = personscan.thumbnailPath(req.recordingPath);
+  if (!fs.existsSync(thumb)) return res.sendStatus(404);
+  res.set('Cache-Control', 'private, max-age=3600');
+  return res.type('image/jpeg').sendFile(thumb);
+});
+
+// Is the person check usable? Answers 409 (with the reason) when it is switched off, so the dashboard can say why.
+function requireScanEnabled(req, res, next) {
+  if (scanCfg.enabled) return next();
+  return res.status(409).json({ error: 'the person check is switched off (personScan.enabled in config.js — see INSTALL.md)' });
+}
+
+// Sort out one clip: a clip without a person is moved to no-person/ (or deleted, personScan.action).
+app.post('/recordings/:id/:filename/scan', requireDashboardKey, requireScanEnabled, requireExistingRecording, (req, res) => {
+  const result = queueScan(req.params.id, req.params.filename);
+  relayLog('INFO', `person check of ${req.params.id}/${req.params.filename} requested by ${actorOf(req)} (${result})`);
+  res.status(202).json({ scan: result });
+});
+
+// Sort out every clip of a camera that has not been checked yet.
+app.post('/recordings/:id/scan', requireDashboardKey, requireScanEnabled, (req, res) => {
+  const results = recordingFileNames(cameraDir(req.params.id)).map((f) => queueScan(req.params.id, f));
+  const queued = results.filter((r) => r === 'queued').length;
+  relayLog('INFO', `person check of ${queued} recording(s) of ${req.params.id} requested by ${actorOf(req)}`);
+  res.status(202).json({ queued });
 });
 
 // Any error a route doesn't handle itself ends up here: recorded with its stack

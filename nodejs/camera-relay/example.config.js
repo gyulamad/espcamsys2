@@ -53,5 +53,22 @@ module.exports = {
   // got hold of a board could otherwise switch your whole system off. Without a controlKey the
   // switch is simply refused. Generate one with:  openssl rand -hex 24
   controlKey: '',
+
+  // Sorting out footage without a person (see "Sorting out footage without a person" in INSTALL.md).
+  // A YOLO ONNX model checks each recording frame by frame on the Pi, stops at the first person (that frame
+  // becomes the clip's thumbnail) and files a clip that shows nobody under <camera>/no-person/ or deletes it.
+  // A clip is NEVER removed unless the whole clip was read and no person found; any failure keeps it.
+  // personScan: {
+  //   enabled: false,            // switch on after installing the model (INSTALL.md)
+  //   auto: true,                // check every recording right after it is saved
+  //   action: 'move',            // 'move' (safe) or 'delete' a clip with nobody in it
+  //   model: 'models/person.onnx', // relative to this folder
+  //   script: 'tools/person_scan.py', // the detector, shipped with the relay
+  //   python: 'python3',
+  //   confidence: 0.4,           // 0 < c <= 1; lower keeps more doubtful clips
+  //   stride: 1,                 // analyse every Nth frame (raise to go faster on a slow Pi)
+  //   timeoutSeconds: 900,
+  //   minAgeSeconds: 20,         // a clip touched more recently than this is left alone
+  // },
   // switchFile: 'recording-switch.json',  // where the state is kept so it survives a restart (default shown)
 };
