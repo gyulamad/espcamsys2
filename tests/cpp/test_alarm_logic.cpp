@@ -315,6 +315,78 @@ TEST(log_url_points_at_the_relays_log_endpoint) {
     TEST_ASSERT(buildLogUrl("192.168.4.9", 8080) == "http://192.168.4.9:8080/log", "host, port and /log");
 }
 
+// ── alarmHoldUpdate (keep recording while the alarm line stays active) ───
+
+TEST(hold_edge_sends_the_alarm_immediately) {
+    AlarmHoldState st;
+    TEST_ASSERT(alarmHoldUpdate(st, /*edge=*/true, /*active=*/true, 1000, 1000), "an edge always sends");
+    TEST_ASSERT(st.armed, "an edge arms the refresh");
+    TEST_ASSERT_EQ(st.lastSentMs, 1000UL, "the send time is remembered");
+}
+
+TEST(hold_resends_every_refresh_interval_while_the_line_stays_active) {
+    // The bug: line goes high and stays high -> one alarm, recording runs out.
+    AlarmHoldState st;
+    alarmHoldUpdate(st, true, true, 1000, 1000);
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 1500, 1000), "not before the interval has passed");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 1999, 1000), "still not at 999 ms");
+    TEST_ASSERT(alarmHoldUpdate(st, false, true, 2000, 1000), "re-sent once the interval has passed");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 2500, 1000), "the interval restarts after each send");
+    TEST_ASSERT(alarmHoldUpdate(st, false, true, 3000, 1000), "and it keeps going for as long as the line is held");
+    TEST_ASSERT(alarmHoldUpdate(st, false, true, 4000, 1000), "...and going");
+}
+
+TEST(hold_stops_resending_once_the_line_goes_inactive) {
+    AlarmHoldState st;
+    alarmHoldUpdate(st, true, true, 0, 1000);
+    TEST_ASSERT(!alarmHoldUpdate(st, false, false, 1500, 1000), "nothing is sent for a released line");
+    TEST_ASSERT(!st.armed, "release disarms");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 5000, 1000), "a line seen active again WITHOUT an edge does not send");
+}
+
+TEST(hold_a_new_edge_after_release_starts_over) {
+    AlarmHoldState st;
+    alarmHoldUpdate(st, true, true, 0, 1000);
+    alarmHoldUpdate(st, false, false, 500, 1000); // released
+    TEST_ASSERT(alarmHoldUpdate(st, true, true, 700, 1000), "the next edge sends right away");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 1200, 1000), "the interval counts from that edge");
+    TEST_ASSERT(alarmHoldUpdate(st, false, true, 1700, 1000), "and the refresh resumes");
+}
+
+TEST(hold_an_edge_while_held_restarts_the_interval) {
+    // "...or goes high again while the recording keeps rolling": an extra edge
+    // sends at once and is not followed by a second send right behind it.
+    AlarmHoldState st;
+    alarmHoldUpdate(st, true, true, 0, 1000);
+    TEST_ASSERT(alarmHoldUpdate(st, true, true, 800, 1000), "an edge during the hold sends");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 1000, 1000), "no double send: the interval restarted at the edge");
+    TEST_ASSERT(alarmHoldUpdate(st, false, true, 1800, 1000), "the next refresh is a full interval after it");
+}
+
+TEST(hold_a_pulse_shorter_than_one_loop_sends_once_and_disarms) {
+    // Line went high and low again before loop() looked: the edge was latched.
+    AlarmHoldState st;
+    TEST_ASSERT(alarmHoldUpdate(st, true, false, 100, 1000), "the latched edge still sends");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, false, 200, 1000), "the next look sees a released line and stays quiet");
+    TEST_ASSERT(!st.armed, "and nothing is left armed");
+}
+
+TEST(hold_a_line_already_active_at_boot_does_not_send) {
+    // Same rule as alarmDebounceUpdate(): no edge, no alarm.
+    AlarmHoldState st;
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 0, 1000), "no edge yet: quiet");
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, 60000, 1000), "even long after boot while still held");
+}
+
+TEST(hold_survives_the_millis_counter_wrapping) {
+    // Unsigned subtraction: a send just before the 32-bit wrap is still seen as old after it.
+    const unsigned long nearWrap = 0xFFFFFFFFUL - 200;
+    AlarmHoldState st;
+    alarmHoldUpdate(st, true, true, nearWrap, 1000);
+    TEST_ASSERT(!alarmHoldUpdate(st, false, true, nearWrap + 500, 1000), "not due 500 ms after the send, across the wrap");
+    TEST_ASSERT(alarmHoldUpdate(st, false, true, nearWrap + 1000, 1000), "due 1000 ms after the send, across the wrap");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -367,6 +439,14 @@ int main() {
     RUN_TEST(old_relay_bytes_and_unknown_bytes_leave_the_flag_off);
     RUN_TEST(relay_greeting_sequence_resume_then_capability);
     RUN_TEST(log_url_points_at_the_relays_log_endpoint);
+    RUN_TEST(hold_edge_sends_the_alarm_immediately);
+    RUN_TEST(hold_resends_every_refresh_interval_while_the_line_stays_active);
+    RUN_TEST(hold_stops_resending_once_the_line_goes_inactive);
+    RUN_TEST(hold_a_new_edge_after_release_starts_over);
+    RUN_TEST(hold_an_edge_while_held_restarts_the_interval);
+    RUN_TEST(hold_a_pulse_shorter_than_one_loop_sends_once_and_disarms);
+    RUN_TEST(hold_a_line_already_active_at_boot_does_not_send);
+    RUN_TEST(hold_survives_the_millis_counter_wrapping);
 
     return test::summarize();
 }

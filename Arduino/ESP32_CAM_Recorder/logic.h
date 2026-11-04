@@ -60,6 +60,42 @@ inline bool alarmDebounceUpdate(AlarmDebounceState &st, int raw, unsigned long n
     return false; // already stable at this value, nothing changed
 }
 
+// ── Alarm hold (level) refresh ─────────────────────────────────────────
+// The relay records for a fixed time after each alarm message, so one message
+// per RISING edge is not enough for a sensor that stays active (a motion /
+// brightness / person detector whose output goes high and STAYS high): the
+// recording would run out while the alarm line is still up and only restart on
+// the next edge. While the line is held active the alarm is therefore re-sent
+// every refreshMs, which makes the relay extend the same recording. Keep
+// refreshMs well below the relay's alarmRecordSeconds (its minimum is 1 s).
+//
+// Held-ness is only honoured after a real edge ("armed"): a sensor that powers
+// up already active must not fire at boot, same rule as alarmDebounceUpdate().
+struct AlarmHoldState {
+    bool armed = false;            // an edge happened and the line has not gone inactive since
+    unsigned long lastSentMs = 0;  // when the alarm was last sent (edge or refresh)
+};
+
+// Call once per loop(). `edge` is "a new alarm edge was latched since the last
+// call", `inputActive` the line's current level compared with the active level.
+// Returns true when an alarm message should be sent now.
+inline bool alarmHoldUpdate(AlarmHoldState &st, bool edge, bool inputActive,
+                            unsigned long nowMs, unsigned long refreshMs) {
+    if (edge) {
+        st.armed = true;
+        st.lastSentMs = nowMs;
+        return true;
+    }
+    if (!inputActive) {
+        st.armed = false; // released: nothing to keep alive
+        return false;
+    }
+    if (!st.armed) return false;
+    if (nowMs - st.lastSentMs < refreshMs) return false;
+    st.lastSentMs = nowMs;
+    return true;
+}
+
 // Which camera id an alarm-triggered recording request should target —
 // this camera alone, or every camera the relay knows about.
 inline std::string alarmRecordTargetId(bool recordAllCameras, const std::string &cameraId) {

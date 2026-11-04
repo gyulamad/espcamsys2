@@ -77,6 +77,12 @@ const unsigned long ALARM_DEBOUNCE_MS = 50;
 // even when loop() is slow (frame push + delay).
 volatile bool alarmPending = false;
 volatile unsigned long alarmLastIsrMs = 0;
+// While the alarm line STAYS active the alarm is re-sent this often, so the
+// relay keeps extending the recording instead of letting it run out under a
+// sensor that is still alarming (see alarmHoldUpdate() in logic.h). Must stay
+// below the relay's alarmRecordSeconds, whose minimum is 1 s.
+const unsigned long ALARM_HOLD_REFRESH_MS = 1000;
+AlarmHoldState alarmHold;
 
 void IRAM_ATTR onAlarmEdge() {
   unsigned long now = millis();
@@ -428,7 +434,12 @@ void sendAlarmRequest(const String &id) {
 // message (an older relay, or this connection is brand new and the
 // announcement hasn't been read yet). That check is what makes it safe to run
 // this firmware against any relay version.
-void triggerAlarmRecording() {
+//
+// `refresh` is true for the periodic re-send while the alarm line is held
+// active (see checkAlarmTrigger()): the same message, but its routine success
+// is only logged at DEBUG so a long alarm doesn't flood the log every second.
+// Problems are always logged at their usual level.
+void triggerAlarmRecording(bool refresh) {
   bool wifiUp = WiFi.status() == WL_CONNECTED;
   std::string targetId = alarmRecordTargetId(g_cfg.alarmRecordAll, g_cfg.cameraId);
 
@@ -437,7 +448,8 @@ void triggerAlarmRecording() {
       uint8_t msg[ALARM_MESSAGE_LEN];
       encodeAlarmMessage(g_cfg.alarmRecordAll, msg);
       if (writePushBytes(msg, ALARM_MESSAGE_LEN) == ALARM_MESSAGE_LEN) {
-        RLOG_INFO("alarm sent in-band on the push connection");
+        if (refresh) RLOG_DEBUG("alarm line still active — alarm re-sent in-band");
+        else RLOG_INFO("alarm sent in-band on the push connection");
         return;
       }
       // A partial write leaves the byte stream stopped halfway through a
@@ -463,17 +475,26 @@ void triggerAlarmRecording() {
   }
 }
 
-// Handles an alarm edge latched by onAlarmEdge(). Fires once per edge into
-// the ALARM_ACTIVE level; edges that arrive while a previous trigger is still
-// being processed collapse into one, which is fine since a repeat trigger
-// only extends the recording anyway.
+// True while the alarm line is at its ALARM_ACTIVE level.
+bool alarmInputActive() {
+  return digitalRead(g_cfg.alarmGpioPin) == (g_cfg.alarmActiveHigh ? HIGH : LOW);
+}
+
+// Handles the alarm line: fires on every edge into the ALARM_ACTIVE level
+// latched by onAlarmEdge(), and keeps re-sending the alarm every
+// ALARM_HOLD_REFRESH_MS for as long as the line then stays active, so a
+// recording keeps rolling under a sensor that goes high and stays high. Edges
+// that arrive while a previous trigger is still being processed collapse into
+// one, which is fine since a repeat trigger only extends the recording anyway.
 void checkAlarmTrigger() {
   if (g_cfg.alarmGpioPin < 0) return; // feature turned off — see the ALARM_GPIO_PIN setting
-  if (!alarmPending) return;
 
+  bool edge = alarmPending;
   alarmPending = false;
-  RLOG_INFO("alarm input triggered");
-  triggerAlarmRecording();
+  if (!alarmHoldUpdate(alarmHold, edge, alarmInputActive(), millis(), ALARM_HOLD_REFRESH_MS)) return;
+
+  if (edge) RLOG_INFO("alarm input triggered");
+  triggerAlarmRecording(!edge);
 }
 
 // Configures and initializes the OV2640 camera driver. Split out of setup()
@@ -585,6 +606,7 @@ void setupAlarmInput() {
   attachInterrupt(digitalPinToInterrupt(g_cfg.alarmGpioPin), onAlarmEdge,
                   g_cfg.alarmActiveHigh ? RISING : FALLING);
   alarmPending = false;
+  alarmHold = AlarmHoldState();
 }
 
 // Brings WiFi up and blocks until one of the configured networks connects.

@@ -85,6 +85,8 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 
    When the alarm input fires, the camera reports it to the relay as a tiny message on the connection it already holds open for video frames, so it never stops streaming to make a separate HTTP request. (If that connection happens to be down, it falls back to a plain `POST /alarm/<id>`.) The relay announces to each camera, right after it connects, that it understands this message, and the camera only uses it after hearing that; against a relay that doesn't announce it (an older version), the camera keeps using the HTTP request, so mixing versions is safe.
 
+   The alarm is sent on every edge into the active level **and then once a second for as long as the pin stays active**, so a sensor or person detector that goes high and stays high keeps the recording rolling (each message just extends it by the relay's alarm length); it stops being extended when the pin goes inactive, and the recording ends that length later. A pin that is already active when the board boots does not alarm until it has gone inactive and active again. Keep the relay's **ALARM** length at 1 s or more (its minimum), ideally several seconds.
+
    Cameras stream continuously — there is no on/off switch for a camera any more. That is what lets the relay keep the rolling pre-roll buffer.
 
 6. Repeat for every camera, giving each one a unique `CAMERA_ID` (`cam1`, `cam2`, `cam3`, `cam4`, ...).
