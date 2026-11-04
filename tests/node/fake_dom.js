@@ -79,6 +79,11 @@ function createFakeDocument() {
     body,
     createElement: (tag) => new FakeElement(tag),
     getElementById: (id) => body.descendants().find((e) => e.id === id) || null,
+    // Document-level listeners (the picture viewer closes on Escape); key(name) is a key press.
+    listeners: {},
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    removeEventListener(type, fn) { this.listeners[type] = (this.listeners[type] || []).filter((f) => f !== fn); },
+    key(name) { [...(this.listeners.keydown || [])].forEach((fn) => fn({ type: 'keydown', key: name })); },
   };
 }
 

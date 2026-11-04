@@ -47,7 +47,15 @@ class CamLayout
   .files-name { color: var(--seen); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .files-size { color: var(--seen); font-weight: 400; flex-shrink: 0; }
   /* The first person found in a clip, so who is in it is visible without playing it. */
-  .files-thumb { width: 96px; height: auto; flex-shrink: 0; border-radius: 3px; border: 1px solid var(--border); }
+  .files-thumb-btn { padding: 0; border: 0; background: none; flex-shrink: 0; cursor: zoom-in; line-height: 0; }
+  .files-thumb { width: 96px; height: auto; border-radius: 3px; border: 1px solid var(--border); }
+  /* The picture in large, over the whole page; a click or Escape closes it. */
+  .files-lightbox {
+    position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding: 12px; background: rgba(0, 0, 0, 0.88); cursor: zoom-out;
+  }
+  .files-lightbox img { max-width: 100%; max-height: calc(100% - 32px); object-fit: contain; }
+  .files-lightbox-caption { color: #ddd; font-size: 0.85em; word-break: break-all; text-align: center; }
   /* "processing…" / why a person check failed. */
   .files-scan { color: var(--accent); flex-shrink: 0; font-size: 0.85em; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .files-scan.error { color: #e57373; }

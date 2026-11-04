@@ -786,7 +786,7 @@ All the options are listed in `example.config.js`. Restart the relay process (co
 
 ### 5. Use it from the dashboard
 
-In every file list (a camera's **📼 FILES** and **📼 ALL FILES**): **🧑 SORT OUT ALL** checks every clip not checked yet, **🧑 SORT OUT SELECTED** only the ticked ones. A clip waiting or being checked shows `⏳ processing…`; the list reloads itself until all are done (not while a clip is playing). Clips with a person get their picture in the row. To get a moved clip back, copy it from `recordings/<camera>/no-person/` into `recordings/<camera>/`. With the person check switched off, the buttons answer "the person check is switched off".
+In every file list (a camera's **📼 FILES** and **📼 ALL FILES**): **🧑 SORT OUT ALL** checks every clip not checked yet, **🧑 SORT OUT SELECTED** only the ticked ones. A clip waiting or being checked shows `⏳ processing…`; the list reloads itself until all are done (not while a clip is playing). Clips with a person get their picture in the row; **click it to see the frame in large** (click again or press Esc to close). To get a moved clip back, copy it from `recordings/<camera>/no-person/` into `recordings/<camera>/`. With the person check switched off, the buttons answer "the person check is switched off".
 
 **Safety notes.** `no-person/` is not shown in the lists and is not cleaned up by the relay — delete it by hand when you trust the detector (`recordings/*/no-person/`). Judge `confidence` on your own footage: night, small or partly hidden people are the clips a detector misses; start with `action: 'move'` and look in `no-person/` for a week before ever using `'delete'`. The check needs the dashboard control key like every other action that changes recordings.
 

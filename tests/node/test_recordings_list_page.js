@@ -298,6 +298,32 @@ async function main() {
       events.downloads === 1 && server.posts().filter((r) => r.query.includes('&seen=')).length === 2);
   }
 
+  // ── the person's picture in large ──
+  {
+    const E = name('cam1', '2026-10-05T10:00:00.000Z');
+    const server = fakeServer({ cam1: [{ filename: E, sizeBytes: 5, seen: true, person: true }, { filename: A, sizeBytes: 5, seen: true }] });
+    const { doc, panel, view } = build(server, { prefix: 'cam1', cams: ['cam1'], camLabel: null });
+    await view.refresh();
+    const thumbs = panel.querySelectorAll('.files-thumb-btn');
+    check('only a clip with a person has a picture, and it is a button', thumbs.length === 1 && thumbs[0].tagName === 'BUTTON' && thumbs[0].type === 'button');
+    check('…its picture is the clip\'s thumbnail', panel.querySelector('.files-thumb').src === `recordings.php?cam=cam1&thumb=${E}`);
+    check('nothing is open before a click', doc.body.querySelector('.files-lightbox') === null);
+    thumbs[0].click();
+    const box = doc.body.querySelector('.files-lightbox');
+    check('a click opens the same picture in large, over the page, with the clip name', !!box && box.querySelector('.files-lightbox-caption').text() === E
+      && box.descendants().some((e) => e.tagName === 'IMG' && e.src === `recordings.php?cam=cam1&thumb=${E}`) && box.parent === doc.body);
+    thumbs[0].click();
+    check('clicking again never stacks a second one', doc.body.querySelectorAll('.files-lightbox').length === 1);
+    doc.key('a');
+    check('another key leaves it open', !!doc.body.querySelector('.files-lightbox'));
+    doc.key('Escape');
+    check('Escape closes it and stops listening', doc.body.querySelector('.files-lightbox') === null && (doc.listeners.keydown || []).length === 0);
+    thumbs[0].click();
+    doc.body.querySelector('.files-lightbox').click();
+    check('a click on the picture closes it too', doc.body.querySelector('.files-lightbox') === null && (doc.listeners.keydown || []).length === 0);
+    check('looking at a picture changes nothing on the server', server.posts().length === 0);
+  }
+
   finished = true;
   console.log(`\n${passCount} passed, ${failCount} failed`);
   process.exitCode = failCount === 0 ? 0 : 1;

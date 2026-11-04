@@ -135,6 +135,25 @@
     return el;
   }
 
+  // The picture of the person in large: the same JPEG as the thumbnail (it is the whole frame), over the page.
+  // A click anywhere on it, or Escape, closes it. Only one is ever open.
+  function showPicture(src, caption) {
+    const old = document.body.querySelector('.files-lightbox');
+    if (old) old.remove();
+    function close() {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+    }
+    const overlay = h('div', { className: 'files-lightbox', role: 'dialog', ariaLabel: caption, onclick: close },
+      h('img', { src, alt: caption }),
+      h('span', { className: 'files-lightbox-caption', textContent: caption }));
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+  }
+
   // ── Talking to recordings.php ────────────────────────────────────────────
 
   // One camera's clips, tagged with the camera. Throws when recordings.php does not answer with a list.
@@ -343,7 +362,9 @@
           h('input', { type: 'checkbox', className: 'files-select', value: f.filename, checked: keep.has(`${f.cam}/${f.filename}`),
                        ariaLabel: `Select ${f.filename}`, dataset: { cam: f.cam, seen: f.seen ? '1' : '0' }, onchange: updateSelectionUI }),
           ...(label === null ? [] : [h('span', { className: 'files-cam', textContent: label })]),
-          ...(f.person ? [h('img', { className: 'files-thumb', src: thumbUrl(f.cam, f.filename), alt: `Person in ${f.filename}`, loading: 'lazy', width: 96 })] : []),
+          ...(f.person ? [h('button', { className: 'files-thumb-btn', type: 'button', title: 'Click to enlarge', ariaLabel: `Enlarge the picture of the person in ${f.filename}`,
+                                       onclick: () => showPicture(thumbUrl(f.cam, f.filename), f.filename) },
+            h('img', { className: 'files-thumb', src: thumbUrl(f.cam, f.filename), alt: `Person in ${f.filename}`, loading: 'lazy', width: 96 }))] : []),
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
           ...(f.scan ? [h('span', { className: 'files-scan' + (f.scan.state === 'error' ? ' error' : ''), textContent: scanLabel(f.scan) })] : []),
@@ -398,7 +419,7 @@
 
   Object.assign(api, {
     create, loadCameras, fetchCameraFiles, post, recordedAtMs, sortNewestFirst, tagFiles, mergeResults,
-    recordingUrl, downloadUrl, playUrl, thumbUrl, scanOf, scanLabel, hasPendingScan, formatBytes, h,
+    recordingUrl, downloadUrl, playUrl, thumbUrl, showPicture, scanOf, scanLabel, hasPendingScan, formatBytes, h,
   });
 
   root.CamRecordingsList = api;
