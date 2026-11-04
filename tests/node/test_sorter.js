@@ -6,18 +6,20 @@ const ps = require('../../nodejs/camera-relay/lib/personscan');
 
 const CLIP = '/r/cam1/cam1_2026.mp4';
 
-function rig({ action = 'move', mtimeMs = 0, nowMs = 100000, modelExists = true, clipExists = true, detector, moveFails = false, mtimeThrows = false } = {}) {
+function rig({ action = 'move', writing = false, modelExists = true, clipExists = true, detector, moveFails = false, clipGoneAtStart = false } = {}) {
   const calls = [];
-  const config = { ...ps.resolveScanConfig({ action }, '/relay'), minAgeMs: 20000 };
+  const config = ps.resolveScanConfig({ action }, '/relay');
+  let checks = 0;
   const files = {
-    mtimeMs: () => { if (mtimeThrows) throw new Error('ENOENT'); return mtimeMs; },
-    exists: (p) => (p === config.model ? modelExists : clipExists),
+    // the clip exists at the first look unless clipGoneAtStart; clipExists=false means it vanishes while the detector works
+    exists: (p) => { if (p === config.model) return modelExists; checks += 1; return checks === 1 ? !clipGoneAtStart : clipExists; },
+    isBeingWritten: () => writing,
     move: (a, b) => { if (moveFails) throw new Error('EACCES'); calls.push(['move', a, b]); },
     remove: (p) => calls.push(['remove', p]),
     removeThumbnail: (p) => calls.push(['removeThumbnail', p]),
   };
   const runDetector = async (args) => { calls.push(['detect', args[args.indexOf('--video') + 1]]); return detector; };
-  return { sorter: createSorter({ config, runDetector, files, now: () => nowMs }), calls, config };
+  return { sorter: createSorter({ config, runDetector, files }), calls, config };
 }
 const answer = (obj, code = 0) => ({ code, stdout: JSON.stringify(obj), stderr: '', timedOut: false, spawnError: null });
 
@@ -39,16 +41,16 @@ test('no person + delete: clip removed', async () => {
   assertEqual(r.calls[1], ['remove', CLIP]);
 });
 
-test('clip still being written: not even scanned', async () => {
-  const r = rig({ mtimeMs: 90000, detector: answer({ ok: true, person: false }) });
+test('clip the relay is still encoding: not even scanned', async () => {
+  const r = rig({ writing: true, detector: answer({ ok: true, person: false }) });
   const o = await r.sorter.sort(CLIP);
   assertEqual(o.state, 'error');
-  assertTrue(o.reason.includes('still being written'));
+  assertTrue(o.reason.includes('still being encoded'));
   assertEqual(r.calls, []);
 });
 
 test('clip gone before the scan: error, nothing scanned', async () => {
-  const r = rig({ mtimeThrows: true, detector: answer({ ok: true, person: false }) });
+  const r = rig({ clipGoneAtStart: true, detector: answer({ ok: true, person: false }) });
   assertEqual((await r.sorter.sort(CLIP)).reason, 'the recording no longer exists');
   assertEqual(r.calls, []);
 });

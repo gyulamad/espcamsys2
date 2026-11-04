@@ -85,7 +85,7 @@ const names = async () => (await list()).map((f) => f.filename).sort();
 const scan = (name) => request('POST', `/recordings/${CAM}/${name}/scan`);
 const exists = (...p) => fs.existsSync(path.join(CAM_DIR, ...p));
 
-const scanConfig = (extra) => ({ enabled: true, auto: false, action: 'move', model: modelFile, python: 'python3', script: FAKE, minAgeSeconds: 0, ...extra });
+const scanConfig = (extra) => ({ enabled: true, auto: false, action: 'move', model: modelFile, python: 'python3', script: FAKE, ...extra });
 
 (async () => {
   let relay = null;

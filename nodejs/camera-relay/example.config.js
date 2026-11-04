@@ -68,7 +68,6 @@ module.exports = {
   //   confidence: 0.4,           // 0 < c <= 1; lower keeps more doubtful clips
   //   stride: 1,                 // analyse every Nth frame (raise to go faster on a slow Pi)
   //   timeoutSeconds: 900,
-  //   minAgeSeconds: 20,         // a clip touched more recently than this is left alone
   // },
   // switchFile: 'recording-switch.json',  // where the state is kept so it survives a restart (default shown)
 };

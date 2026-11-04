@@ -20,7 +20,6 @@ const DEFAULTS = Object.freeze({
   confidence: 0.4,       // 0 < c <= 1; lower keeps more doubtful clips (a missed person costs more than a false alarm)
   stride: 1,             // analyse every Nth frame
   timeoutSeconds: 900,
-  minAgeSeconds: 20,     // a clip changed more recently than this may still be being written
 });
 
 function number(raw, fallback, ok, name, warnings) {
@@ -62,7 +61,6 @@ function resolveScanConfig(raw, relayDir) {
     confidence: number(given.confidence, DEFAULTS.confidence, (n) => n > 0 && n <= 1, 'confidence', warnings),
     stride,
     timeoutMs: number(given.timeoutSeconds, DEFAULTS.timeoutSeconds, inRange(10, 86400), 'timeoutSeconds', warnings) * 1000,
-    minAgeMs: number(given.minAgeSeconds, DEFAULTS.minAgeSeconds, inRange(0, 3600), 'minAgeSeconds', warnings) * 1000,
     warnings,
   };
 }
@@ -127,12 +125,7 @@ function parseScanResult(run) {
   return { kind: 'person', confidence: typeof answer.confidence === 'number' ? answer.confidence : null };
 }
 
-// Has the clip been left alone long enough to be a finished file? (ffmpeg writes the final name directly.)
-function isSettled(mtimeMs, nowMs, minAgeMs) {
-  return nowMs - mtimeMs >= minAgeMs;
-}
-
 module.exports = {
   ACTIONS, NO_PERSON_DIR, THUMB_SUFFIX, DEFAULTS,
-  resolveScanConfig, thumbnailPath, noPersonPath, buildScanArgs, scanEnv, parseScanResult, isSettled,
+  resolveScanConfig, thumbnailPath, noPersonPath, buildScanArgs, scanEnv, parseScanResult,
 };

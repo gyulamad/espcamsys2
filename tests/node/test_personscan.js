@@ -12,19 +12,19 @@ test('resolveScanConfig: defaults (off, move, model under the relay folder)', ()
   assertEqual([c.enabled, c.auto, c.action, c.confidence, c.stride], [false, true, 'move', 0.4, 1]);
   assertEqual(c.model, '/relay/models/person.onnx');
   assertEqual(c.script, '/relay/tools/person_scan.py');
-  assertEqual([c.timeoutMs, c.minAgeMs, c.warnings], [900000, 20000, []]);
+  assertEqual([c.timeoutMs, c.warnings], [900000, []]);
 });
 
 test('resolveScanConfig: valid values are taken, paths resolved against the relay folder', () => {
-  const c = cfg({ enabled: true, auto: false, action: 'delete', confidence: '0.6', stride: 5, model: 'm/x.onnx', python: ' /usr/bin/python3 ', timeoutSeconds: 60, minAgeSeconds: 0 });
+  const c = cfg({ enabled: true, auto: false, action: 'delete', confidence: '0.6', stride: 5, model: 'm/x.onnx', python: ' /usr/bin/python3 ', timeoutSeconds: 60 });
   assertEqual([c.enabled, c.auto, c.action, c.confidence, c.stride, c.python], [true, false, 'delete', 0.6, 5, '/usr/bin/python3']);
-  assertEqual([c.model, c.timeoutMs, c.minAgeMs, c.warnings], ['/relay/m/x.onnx', 60000, 0, []]);
+  assertEqual([c.model, c.timeoutMs, c.warnings], ['/relay/m/x.onnx', 60000, []]);
 });
 
 test('resolveScanConfig: bad values fall back to the default with a warning each', () => {
-  const c = cfg({ enabled: 'yes', auto: 1, action: 'burn', confidence: 0, stride: 1.5, timeoutSeconds: 1, minAgeSeconds: -1 });
-  assertEqual([c.enabled, c.auto, c.action, c.confidence, c.stride, c.timeoutMs, c.minAgeMs], [false, true, 'move', 0.4, 1, 900000, 20000]);
-  assertEqual(c.warnings.length, 7);
+  const c = cfg({ enabled: 'yes', auto: 1, action: 'burn', confidence: 0, stride: 1.5, timeoutSeconds: 1 });
+  assertEqual([c.enabled, c.auto, c.action, c.confidence, c.stride, c.timeoutMs], [false, true, 'move', 0.4, 1, 900000]);
+  assertEqual(c.warnings.length, 6);
 });
 
 test('resolveScanConfig: a non-object block is ignored', () => {
@@ -87,10 +87,6 @@ test('parseScanResult: reasons are readable and short', () => {
   const long = ps.parseScanResult(run({ stdout: JSON.stringify({ ok: false, error: `a\u0007${'x'.repeat(500)}` }) })).reason;
   assertEqual(long.length, 200);
   assertTrue(!long.includes('\u0007'));
-});
-
-test('isSettled', () => {
-  assertEqual([ps.isSettled(1000, 21000, 20000), ps.isSettled(1001, 21000, 20000), ps.isSettled(5, 5, 0)], [true, false, true]);
 });
 
 summarize();

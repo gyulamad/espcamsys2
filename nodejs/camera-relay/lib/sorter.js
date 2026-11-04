@@ -13,19 +13,16 @@
 const personscan = require('./personscan');
 const { errorMessage } = require('./util');
 
-// files: { mtimeMs(path), exists(path), move(from, to), remove(clipPath), removeThumbnail(clipPath) }
+// files: { exists(path), isBeingWritten(clipPath), move(from, to), remove(clipPath), removeThumbnail(clipPath) }
+// isBeingWritten is the relay's own knowledge (ffmpeg is encoding that file right now) — never a guess from
+// file times, which a Pi with a wrong or just-corrected clock gets wrong.
 // runDetector(args) -> Promise<{ code, stdout, stderr, timedOut, spawnError }>
-function createSorter({ config, runDetector, files, now = Date.now }) {
+function createSorter({ config, runDetector, files }) {
   const error = (reason) => ({ state: 'error', reason });
 
   function checkReady(clipPath) {
-    let mtimeMs;
-    try {
-      mtimeMs = files.mtimeMs(clipPath);
-    } catch (e) {
-      return 'the recording no longer exists';
-    }
-    if (!personscan.isSettled(mtimeMs, now(), config.minAgeMs)) return 'the recording is still being written — try again in a moment';
+    if (!files.exists(clipPath)) return 'the recording no longer exists';
+    if (files.isBeingWritten(clipPath)) return 'the recording is still being encoded — try again in a moment';
     if (!files.exists(config.model)) return `the person detector model is not installed (expected at ${config.model})`;
     return null;
   }

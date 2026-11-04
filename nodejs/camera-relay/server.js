@@ -559,20 +559,27 @@ function removeTempDir(rec) {
   fs.rm(rec.tempDir, { recursive: true, force: true }, () => {});
 }
 
+// Clips ffmpeg is writing right now (the file has its final name from the start, so it already shows in the
+// list): the person check must not read them.
+const clipsBeingEncoded = new Set();
+
 function encodeRecording(rec) {
   const fps = video.computeFps(rec.frameCount, rec.firstFrameAt, rec.lastFrameAt, DEFAULT_FPS);
   const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
   const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
 
+  clipsBeingEncoded.add(outputPath);
   const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath));
 
   ffmpeg.on('error', (err) => {
+    clipsBeingEncoded.delete(outputPath);
     // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
     // frames in place rather than deleting footage we can't otherwise recover.
     camLog('ERROR', rec.id, `ffmpeg failed to start (is it installed?): ${err.message} — raw frames kept at ${rec.tempDir}`);
   });
 
   ffmpeg.on('exit', (code) => {
+    clipsBeingEncoded.delete(outputPath);
     if (code !== 0) {
       camLog('ERROR', rec.id, `ffmpeg exited with code ${code} — raw frames kept at ${rec.tempDir}`);
       return;
@@ -1834,7 +1841,7 @@ function removeClip(clipPath) {
 const sorter = createSorter({
   config: scanCfg,
   files: {
-    mtimeMs: (p) => fs.statSync(p).mtimeMs,
+    isBeingWritten: (p) => clipsBeingEncoded.has(p),
     exists: (p) => fs.existsSync(p),
     move: (from, to) => {
       fs.mkdirSync(path.dirname(to), { recursive: true });
