@@ -9,12 +9,20 @@
 #
 # Usage:
 #   ./run_tests.sh                  run every suite
+#   ./run_tests.sh --no-sketch-compile
+#                                   leave out the real compile of the two sketches
+#                                   (see below), e.g. on a machine without arduino-cli
 #   ./run_tests.sh --coverage N     also measure line coverage and FAIL if any
 #                                   of the five areas below is under N percent
 #                                   (0-100): the two Arduino sketches (gcov),
 #                                   the dashboard's PHP logic, the relay's
 #                                   Node.js logic and the relay's server.js
 #   ./run_tests.sh -h | --help
+#
+# The sketches themselves are compiled too (tools/compile_sketches.sh): the tests below only build
+# parts of them against desktop fakes, so only this catches a patch that leaves a sketch not compiling.
+# It needs arduino-cli with the esp32 core 3.x (INSTALL.md, "Compiling the sketches"); without it the run
+# FAILS, like any other missing tool, unless --no-sketch-compile says that leaving it out is intended.
 #
 # Coverage is measured per area and N applies to EACH of them, so a
 # well-tested one can't hide an untested one:
@@ -52,8 +60,11 @@ overall_status=0
 
 # ── Arguments ────────────────────────────────────────────────────────────
 COVERAGE_MIN=""
+COMPILE_SKETCHES=1
 while [ $# -gt 0 ]; do
     case "$1" in
+        --no-sketch-compile)
+            COMPILE_SKETCHES=0; shift ;;
         --coverage)
             if [ $# -lt 2 ]; then echo "--coverage needs a number (minimum percent)" >&2; exit 2; fi
             COVERAGE_MIN="$2"; shift 2 ;;
@@ -328,6 +339,19 @@ else
     fi
 fi
 
+# ── The sketches themselves ──────────────────────────────────────────────
+# The C++ tests above compile parts of the sketches against fakes; this compiles each sketch folder as a
+# whole with the real toolchain. Exit 1 = a sketch does not compile, 2 = no toolchain: both fail the run.
+hr
+echo "Arduino sketches compile (arduino-cli, the real toolchain)"
+hr
+if [ "$COMPILE_SKETCHES" = 0 ]; then
+    echo "SKIPPED (--no-sketch-compile): the sketches were NOT compiled"
+else
+    "$ROOT_DIR/tools/compile_sketches.sh"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 # ── Node.js logic tests ──────────────────────────────────────────────────
 hr
 echo "Node.js (camera-relay logic) tests"
@@ -515,6 +539,12 @@ hr
 echo "Shell tests (the dashboard's privileged power helper)"
 hr
 "$ROOT_DIR/tests/shell/test_camdash_power.sh"
+[ $? -ne 0 ] && overall_status=1
+
+hr
+echo "Shell tests (the sketch compile check, tools/compile_sketches.sh, against a fake arduino-cli)"
+hr
+"$ROOT_DIR/tests/shell/test_compile_sketches.sh"
 [ $? -ne 0 ] && overall_status=1
 
 # The relay itself needs its packages (express ...) for every end-to-end test below: installed here from

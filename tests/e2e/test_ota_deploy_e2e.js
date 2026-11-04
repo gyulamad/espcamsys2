@@ -167,6 +167,8 @@ function makeRepo(tmp) {
     fs.writeFileSync(path.join(repo, d, path.basename(d) + '.ino'), '// sketch\n');
   }
   fs.copyFileSync(path.join(REPO, 'ota-deploy.sh'), path.join(repo, 'ota-deploy.sh'));
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });   // the script sources the shared build definitions
+  fs.copyFileSync(path.join(REPO, 'tools/sketch_build_lib.sh'), path.join(repo, 'tools/sketch_build_lib.sh'));
   fs.writeFileSync(path.join(repo, '.gitignore'), 'fw_version.h\n');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'arduino-cli'), FAKE_ARDUINO_CLI, { mode: 0o755 });

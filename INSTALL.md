@@ -502,7 +502,7 @@ You do not need a fixed address for the Pi. `SERVER_HOST` is only where a board 
 
 ## Running the tests (and checking coverage)
 
-`run_tests.sh` in the repo root runs every test suite: the Arduino C++ logic of **both** sketches, the relay's Node.js logic, the end-to-end tests and the PHP dashboard logic. Nothing needs flashing — it all runs on your laptop or the Pi.
+`run_tests.sh` in the repo root runs every test suite: the Arduino C++ logic of **both** sketches, a real compile of both sketches, the relay's Node.js logic, the end-to-end tests and the PHP dashboard logic. Nothing needs flashing — it all runs on your laptop or the Pi.
 
 Two tests need a package that is installed separately: `tests/dom/test_index_dom.js` runs the real dashboard page in a simulated browser (jsdom) to prove that nothing from the relay or `config.php` can become markup or script, and `tests/dom/test_resume_dom.js` uses it to check that the pictures start over when the page comes back after a phone was locked. `./run_tests.sh` installs it by itself (`npm ci` in `tests/dom`, the first time and whenever a patch changes its lockfile; it needs a network connection then). If that is not possible (no npm, no network) that test prints `SKIP` and everything else still runs — but a skipped test protects nothing, so make sure it ran on the machine where you test before you commit. You can also install it by hand: `cd tests/dom && npm ci`.
 
@@ -511,6 +511,25 @@ Two tests need a package that is installed separately: `tests/dom/test_index_dom
 ```
 
 You need `g++`, `node` and `php` on `PATH` (and `gdb`, which gives a backtrace if a C++ test crashes; without it the tests still run). The end-to-end tests also need `npm install` to have been run in `nodejs/camera-relay/`. A missing tool is reported as a failure rather than silently skipped. The exit code is `0` only if everything passed.
+
+### Compiling the sketches: does the sketch itself still build?
+
+The C++ tests build only *parts* of the sketches (the logic headers, and blocks cut out of the `.ino` files) against desktop fakes, so a patch can pass all of them and still leave a sketch that does not compile — a name used above its declaration, a missing `#include`, a call the real core does not have. `run_tests.sh` therefore also compiles both sketch folders as a whole with the real toolchain, through `tools/compile_sketches.sh`. It writes nothing into the repository and flashes nothing. Run it before you start a patch (to know you start from a sketch that builds) and again before you finish it.
+
+One-time setup on the machine that runs the tests (the same toolchain `ota-deploy.sh` uses):
+
+1. Install [`arduino-cli`](https://arduino.github.io/arduino-cli/latest/installation/) and put it on `PATH`.
+2. Install the **esp32** core, version 3.x: add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` to `board_manager.additional_urls` (`arduino-cli config add board_manager.additional_urls <url>`), then `arduino-cli core update-index` and `arduino-cli core install esp32:esp32`.
+3. Have the `esp-tflite-micro` library where `arduino-cli` looks for libraries (step 1 of section 2 clones it into `~/Arduino/libraries`, which is its default); the person detector needs it.
+
+```bash
+tools/compile_sketches.sh              # both sketches
+tools/compile_sketches.sh detector     # or: recorder
+```
+
+It compiles every sketch even if an earlier one failed and prints the compiler's output only for the ones that did not compile. The exit code is `0` if both compiled, `1` if one did not, and `2` if the toolchain or the board is missing (then nothing was compiled, so nothing is known about the sketches). The board and the extra compile arguments are the ones from your `ota.conf` (`FQBN`, `EXTRA_COMPILE_ARGS`), or the defaults of `ota-deploy.sh` when you have none, so what is checked is what gets deployed. The first compile of the person detector takes a few minutes (the TFLite library is big); set `SKETCH_BUILD_DIR=$HOME/.cache/espcamsys-build` to keep the build files between runs and later runs only recompile what changed.
+
+Without `arduino-cli`, `./run_tests.sh` **fails** at this step, like it does for any other missing tool. On a machine that is not meant to compile firmware, say so with `./run_tests.sh --no-sketch-compile`: the step is then reported as skipped, loudly, and the rest runs as usual.
 
 ### Failing the run when coverage is too low: `--coverage N`
 

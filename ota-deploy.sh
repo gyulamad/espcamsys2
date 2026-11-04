@@ -22,6 +22,8 @@
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/sketch_build_lib.sh
+. "$ROOT_DIR/tools/sketch_build_lib.sh"
 CONF="${OTA_CONF:-$ROOT_DIR/ota.conf}"
 
 die()  { echo "ota-deploy: $*" >&2; exit 1; }
@@ -44,16 +46,10 @@ done
 
 # ── settings ─────────────────────────────────────────────────────────────
 RELAY_URL=""; CONTROL_KEY=""
-FQBN="esp32:esp32:esp32cam:PartitionScheme=min_spiffs"
-EXTRA_COMPILE_ARGS=""
 SLOT_BYTES=1966080
 WAIT_SECONDS=0
-if [ -f "$CONF" ]; then
-    # shellcheck disable=SC1090
-    . "$CONF"
-else
-    echo "ota-deploy: no $CONF - copy ota.example.conf to ota.conf and fill it in" >&2; exit 2
-fi
+[ -f "$CONF" ] || { echo "ota-deploy: no $CONF - copy ota.example.conf to ota.conf and fill it in" >&2; exit 2; }
+load_sketch_build_settings "$CONF"
 [ -n "$WAIT_ARG" ] && WAIT_SECONDS="$WAIT_ARG"
 [ -n "$RELAY_URL" ]   || { echo "ota-deploy: RELAY_URL is not set in $CONF" >&2; exit 2; }
 [ -n "$CONTROL_KEY" ] || { echo "ota-deploy: CONTROL_KEY is not set in $CONF" >&2; exit 2; }
@@ -65,11 +61,9 @@ for tool in arduino-cli curl awk git; do
 done
 
 case "$WHAT" in
-    all)      TYPES="recorder detector" ;;
+    all)      TYPES="$SKETCH_TYPES" ;;
     *)        TYPES="$WHAT" ;;
 esac
-sketch_dir()  { case "$1" in recorder) echo "$ROOT_DIR/Arduino/ESP32_CAM_Recorder" ;; detector) echo "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person" ;; esac; }
-sketch_name() { basename "$(sketch_dir "$1")"; }
 
 # ── version ──────────────────────────────────────────────────────────────
 VERSION="$(git -C "$ROOT_DIR" describe --always --dirty 2>/dev/null)" || die "git describe failed - is this a git checkout?"
@@ -87,7 +81,7 @@ echo "Version: $VERSION"
 # ── build ────────────────────────────────────────────────────────────────
 TMP="$(mktemp -d)"
 cleanup() {
-    for t in recorder detector; do rm -f "$(sketch_dir "$t")/fw_version.h"; done
+    for t in $SKETCH_TYPES; do rm -f "$(sketch_dir "$t")/fw_version.h"; done
     rm -rf "$TMP"
 }
 trap cleanup EXIT
