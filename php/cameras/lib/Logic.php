@@ -185,7 +185,12 @@ class CamLogic
         if ($scan['state'] !== 'error') {
             return null;
         }
-        $reason = isset($scan['reason']) && is_string($scan['reason']) ? mb_substr($scan['reason'], 0, 200) : '';
+        // At most 200 characters, cut on a character boundary (PCRE, not mbstring: the Pi's PHP has no mbstring).
+        // Text that is not valid UTF-8 would break json_encode for the whole list, so it becomes ''.
+        $reason = '';
+        if (isset($scan['reason']) && is_string($scan['reason']) && preg_match('/\A.{0,200}/su', $scan['reason'], $m) === 1) {
+            $reason = $m[0];
+        }
         return ['state' => 'error', 'reason' => $reason];
     }
 

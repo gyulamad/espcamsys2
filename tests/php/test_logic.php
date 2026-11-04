@@ -1137,6 +1137,20 @@ camtest_test('sanitizeRecordingList: person flag and person-check state pass onl
     camtest_assert_equal(strlen($r[4]['scan']['reason']), 200);
 });
 
+camtest_test('sanitizeRecordingList: a long or non-ASCII failure reason is cut cleanly and the list still encodes (no mbstring needed)', function () {
+    $r = CamLogic::sanitizeRecordingList([
+        ['filename' => 'a.mp4', 'scan' => ['state' => 'error', 'reason' => str_repeat('é', 300)]],
+        ['filename' => 'b.mp4', 'scan' => ['state' => 'error', 'reason' => "bad \xC3\x28 bytes"]],
+        ['filename' => 'c.mp4', 'scan' => ['state' => 'error', 'reason' => 'the person detector model is not installed']],
+        ['filename' => 'd.mp4', 'scan' => ['state' => 'error']],
+    ]);
+    camtest_assert_equal(strlen($r[0]['scan']['reason']), 400);          // 200 two-byte characters, none cut in half
+    camtest_assert_equal($r[1]['scan']['reason'], '');                   // invalid UTF-8 never reaches json_encode
+    camtest_assert_equal($r[2]['scan']['reason'], 'the person detector model is not installed');
+    camtest_assert_equal($r[3]['scan']['reason'], '');
+    camtest_assert_true(json_encode($r) !== false);
+});
+
 camtest_test('sanitizeRecordingList: an empty list is a list; anything that is not a list is refused', function () {
     camtest_assert_equal(CamLogic::sanitizeRecordingList([]), []);
     foreach ([null, 'text', 5, true, ['error' => 'boom'], ['a.mp4' => ['filename' => 'a.mp4']], [1 => ['filename' => 'a.mp4']]] as $bad) {
