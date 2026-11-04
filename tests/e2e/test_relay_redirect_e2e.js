@@ -146,6 +146,7 @@ async function main() {
       ['status.php', 'GET', 'status.php'],
       ['detector-status.php', 'GET', 'detector-status.php'],
       ['detector-events.php', 'GET', 'detector-events.php'],
+      ['detector-view.php', 'POST', 'detector-view.php?cam=cam-a&action=on'],
       ['recordings.php (the list)', 'GET', 'recordings.php?cam=cam-a'],
       ['recordings.php (the video player)', 'GET', `recordings.php?cam=cam-a&play=${FILE}`],
       ['recordings.php (download)', 'GET', `recordings.php?cam=cam-a&download=${FILE}`],

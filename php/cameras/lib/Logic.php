@@ -1259,6 +1259,7 @@ class CamLogic
                     'ageMs' => null, 'pictureAgeMs' => null, 'ip' => null,
                     'message' => self::detectorNeverHeardMessage($d, $unpaired),
                     'report' => null,
+                    'view' => self::detectorViewSummary(null),
                 ];
                 continue;
             }
@@ -1275,9 +1276,19 @@ class CamLogic
                 'ip' => isset($v['ip']) && is_string($v['ip']) ? $v['ip'] : null,
                 'message' => isset($v['message']) && is_string($v['message']) ? $v['message'] : '',
                 'report' => isset($v['report']) ? $v['report'] : null,
+                'view' => self::detectorViewSummary($v['view'] ?? null),
             ];
         }
         return $out;
+    }
+
+    // The live-view switch of a detector as the page needs it: { supported, wanted }. `supported` = the
+    // firmware asks the relay whether to stream, so there is something to switch (an older one streams all
+    // the time); `wanted` = somebody asked recently. Anything else the relay says is dropped.
+    public static function detectorViewSummary($view): array
+    {
+        $view = is_array($view) ? $view : [];
+        return ['supported' => !empty($view['supported']), 'wanted' => !empty($view['wanted'])];
     }
 
     // Why a paired detector the relay has never heard from is not showing. $unpaired: the ids of the

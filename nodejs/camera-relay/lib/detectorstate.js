@@ -15,6 +15,8 @@
 // showing, WHY not, in words, because "offline" with no reason is what makes a
 // missing detector so hard to track down.
 
+const detectorview = require('./detectorview');
+
 const MAX_TEXT = 64;
 const STATES = ['dark', 'still', 'active', 'off'];
 // The detector's picture is FRAME_SIZE x FRAME_SIZE pixels (the person model's input).
@@ -49,7 +51,7 @@ function parseArea(a) {
 
 // Checks the readings one message carries. Returns { ok: true, report } or { ok: false, error }.
 // Shape (all numbers; thresholds are the detector's own settings):
-//   { ip, fw, uptimeMs, rssi,
+//   { ip, fw, uptimeMs, rssi, viewLeftS (optional),
 //     gpio:   { pin, high },
 //     scene:  { state, brightness, motion, darkBelow, motionAtLeast, holdS,
 //               area: { x0, y0, x1, y1 }                       <- optional: the part of the picture watched for motion },
@@ -89,6 +91,7 @@ function parseStatus(body) {
       fw: text(body.fw),
       uptimeMs: num(body.uptimeMs, 0, 4294967295 * 1000),
       rssi: num(body.rssi, -200, 0),
+      viewLeftS: num(body.viewLeftS, 0, 86400),     // optional: seconds of live view left on the board's own timer
       gpio: { pin, high: g.high },
       scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, holdS, area: area.area },
       person: { score, detectAt, clearAt, detected: p.detected },
@@ -115,9 +118,11 @@ function describeAge(ms) {
 // What GET /detectors returns / what the dashboard reads, for one detector. `det` is the relay's
 // record, or undefined for one it has never heard from:
 //   { report, receivedAt, frameAt, connected, ip, connectedAt, lastDisconnectAt, lastDisconnectWhy }
-// -> { state: 'online' | 'no-picture' | 'offline' | 'never',
+// -> { state: 'online' | 'no-picture' | 'idle' | 'offline' | 'never',
 //      online, hasPicture, connected, ageMs, pictureAgeMs, connectedForMs, ip,
-//      lastDisconnect: { agoMs, why } | null, message, report }
+//      lastDisconnect: { agoMs, why } | null, message, report, view }
+// 'idle' = the board is there but its live view is OFF (it rests and asks the relay every ~30 s whether
+// somebody wants to look); `view` is detectorview.describe().
 // `message` is empty while everything is fine, otherwise says why the detector is not (fully) showing.
 function buildView(det, now) {
   if (!det) {
@@ -125,6 +130,7 @@ function buildView(det, now) {
       state: 'never', online: false, hasPicture: false, connected: false, ageMs: null, pictureAgeMs: null,
       connectedForMs: null, ip: null, lastDisconnect: null,
       message: 'the relay has not heard from this detector since it started', report: null,
+      view: detectorview.describe(null, now),
     };
   }
   const ageMs = det.receivedAt ? Math.max(0, now - det.receivedAt) : null;
@@ -134,9 +140,14 @@ function buildView(det, now) {
   const connected = !!det.connected;
   const lastDisconnect = det.lastDisconnectAt ? { agoMs: Math.max(0, now - det.lastDisconnectAt), why: det.lastDisconnectWhy || '' } : null;
 
+  const view = detectorview.describe(det, now);
   let state = 'online';
   let message = '';
-  if (!online) {
+  if (!online && !connected && view.idleFresh) {
+    // Resting on purpose: the live view is off. The last numbers are old, so they are not offered.
+    state = 'idle';
+    message = 'the live view is off: the detector rests and asks the relay every ~30 s whether you want to watch';
+  } else if (!online) {
     state = 'offline';
     if (connected) {
       message = ageMs === null
@@ -158,7 +169,7 @@ function buildView(det, now) {
   return {
     state, online, hasPicture, connected, ageMs, pictureAgeMs,
     connectedForMs: connected && det.connectedAt ? Math.max(0, now - det.connectedAt) : null,
-    ip: det.ip || null, lastDisconnect, message, report: det.report || null,
+    ip: det.ip || null, lastDisconnect, message, report: state === 'idle' ? null : (det.report || null), view,
   };
 }
 

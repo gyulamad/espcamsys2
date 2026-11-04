@@ -792,6 +792,16 @@ In every file list (a camera's **📼 FILES** and **📼 ALL FILES**): **🧑 SO
 
 **Safety notes.** `no-person/` is not shown in the lists and is not cleaned up by the relay — delete it by hand when you trust the detector (`recordings/*/no-person/`). Judge `confidence` on your own footage: night, small or partly hidden people are the clips a detector misses; start with `action: 'move'` and look in `no-person/` for a week before ever using `'delete'`. The check needs the dashboard control key like every other action that changes recordings.
 
+## The detector live view switch (WATCH button)
+
+A person detector no longer streams all the time. The sensor values and the small grey picture are sent only while somebody wants to see them; otherwise the detector drops the link, the Wi-Fi radio rests, and the board asks the relay about every 30 s.
+
+- On the dashboard each detector row has a **▶ WATCH** button (shown only for detectors with the new firmware). It switches the live view on for **10 minutes** by default; **■ STOP (m:ss)** ends it. While the dashboard is open and you are active, the view is renewed automatically.
+- The duration is the relay setting `detectorViewMinutes` (`config.js`, or the env `DETECTOR_VIEW_MINUTES`; 1-1440, default 10).
+- Latency: ON takes up to ~30 s (the board's next ask), OFF about 3 s. A detector with older firmware, or a relay without the switch, simply streams all the time as before.
+- The simple view's SLIDESHOW switches the live view on for all detectors by itself.
+- Re-flash the person detector sketch and update the relay and the dashboard together.
+
 ## The simple camera pages (dashboard → ▦ SIMPLE LIST / ▣ SIMPLE VIEW)
 
 Two plain pages for a wall screen or a quick look, behind the same login as the dashboard:
@@ -802,6 +812,8 @@ Two plain pages for a wall screen or a quick look, behind the same login as the 
   1. A camera that **starts recording**, or whose paired person detector reports **motion at or above its MOTION_THRESH**, is shown at once, without waiting for the time to run out. Motion does not pull the view away from a camera that is recording; a new recording does.
   2. When the time is up, only the cameras of the highest priority take part: while any camera records, the ones that do not are skipped; with none recording, the ones in motion; with none of either, all of them. Recording beats motion, motion beats the rest.
   3. Pressing PREV / NEXT during a slideshow shows that camera for a full time. Pressing the button again ends the slideshow.
+
+  A person detector that **sees a person** counts above plain motion (recording > person > motion). A detector rests while nobody watches (see the WATCH button), so while the slideshow runs it switches the live view on for **all** detectors and renews it every 20 s; it takes up to ~30 s until a resting detector answers the first time. The views lapse by themselves after the slideshow ends.
 
   Motion needs a person detector paired with the camera (see the detector section): a camera without one can only take part by recording.
 

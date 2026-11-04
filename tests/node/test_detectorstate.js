@@ -190,4 +190,39 @@ test('describeAge: seconds, minutes, hours', () => {
   assertEqual(ds.describeAge(-5), '0 s');
 });
 
+// ── the live view that is switched off (idle) ───────────────────────────
+
+test('buildView: resting detector (live view off, it still asks every ~30 s) is idle, not offline', () => {
+  const v = ds.buildView(rec({ connected: false, receivedAt: 1000, frameAt: 1000, lastDisconnectAt: 1200, lastDisconnectWhy: 'the board closed the connection', polledAt: 60000, polls: 3 }), 70000);
+  assertEqual(v.state, 'idle');
+  assertEqual(v.online, false);
+  assertEqual(v.report, null, 'old numbers are not shown as if they were live');
+  assertTrue(v.view.supported && v.view.idleFresh);
+  assertTrue(/live view is off/.test(v.message));
+});
+
+test('buildView: a detector that stopped asking is offline again', () => {
+  const v = ds.buildView(rec({ connected: false, receivedAt: 1000, frameAt: 1000, polledAt: 1000, polls: 3 }), 1000 + 80000);
+  assertEqual(v.state, 'offline');
+  assertTrue(/last heard/.test(v.message));
+});
+
+test('buildView: streaming wins over idle (numbers arriving are shown)', () => {
+  const v = ds.buildView(rec({ polledAt: 950, polls: 1 }), 1000);
+  assertEqual(v.state, 'online');
+  assertTrue(v.report !== null);
+});
+
+test('buildView: an older firmware (never asks) has no switchable view', () => {
+  const v = ds.buildView(rec(), 1000);
+  assertEqual(v.view.supported, false);
+});
+
+test('parseStatus: viewLeftS is optional and checked', () => {
+  assertEqual(ds.parseStatus(good()).report.viewLeftS, null);
+  assertEqual(ds.parseStatus(Object.assign(good(), { viewLeftS: 540 })).report.viewLeftS, 540);
+  assertEqual(ds.parseStatus(Object.assign(good(), { viewLeftS: -1 })).report.viewLeftS, null);
+  assertEqual(ds.parseStatus(Object.assign(good(), { viewLeftS: 'x' })).report.viewLeftS, null);
+});
+
 summarize();

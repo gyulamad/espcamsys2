@@ -27,6 +27,7 @@ const firmware = require('./lib/firmware');
 const detectorstate = require('./lib/detectorstate');
 const detectorlink = require('./lib/detectorlink');
 const detectorevents = require('./lib/detectorevents');
+const detectorview = require('./lib/detectorview');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
@@ -654,6 +655,9 @@ app.get('/stream/:id', requireReadKey, (req, res) => {
 //
 //   (Upgrade) GET /detector/:id/uplink   camera key (X-Api-Key): the detector's connection (see below)
 //   GET /detectors                        every detector the relay has heard from: { id: view }
+//   GET /detectors/events                 the same, pushed as Server-Sent Events
+//   GET  /detector/:id/view               camera key: the board asks whether to stream (see below)
+//   POST /detector/:id/view?action=       control key: the dashboard asks for the live view (on / keep / off)
 //   GET /detector/:id/stream              its picture as MJPEG (works as <img src>). It answers AT ONCE: 200
 //                                         with frames, or 404 / 503 with JSON saying why there are none — it
 //                                         never leaves a viewer waiting for a picture that is not coming.
@@ -666,6 +670,7 @@ const MAX_DETECTORS = 64;                     // a wrong or hostile id must not 
 const NO_PICTURE_WARN_MS = connection.parseTimeoutMs(fromEnv('DETECTOR_NO_PICTURE_WARN_MS'), 10 * 1000); // connected and reporting numbers, but no picture for this long: say so
 const MAX_BAD_MESSAGES_IN_A_ROW = 25;         // then the connection is not a detector's: drop it
 const detectors = {}; // id -> record, see getDetector()
+const DETECTOR_VIEW_MINUTES = detectorview.viewMinutes(fromEnv('DETECTOR_VIEW_MINUTES', config.detectorViewMinutes)); // how long a detector streams after somebody asked (10 by default)
 const detectorBus = new EventEmitter();        // 'change' whenever any detector's readings or connection change: feeds /detectors/events
 detectorBus.setMaxListeners(detectorevents.MAX_VIEWERS + 4);
 const detectorViewThrottle = new Throttle(5 * 60 * 1000); // the dashboard asking for a picture that is not there: once per 5 min per detector and state
@@ -679,6 +684,8 @@ function getDetector(id) {
       socket: null, connected: false, ip: null, connectedAt: 0,
       lastDisconnectAt: 0, lastDisconnectWhy: '',
       connections: 0, pictures: 0, pictureLogged: false, noPictureWarned: false, badInARow: 0,
+      ...detectorview.newRecord(),           // the live view switch: who wants to look, when the board last asked
+      lastAnswer: '',                        // what the board was last told (logged when it changes)
     };
     detectors[id].emitter.setMaxListeners(50);
   }
@@ -1464,6 +1471,46 @@ function checkDeviceParams(req, res, next) {
   if (!devicesettings.isId(req.params.id)) return res.status(400).json({ error: 'not a valid device id' });
   return next();
 }
+// ── the live view switch of a detector (lib/detectorview.js) ─────────────────
+// A detector streams only while somebody wants to look: it rests otherwise (no connection, the Wi-Fi
+// modem sleeps) and asks here, about every 30 s, whether to stream. Answer: "view=1;stop=0".
+//   GET  /detector/:id/view          camera key (the board)
+//   POST /detector/:id/view?action=  control key (the dashboard): on | keep | off
+app.get('/detector/:id/view', requireCameraKeyForDevice, (req, res) => {
+  const id = req.params.id;
+  if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid detector id' });
+  if (!detectors[id] && Object.keys(detectors).length >= MAX_DETECTORS) {
+    return res.status(503).json({ error: `the relay already knows ${MAX_DETECTORS} detectors and accepts no more` });
+  }
+  const det = getDetector(id);
+  const now = Date.now();
+  const firstAsk = det.polls === 0;
+  det.ip = logfile.normalizeIp(req.socket.remoteAddress) || det.ip;
+  const answer = detectorview.answerPoll(det, now);
+  const text = detectorview.encodeAnswer(answer, DETECTOR_VIEW_MINUTES);
+  if (firstAsk || text !== det.lastAnswer) {
+    detLog('INFO', id, `the detector asked whether to stream: ${answer.stop ? 'stop streaming' : answer.view ? 'somebody wants to look: stream' : 'nobody is looking: keep resting'}`);
+    det.lastAnswer = text;
+  }
+  detectorBus.emit('change');
+  return res.set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }).send(text);
+});
+
+app.post('/detector/:id/view', requireControlKeyForDevice, (req, res) => {
+  const id = req.params.id;
+  if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid detector id' });
+  const action = req.query.action;
+  if (!detectorview.isAction(action)) return res.status(400).json({ error: `action must be one of ${detectorview.ACTIONS.join(', ')}` });
+  const det = detectors[id];
+  if (!det) return res.status(404).json({ error: `no detector called '${id}' has connected to the relay since it started` });
+  const now = Date.now();
+  detectorview.ask(det, action, now);
+  if (action !== 'keep') detLog('INFO', id, `live view ${action === 'on' ? 'switched ON' : 'switched OFF'} by ${actorOf(req)}`);
+  detectorBus.emit('change');
+  return res.json({ ok: true, view: detectorview.describe(det, now) });
+});
+// ── end of the live view switch ──────────────────────────────────────────────
+
 function loadDeviceState(type, id) {
   return devicesettings.parseState(readStagedFile(devicesettings.stateFile(DEVICE_SETTINGS_DIR, type, id)) || '');
 }

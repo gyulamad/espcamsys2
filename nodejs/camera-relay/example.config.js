@@ -69,5 +69,10 @@ module.exports = {
   //   stride: 1,                 // analyse every Nth frame (raise to go faster on a slow Pi)
   //   timeoutSeconds: 900,
   // },
+
+  // How long (minutes) a person detector keeps streaming its sensor values and small picture after somebody
+  // pressed WATCH on the dashboard (and again after every ask while they keep watching). It rests the rest of
+  // the time. Whole number 1-1440; the board counts the time itself. Also: DETECTOR_VIEW_MINUTES.
+  // detectorViewMinutes: 10,   // default
   // switchFile: 'recording-switch.json',  // where the state is kept so it survives a restart (default shown)
 };

@@ -11,6 +11,7 @@
   const POLL_MS = 2000;     // how often the relay is asked what the cameras do
   const TICK_MS = 1000;     // clock, and how often the slideshow looks at the situation
   const RETRY_MS = 3000;    // a broken picture stream is opened again after this long
+  const VIEW_KEEP_MS = 20000;   // the live view of a detector is renewed this often while the slideshow runs
   const DEFAULT_SLIDESHOW_SECONDS = 10;
 
   function readCameras() {
@@ -34,6 +35,7 @@
   let status = null;               // the last answers of the relay (null: not known)
   let detectors = null;
   let retryTimer = null;
+  const viewAsked = {};            // detector id -> when its live view was last requested
 
   function renderRecording() {
     const rec = el('rec');
@@ -62,10 +64,12 @@
   }
 
   function setSlideshow(on) {
+    if (!on) for (const id of ids) delete viewAsked[id];   // the views lapse by themselves: the detectors rest again
     slideshow = on ? S.createSlideshow(ids, current, slideshowMs, Date.now()) : null;
     const button = el('slideshow');
     button.classList.toggle('on', on);
     button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) keepViews();
     button.textContent = on ? '⏸ SLIDESHOW ON' : '▶ SLIDESHOW';
   }
 
@@ -87,9 +91,24 @@
     }
   }
 
+  // A resting detector sends no sensor values. The slideshow needs them (motion, person) of all cameras, so
+  // while it runs the live view of every detector is switched on and renewed; it is never turned off here
+  // (another viewer may be watching) but lapses by itself when nobody renews it.
+  function keepViews() {
+    if (!slideshow) return;
+    const now = Date.now();
+    for (const { id, action } of S.viewRequests(ids, detectors, viewAsked, now, VIEW_KEEP_MS)) {
+      viewAsked[id] = now;
+      fetch('detector-view.php?cam=' + encodeURIComponent(id) + '&action=' + action, {
+        method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'camdash' },
+      }).catch(() => { delete viewAsked[id]; });   // out of reach: ask again at the next poll
+    }
+  }
+
   async function poll() {
     [status, detectors] = await Promise.all([getJson('status.php'), getJson('detector-status.php')]);
     renderRecording();
+    keepViews();
     tick();   // a camera that has just started recording is shown now, not at the next second
   }
 

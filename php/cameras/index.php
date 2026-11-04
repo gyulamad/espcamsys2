@@ -571,7 +571,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
-          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
+          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><button type="button" class="cam-btn" id="detwatch-<?= $camId ?>" data-cam="<?= $camId ?>" hidden onclick="toggleDetectorWatch(this.dataset.cam)"></button><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
           <div>
             <div class="det-line"><span class="k">BRIGHTNESS</span><span class="v" id="detbright-<?= $camId ?>">–</span></div>
             <div class="det-bar"><div class="fill" id="detbrightbar-<?= $camId ?>"></div><div class="mark" id="detbrightmark-<?= $camId ?>" style="display:none"></div></div>
@@ -1364,6 +1364,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // change and restarts. RESET forgets them. Once the detector reports the new values they are dropped.
   const detLast = {};      // cam id -> last report received
   const detLastD = {};     // cam id -> last detector status (what renderDetector was given)
+  const detIdle = {};      // cam id -> true while the detector's live view is off (no picture to retry for)
   const detPending = {};   // cam id -> { SETTING: value } moved but not applied yet
   const detApplying = {};  // cam id -> true between APPLY and the detector reporting the values
   const detDrag = {};      // cam id -> { key, scale } while a stick is held
@@ -1575,6 +1576,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function renderDetector(id, d) {
     const row = document.getElementById('det-' + id);
     if (!row) return;
+    detLastD[id] = d;
+    detIdle[id] = !!d && d.state === 'idle';
+    renderWatchButton(id, d);
     const r = d && d.report;
     const online = !!(d && d.online && r);
     const showing = online && !!d.hasPicture;
@@ -1586,12 +1590,16 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     } else if (!d) {
       setDetectorOverlay(id, 'NO DATA', 'the dashboard got no answer about this detector');
     } else {
-      setDetectorOverlay(id, d.state === 'no-picture' ? 'NO PICTURE' : 'DETECTOR OFFLINE', d.message || '');
+      const idle = d.state === 'idle';
+      setDetectorOverlay(
+        id,
+        idle ? 'LIVE VIEW OFF' : d.state === 'no-picture' ? 'NO PICTURE' : 'DETECTOR OFFLINE',
+        idle ? 'Press ▶ WATCH to see the sensor values and the picture. The detector keeps detecting and driving its alarm pin; it only rests its Wi-Fi.' : (d.message || '')
+      );
     }
     if (!r) return;   // never heard from: keep the dashes
     const sc = r.scene, pe = r.person;
     detLast[id] = r;
-    detLastD[id] = d;
     dropAppliedPending(id, r);
     const pd = detPending[id] || {};
     // A threshold dragged but not applied yet shows in place of the one the detector reports.
@@ -1667,6 +1675,73 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (lk.jpegFails) info.push(lk.jpegFails + ' JPEG failures');
     if (r.fw) info.push('fw ' + r.fw);
     detEl('info', id).textContent = info.join(' · ');
+  }
+
+  // The WATCH button: the detector streams its sensor values and small picture only while somebody wants to
+  // look, so its Wi-Fi radio can rest (it keeps detecting and driving its alarm pin either way).
+  // Pure logic first (tests/node/test_detector_watch.js runs exactly this block).
+  // <detector-watch>
+  const WATCH_KEEP_MS = 20000;               // while somebody watches, the page tells the relay "still looking" this often
+  const WATCH_ACTIVE_MS = 10 * 60 * 1000;    // ... as long as the person touched the page within this time
+  const fmtLeft = (s) => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  const isStreaming = (d) => !!d && (d.state === 'online' || d.state === 'no-picture');
+  // What the button of one detector shows and does, from its status (the detector-status.php shape).
+  //   -> { hidden, label, title, action: 'on' | 'off' }
+  function watchButton(d) {
+    const view = d && d.view;
+    if (!view || !view.supported) return { hidden: true, label: '', title: '', action: 'on' };   // an older firmware streams all the time
+    if (isStreaming(d)) {
+      const left = d.report && typeof d.report.viewLeftS === 'number' ? d.report.viewLeftS : null;
+      return { hidden: false, label: '■ STOP' + (left === null ? '' : ' (' + fmtLeft(left) + ')'), title: 'Stop the live view now, so the detector can rest', action: 'off' };
+    }
+    if (view.wanted) return { hidden: false, label: '… STARTING', title: 'Asked: the detector checks in about every 30 s while it rests. Click to cancel.', action: 'off' };
+    return { hidden: false, label: '▶ WATCH', title: 'Show the sensor values and the small picture (the detector rests when nobody watches)', action: 'on' };
+  }
+  // Should this page tell the relay "still looking" now? Only while the live view is wanted or running, the
+  // page is in view, and the person has been active on it lately — an abandoned tab lets the view run out.
+  function keepAliveDue(d, nowMs, lastActivityMs, hidden) {
+    if (hidden || !d || !d.view || !d.view.supported) return false;
+    if (!d.view.wanted && !isStreaming(d)) return false;
+    return nowMs - lastActivityMs < WATCH_ACTIVE_MS;
+  }
+  // </detector-watch>
+
+  async function postDetectorView(id, action) {
+    try {
+      const res = await fetch('detector-view.php?cam=' + encodeURIComponent(id) + '&action=' + action, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
+      if (res.ok) return true;
+      let why = 'HTTP ' + res.status;
+      try { const j = await res.json(); if (j && j.error) why = j.error; } catch (e) { /* not JSON */ }
+      setDetectorOverlay(id, 'LIVE VIEW', why);
+    } catch (e) {
+      setDetectorOverlay(id, 'LIVE VIEW', 'could not reach the dashboard: ' + ((e && e.message) || e));
+    }
+    return false;
+  }
+  function toggleDetectorWatch(id) {
+    const b = watchButton(detLastD[id]);
+    if (b.hidden) return;
+    lastActivityAt = Date.now();
+    detEl('watch', id).disabled = true;   // re-enabled by the next status (the relay pushes one at once)
+    postDetectorView(id, b.action).then((ok) => { if (!ok) detEl('watch', id).disabled = false; });
+  }
+  function renderWatchButton(id, d) {
+    const el = detEl('watch', id);
+    if (!el) return;
+    const b = watchButton(d);
+    el.hidden = b.hidden;
+    el.textContent = b.label;
+    el.title = b.title;
+    el.disabled = false;
+  }
+  // "Still looking" while somebody watches (the activity of the person is what keeps the view alive).
+  let lastActivityAt = Date.now();
+  ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'].forEach((ev) => window.addEventListener(ev, () => { lastActivityAt = Date.now(); }, { passive: true }));
+  function keepDetectorViewsAlive() {
+    document.querySelectorAll('.det-row').forEach((row) => {
+      const id = row.dataset.cam;
+      if (keepAliveDue(detLastD[id], Date.now(), lastActivityAt, document.hidden)) postDetectorView(id, 'keep');
+    });
   }
 
   // Shows one { camId: status } answer on every detector row. Both the live stream and the polling fallback
@@ -1757,7 +1832,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     delete detImgTimers[id];
     const img = document.getElementById('detimg-' + id);
     const cam = document.getElementById('img-' + id);
-    if (!img || document.hidden || streamsPaused || (cam && cam.dataset.hidden === '1')) return;
+    if (!img || document.hidden || streamsPaused || detIdle[id] || (cam && cam.dataset.hidden === '1')) return;   // idle: the picture comes back by itself when the view is switched on
     img.dataset.failed = '';
     img.dataset.lastTry = String(Date.now());
     img.src = img.dataset.src + '&_=' + Date.now();
@@ -1801,6 +1876,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     setInterval(pollDetectors, DETECTOR_POLL_MS);
     // A hidden tab needs no live numbers (and holds no connection); coming back reopens the stream.
     document.addEventListener('visibilitychange', () => { if (document.hidden) closeDetectorEvents(); else openDetectorEvents(); });
+    setInterval(keepDetectorViewsAlive, WATCH_KEEP_MS);
   }
 
   const STATUS_POLL_MS = 4000;

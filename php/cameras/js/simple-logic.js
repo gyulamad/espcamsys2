@@ -5,6 +5,7 @@
 //
 //   fitThumbnails   how big the thumbnails of the list page are, and in how many columns
 //   neighbor        the previous / next camera of the pager (wraps around)
+//   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
 //   nextByPriority  which camera follows after the slideshow time is up
 //   jumpTarget      which camera the slideshow shows AT ONCE, without waiting for the time
@@ -15,8 +16,8 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.CamSimple = api;
 })(typeof self !== 'undefined' ? self : this, function () {
-  // Higher wins. Recording beats motion, motion beats everything else.
-  const PRIORITY = Object.freeze({ IDLE: 0, MOTION: 1, RECORDING: 2 });
+  // Higher wins. Recording beats a person, a person beats motion, motion beats everything else.
+  const PRIORITY = Object.freeze({ IDLE: 0, MOTION: 1, PERSON: 2, RECORDING: 3 });
 
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -63,12 +64,35 @@
     return isNum(scene.motion) && isNum(scene.motionAtLeast) && scene.motionAtLeast > 0 && scene.motion >= scene.motionAtLeast;
   }
 
+  // Does the person detector of a camera see a person right now? (Offline: old news.)
+  function personSeen(detector) {
+    if (!detector || detector.online !== true || !detector.report || !detector.report.person) return false;
+    return detector.report.person.detected === true;
+  }
+
+  // Which of the cameras' person detectors have to be switched to live view (they rest otherwise and send no
+  // sensor values) — and with which action. Only detectors that support the switch (view.supported) are
+  // asked: 'on' while the relay does not yet want the view, 'keep' to renew it, at most every keepMs per
+  // camera (`asked`: id -> time of the last request, updated by the caller). -> [{ id, action }]
+  function viewRequests(ids, detectors, asked, nowMs, keepMs) {
+    const out = [];
+    for (const id of ids) {
+      const d = detectors && detectors[id];
+      if (!d || !d.view || d.view.supported !== true) continue;   // no detector, or it streams always
+      const last = asked && asked[id];
+      if (isNum(last) && nowMs - last < keepMs) continue;
+      out.push({ id, action: d.view.wanted === true ? 'keep' : 'on' });
+    }
+    return out;
+  }
+
   // { id: PRIORITY } for every camera, from status.php's answer (`status`: id -> { recording, ... }) and
   // detector-status.php's (`detectors`: id -> detector view). Either may be null (the request failed).
   function priorities(ids, status, detectors) {
     const out = {};
     for (const id of ids) {
       if (status && status[id] && status[id].recording === true) out[id] = PRIORITY.RECORDING;
+      else if (detectors && personSeen(detectors[id])) out[id] = PRIORITY.PERSON;
       else if (detectors && inMotion(detectors[id])) out[id] = PRIORITY.MOTION;
       else out[id] = PRIORITY.IDLE;
     }
@@ -138,5 +162,5 @@
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, fitThumbnails, neighbor, inMotion, priorities, nextByPriority, jumpTarget, createSlideshow, formatClock };
+  return { PRIORITY, fitThumbnails, neighbor, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, formatClock };
 });

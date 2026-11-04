@@ -54,6 +54,7 @@ TEST(json_strings_are_escaped) {
 
 TEST(log_url) {
     TEST_ASSERT_EQ(buildLogUrl("192.168.4.9", 8080), std::string("http://192.168.4.9:8080/log"), "the relay's log endpoint");
+    TEST_ASSERT_EQ(buildViewUrl("192.168.4.9", 8080, "esp-1"), std::string("http://192.168.4.9:8080/detector/esp-1/view"), "the relay's live-view switch");
 }
 
 // ── the gate ─────────────────────────────────────────────────────────────
@@ -936,6 +937,133 @@ TEST(session_describes_itself_in_every_state) {
     TEST_ASSERT(has(s.lastFailure(), "lost the connection"), "lastFailure() has it too");
 }
 
+// ── the live view gate ──────────────────────────────────────────────
+
+TEST(view_answer_is_parsed_strictly) {
+    ViewAnswer a = parseViewAnswer("view=1;stop=0;mins=10");
+    TEST_ASSERT(a.ok && a.view && !a.stop && a.minutes == 10, "the relay's answer");
+    a = parseViewAnswer("view=0;stop=1;mins=25\n");
+    TEST_ASSERT(a.ok && !a.view && a.stop && a.minutes == 25, "a stop, trailing newline and all");
+    a = parseViewAnswer(" mins=3 ; stop=0 ; view=1 ");
+    TEST_ASSERT(a.ok && a.view && a.minutes == 3, "any order, spaces ignored");
+    a = parseViewAnswer("view=1;stop=0");
+    TEST_ASSERT(a.ok && a.view && a.minutes == 0, "an answer without a time: 0 = use the default");
+    for (const char* bad : { "", "<html>404</html>", "view=2;stop=0", "view=1", "stop=0", "view=1;stop=x", "{\"view\":true}" }) {
+        TEST_ASSERT(!parseViewAnswer(bad).ok, bad);
+    }
+    TEST_ASSERT_EQ(parseViewAnswer("view=1;stop=0;mins=abc").minutes, 0u, "a time that is not a number is not used");
+    TEST_ASSERT_EQ(parseViewAnswer("view=1;stop=0;mins=99999").minutes, 0u, "nor a absurdly long one");
+    TEST_ASSERT_EQ(parseViewAnswer("view=1;stop=0;mins=-5").minutes, 0u, "nor a negative one");
+}
+
+TEST(view_gate_rests_until_asked_and_asks_at_once_at_boot) {
+    ViewGate g;
+    TEST_ASSERT(!g.live(0) && g.leftS(0) == 0, "not streaming at boot");
+    TEST_ASSERT(g.pollDue(5), "the first question goes out at once");
+    TEST_ASSERT(g.onAnswer(5, "view=0;stop=0;mins=10"), "an answer");
+    TEST_ASSERT(!g.live(6), "nobody is looking: it keeps resting");
+    TEST_ASSERT(!g.pollDue(5 + 29999) && g.pollDue(5 + 30000), "and asks again after 30 s");
+}
+
+TEST(view_gate_streams_for_the_time_in_the_answer_and_asks_often_meanwhile) {
+    ViewGate g;
+    g.onAnswer(1000, "view=1;stop=0;mins=10");
+    TEST_ASSERT(g.live(1001), "streaming");
+    TEST_ASSERT_EQ(g.leftS(1000), 600, "ten minutes");
+    TEST_ASSERT_EQ(g.leftS(1000 + 1), 600, "rounded up");
+    TEST_ASSERT_EQ(g.leftS(1000 + 599001), 1, "the last second");
+    TEST_ASSERT(g.live(1000 + 599999) && !g.live(1000 + 600000), "ends exactly at the deadline, by its own timer");
+    TEST_ASSERT(!g.pollDue(1000 + 2999) && g.pollDue(1000 + 3000), "while streaming it asks every 3 s");
+}
+
+TEST(view_gate_every_yes_restarts_the_time_and_no_does_not_cut_it_short) {
+    ViewGate g;
+    g.onAnswer(0, "view=1;stop=0;mins=10");
+    g.onAnswer(300000, "view=1;stop=0;mins=10");
+    TEST_ASSERT(g.live(300000 + 599999), "the page kept asking: the time restarted");
+    g.onAnswer(400000, "view=0;stop=0;mins=10");
+    TEST_ASSERT(g.live(400001) && g.live(300000 + 599999), "a person who left (no more asks) does not cut the view short");
+    TEST_ASSERT(!g.live(300000 + 600000), "it ends when the time since the last yes is up");
+}
+
+TEST(view_gate_stop_ends_it_now) {
+    ViewGate g;
+    g.onAnswer(0, "view=1;stop=0;mins=10");
+    g.onAnswer(3000, "view=0;stop=1;mins=10");
+    TEST_ASSERT(!g.live(3001) && g.leftS(3001) == 0, "the OFF button stops the view at once");
+    TEST_ASSERT(!g.pollDue(3000 + 29999) && g.pollDue(3000 + 30000), "and it goes back to asking every 30 s");
+    g.onAnswer(40000, "view=1;stop=0;mins=10");
+    TEST_ASSERT(g.live(40001), "a new ON starts it again");
+}
+
+TEST(view_gate_uses_its_default_time_when_the_answer_has_none) {
+    ViewGate g(30000, 3000, 10000, 7);
+    g.onAnswer(0, "view=1;stop=0");
+    TEST_ASSERT_EQ(g.leftS(0), 420, "seven minutes: the default");
+}
+
+TEST(view_gate_keeps_its_state_when_the_relay_cannot_be_asked) {
+    ViewGate g;
+    g.onAnswer(0, "view=1;stop=0;mins=10");
+    g.onPollFailed(3000);
+    TEST_ASSERT(g.live(3001), "a running view runs on until its own timer ends it");
+    TEST_ASSERT(!g.pollDue(3000 + 9999) && g.pollDue(3000 + 10000), "it tries again soon");
+    ViewGate idle;
+    idle.onPollFailed(100);
+    TEST_ASSERT(!idle.live(101) && !idle.pollDue(100 + 9999) && idle.pollDue(100 + 10000), "a resting board that cannot ask stays at rest and retries soon");
+    TEST_ASSERT(!idle.onAnswer(200, "<html>Not Found</html>") && !idle.live(201), "an answer that is not one (an older relay) counts as no answer");
+    TEST_ASSERT(!idle.pollDue(200 + 9999), "and is retried at the retry pace");
+}
+
+TEST(view_gate_works_across_the_millis_wrap) {
+    ViewGate g;
+    uint32_t t = 0xFFFFFFFFu - 1000;
+    g.onAnswer(t, "view=1;stop=0;mins=1");
+    TEST_ASSERT(g.live(t + 59999) && !g.live(t + 60000), "the deadline is wrap-safe");
+    TEST_ASSERT_EQ(g.leftS(t + 1000), 59, "and so is the time left");
+    TEST_ASSERT(g.pollDue(t + 3000), "and the next ask");
+}
+
+TEST(session_release_closes_the_link_quietly_and_a_later_step_reconnects_at_once) {
+    FakeEnv env;
+    UplinkSession s(ucfg(), env);
+    bringUp(s, env);
+    size_t logs = env.logs.size();
+    s.release();
+    TEST_ASSERT(env.closeCalls == 1 && !env.isOpen_, "the connection is closed");
+    TEST_ASSERT(s.state() == UplinkSession::State::WaitingForWifi, "and the session waits");
+    TEST_ASSERT_EQ(s.stats().reconnects, 0u, "resting is not a lost connection");
+    TEST_ASSERT_EQ(env.logs.size(), logs, "and nothing is logged as a failure");
+    s.release();
+    TEST_ASSERT_EQ(env.closeCalls, (size_t)1, "releasing twice closes once");
+    env.now += 60000;
+    s.step(true);
+    TEST_ASSERT_EQ(env.openCalls, (size_t)2, "the view is back: a new connection opens at once, no backoff");
+}
+
+TEST(status_json_reports_the_time_left_of_the_live_view) {
+    LinkStats l = link();
+    TEST_ASSERT(!has(buildStatusJson(cfg(), snap(), 1500, "x", 0, 0, l), "viewLeftS"), "not reported by default");
+    l.viewLeftS = 541;
+    TEST_ASSERT(has(buildStatusJson(cfg(), snap(), 1500, "x", 0, 0, l), "\"viewLeftS\":541"), "seconds left, for the dashboard's countdown");
+    FakeEnv env;
+    UplinkSession s(ucfg(), env);
+    s.setViewLeftS(300);
+    bringUp(s, env);
+    std::vector<Wire> m = messagesIn(env.sent);
+    TEST_ASSERT(m.size() == 1 && has(wireAt(m, 0).status, "\"viewLeftS\":300"), "the session sends it with every message");
+}
+
+TEST(view_gate_streams_all_the_time_for_a_relay_without_the_switch_until_it_is_updated) {
+    ViewGate g;
+    g.onRelayWithoutSwitch(100);
+    TEST_ASSERT(g.live(101) && g.relayWithoutSwitch(), "an older relay: stream, as detectors always did");
+    TEST_ASSERT_EQ(g.leftS(101), 0, "no timer to report");
+    TEST_ASSERT(!g.pollDue(100 + 59999) && g.pollDue(100 + 60000), "it looks again in a minute");
+    g.onAnswer(60100, "view=0;stop=0;mins=10");
+    TEST_ASSERT(!g.live(60101) && !g.relayWithoutSwitch(), "the relay was updated: the switch works, nobody is looking, so it rests");
+}
+
 int main() {
     RUN_TEST(json_strings_are_escaped);
     RUN_TEST(log_url);
@@ -991,5 +1119,16 @@ int main() {
     RUN_TEST(session_wifi_drop_while_connecting_or_backing_off);
     RUN_TEST(session_works_across_the_millis_wrap);
     RUN_TEST(session_describes_itself_in_every_state);
+    RUN_TEST(view_answer_is_parsed_strictly);
+    RUN_TEST(view_gate_rests_until_asked_and_asks_at_once_at_boot);
+    RUN_TEST(view_gate_streams_for_the_time_in_the_answer_and_asks_often_meanwhile);
+    RUN_TEST(view_gate_every_yes_restarts_the_time_and_no_does_not_cut_it_short);
+    RUN_TEST(view_gate_stop_ends_it_now);
+    RUN_TEST(view_gate_uses_its_default_time_when_the_answer_has_none);
+    RUN_TEST(view_gate_keeps_its_state_when_the_relay_cannot_be_asked);
+    RUN_TEST(view_gate_works_across_the_millis_wrap);
+    RUN_TEST(session_release_closes_the_link_quietly_and_a_later_step_reconnects_at_once);
+    RUN_TEST(status_json_reports_the_time_left_of_the_live_view);
+    RUN_TEST(view_gate_streams_all_the_time_for_a_relay_without_the_switch_until_it_is_updated);
     return test::summarize();
 }

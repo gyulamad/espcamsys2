@@ -809,11 +809,25 @@ camtest_test('buildDetectorStatus: only paired cameras; carries the relay\'s sta
     camtest_assert_equal($s['cam1'], [
         'detector' => 'det-1', 'state' => 'online', 'online' => true, 'hasPicture' => true, 'connected' => true,
         'ageMs' => 120, 'pictureAgeMs' => 130, 'ip' => '192.168.4.37', 'message' => '', 'report' => ['scene' => ['brightness' => 90]],
+        'view' => ['supported' => false, 'wanted' => false],
     ]);
     camtest_assert_equal($s['cam3']['state'], 'offline');
     camtest_assert_equal($s['cam3']['online'], false);
     camtest_assert_equal($s['cam3']['message'], 'last heard 9 s ago; its connection ended (the board closed the connection)');
     camtest_assert_equal(CamLogic::buildDetectorStatus([], $relay), []);
+});
+
+camtest_test('buildDetectorStatus: carries the live-view switch (supported / wanted) and passes an idle detector on', function () {
+    $cams = [['id' => 'camA', 'url' => 'http://r', 'detector' => 'det-1'], ['id' => 'camB', 'url' => 'http://r', 'detector' => 'det-2']];
+    $s = CamLogic::buildDetectorStatus($cams, [
+        'det-1' => ['state' => 'idle', 'online' => false, 'report' => null, 'message' => 'the live view is off', 'view' => ['supported' => true, 'wanted' => true, 'secret' => 'x']],
+        'det-2' => ['state' => 'online', 'online' => true, 'report' => ['x' => 1]],
+    ]);
+    camtest_assert_equal($s['camA']['state'], 'idle');
+    camtest_assert_equal($s['camA']['view'], ['supported' => true, 'wanted' => true], 'only the two flags, nothing else the relay says');
+    camtest_assert_equal($s['camB']['view'], ['supported' => false, 'wanted' => false], 'an older relay or firmware: not switchable');
+    camtest_assert_equal(CamLogic::buildDetectorStatus($cams, [])['camA']['view'], ['supported' => false, 'wanted' => false], 'never heard from: not switchable');
+    camtest_assert_equal(CamLogic::detectorViewSummary('junk'), ['supported' => false, 'wanted' => false]);
 });
 
 camtest_test('buildDetectorStatus: numbers without a picture stay "online" but are flagged no-picture', function () {

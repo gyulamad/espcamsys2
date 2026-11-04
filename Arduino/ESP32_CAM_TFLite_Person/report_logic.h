@@ -67,6 +67,11 @@ inline std::string buildLogUrl(const std::string& host, int httpPort) {
     return "http://" + host + ":" + std::to_string(httpPort) + "/log";
 }
 
+// The relay's live-view switch (GET /detector/<id>/view): "view=1;stop=0;mins=10", see ViewGate.
+inline std::string buildViewUrl(const std::string& host, int httpPort, const std::string& detectorId) {
+    return "http://" + host + ":" + std::to_string(httpPort) + "/detector/" + detectorId + "/view";
+}
+
 // ── What the detector sees ───────────────────────────────────────────────
 
 // How the gate is shown. "off" = both checks are switched off (DARK_THRESH=0 and MOTION_THRESH=0):
@@ -130,6 +135,7 @@ struct LinkStats {
     uint32_t jpegFails = 0;    // frames that could not be encoded as JPEG since boot
     uint32_t reconnects = 0;   // times the connection to the relay was lost since boot
     uint32_t heap = 0;         // free heap, bytes
+    int32_t viewLeftS = -1;    // seconds of live view left on the board's own timer; -1 = not reported
 };
 
 // The JSON status of one message. One object, no line breaks. Numbers are printed
@@ -153,6 +159,10 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
     char buf[160];
     snprintf(buf, sizeof(buf), ",\"uptimeMs\":%u,\"rssi\":%d", (unsigned)uptimeMs, rssi);
     out += buf;
+    if (link.viewLeftS >= 0) {
+        snprintf(buf, sizeof(buf), ",\"viewLeftS\":%d", (int)link.viewLeftS);
+        out += buf;
+    }
 
     snprintf(buf, sizeof(buf), ",\"gpio\":{\"pin\":%d,\"high\":%s}", cfg.gpioPin, s.detected ? "true" : "false");
     out += buf;
@@ -558,6 +568,118 @@ public:
     virtual void relayReachable() = 0;   // the uplink just came up: a good moment to let queued log entries out
 };
 
+// ── The live view gate ───────────────────────────────────────────────
+// The detector streams its sensor values and small picture only while somebody wants to look (the dashboard's
+// WATCH button), so the Wi-Fi radio can rest the rest of the time. Detection and the alarm pin run all the time.
+// The board asks the relay (GET /detector/<id>/view): about every 30 s while it rests, every few seconds while
+// it streams. The answer is plain text, "view=1;stop=0;mins=10":
+//   view=1   somebody wants to look: stream, for `mins` minutes from this answer (and again after every later one)
+//   stop=1   the OFF button was pressed: stop now
+// The board counts the time itself, so it stops even if the relay or the dashboard goes away. Pure logic: the
+// HTTP request is the sketch's, this decides when to ask and what the answer means.
+struct ViewAnswer {
+    bool ok = false;        // false: not an answer of this kind (an older relay, an error page)
+    bool view = false;
+    bool stop = false;
+    uint32_t minutes = 0;   // 0: the answer did not say
+};
+
+// The value of `key` in a "k=v;k=v" text, or "" when it is not there.
+inline std::string viewField(const std::string& text, const std::string& key) {
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t end = text.find(';', pos);
+        if (end == std::string::npos) end = text.size();
+        std::string item = text.substr(pos, end - pos);
+        size_t eq = item.find('=');
+        if (eq != std::string::npos && item.substr(0, eq) == key) return item.substr(eq + 1);
+        pos = end + 1;
+    }
+    return "";
+}
+
+inline ViewAnswer parseViewAnswer(const std::string& body) {
+    ViewAnswer a;
+    std::string text;
+    for (size_t i = 0; i < body.size() && i < 200; ++i) {
+        char c = body[i];
+        if (c != ' ' && c != '\r' && c != '\n' && c != '\t') text += c;
+    }
+    std::string view = viewField(text, "view"), stop = viewField(text, "stop");
+    if ((view != "0" && view != "1") || (stop != "0" && stop != "1")) return a;   // not ours
+    a.ok = true;
+    a.view = view == "1";
+    a.stop = stop == "1";
+    std::string mins = viewField(text, "mins");
+    uint32_t n = 0;
+    bool digits = !mins.empty() && mins.size() <= 4;
+    for (size_t i = 0; digits && i < mins.size(); ++i) {
+        if (mins[i] < '0' || mins[i] > '9') digits = false; else n = n * 10 + (uint32_t)(mins[i] - '0');
+    }
+    a.minutes = digits ? n : 0;
+    return a;
+}
+
+class ViewGate {
+public:
+    ViewGate(uint32_t idlePollMs = 30000, uint32_t livePollMs = 3000, uint32_t retryMs = 10000, uint32_t defaultMinutes = 10)
+        : idlePollMs_(idlePollMs), livePollMs_(livePollMs), retryMs_(retryMs), defaultMinutes_(defaultMinutes),
+          legacyRecheckMs_(60000), active_(false), legacy_(false), deadline_(0), nextPollAt_(0), polled_(false) {}
+
+    // Stream now? (Wrap-safe: millis() overflows after 49 days.) A relay that does not know the live view
+    // switch (older than this firmware) is streamed to all the time, as detectors always used to.
+    bool live(uint32_t now) const { return legacy_ || (active_ && (int32_t)(deadline_ - now) > 0); }
+
+    // The relay has no live view switch (it answered "not found"): stream all the time, and look again in a
+    // minute, so the switch starts working by itself once the relay is updated.
+    void onRelayWithoutSwitch(uint32_t now) {
+        legacy_ = true;
+        schedule(now, legacyRecheckMs_);
+    }
+    bool relayWithoutSwitch() const { return legacy_; }
+
+    // Whole seconds of live view left (0 when not live or not on a timer), rounded up.
+    int32_t leftS(uint32_t now) const {
+        if (legacy_ || !live(now)) return 0;
+        return (int32_t)(((uint32_t)(deadline_ - now) + 999) / 1000);
+    }
+
+    // The first ask comes at once (a board that just started wants to know), the next ones on the schedule.
+    bool pollDue(uint32_t now) const { return !polled_ || (int32_t)(now - nextPollAt_) >= 0; }
+
+    // The relay's answer text. Returns false when it was not an answer of this kind (treated like no answer).
+    bool onAnswer(uint32_t now, const std::string& body) {
+        ViewAnswer a = parseViewAnswer(body);
+        if (!a.ok) {
+            onPollFailed(now);
+            return false;
+        }
+        legacy_ = false;
+        if (a.stop) {
+            active_ = false;
+        } else if (a.view) {
+            active_ = true;
+            deadline_ = now + (a.minutes ? a.minutes : defaultMinutes_) * 60000UL;
+        }
+        schedule(now, live(now) ? livePollMs_ : idlePollMs_);
+        return true;
+    }
+
+    // No answer (relay or network down): the state stays as it is (a running view runs out by its own timer),
+    // and the next try comes soon.
+    void onPollFailed(uint32_t now) { schedule(now, retryMs_); }
+
+private:
+    void schedule(uint32_t now, uint32_t afterMs) { polled_ = true; nextPollAt_ = now + afterMs; }
+
+    uint32_t idlePollMs_, livePollMs_, retryMs_, defaultMinutes_, legacyRecheckMs_;
+    bool active_;
+    bool legacy_;
+    uint32_t deadline_;
+    uint32_t nextPollAt_;
+    bool polled_;
+};
+
 struct UplinkConfig {
     std::string host;
     int port = 0;
@@ -593,6 +715,18 @@ public:
         : cfg_(cfg), env_(env), policy_(cfg.minFrameGapMs, cfg.heartbeatMs), state_(State::WaitingForWifi),
           frame_(cfg.frameBytes, 0), attempts_(0), failures_(0), retryAt_(0), answerDeadline_(0),
           connectedAt_(0), picturesThisConnection_(0), firstPictureLogged_(false) {}
+
+    // The live view ended (nobody is watching): close the connection on purpose and rest. Nothing is counted
+    // or logged as a failure; the next step() opens a fresh connection and sends at once (the view is back).
+    void release() {
+        if (state_ == State::AwaitingAnswer || state_ == State::Streaming) env_.close();
+        state_ = State::WaitingForWifi;
+        failures_ = 0;
+        policy_.reset();
+    }
+
+    // Seconds of live view left on the board's timer, reported to the dashboard with every message (-1: none).
+    void setViewLeftS(int32_t seconds) { stats_.viewLeftS = seconds; }
 
     void step(bool wifiUp) {
         uint32_t now = env_.nowMs();

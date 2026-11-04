@@ -260,6 +260,43 @@ test('slideshow: a lone camera never switches', () => {
   assertEqual(s.current(), 'x');
 });
 
+// ── person detected + the live view the slideshow needs ──────────────
+
+test('personSeen: only an online detector with person.detected === true', () => {
+  const d = (over) => Object.assign({ online: true, report: { person: { detected: true } } }, over);
+  assertEqual(S.personSeen(d()), true);
+  assertEqual(S.personSeen(d({ online: false })), false);
+  assertEqual(S.personSeen(d({ report: { person: { detected: false } } })), false);
+  assertEqual(S.personSeen(d({ report: { person: { detected: 'true' } } })), false);
+  assertEqual(S.personSeen(d({ report: null })), false);
+  assertEqual(S.personSeen(null), false);
+});
+
+test('priorities: a person beats motion, recording beats a person', () => {
+  const person = { online: true, report: { person: { detected: true }, scene: { motion: 500, motionAtLeast: 300 } } };
+  const moving = { online: true, report: { scene: { motion: 500, motionAtLeast: 300 } } };
+  const p = S.priorities(['a', 'b', 'c'], { c: { recording: true } }, { a: person, b: moving, c: person });
+  assertEqual(p, { a: S.PRIORITY.PERSON, b: S.PRIORITY.MOTION, c: S.PRIORITY.RECORDING });
+});
+
+test('viewRequests: asks "on" for resting detectors, "keep" for wanted ones, skips the rest', () => {
+  const dets = {
+    a: { view: { supported: true, wanted: false } },
+    b: { view: { supported: true, wanted: true } },
+    c: { view: { supported: false, wanted: false } },
+    d: { online: true },
+  };
+  assertEqual(S.viewRequests(['a', 'b', 'c', 'd', 'e'], dets, {}, 1000, 20000),
+    [{ id: 'a', action: 'on' }, { id: 'b', action: 'keep' }]);
+});
+
+test('viewRequests: not again before keepMs; again after; no answer yet asks nobody', () => {
+  const dets = { a: { view: { supported: true, wanted: true } } };
+  assertEqual(S.viewRequests(['a'], dets, { a: 1000 }, 20999, 20000), []);
+  assertEqual(S.viewRequests(['a'], dets, { a: 1000 }, 21000, 20000), [{ id: 'a', action: 'keep' }]);
+  assertEqual(S.viewRequests(['a'], null, {}, 0, 20000), []);
+});
+
 // ── formatClock ──────────────────────────────────────────────────────
 
 test('formatClock: HH:MM:SS with leading zeros', () => {

@@ -190,6 +190,28 @@ bool postLogBatch(const std::string &body, String &detail) {
   return code >= 200 && code < 300;
 }
 
+// Asks the relay whether somebody wants the live view (GET /detector/<id>/view) and tells the gate what
+// came back. 404 = an older relay without the switch: the gate then streams always (the old behaviour).
+void pollViewSwitch(person_report::ViewGate &gate) {
+  HTTPClient http;
+  http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId).c_str()));
+  http.setTimeout(5000);
+  http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
+  int code = http.GET();
+  String body = (code == 200) ? http.getString() : String();
+  http.end();
+  uint32_t now = millis();
+  if (code == 404) {
+    gate.onRelayWithoutSwitch(now);
+    return;
+  }
+  if (code != 200 || !gate.onAnswer(now, std::string(body.c_str()))) {
+    gate.onPollFailed(now);
+    return;
+  }
+  g_relayOkAt = now;   // the relay answered: it is there, even though no picture stream is open
+}
+
 // One pass of the delivery task: ask the core whether a delivery is due, make the HTTP request if so
 // (OUTSIDE the lock — it can be slow), and report the outcome.
 void remoteLogPump() {
@@ -788,7 +810,7 @@ void settingsSyncTick() {
 #define RELAY_FIND_WARN(...) RLOG_WARN(__VA_ARGS__)
 #include "relay_find.h"
 
-static const uint32_t RELAY_DOWN_MS = 30000;
+static const uint32_t RELAY_DOWN_MS = 90000;   // a resting detector asks only every ~30 s
 volatile uint32_t g_relayOkAt = 0;   // millis() when the uplink was last open (set by WifiUplinkEnv)
 static PreferencesStore* g_findStore = nullptr;
 static RelayFind* g_find = nullptr;
@@ -1259,6 +1281,8 @@ void networkTask(void *)
     person_report::UplinkSession session(ucfg, env);
     person_report::WifiWatch wifiWatch(10000);
     person_report::Every heartbeat((uint32_t)g_cfg.announceHeartbeatSec * 1000UL);
+    person_report::ViewGate viewGate;   // streams only while somebody watches; otherwise the radio rests
+    bool radioAwake = true;
 
     for (;;)
     {
@@ -1288,16 +1312,28 @@ void networkTask(void *)
 
             // The relay's address changed? (does nothing unless the uplink has been down for a while)
             relayFindTick();
+
+            // Does somebody want to see the sensor values and the picture? (does nothing unless an ask is due)
+            if (viewGate.pollDue(millis())) pollViewSwitch(viewGate);
         }
 
-        session.step(up);
+        const uint32_t nowMs = millis();
+        const bool live = viewGate.live(nowMs);
+        if (live != radioAwake)
+        {
+            radioAwake = live;
+            WiFi.setSleep(!live);   // nobody watching: the Wi-Fi radio may rest between its beacons
+        }
+        session.setViewLeftS(viewGate.leftS(nowMs));
+        if (live) session.step(up);
+        else session.release();     // drops the link; the relay then sees an idle detector
 
         if (heartbeat.due(millis()))
         {
             logHeartbeat(session);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(up ? 10 : 500));
+        vTaskDelay(pdMS_TO_TICKS(!up ? 500 : live ? 10 : 200));
     }
 }
 
