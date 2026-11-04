@@ -190,28 +190,6 @@ bool postLogBatch(const std::string &body, String &detail) {
   return code >= 200 && code < 300;
 }
 
-// Asks the relay whether somebody wants the live view (GET /detector/<id>/view) and tells the gate what
-// came back. 404 = an older relay without the switch: the gate then streams always (the old behaviour).
-void pollViewSwitch(person_report::ViewGate &gate) {
-  HTTPClient http;
-  http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId).c_str()));
-  http.setTimeout(5000);
-  http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
-  int code = http.GET();
-  String body = (code == 200) ? http.getString() : String();
-  http.end();
-  uint32_t now = millis();
-  if (code == 404) {
-    gate.onRelayWithoutSwitch(now);
-    return;
-  }
-  if (code != 200 || !gate.onAnswer(now, std::string(body.c_str()))) {
-    gate.onPollFailed(now);
-    return;
-  }
-  g_relayOkAt = now;   // the relay answered: it is there, even though no picture stream is open
-}
-
 // One pass of the delivery task: ask the core whether a delivery is due, make the HTTP request if so
 // (OUTSIDE the lock — it can be slow), and report the outcome.
 void remoteLogPump() {
@@ -1246,6 +1224,28 @@ void logHeartbeat(person_report::UplinkSession &session)
 // ── end of uplink glue ──────────────────────────────────────
 
 // ── The task ────────────────────────────────────────────────
+
+// Asks the relay whether somebody wants the live view (GET /detector/<id>/view) and tells the gate what
+// came back. 404 = an older relay without the switch: the gate then streams always (the old behaviour).
+void pollViewSwitch(person_report::ViewGate &gate) {
+  HTTPClient http;
+  http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId).c_str()));
+  http.setTimeout(5000);
+  http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
+  int code = http.GET();
+  String body = (code == 200) ? http.getString() : String();
+  http.end();
+  uint32_t now = millis();
+  if (code == 404) {
+    gate.onRelayWithoutSwitch(now);
+    return;
+  }
+  if (code != 200 || !gate.onAnswer(now, std::string(body.c_str()))) {
+    gate.onPollFailed(now);
+    return;
+  }
+  g_relayOkAt = now;   // the relay answered: it is there, even though no picture stream is open
+}
 
 void networkTask(void *)
 {

@@ -61,6 +61,21 @@ struct String {
     const char* c_str() const { return s.c_str(); }
 };
 
+// The relay's live-view switch (GET /detector/<id>/view), as the HTTP client sees it. By default the fake relay
+// has no such route (404): the detector then streams all the time, as the older relay expects.
+static int g_viewCode = 404;                 // what it answers; <= 0 = could not connect
+static std::string g_viewBody;               // ... with this text on 200
+static std::vector<std::string> g_viewAsked; // the URLs asked
+struct HTTPClient {
+    std::string url; bool keyed = false;
+    void begin(String u) { url = u.s; }
+    void setTimeout(int) {}
+    void addHeader(const char* k, const char* v) { keyed = keyed || (std::string(k) == "X-Api-Key" && std::string(v) == "s3cret"); }
+    int GET() { g_viewAsked.push_back(keyed ? url : "NO KEY " + url); return g_viewCode; }
+    String getString() { return String(g_viewBody.c_str()); }
+    void end() {}
+};
+
 struct IPAddress {
     std::string s = "0.0.0.0";
     IPAddress() {}
@@ -327,6 +342,7 @@ static void resetWorld() {
     g_mutexCreateFails = false; g_mutexesCreated = g_mutexesDeleted = 0; g_tasks.clear(); g_taskCreateFails = false;
     g_taskDelays.clear(); g_stopAfterDelays = -1; g_onTaskDelay = nullptr; g_mallocFails = false;
     g_wifiCalls.clear(); g_wifiDriverOk = true; g_wifiMode = 0; g_settingsSyncTicks = 0; g_heapStages.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear(); g_relayFindTicks = 0; g_relayOkAt = 0;
+    g_viewCode = 404; g_viewBody.clear(); g_viewAsked.clear();
     g_remoteLogStarts = 0; g_resetReason = 1; g_psram = true;
     reportFrame = nullptr; reportMutex = nullptr;
     g_cfg = PersonSettings();
@@ -751,6 +767,34 @@ static void runNetworkTask(int passes) {
     g_stopAfterDelays = -1;
 }
 
+TEST(a_relay_without_the_view_switch_keeps_the_stream_on_all_the_time) {
+    resetWorld(); typicalLiveViewSettings();
+    runNetworkTask(3);
+    TEST_ASSERT(!g_viewAsked.empty() && g_viewAsked[0] == "http://192.168.4.9:8080/detector/det-1/view", "it asks the relay's switch, with the key");
+    TEST_ASSERT(WiFiClient::connects >= 1, "an older relay (404): the picture link is opened as before");
+    for (const std::string& c : g_wifiCalls) TEST_ASSERT(c != "sleep:1", "and the radio never sleeps");
+}
+
+TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = 200; g_viewBody = "view=0;stop=0;mins=10";
+    runNetworkTask(3);
+    TEST_ASSERT(WiFiClient::connects == 0, "no picture link is opened");
+    bool slept = false;
+    for (const std::string& c : g_wifiCalls) slept = slept || c == "sleep:1";
+    TEST_ASSERT(slept, "the Wi-Fi radio may rest");
+    TEST_ASSERT_EQ((int)g_viewAsked.size(), 1, "and it does not ask again before its ~30 s are up");
+    TEST_ASSERT(g_relayOkAt != 0 || g_now == 0, "an answer counts as the relay being there");
+}
+
+TEST(somebody_watching_opens_the_picture_link_and_wakes_the_radio) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = 200; g_viewBody = "view=1;stop=0;mins=10";
+    runNetworkTask(3);
+    TEST_ASSERT(WiFiClient::connects >= 1, "the picture link is opened");
+    for (const std::string& c : g_wifiCalls) TEST_ASSERT(c != "sleep:1", "the radio stays awake");
+}
+
 TEST(the_network_task_puts_wi_fi_in_station_mode_without_sleep_and_adds_every_network) {
     resetWorld(); typicalLiveViewSettings();
     runNetworkTask(1);
@@ -1051,6 +1095,9 @@ int main() {
     RUN_TEST(out_of_memory_for_the_snapshot_fails_loudly_and_leaves_nothing_half_started);
     RUN_TEST(a_mutex_that_cannot_be_created_is_the_same_failure);
     RUN_TEST(a_network_task_that_cannot_be_created_is_reported);
+    RUN_TEST(a_relay_without_the_view_switch_keeps_the_stream_on_all_the_time);
+    RUN_TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio);
+    RUN_TEST(somebody_watching_opens_the_picture_link_and_wakes_the_radio);
     RUN_TEST(the_network_task_puts_wi_fi_in_station_mode_without_sleep_and_adds_every_network);
     RUN_TEST(while_wi_fi_is_down_the_task_waits_half_a_second_and_does_nothing_else);
     RUN_TEST(once_wi_fi_is_up_the_task_checks_for_updates_and_opens_the_uplink_with_the_settings);
