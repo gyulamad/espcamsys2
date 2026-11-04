@@ -743,18 +743,28 @@ sudo apt install -y python3-venv
 python3 -m venv ~/yolo-export
 ~/yolo-export/bin/pip install ultralytics onnx
 cd ~ && ~/yolo-export/bin/yolo export model=yolo26n.pt format=onnx imgsz=640 opset=12   # or yolo11n.pt if yolo26n is not available to you
-mkdir -p /opt/camrelay/models && cp ~/yolo26n.onnx /opt/camrelay/models/person.onnx
 rm -rf ~/yolo-export        # optional: it pulls in PyTorch (about 1 GB)
 ```
 
-(If you export on a laptop instead, do the same there and `scp yolo26n.onnx pi@<pi>:/opt/camrelay/models/person.onnx`.)
+The export writes `yolo26n.onnx` into the folder you ran it from (`~` above); `find ~ -name '*.onnx'` shows where it is. (If you export on a laptop instead, do the same there and `scp` the `.onnx` file to the Pi.)
+
+**Put the model in the folder the relay runs from, as `models/person.onnx`.** That is the folder that holds `server.js` — the `nodejs/camera-relay/` folder of your checkout (for example `~/espcamsys2/nodejs/camera-relay`), or wherever you copied it (such as `/opt/camrelay`). If it is not there the file list shows `⚠ check failed: the person detector model is not installed (expected at <path>)` next to the clip, and that path is where to put it:
+
+```
+mkdir -p ~/espcamsys2/nodejs/camera-relay/models        # use your relay folder
+cp ~/yolo26n.onnx ~/espcamsys2/nodejs/camera-relay/models/person.onnx
+ls -l ~/espcamsys2/nodejs/camera-relay/models/person.onnx
+rm ~/yolo26n.*              # the copy in your home folder is no longer needed
+```
+
+No relay restart is needed for a newly placed model (it is looked for at every check). To keep the file somewhere else, set `model: '/full/path/to/file.onnx'` in the `personScan` block of `config.js` (step 4).
 
 (Model weights are published by Ultralytics under the AGPL-3.0 licence — check it fits your use. Use a `yolo*n` model first; the larger `s` model is more accurate but several times slower on a Pi.)
 
 ### 3. Try it on one clip (on the Pi)
 
 ```
-cd /opt/camrelay
+cd ~/espcamsys2/nodejs/camera-relay        # your relay folder (the one with server.js)
 python3 tools/person_scan.py --model models/person.onnx --video recordings/<camera>/<some clip>.mp4 --thumbnail /tmp/test-thumb.jpg
 ```
 
