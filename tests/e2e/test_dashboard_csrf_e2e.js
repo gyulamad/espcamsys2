@@ -205,10 +205,26 @@ async function main() {
     check('the control key is not written to the log', !phpLog.includes(KEY));
 
     // ── the page's own buttons keep working: its fetch() calls carry the header ──
-    const page = fs.readFileSync(path.join(DASH_SRC, 'index.php'), 'utf8');
-    const posts = page.match(/fetch\([^;]*?\{ method: 'POST'[^;]*?\}/g) || [];
-    check('index.php has POST fetch calls to check', posts.length >= 6, String(posts.length));
-    check('every POST fetch in index.php sends X-Requested-With', posts.every((p) => p.includes("'X-Requested-With': 'camdash'")), posts.filter((p) => !p.includes('X-Requested-With')).join('\n'));
+    // Every page of the dashboard (index.php, the settings pages, the scripts in js/ and lib/), not only index.php.
+    const sources = [DASH_SRC, path.join(DASH_SRC, 'js'), path.join(DASH_SRC, 'lib')]
+      .flatMap((dir) => fs.existsSync(dir) ? fs.readdirSync(dir).map((f) => path.join(dir, f)) : [])
+      .filter((f) => /\.(php|js)$/.test(f) && fs.statSync(f).isFile());
+    const posts = [];   // the text of every fetch call that sends method: 'POST'
+    for (const file of sources) {
+      const text = fs.readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/method:\s*'POST'/g)) {
+        const start = Math.max(text.lastIndexOf('fetch', m.index), 0);
+        posts.push({ file: path.relative(DASH_SRC, file), call: text.slice(start, m.index + 300) });
+      }
+    }
+    // Only the header that makes the browser's call a deliberate one counts: the literal one, or the shared
+    // constants the pages define as { 'X-Requested-With': 'camdash' } (checked below).
+    const carries = (p) => p.call.includes("'X-Requested-With': 'camdash'") || /\bAJAX(_HEADERS)?\b/.test(p.call);
+    check('the dashboard sources have POST fetch calls to check', posts.length >= 6, String(posts.length));
+    check('every POST fetch sends X-Requested-With', posts.every(carries), posts.filter((p) => !carries(p)).map((p) => p.file + ': ' + p.call.split('\n')[0]).join('\n'));
+    // the shared constants really are the header
+    const constants = sources.filter((f) => /\bconst AJAX(_HEADERS)? = /.test(fs.readFileSync(f, 'utf8')));
+    check('every AJAX constant is the X-Requested-With header', constants.every((f) => /const AJAX(_HEADERS)? = \{ 'X-Requested-With': 'camdash' \};/.test(fs.readFileSync(f, 'utf8'))), constants.join(', '));
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
   } finally {
