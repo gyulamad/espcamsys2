@@ -7,6 +7,9 @@ require_once __DIR__ . '/relay.php';
 $count = count($cameras);
 $cols  = CamLogic::computeGridColumns($count);
 
+// Pictures through ONE mux.php connection (config.php 'mux_enabled') or one stream.php per camera.
+$muxEnabled = CamLogic::muxEnabled($config);
+
 // How many recordings each camera has, worked out NOW so the FILES buttons
 // already show it in the page the browser receives — no waiting for a
 // background request. Short timeout: the relay is on the local network, and
@@ -545,7 +548,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         <img data-cam="<?= $camId ?>"
           class="stream"
           id="img-<?= $camId ?>"
-          src="<?= $proxyUrl ?>"
+          <?= $muxEnabled ? '' : 'src="' . $proxyUrl . '"' ?>
+
           alt="<?= $camName ?>"
           data-src="<?= $proxyUrl ?>"
           onload="onStreamLoad(this.dataset.cam)"
@@ -595,7 +599,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       <?php endif; ?>
 
       <div class="cam-footer">
-        <span>PROXY → stream.php?cam=<?= $camId ?></span>
+        <span>PROXY → <?= $muxEnabled ? 'mux.php' : 'stream.php?cam=' . $camId ?></span>
         <span>CAM <?= str_pad($i + 1, 2, '0', STR_PAD_LEFT) ?></span>
       </div>
 
@@ -610,6 +614,11 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </footer>
 
 <?= CamLayout::recordingsListScript() ?>
+<?php if ($muxEnabled): ?>
+<script src="js/mux-codec.js"></script>
+<script src="js/mux-client.js"></script>
+<script src="js/mux-pictures.js"></script>
+<?php endif; ?>
 <script>
   // ── Clock ──
   function tick() {
@@ -668,6 +677,50 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     }
   })();
 
+  // ── Where the pictures come from ──
+  // Normally ONE connection (mux.php) carries every camera's picture: a browser allows only about 6 connections per
+  // address over HTTP/1.1, and one stream.php per camera used to leave no room for the other requests of this page.
+  // If mux.php cannot be used from here (js/mux-client.js: three attempts in a row that never delivered anything)
+  // or is switched off in config.php, each camera gets its own stream.php connection, as before.
+  // <pictures-source>
+  const MUX_ENABLED = <?= $muxEnabled ? 'true' : 'false' ?>;
+  let pictures = MUX_ENABLED && window.CamMuxPictures ? CamMuxPictures.create({
+    url: 'mux.php',
+    imgFor: (id) => document.getElementById('img-' + id),
+    onDown: (ids) => ids.forEach((id) => onStreamError(id)),   // it is reopened by itself; pictures resume on their own
+    onFallback: fallBackToStreams,
+  }) : null;
+
+  function openPicture(id) {
+    if (pictures) {
+      pictures.show(id);
+      return;
+    }
+    const img = document.getElementById('img-' + id);
+    img.src = img.dataset.src + '&_=' + Date.now();   // cache-bust so the browser actually re-requests
+    armStreamWatchdog(id);
+  }
+
+  function closePicture(id) {
+    if (pictures) {
+      pictures.hide(id);
+      return;
+    }
+    document.getElementById('img-' + id).src = '';
+  }
+
+  function fallBackToStreams() {
+    console.warn('mux.php cannot be used from here: showing one stream.php connection per camera');
+    pictures.close();
+    pictures = null;
+    getAllCameraIds().forEach((id) => reloadStream(id));
+  }
+
+  // With mux.php the images have no src yet (a src would open a stream.php connection per camera): start them now.
+  // (Also when the mux scripts could not be loaded: then every camera gets its own stream.php, via openPicture.)
+  if (MUX_ENABLED) getAllCameraIds().forEach((id) => reloadStream(id));
+  // </pictures-source>
+
   function setStatus(id, cls, label) {
     const pill = document.getElementById('pill-' + id);
     pill.className = 'status-pill ' + cls;
@@ -704,9 +757,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     overlay.replaceChildren(h('div', { className: 'spinner' }), h('span', { textContent: 'CONNECTING…' }));
     overlay.classList.add('visible');
 
-    // Cache-bust so the browser actually re-requests
-    img.src = img.dataset.src + '&_=' + Date.now();
-    armStreamWatchdog(id);
+    openPicture(id);
   }
 
   function reloadAll() {
@@ -765,7 +816,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // Closes the live connections of one camera: its picture and its detector's picture.
   function stopPictures(id) {
     clearStreamWatchdog(id);
-    document.getElementById('img-' + id).src = '';
+    closePicture(id);
     const di = document.getElementById('detimg-' + id);
     if (di) di.src = '';
   }
@@ -1858,6 +1909,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   let hiddenSince = null;
   function resumeAfterHidden() {
     restartAllPictures();
+    if (pictures) pictures.reconnect();   // the one connection may have died without a sound too
     pollAllStatuses();
     if (document.querySelector('.det-row')) pollDetectors();
   }

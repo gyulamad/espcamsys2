@@ -28,6 +28,7 @@ const detectorstate = require('./lib/detectorstate');
 const detectorlink = require('./lib/detectorlink');
 const detectorevents = require('./lib/detectorevents');
 const detectorview = require('./lib/detectorview');
+const muxfeed = require('./lib/muxfeed');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
@@ -641,6 +642,32 @@ app.get('/stream/:id', requireReadKey, (req, res) => {
   cam.emitter.on('frame', onFrame);
 
   req.on('close', () => cam.emitter.off('frame', onFrame));
+});
+
+// The pictures of several cameras on ONE connection (see lib/muxcodec.js for the format): a browser allows only
+// about 6 connections per address over HTTP/1.1, so one MJPEG connection per camera left no room for the
+// dashboard's other requests. ?cams=cam1,cam2 names the cameras (the dashboard leaves out the ones its user hid).
+// Like /stream, a viewer that cannot keep up gets the newest picture of each camera instead of a backlog.
+// Reading needs the read key, like /stream — only the PHP layer should reach this port.
+let muxViewers = 0;
+app.get('/mux', requireReadKey, (req, res) => {
+  const parsed = muxfeed.parseCameraIds(req.query.cams, { idPattern: logentry.CAMERA_ID_RE, max: MAX_CAMERAS });
+  if (parsed.error) return res.status(400).set('Cache-Control', 'no-store').json({ error: parsed.error });
+  if (muxViewers >= muxfeed.MAX_VIEWERS) {
+    return res.status(503).set('Cache-Control', 'no-store').json({ error: `already ${muxfeed.MAX_VIEWERS} viewers of the live pictures` });
+  }
+  const cameraList = parsed.ids.map((id) => ({ id, cam: getCamera(id) }));
+  muxViewers += 1;
+  res.writeHead(200, muxfeed.HEADERS);
+  res.flushHeaders();
+  req.socket.setNoDelay(true);
+  const session = muxfeed.openSession({ write: (bytes) => res.write(bytes), cameras: cameraList });
+  res.on('drain', session.drain);
+  req.on('close', () => {
+    muxViewers -= 1;
+    session.close();
+  });
+  return undefined;
 });
 
 // ── Person detectors (ESP32_CAM_TFLite_Person) ──

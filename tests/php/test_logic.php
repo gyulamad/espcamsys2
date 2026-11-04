@@ -1623,4 +1623,52 @@ camtest_test('cameraSummaries: id and name only; a missing or blank name falls b
     camtest_assert_equal(CamLogic::cameraSummaries([5 => ['id' => 'a', 'name' => 'A']]), [['id' => 'a', 'name' => 'A']], 'reindexed');
 });
 
+// ── mux.php: every camera's picture on one connection ────────────────
+
+camtest_test('muxEnabled is off unless config.php says yes', function () {
+    camtest_assert_equal(CamLogic::muxEnabled([]), false);
+    camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => true]), true);
+    camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => false]), false);
+});
+
+camtest_test('muxEnabled reads the usual ways of writing yes and no, and treats nonsense as off', function () {
+    foreach ([1, '1', 'true', 'on', 'yes'] as $yes) {
+        camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $yes]), true, var_export($yes, true));
+    }
+    foreach ([0, '0', 'false', 'off', 'no', '', null, 'banana', [], ['x']] as $no) {
+        camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $no]), false, var_export($no, true));
+    }
+});
+
+$muxCams = [['id' => 'cam1', 'name' => 'A'], ['id' => 'cam2', 'name' => 'B'], ['id' => 'cam-3', 'name' => 'C']];
+
+camtest_test('muxCameraIds: the cameras asked for, each once, in the order given', function () use ($muxCams) {
+    camtest_assert_equal(CamLogic::muxCameraIds($muxCams, 'cam2,cam1'), ['cam2', 'cam1']);
+    camtest_assert_equal(CamLogic::muxCameraIds($muxCams, 'cam1,cam1,cam-3'), ['cam1', 'cam-3']);
+    camtest_assert_equal(CamLogic::muxCameraIds($muxCams, 'cam1'), ['cam1']);
+});
+
+camtest_test('muxCameraIds: null for anything that is not a list of existing cameras', function () use ($muxCams) {
+    foreach (['', ',', 'cam1,', ',cam1', 'cam1,,cam2', 'cam1,nope', 'nope', 'CAM1', ' cam1', 'cam1 ', ['cam1'], null, 5] as $bad) {
+        camtest_assert_equal(CamLogic::muxCameraIds($muxCams, $bad), null, var_export($bad, true));
+    }
+    camtest_assert_equal(CamLogic::muxCameraIds([], 'cam1'), null, 'no cameras at all');
+});
+
+camtest_test('muxUrl: the relay address without a double slash, the list in one escaped parameter', function () {
+    camtest_assert_equal(CamLogic::muxUrl('http://127.0.0.1:8080', ['cam1', 'cam2']), 'http://127.0.0.1:8080/mux?cams=cam1%2Ccam2');
+    camtest_assert_equal(CamLogic::muxUrl('http://relay:8080/', ['a b&c']), 'http://relay:8080/mux?cams=a%20b%26c');
+});
+
+camtest_test('isMuxContentType accepts exactly the mux type (any case, spaces around it) and nothing else', function () {
+    camtest_assert_true(CamLogic::isMuxContentType(['HTTP/1.1 200 OK', 'Content-Type: application/x-espcam-mux']));
+    camtest_assert_true(CamLogic::isMuxContentType(['content-type:   Application/X-Espcam-Mux  ']));
+    foreach (['text/html', 'application/json; charset=utf-8', 'multipart/x-mixed-replace; boundary=frame', 'image/jpeg',
+              'application/x-espcam-mux; charset=x', 'application/x-espcam-mux2', 'text/html, application/x-espcam-mux'] as $other) {
+        camtest_assert_true(!CamLogic::isMuxContentType(['HTTP/1.1 200 OK', 'Content-Type: ' . $other]), $other);
+    }
+    camtest_assert_true(!CamLogic::isMuxContentType(['HTTP/1.1 200 OK']), 'no Content-Type at all');
+    camtest_assert_true(!CamLogic::isMuxContentType([]));
+});
+
 exit(camtest_summarize());

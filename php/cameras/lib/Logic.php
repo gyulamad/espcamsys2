@@ -388,6 +388,51 @@ class CamLogic
         return null;
     }
 
+    // ── The mux stream (mux.php): the pictures of every camera on ONE connection ──
+    // A browser allows only about 6 connections per address over HTTP/1.1, so a stream.php connection per camera
+    // left no room for the dashboard's other requests. The format is documented in nodejs/camera-relay/lib/muxcodec.js.
+
+    public const MUX_CONTENT_TYPE = 'application/x-espcam-mux';
+
+    // Whether the dashboard shows the cameras through mux.php (config.php: 'mux_enabled', off unless set: example.config.php
+    // turns it on). Off = one stream.php connection per camera, as before. A value that is not a yes/no is off.
+    public static function muxEnabled(array $config): bool
+    {
+        if (!array_key_exists('mux_enabled', $config)) {
+            return false;
+        }
+        return filter_var($config['mux_enabled'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false;
+    }
+
+    // The cameras a mux request asks for ("cam1,cam2"): each once, in the order given. Null when the list is not
+    // a string, is empty, has an empty entry, or names a camera config.php does not have.
+    public static function muxCameraIds(array $cameras, $requested): ?array
+    {
+        if (!is_string($requested) || $requested === '') {
+            return null;
+        }
+        $ids = array_values(array_unique(explode(',', $requested)));
+        foreach ($ids as $id) {
+            if (self::findCameraById($cameras, $id) === null) {
+                return null;
+            }
+        }
+        return $ids;
+    }
+
+    // Where the relay serves the mux stream of these cameras.
+    public static function muxUrl(string $relayUrl, array $ids): string
+    {
+        return rtrim($relayUrl, '/') . '/mux?cams=' . rawurlencode(implode(',', $ids));
+    }
+
+    // Whether the relay's answer says it is the mux stream. Anything else (JSON saying why not, or text/html from
+    // a spoofed relay, which would run as a page in the dashboard's own origin) is not passed on (review F-14).
+    public static function isMuxContentType(array $wrapperData): bool
+    {
+        return strtolower(trim(self::extractContentType($wrapperData, ''))) === self::MUX_CONTENT_TYPE;
+    }
+
     // The browser's Range header, if it is exactly ONE plain byte range (bytes=0-99, bytes=500-, bytes=-500),
     // else null: it is passed on to the relay, and anything odd is simply not passed on (the whole file is served).
     public static function validRangeHeader($value): ?string

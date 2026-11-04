@@ -1,0 +1,148 @@
+'use strict';
+
+// test_muxfeed.js — what GET /mux does for one viewer (nodejs/camera-relay/lib/muxfeed.js): the list of cameras it
+// accepts, the "newest picture only" rule for a viewer that cannot keep up, and the wiring to the cameras.
+
+const { EventEmitter } = require('events');
+const { test, assertEqual, assertTrue, summarize } = require('./framework');
+const feedLib = require('../../nodejs/camera-relay/lib/muxfeed');
+const codec = require('../../nodejs/camera-relay/lib/muxcodec');
+const decoder = require('../../php/cameras/js/mux-codec');
+const { CAMERA_ID_RE } = require('../../nodejs/camera-relay/lib/logentry');
+
+const RULES = { idPattern: CAMERA_ID_RE, max: 3 };
+const pic = (n) => Buffer.from([0xff, 0xd8, n]);
+
+// Everything written, decoded back into [type, source, first payload byte].
+function recorder(answers = []) {
+  const writes = [];
+  const write = (bytes) => { writes.push(bytes); return answers.length ? answers.shift() : true; };
+  const decoded = () => writes.flatMap((b) => decoder.createParser().push(new Uint8Array(b)).map((m) => [m.type, m.source, m.payload[2]]));
+  return { write, writes, decoded };
+}
+
+test('parseCameraIds: a comma-separated list, each camera once, in the order given', () => {
+  assertEqual(feedLib.parseCameraIds('a,b,c', RULES), { ids: ['a', 'b', 'c'] });
+  assertEqual(feedLib.parseCameraIds('b,a,b', RULES), { ids: ['b', 'a'] });
+  assertEqual(feedLib.parseCameraIds('cam-1.x_2', RULES), { ids: ['cam-1.x_2'] });
+});
+
+test('parseCameraIds: everything else is an error that says why', () => {
+  for (const raw of [undefined, '', ',', 'a,', 'a,,b', ['a', 'b'], 'a b', '../x', 'a/b', 'a'.repeat(65), {}, 5]) {
+    const r = feedLib.parseCameraIds(raw, RULES);
+    assertTrue(typeof r.error === 'string' && r.ids === undefined, `${JSON.stringify(raw)} must be refused`);
+  }
+  assertTrue(/more than 3/.test(feedLib.parseCameraIds('a,b,c,d', RULES).error));
+  assertEqual(feedLib.parseCameraIds('a,a,a,b', RULES), { ids: ['a', 'b'] }, 'the limit counts distinct cameras');
+});
+
+test('createFeed: while the connection keeps up every picture is written at once', () => {
+  const r = recorder();
+  const feed = feedLib.createFeed(r.write);
+  feed.offer('cam:a', pic(1));
+  feed.offer('cam:b', pic(2));
+  feed.offer('cam:a', pic(3));
+  assertEqual(r.decoded(), [[1, 'cam:a', 1], [1, 'cam:b', 2], [1, 'cam:a', 3]]);
+});
+
+test('createFeed: a full connection keeps only the NEWEST picture of each camera, sent after drain', () => {
+  const r = recorder([false]);                 // the first write fills the buffer
+  const feed = feedLib.createFeed(r.write);
+  feed.offer('cam:a', pic(1));
+  feed.offer('cam:a', pic(2));
+  feed.offer('cam:b', pic(3));
+  feed.offer('cam:a', pic(4));
+  assertEqual(r.writes.length, 1, 'nothing is written while the buffer is full');
+  feed.drain();
+  assertEqual(r.decoded(), [[1, 'cam:a', 1], [1, 'cam:a', 4], [1, 'cam:b', 3]], 'a1 went out first; then only the newest of a, and b');
+  feed.drain();
+  assertEqual(r.writes.length, 3, 'drain with nothing waiting writes nothing');
+});
+
+test('createFeed: draining stops again as soon as the buffer is full, the rest waits for the next drain', () => {
+  const r = recorder([false, false, true]);
+  const feed = feedLib.createFeed(r.write);
+  feed.offer('cam:a', pic(1));   // false: full
+  feed.offer('cam:b', pic(2));
+  feed.offer('cam:c', pic(3));
+  feed.drain();                  // writes b: false again
+  assertEqual(r.decoded().map((m) => m[1]), ['cam:a', 'cam:b']);
+  feed.drain();                  // writes c
+  assertEqual(r.decoded().map((m) => m[1]), ['cam:a', 'cam:b', 'cam:c']);
+});
+
+test('createFeed: a heartbeat is written when idle and left out when the connection is busy', () => {
+  const r = recorder([false]);
+  const feed = feedLib.createFeed(r.write);
+  feed.heartbeat();
+  assertEqual(r.decoded().map((m) => m[0]), [codec.TYPE_HEARTBEAT]);
+  feed.heartbeat();
+  assertEqual(r.writes.length, 1, 'the buffer is full: the connection is plainly alive');
+  feed.drain();
+  feed.heartbeat();
+  assertEqual(r.writes.length, 2);
+});
+
+function cameras(...ids) {
+  return ids.map((id) => ({ id, cam: { emitter: new EventEmitter(), frame: null } }));
+}
+function fakeTimers() {
+  const t = { fn: null, ms: null, cleared: 0 };
+  t.set = (fn, ms) => { t.fn = fn; t.ms = ms; return 'timer'; };
+  t.clear = (h) => { if (h === 'timer') t.cleared += 1; };
+  return t;
+}
+
+test('openSession: a heartbeat first, then the last known pictures, then every new one', () => {
+  const r = recorder();
+  const list = cameras('a', 'b');
+  list[1].cam.frame = pic(9);
+  const timers = fakeTimers();
+  feedLib.openSession({ write: r.write, cameras: list, setTimer: timers.set, clearTimer: timers.clear });
+  assertEqual(r.decoded(), [[2, '', undefined], [1, 'cam:b', 9]]);
+  list[0].cam.emitter.emit('frame', pic(5));
+  assertEqual(r.decoded().pop(), [1, 'cam:a', 5]);
+});
+
+test('openSession: the heartbeat timer runs at HEARTBEAT_MS and beats', () => {
+  const r = recorder();
+  const timers = fakeTimers();
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), setTimer: timers.set, clearTimer: timers.clear });
+  assertEqual(timers.ms, feedLib.HEARTBEAT_MS);
+  timers.fn();
+  assertEqual(r.decoded().map((m) => m[0]), [2, 2]);
+});
+
+test('openSession: close() leaves nothing subscribed and stops the timer; pictures after it are ignored', () => {
+  const r = recorder();
+  const list = cameras('a', 'b');
+  const timers = fakeTimers();
+  const session = feedLib.openSession({ write: r.write, cameras: list, setTimer: timers.set, clearTimer: timers.clear });
+  assertEqual(list.map((c) => c.cam.emitter.listenerCount('frame')), [1, 1]);
+  session.close();
+  assertEqual(list.map((c) => c.cam.emitter.listenerCount('frame')), [0, 0]);
+  assertEqual(timers.cleared, 1);
+  list[0].cam.emitter.emit('frame', pic(1));
+  assertEqual(r.writes.length, 1, 'only the first heartbeat was ever written');
+});
+
+test('openSession: drain() lets a viewer that was behind catch up', () => {
+  const r = recorder([true, false]);       // the heartbeat fits, the first picture fills the buffer
+  const list = cameras('a');
+  const session = feedLib.openSession({ write: r.write, cameras: list, setTimer: () => 't', clearTimer: () => {} });
+  list[0].cam.emitter.emit('frame', pic(1));
+  list[0].cam.emitter.emit('frame', pic(2));
+  list[0].cam.emitter.emit('frame', pic(3));
+  session.drain();
+  assertEqual(r.decoded().map((m) => m[2]), [undefined, 1, 3]);
+});
+
+test('HEADERS: a mux stream is never sniffed as anything else and never cached', () => {
+  assertEqual(feedLib.HEADERS['Content-Type'], 'application/x-espcam-mux');
+  assertEqual(feedLib.HEADERS['X-Content-Type-Options'], 'nosniff');
+  assertEqual(feedLib.HEADERS['Cache-Control'], 'no-store');
+  assertTrue(Object.isFrozen(feedLib.HEADERS));
+  assertTrue(feedLib.HEARTBEAT_MS < 15000, 'the PHP proxy and the browser give up after 15 s of silence');
+});
+
+summarize();
