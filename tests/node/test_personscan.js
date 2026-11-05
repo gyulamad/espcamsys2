@@ -35,6 +35,7 @@ test('resolveScanConfig: a non-object block is ignored', () => {
 test('thumbnailPath / noPersonPath sit next to the clip and never look like a recording', () => {
   assertEqual(ps.thumbnailPath('/r/cam1/cam1_x.mp4'), '/r/cam1/cam1_x.mp4.thumb.jpg');
   assertEqual(ps.noPersonPath('/r/cam1/cam1_x.mp4'), '/r/cam1/no-person/cam1_x.mp4');
+  assertEqual(ps.noPersonDir('/r/cam1'), '/r/cam1/no-person');
   assertTrue(!/\.mp4$/.test(ps.thumbnailPath('/r/cam1/cam1_x.mp4')));
 });
 

@@ -71,10 +71,15 @@ function thumbnailPath(clipPath) {
   return clipPath + THUMB_SUFFIX;
 }
 
+// The archive of one camera: <camera folder>/no-person/, where clips with nobody in them wait when the
+// action is 'move'. The folder is not scanned for the lists, so its clips are off the dashboard but on disk.
+function noPersonDir(cameraDir) {
+  return path.join(cameraDir, NO_PERSON_DIR);
+}
+
 // Where a clip with nobody in it goes when the action is 'move': <camera folder>/no-person/<same name>.
-// The folder is not scanned for the lists, so the clip leaves the dashboard but stays on disk.
 function noPersonPath(clipPath) {
-  return path.join(path.dirname(clipPath), NO_PERSON_DIR, path.basename(clipPath));
+  return path.join(noPersonDir(path.dirname(clipPath)), path.basename(clipPath));
 }
 
 // The arguments for the interpreter. Plain argv entries, never a shell string, so a file name cannot
@@ -127,5 +132,5 @@ function parseScanResult(run) {
 
 module.exports = {
   ACTIONS, NO_PERSON_DIR, THUMB_SUFFIX, DEFAULTS,
-  resolveScanConfig, thumbnailPath, noPersonPath, buildScanArgs, scanEnv, parseScanResult,
+  resolveScanConfig, thumbnailPath, noPersonDir, noPersonPath, buildScanArgs, scanEnv, parseScanResult,
 };

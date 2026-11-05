@@ -1214,6 +1214,14 @@ camtest_test('sanitizeRecordingList: negative, float and huge sizes become 0 or 
     camtest_assert_equal(array_column($r, 'sizeBytes'), [0, 0, PHP_INT_MAX]);
 });
 
+camtest_test('sanitizeArchiveCount: only a whole number of 0 or more passes', function () {
+    camtest_assert_equal(CamLogic::sanitizeArchiveCount(['count' => 0]), 0);
+    camtest_assert_equal(CamLogic::sanitizeArchiveCount(['count' => 17, 'extra' => '<b>x</b>']), 17);
+    foreach ([null, 'text', 5, [], ['count' => -1], ['count' => 1.5], ['count' => '3'], ['count' => null], ['count' => '<script>'], ['count' => [1]], ['error' => 'boom']] as $bad) {
+        camtest_assert_equal(CamLogic::sanitizeArchiveCount($bad), null, var_export($bad, true));
+    }
+});
+
 camtest_test('onlyValidCameras drops ids that are not plain ids and reports them', function () {
     $cams = [
         ['id' => 'cam1', 'name' => 'A'], ['id' => 'front.door-2_x', 'name' => 'B'],

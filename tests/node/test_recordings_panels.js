@@ -68,7 +68,7 @@ async function main() {
 
   // opening
   await api.toggleRecordingsPanel('cam1');
-  check('opening a panel loads that camera\'s list, and only that camera\'s', requests.length === 1 && requests[0] === 'GET recordings.php?cam=cam1', requests.join(','));
+  check('opening a panel loads that camera\'s list, and only that camera\'s', requests.join() === 'GET recordings.php?cam=cam1,GET recordings.php?cam=cam1&archive=1' || requests.join() === 'GET recordings.php?cam=cam1&archive=1,GET recordings.php?cam=cam1', requests.join(','));
   check('…inside the "make room for footage" wrapper', paused === 1);
   check('…and draws the clip without a camera name (it is one camera)', panel1.querySelectorAll('.files-name').map((e) => e.text()).join() === clip && panel1.querySelectorAll('.files-cam').length === 0);
   check('…with this camera\'s own button ids', !!doc.getElementById('files-sel-all-cam1') && !!doc.getElementById('files-del-selected-cam1'));

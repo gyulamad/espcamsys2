@@ -11,6 +11,9 @@
 //   - the list shows "processing" while the detector works; deleting a clip removes its thumbnail
 //   - the routes need the dashboard key; unsafe names are refused; a missing clip is 404
 //   - with action 'delete' a clip with nobody in it is removed for good
+//   - the archive (<camera>/no-person/): GET .../archive counts its clips, DELETE .../archive removes them for
+//     good — needs the right key, leaves the listed clips, other files, folders and links alone, and is not
+//     mistaken for a clip name
 // Needs python3 (skips if missing). Writes a temporary config.js (the real one is restored). Own ports.
 // Usage:  node tests/e2e/test_person_scan_e2e.js        Exit code 0 if all passed.
 
@@ -161,6 +164,42 @@ const scanConfig = (extra) => ({ enabled: true, auto: false, action: 'move', mod
     check("action 'delete': a clip with nobody in it is removed for good", !!(await waitFor(async () => !exists('f_empty.mp4'))) && !exists('no-person', 'f_empty.mp4'));
     await waitFor(async () => { const e = await entry('g_crash.mp4'); return e && e.scan && e.scan.state === 'error'; });
     check("…but a crashed check never deletes", exists('g_crash.mp4'));
+    await stopRelay(relay);
+
+    // ── the archive: counted and deleted for good ──
+    writeConfig(scanConfig({}));
+    relay = await startRelay();
+    fs.rmSync(path.join(CAM_DIR, 'no-person'), { recursive: true, force: true });
+    const archive = () => request('GET', `/recordings/${CAM}/archive`);
+    const wipe = (opts) => request('DELETE', `/recordings/${CAM}/archive`, opts);
+    check('no archive folder yet: the archive is empty', (await archive()).json.count === 0);
+    fs.mkdirSync(path.join(CAM_DIR, 'no-person', 'folder.mp4'), { recursive: true });
+    for (const n of ['arch_1.mp4', 'arch_2.mp4', 'arch_3.mp4']) fs.writeFileSync(path.join(CAM_DIR, 'no-person', n), 'EMPTY');
+    fs.writeFileSync(path.join(CAM_DIR, 'no-person', 'notes.txt'), 'mine');
+    const outside = path.join(tmp, 'outside.mp4');
+    fs.writeFileSync(outside, 'outside the archive');
+    fs.symlinkSync(outside, path.join(CAM_DIR, 'no-person', 'link.mp4'));
+    clip('listed.mp4', 'PERSON');
+    r = await archive();
+    check('the archive counts only its plain clip files (3), not folders, links or other files', r.status === 200 && r.json.count === 3, JSON.stringify(r.json));
+    check('…and its clips are not in the list of recordings', !(await names()).some((n) => n.startsWith('arch_')));
+    r = await request('GET', `/recordings/${CAM}/archive`, { key: null });
+    check('reading the count needs the key (401/403 without)', [401, 403].includes(r.status), String(r.status));
+    r = await wipe({ key: null });
+    check('deleting the archive needs the dashboard key (401/403 without)', [401, 403].includes(r.status) && exists('no-person', 'arch_1.mp4'), String(r.status));
+    r = await wipe({ key: 'wrong-key' });
+    check('…and the right one', [401, 403].includes(r.status) && exists('no-person', 'arch_2.mp4'), String(r.status));
+    r = await wipe();
+    check('deleting the archive answers with the deleted names', r.status === 200 && JSON.stringify(r.json.deleted) === JSON.stringify(['arch_1.mp4', 'arch_2.mp4', 'arch_3.mp4']), JSON.stringify(r.json));
+    check('…the clips are gone for good', !exists('no-person', 'arch_1.mp4') && !exists('no-person', 'arch_2.mp4') && !exists('no-person', 'arch_3.mp4'));
+    check('…the listed clip, the folder, the link, its target and the other file are untouched',
+      exists('listed.mp4') && exists('no-person', 'folder.mp4') && exists('no-person', 'link.mp4') && fs.existsSync(outside) && exists('no-person', 'notes.txt'));
+    check('…the archive now counts 0', (await archive()).json.count === 0);
+    check('…and the deletion was logged with the count', /archive of .*: 3 recording\(s\) deleted/.test(relay.output()));
+    check('deleting an empty archive is fine', (await wipe()).status === 200);
+    check('"archive" is not mistaken for a clip name (400/404 for a real clip route stays)', (await request('GET', `/recordings/${CAM}/archive.mp4`)).status === 404);
+    r = await request('GET', '/recordings/..%2Fx/archive');
+    check('a camera id that leaves the recordings folder is refused', r.status === 400 || r.status === 404, String(r.status));
     await stopRelay(relay);
 
     // ── model not installed ──

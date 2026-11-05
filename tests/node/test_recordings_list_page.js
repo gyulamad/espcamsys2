@@ -41,6 +41,7 @@ function fakeServer(initial, options = {}) {
   const clips = JSON.parse(JSON.stringify(initial));
   const requests = [];
   const failingDeletes = new Set(options.failingDeletes || []);
+  const archive = Object.assign({}, options.archive || {});   // camera -> number of archived clips
   const reply = (status, body) => ({ ok: status < 400, status, json: async () => body });
   async function fetch(url, init = {}) {
     const u = new URL(url, 'http://dash/');
@@ -49,6 +50,15 @@ function fakeServer(initial, options = {}) {
     requests.push({ method, cam, query: u.search, headers: init.headers || {} });
     if (options.unreadable && options.unreadable.includes(cam)) return reply(502, { error: 'Could not reach relay' });
     if (!clips[cam]) return reply(404, 'Camera not found');
+    if (u.searchParams.has('archive')) {
+      if (options.archiveUnreadable && options.archiveUnreadable.includes(cam)) return reply(502, { error: 'Could not reach relay' });
+      return reply(200, { count: archive[cam] || 0 });
+    }
+    if (u.searchParams.has('deleteArchive')) {
+      if (options.failingArchiveDeletes && options.failingArchiveDeletes.includes(cam)) return reply(500, { error: 'disk said no' });
+      archive[cam] = 0;
+      return reply(200, { deleted: [] });
+    }
     if (method === 'GET') return reply(200, clips[cam]);
     const del = u.searchParams.get('delete');
     if (del !== null) {
@@ -60,7 +70,7 @@ function fakeServer(initial, options = {}) {
     if (seen !== null) clips[cam].forEach((f) => { if (f.filename === seen) f.seen = true; });
     return reply(200, { ok: true });
   }
-  return { fetch, requests, clips, posts: () => requests.filter((r) => r.method === 'POST') };
+  return { fetch, requests, clips, archive, posts: () => requests.filter((r) => r.method === 'POST') };
 }
 
 function page() {
@@ -114,7 +124,9 @@ async function main() {
     const server = fakeServer(fleet());
     const { doc, panel, view, events } = build(server);
     await view.refresh();
-    check('the list asks recordings.php once per camera, with GET', same(server.requests.map((r) => `${r.method} ${r.cam}`).sort(), ['GET cam1', 'GET cam2', 'GET cam3']));
+    check('the list asks recordings.php once per camera for its clips and once for its archive, with GET',
+      same(server.requests.map((r) => `${r.method} ${r.cam}${r.query.includes('archive') ? ' archive' : ''}`).sort(),
+        ['GET cam1', 'GET cam1 archive', 'GET cam2', 'GET cam2 archive', 'GET cam3', 'GET cam3 archive']));
     check('every camera\'s clips are in the one list, newest first', same(names(panel), [D, B, C, A]), show(names(panel)));
     check('each row names its camera', same(panel.querySelectorAll('.files-cam').map((e) => e.text()), ['🚗 Drive', '🌿 Back', '🚪 Front', '🚪 Front']));
     check('a camera name is also the tooltip of its cell, as the cell cuts a long name short', same(panel.querySelectorAll('.files-cam').map((e) => e.title), ['🚗 Drive', '🌿 Back', '🚪 Front', '🚪 Front']));
@@ -172,6 +184,77 @@ async function main() {
     const notList = build({ fetch: async () => ({ ok: true, status: 200, json: async () => ({ error: 'x' }) }) }, { cams: ['cam1'], camLabel: null });
     await notList.view.refresh();
     check('an answer that is not a list is an error, not "no recordings"', notList.panel.text() === 'Could not load recordings.');
+  }
+
+  // ── the archive (what the person check sorted out) ──
+  {
+    const btnOf = (doc) => byId(doc, 'files-delete-archive-all');
+    const header = (panel) => panel.querySelector('.files-panel-header');
+
+    const none = build(fakeServer(fleet()));
+    await none.view.refresh();
+    check('an empty archive: no DELETE ARCHIVE button', btnOf(none.doc) === null);
+
+    const server = fakeServer(fleet(), { archive: { cam1: 3, cam2: 0, cam3: 4 } });
+    const { doc, panel, view, events } = build(server);
+    await view.refresh();
+    const btn = btnOf(doc);
+    check('the button shows how many clips are archived, over every camera of the list', !!btn && btn.text() === '🗄 DELETE ARCHIVE (7)', btn && btn.text());
+    check('…next to SORT OUT ALL, before DELETE ALL', same(header(panel).querySelectorAll('.cam-btn').map((b) => b.text()), ['🧑 SORT OUT ALL', '🗄 DELETE ARCHIVE (7)', '🗑 DELETE ALL']));
+    check('…its hover text says how to check the archive first', btn.title.includes('no-person') && btn.title.includes('INSTALL.md') && btn.title.includes('cannot be undone'));
+    check('…and is a danger button', btn.classes().includes('danger'));
+
+    const posts = () => server.posts().map((r) => `${r.cam} ${r.query}`);
+    {
+      const a = build(fakeServer(fleet(), { archive: { cam1: 2 } }));
+      await a.view.refresh();
+      a.answers.confirm = false;
+      btnOf(a.doc).click();
+      await new Promise((r) => setTimeout(r, 5));
+      check('answering no to the question deletes nothing', a.events.confirms.length === 1 && a.events.confirms[0].includes('2 archived recordings') && a.events.confirms[0].includes('cannot be undone'));
+    }
+
+    btn.click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('yes: every camera gets its own deleteArchive POST, with the anti-forgery header',
+      same(posts().sort(), ['cam1 ?cam=cam1&deleteArchive=1', 'cam2 ?cam=cam2&deleteArchive=1', 'cam3 ?cam=cam3&deleteArchive=1'])
+      && server.posts().every((r) => r.headers['X-Requested-With'] === 'camdash'), show(posts()));
+    check('…the question named the number', events.confirms[events.confirms.length - 1].includes('7 archived recordings'));
+    check('…the list reloads and the button is gone', btnOf(doc) === null && server.archive.cam1 === 0 && server.archive.cam3 === 0);
+    check('…the clips themselves are untouched', same(names(panel), [D, B, C, A]));
+  }
+  {
+    // one archive delete fails: the others go, the user is told
+    const server = fakeServer(fleet(), { archive: { cam1: 1, cam2: 1 }, failingArchiveDeletes: ['cam2'] });
+    const { doc, view, events } = build(server);
+    await view.refresh();
+    byId(doc, 'files-delete-archive-all').click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('a failing archive delete is reported with its reason and how many failed', events.alerts.length === 1 && events.alerts[0].includes('Could not delete the archive') && events.alerts[0].includes('(1 of 3)') && events.alerts[0].includes('disk said no'), show(events.alerts));
+    check('…the camera that worked is emptied, the one that failed still shows its clips', server.archive.cam1 === 0 && server.archive.cam2 === 1 && byId(doc, 'files-delete-archive-all').text() === '🗄 DELETE ARCHIVE (1)');
+  }
+  {
+    // everything was sorted out: no clips left, the archive can still be deleted
+    const server = fakeServer({ cam1: [], cam2: [], cam3: [] }, { archive: { cam1: 5 } });
+    const { doc, panel, view } = build(server);
+    await view.refresh();
+    check('no clips but an archive: the button is there, SORT OUT ALL and DELETE ALL are not',
+      same(panel.querySelectorAll('.cam-btn').map((b) => b.text()), ['🗄 DELETE ARCHIVE (5)']) && panel.text().includes('No recordings yet.'), show(panel.querySelectorAll('.cam-btn').map((b) => b.text())));
+    byId(doc, 'files-delete-archive-all').click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('…and deleting it leaves the plain "No recordings yet."', panel.text() === 'No recordings yet.' && panel.querySelectorAll('.cam-btn').length === 0);
+  }
+  {
+    // an archive that cannot be read must not break the list
+    const server = fakeServer(fleet(), { archive: { cam1: 2 }, archiveUnreadable: ['cam2'] });
+    const { doc, panel, view } = build(server);
+    await view.refresh();
+    check('an unreadable archive counts as 0 and the list still loads', same(names(panel), [D, B, C, A]) && byId(doc, 'files-delete-archive-all').text() === '🗄 DELETE ARCHIVE (2)');
+    const junk = build({ fetch: async (url) => (String(url).includes('archive=1')
+      ? { ok: true, status: 200, json: async () => ({ count: '<img src=x>' }) }
+      : { ok: true, status: 200, json: async () => [{ filename: A, sizeBytes: 1, seen: true }] }) }, { cams: ['cam1'], camLabel: null });
+    await junk.view.refresh();
+    check('a count that is not a whole number shows no button', byId(junk.doc, 'files-delete-archive-all') === null && names(junk.panel).length === 1);
   }
 
   // ── hostile names ──

@@ -108,9 +108,14 @@
   function recordingUrl(cam, query) {
     return `${ENDPOINT}?cam=${encodeURIComponent(cam)}&${query}`;
   }
+  const archiveUrl = (cam) => recordingUrl(cam, 'archive=1');
   const thumbUrl = (cam, filename) => recordingUrl(cam, `thumb=${encodeURIComponent(filename)}`);
   const downloadUrl = (cam, filename) => recordingUrl(cam, `download=${encodeURIComponent(filename)}`);
   const playUrl = (cam, filename) => recordingUrl(cam, `play=${encodeURIComponent(filename)}`);
+
+  // What the button's hover text says: what the archive is, what the button does, and how to look first.
+  const ARCHIVE_HINT = 'Permanently deletes the archive: the recordings the person check sorted out because nobody is in them. '
+    + 'This cannot be undone. To check them first, look in recordings/<camera>/no-person/ on the relay (over SSH) — see INSTALL.md.';
 
   function formatBytes(n) {
     if (n < 1024) return n + ' B';
@@ -170,6 +175,21 @@
     const results = await Promise.all(cams.map((cam) =>
       fetchCameraFiles(cam, fetchFn).then((files) => ({ cam, files }), () => ({ cam, files: null }))));
     return mergeResults(results);
+  }
+
+  // How many clips one camera's archive holds. Throws when recordings.php does not answer with a plain count.
+  async function fetchArchiveCount(cam, fetchFn) {
+    const res = await fetchFn(archiveUrl(cam));
+    const data = await res.json();
+    if (!res.ok || !data || !Number.isInteger(data.count) || data.count < 0) throw new Error('not a count');
+    return data.count;
+  }
+
+  // The archive size over the given cameras. A camera whose archive cannot be read counts as 0 and does
+  // not stop the others (the list itself is more important than this number).
+  async function loadArchiveTotal(cams, fetchFn) {
+    const counts = await Promise.all(cams.map((cam) => fetchArchiveCount(cam, fetchFn).catch(() => 0)));
+    return counts.reduce((sum, n) => sum + n, 0);
   }
 
   // A POST of the dashboard (delete one / delete all / mark seen); throws with the server's reason.
@@ -306,6 +326,13 @@
       await runDeletes(picked.map((p) => post(p.cam, `delete=${encodeURIComponent(p.filename)}`, fetchFn)), 'Could not delete recordings');
     }
 
+    // Deletes the archive of every camera of this list for good, after asking (the question says how many).
+    async function deleteArchive(archiveTotal) {
+      if (archiveTotal === 0) return;
+      if (!hooks.confirm(`Permanently delete the ${plural(archiveTotal, 'archived recording')} that the person check sorted out? This cannot be undone.`)) return;
+      await runDeletes(cams.map((cam) => post(cam, 'deleteArchive=1', fetchFn)), 'Could not delete the archive');
+    }
+
     // Downloads every ticked clip. A browser takes one download per click, so they start one after another
     // through a hidden link, with a short pause between (many browsers ask once to "allow multiple downloads").
     // Each clip counts as seen, same as the GET button.
@@ -386,10 +413,20 @@
 
     const empty = (text) => h('div', { className: 'files-empty', textContent: text });
 
+    // The header: the clip count (when there are clips) and the buttons that act on the whole list.
+    function header(fileCount, archiveTotal) {
+      return h('div', { className: 'files-panel-header' },
+        h('span', { textContent: fileCount > 0 ? plural(fileCount, 'recording') : '' }),
+        ...(fileCount > 0 ? [h('button', { className: 'cam-btn', id: elId('sort-all'), textContent: '🧑 SORT OUT ALL', onclick: sortOutAll })] : []),
+        ...(archiveTotal > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-archive'), title: ARCHIVE_HINT,
+                                             textContent: `🗄 DELETE ARCHIVE (${archiveTotal})`, onclick: () => deleteArchive(archiveTotal) })] : []),
+        ...(fileCount > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-all'), textContent: '🗑 DELETE ALL', onclick: deleteAll })] : []));
+    }
+
     // Loads and draws the list. A draw that fails shows a message in the panel instead of throwing.
     async function refresh() {
       try {
-        const { files, failed } = await loadCameras(cams, fetchFn);
+        const [{ files, failed }, archiveTotal] = await Promise.all([loadCameras(cams, fetchFn), loadArchiveTotal(cams, fetchFn)]);
         hooks.loaded(files, failed);
         schedulePoll(files);
         if (cams.length > 0 && failed.length === cams.length) {   // every camera failed (no cameras is just an empty list)
@@ -398,16 +435,13 @@
         }
         const notice = failed.length === 0 ? [] : [empty(`Could not load the recordings of: ${failed.map((c) => (options.camLabel ? options.camLabel(c) : c)).join(', ')}`)];
         if (files.length === 0) {
-          setContent(...notice, empty('No recordings yet.'));
+          // Everything may have been sorted into the archive: it can still be deleted from here.
+          setContent(...(archiveTotal > 0 ? [header(0, archiveTotal)] : []), ...notice, empty('No recordings yet.'));
           return;
         }
         // Keep whatever was ticked across a re-render (the list refreshes itself when a recording finishes).
         const keep = new Set(selected().map((p) => `${p.cam}/${p.filename}`));
-        const header = h('div', { className: 'files-panel-header' },
-          h('span', { textContent: plural(files.length, 'recording') }),
-          h('button', { className: 'cam-btn', id: elId('sort-all'), textContent: '🧑 SORT OUT ALL', onclick: sortOutAll }),
-          h('button', { className: 'cam-btn danger', id: elId('delete-all'), textContent: '🗑 DELETE ALL', onclick: deleteAll }));
-        setContent(header, ...notice, ...files.flatMap((f) => row(f, keep)), footer());
+        setContent(header(files.length, archiveTotal), ...notice, ...files.flatMap((f) => row(f, keep)), footer());
         updateSelectionUI();
       } catch (e) {
         setContent(empty('Could not load recordings.'));
@@ -419,7 +453,8 @@
 
   Object.assign(api, {
     create, loadCameras, fetchCameraFiles, post, recordedAtMs, sortNewestFirst, tagFiles, mergeResults,
-    recordingUrl, downloadUrl, playUrl, thumbUrl, showPicture, scanOf, scanLabel, hasPendingScan, formatBytes, h,
+    fetchArchiveCount, loadArchiveTotal, ARCHIVE_HINT,
+    recordingUrl, downloadUrl, playUrl, archiveUrl, thumbUrl, showPicture, scanOf, scanLabel, hasPendingScan, formatBytes, h,
   });
 
   root.CamRecordingsList = api;

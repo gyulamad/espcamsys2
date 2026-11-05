@@ -223,6 +223,16 @@ class CamLogic
         return $out;
     }
 
+    // What the relay says the size of a camera's archive is ({"count": N}): a whole number, 0 or more — or
+    // null for anything else, so nothing but a plain number ever goes on to the browser.
+    public static function sanitizeArchiveCount($decoded): ?int
+    {
+        if (!is_array($decoded) || !isset($decoded['count']) || !is_int($decoded['count']) || $decoded['count'] < 0) {
+            return null;
+        }
+        return $decoded['count'];
+    }
+
     // The text of the low-storage warning (shown in the browser's alert box, so plain text — nothing in
     // it is ever read as HTML). $freeMB is a whole number the caller has already checked.
     public static function storageWarningMessage(int $freeMB): string

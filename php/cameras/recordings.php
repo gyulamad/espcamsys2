@@ -16,6 +16,9 @@
 // POST recordings.php?cam=ID&scan=FILENAME      -> sorts one clip out: checks it for a person, a clip with nobody in it is
 //                                                  moved aside (or deleted, relay setting) — see INSTALL.md
 // POST recordings.php?cam=ID&scanAll=1          -> the same for every clip of this camera not checked yet
+// GET  recordings.php?cam=ID&archive=1          -> {"count": N}: how many clips the sorting out has put in the archive
+//                                                  (the relay's recordings/<camera>/no-person/ folder)
+// POST recordings.php?cam=ID&deleteArchive=1    -> deletes that camera's whole archive for good
 //
 // The POSTs need the dashboard's X-Requested-With header and a same-origin request (see
 // CamLogic::isDashboardMutationAllowed); they reach the relay with the control key and X-Actor,
@@ -31,7 +34,7 @@ require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/relay.php';
 
 // ?cam[]=x, ?play[]=x ... are arrays, not names: refuse them plainly instead of crashing (review F-16)
-if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen', 'thumb', 'scan', 'scanAll']) !== null) {
+if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen', 'thumb', 'scan', 'scanAll', 'archive', 'deleteArchive']) !== null) {
     http_response_code(400);
     exit('Invalid parameter');
 }
@@ -50,6 +53,8 @@ $seen = $_GET['seen'] ?? null;
 $thumb = $_GET['thumb'] ?? null;
 $scan = $_GET['scan'] ?? null;
 $scanAll = isset($_GET['scanAll']);
+$archive = isset($_GET['archive']);
+$deleteArchive = isset($_GET['deleteArchive']);
 
 // Streams a recording to the browser. Shared by $download and $play — the only
 // difference between them is the Content-Disposition we send back; the byte
@@ -161,6 +166,33 @@ if ($scan !== null || $scanAll) {
 
 if ($thumb !== null) {
     stream_thumbnail($relayBase, $thumb);
+}
+
+if ($archive) {
+    header('Content-Type: application/json');
+    [$archiveBody] = relay_fetch($relayBase . '/archive', 'GET', 10, relay_read_headers($config));
+    if ($archiveBody === false) {
+        json_fail(502, 'Could not reach relay');
+    }
+    // PHP is the trust boundary: only a plain number goes on to the browser.
+    $archiveCount = CamLogic::sanitizeArchiveCount(json_decode($archiveBody, true));
+    if ($archiveCount === null) {
+        json_fail(502, 'The relay did not answer with the number of archived recordings');
+    }
+    echo json_encode(['count' => $archiveCount]);
+    exit;
+}
+
+if ($deleteArchive) {
+    header('Content-Type: application/json');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_fail(405, 'Use POST to delete the archive');
+    }
+    // Deletes for good, like DELETE ALL: only the dashboard's own page may ask for it.
+    require_dashboard_mutation();
+    audit_log('delete ARCHIVE of ' . $camera['id']);
+    relay_proxy_json($relayBase . '/archive', 'DELETE', 30, relay_actor_headers($config, false));
+    exit;
 }
 
 if ($deleteAll || $delete !== null) {

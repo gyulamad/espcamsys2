@@ -145,6 +145,7 @@ async function main() {
       ['recordings.php delete one', `recordings.php?cam=${CAM}&delete=${FILE}`],
       ['recordings.php delete ALL', `recordings.php?cam=${CAM}&deleteAll=1`],
       ['recordings.php mark seen', `recordings.php?cam=${CAM}&seen=${FILE}`],
+      ['recordings.php delete ARCHIVE', `recordings.php?cam=${CAM}&deleteArchive=1`],
     ];
 
     // ── attacks are refused and never reach the relay ───────────────
@@ -167,6 +168,7 @@ async function main() {
       ['recordings.php delete one', `recordings.php?cam=${CAM}&delete=${FILE}`, 'DELETE', `/recordings/${CAM}/${FILE}`],
       ['recordings.php delete ALL', `recordings.php?cam=${CAM}&deleteAll=1`, 'DELETE', `/recordings/${CAM}`],
       ['recordings.php mark seen', `recordings.php?cam=${CAM}&seen=${FILE}`, 'POST', `/recordings/${CAM}/${FILE}/seen`],
+      ['recordings.php delete ARCHIVE', `recordings.php?cam=${CAM}&deleteArchive=1`, 'DELETE', `/recordings/${CAM}/archive`],
     ];
     for (const [name, q, method, relayUrl] of expect) {
       const before = seen.length;
@@ -193,6 +195,10 @@ async function main() {
     // ── reads still work without the header ─────────────────────────
     r = await dash(`recordings.php?cam=${CAM}`, 'form', 'GET');
     check('GET recordings.php (the list) needs no header', r.status === 200 && Array.isArray(r.json), `status=${r.status}`);
+    r = await dash(`recordings.php?cam=${CAM}&deleteArchive=1`, 'own', 'GET');
+    check('deleteArchive over GET is refused (405) and never reaches the relay', r.status === 405 && !seen.some((x) => x.method === 'GET' && x.url.endsWith('/archive') && x.headers['x-actor']), `status=${r.status}`);
+    r = await dash(`recordings.php?cam=${CAM}&archive=1`, 'form', 'GET');
+    check('GET recordings.php?archive=1 (the count) refuses a count the relay did not send as a plain number (502)', r.status === 502, `status=${r.status} ${r.text}`);
     r = await dash(`record.php?cam=${CAM}`, 'form', 'GET');
     check('GET record.php (status) needs no header', r.status === 200, `status=${r.status}`);
     r = await dash('settings.php', 'curl', 'GET');
@@ -201,6 +207,7 @@ async function main() {
     // ── audit trail ─────────────────────────────────────────────────
     await sleep(200);
     check('deleting leaves an audit line with who and what', phpLog.includes(`camdash audit: ${AUTH.user}@127.0.0.1 delete ALL recordings of ${CAM}`) && phpLog.includes(`delete recording ${CAM}/${FILE}`), phpLog.slice(-600));
+    check('deleting the archive leaves an audit line too', phpLog.includes(`camdash audit: ${AUTH.user}@127.0.0.1 delete ARCHIVE of ${CAM}`), phpLog.slice(-600));
     check('...and so do start and stop', phpLog.includes(`start recording ${CAM} for 60s`) && phpLog.includes(`stop recording ${CAM}`));
     check('the control key is not written to the log', !phpLog.includes(KEY));
 

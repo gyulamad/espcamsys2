@@ -41,6 +41,7 @@ const sysconfig = require('./lib/sysconfig');
 const diskspace = require('./lib/diskspace');
 const personscan = require('./lib/personscan');
 const { createSorter } = require('./lib/sorter');
+const { createArchive } = require('./lib/archive');
 const { ScanQueue } = require('./lib/scanqueue');
 const { runProcess } = require('./lib/runprocess');
 
@@ -1979,6 +1980,9 @@ const scanQueue = new ScanQueue({
 });
 const scanKey = (camId, filename) => `${camId}/${filename}`;
 
+// The archive (<camera>/no-person/): counted and deleted through lib/archive.js, which only touches plain clip files.
+const archive = createArchive({ fs });
+
 // Queues one clip. A clip that already has its person picture was checked before and is skipped.
 // -> 'queued' | 'duplicate' | 'done'
 function queueScan(camId, filename) {
@@ -2027,6 +2031,24 @@ app.delete('/recordings/:id', requireDashboardKey, (req, res) => {
   relayLog('INFO', `all ${deleted.length} recording(s) of ${req.params.id} deleted by ${actorOf(req)}`);
   for (const f of deleted) removeClip(path.join(dir, f));
   res.json({ deleted });
+});
+
+// How many clips the person check has filed under <camera>/no-person/ (the "archive"). Registered before
+// the /:filename routes, which would answer 400 for the name "archive".
+app.get('/recordings/:id/archive', requireReadKey, (req, res) => {
+  res.json({ count: archive.count(cameraDir(req.params.id)) });
+});
+
+// Delete the whole archive of a camera for good (the dashboard's "DELETE ARCHIVE" button).
+app.delete('/recordings/:id/archive', requireDashboardKey, (req, res) => {
+  const { deleted, failed } = archive.removeAll(cameraDir(req.params.id));
+  const by = actorOf(req);
+  if (failed.length === 0) {
+    relayLog('INFO', `archive of ${req.params.id}: ${deleted.length} recording(s) deleted by ${by}`);
+    return res.json({ deleted });
+  }
+  relayLog('WARN', `archive of ${req.params.id}: ${deleted.length} recording(s) deleted by ${by}, ${failed.length} could not be (${failed[0].name}: ${failed[0].reason})`);
+  return res.status(500).json({ error: `${failed.length} archived recording(s) could not be deleted: ${failed[0].reason}`, deleted });
 });
 
 // Download one recording (recordings.php decides whether the browser sees
