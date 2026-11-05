@@ -388,6 +388,92 @@ class CamLogic
         return null;
     }
 
+    // ── The mux stream (mux.php): the pictures of every camera on ONE connection ──
+    // A browser allows only about 6 connections per address over HTTP/1.1, so a stream.php connection per camera
+    // left no room for the dashboard's other requests. The format is documented in nodejs/camera-relay/lib/muxcodec.js.
+
+    public const MUX_CONTENT_TYPE = 'application/x-espcam-mux';
+
+    // Whether the dashboard shows the cameras through mux.php: on, unless config.php says 'mux_enabled' => false (or
+    // 0, 'off', 'no' ...). Off = one stream.php connection per camera, as before. Anything that is not a yes/no (a
+    // missing key, null, a list, a word nobody knows) is the default: on.
+    public static function muxEnabled(array $config): bool
+    {
+        $value = $config['mux_enabled'] ?? null;
+        if (!is_scalar($value)) {
+            return true;
+        }
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
+    }
+
+    // The cameras a mux request asks for ("cam1,cam2"): each once, in the order given. Null when the list is not
+    // a string, is empty, has an empty entry, or names a camera config.php does not have.
+    public static function muxCameraIds(array $cameras, $requested): ?array
+    {
+        if (!is_string($requested) || $requested === '') {
+            return null;
+        }
+        $ids = array_values(array_unique(explode(',', $requested)));
+        foreach ($ids as $id) {
+            if (self::findCameraById($cameras, $id) === null) {
+                return null;
+            }
+        }
+        return $ids;
+    }
+
+    // The cameras whose DETECTOR's picture a mux request asks for ("cam1,cam2": the cameras' ids, as the page knows
+    // them): each once, in the order given; [] when it asks for none. Null when the list is not a string, has an empty
+    // entry, or names a camera that does not exist or has no detector paired.
+    public static function muxDetectorCameraIds(array $cameras, $requested): ?array
+    {
+        if (!is_string($requested)) {
+            return null;
+        }
+        if ($requested === '') {
+            return [];
+        }
+        $ids = array_values(array_unique(explode(',', $requested)));
+        foreach ($ids as $id) {
+            $camera = self::findCameraById($cameras, $id);
+            if ($camera === null || self::detectorIdOf($camera) === null) {
+                return null;
+            }
+        }
+        return $ids;
+    }
+
+    // camera id => the id of the detector paired with it, for these cameras (all of which have one).
+    public static function detectorIdsByCamera(array $cameras, array $camIds): array
+    {
+        $out = [];
+        foreach ($camIds as $id) {
+            $out[$id] = self::detectorIdOf(self::findCameraById($cameras, $id) ?? []);
+        }
+        return $out;
+    }
+
+    // Where the relay serves the mux stream: the pictures of these cameras, of these detectors (their own ids), and
+    // when $status also the readings of the detectors, when $recording the recording state of the cameras.
+    public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false, bool $recording = false): string
+    {
+        $url = rtrim($relayUrl, '/') . '/mux?cams=' . rawurlencode(implode(',', $ids));
+        if ($detectorIds) {
+            $url .= '&dets=' . rawurlencode(implode(',', $detectorIds));
+        }
+        if ($status) {
+            $url .= '&status=1';
+        }
+        return $recording ? $url . '&rec=1' : $url;
+    }
+
+    // Whether the relay's answer says it is the mux stream. Anything else (JSON saying why not, or text/html from
+    // a spoofed relay, which would run as a page in the dashboard's own origin) is not passed on (review F-14).
+    public static function isMuxContentType(array $wrapperData): bool
+    {
+        return strtolower(trim(self::extractContentType($wrapperData, ''))) === self::MUX_CONTENT_TYPE;
+    }
+
     // The browser's Range header, if it is exactly ONE plain byte range (bytes=0-99, bytes=500-, bytes=-500),
     // else null: it is passed on to the relay, and anything odd is simply not passed on (the whole file is served).
     public static function validRangeHeader($value): ?string

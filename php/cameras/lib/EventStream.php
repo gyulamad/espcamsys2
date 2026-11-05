@@ -44,17 +44,24 @@ final class CamEventStream
         return $lines ? implode("\n", $lines) : null;
     }
 
-    // The message the browser gets for one relay message: the same { camId: status } map that
-    // detector-status.php answers (CamLogic::buildDetectorStatus), as one SSE message. Null when the relay's
-    // data is not a JSON object (it is then skipped, not forwarded).
-    public static function forward(string $relayData, array $cameras): ?string
+    // The readings the browser gets for one relay message: the same { camId: status } map that detector-status.php
+    // answers (CamLogic::buildDetectorStatus), as JSON. Null when the relay's data is not a JSON object (it is then
+    // skipped, not forwarded). Shared by the SSE stream below and mux.php.
+    public static function statusJson(string $relayData, array $cameras): ?string
     {
         $relayDetectors = json_decode($relayData, true);
         if (!is_array($relayDetectors)) {
             return null;
         }
-        $status = (object) CamLogic::buildDetectorStatus($cameras, $relayDetectors);
-        return 'event: ' . self::EVENT_NAME . "\ndata: " . json_encode($status) . "\n\n";
+        $json = json_encode((object) CamLogic::buildDetectorStatus($cameras, $relayDetectors));
+        return $json === false ? null : $json;
+    }
+
+    // The message the browser gets for one relay message, as one SSE message. Null when there is nothing to forward.
+    public static function forward(string $relayData, array $cameras): ?string
+    {
+        $json = self::statusJson($relayData, $cameras);
+        return $json === null ? null : 'event: ' . self::EVENT_NAME . "\ndata: " . $json . "\n\n";
     }
 
     // First bytes of every stream: how long the browser waits before it reconnects by itself.

@@ -64,4 +64,18 @@ camtest_test('preamble sets the browser retry delay', function () {
     camtest_assert_equal(CamEventStream::preamble(1500), "retry: 1500\n\n");
 });
 
+camtest_test('statusJson: the { camId: status } map as JSON, the same one forward() puts in its SSE message', function () use ($cams) {
+    $relay = '{"det1":{"online":true,"state":"online","hasPicture":true,"connected":true,"ageMs":1,"report":null}}';
+    $json = CamEventStream::statusJson($relay, $cams);
+    camtest_assert_equal(json_decode($json, true)['cam1']['detector'], 'det1');
+    camtest_assert_equal(CamEventStream::forward($relay, $cams), "event: detectors\ndata: " . $json . "\n\n");
+});
+
+camtest_test('statusJson: not a JSON object is null', function () use ($cams) {
+    foreach (['not json', '5', 'null', '"x"', ''] as $bad) {
+        camtest_assert_equal(CamEventStream::statusJson($bad, $cams), null, var_export($bad, true));
+    }
+    camtest_assert_equal(CamEventStream::forward('not json', $cams), null);
+});
+
 exit(camtest_summarize());

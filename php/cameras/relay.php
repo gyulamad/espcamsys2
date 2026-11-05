@@ -48,6 +48,33 @@ function relay_read_available($stream, float &$lastDataAt, int $silenceSeconds =
     return '';
 }
 
+// Passes a live stream from the relay on to the browser until the browser leaves or the relay stops (or goes
+// silent). Runs for as long as the browser stays: no time limit. The relay's heartbeats mean PHP writes (and so
+// notices a browser that has gone) at least every few seconds, even when no camera has a picture.
+// $filter, if given, turns each chunk read into what is sent ('' = nothing yet) or null = stop (not the stream
+// it should be); without it the bytes are passed on as they are.
+function relay_pipe_stream($stream, ?callable $filter = null): void
+{
+    set_time_limit(0);
+    ignore_user_abort(false);
+    relay_stream_nonblocking($stream);
+    $lastDataAt = microtime(true);
+    while (!connection_aborted() && ($chunk = relay_read_available($stream, $lastDataAt)) !== null) {
+        if ($chunk === '') {
+            continue;
+        }
+        $out = $filter === null ? $chunk : $filter($chunk);
+        if ($out === null) {
+            return;
+        }
+        if ($out === '') {
+            continue;
+        }
+        echo $out;
+        flush();
+    }
+}
+
 // Answers with a JSON error and stops.
 function json_fail(int $status, string $message): void
 {

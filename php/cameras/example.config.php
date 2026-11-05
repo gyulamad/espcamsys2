@@ -42,6 +42,15 @@ return [
     // A camera that starts recording, or whose person detector sees motion, is shown at once.
     'slideshow_seconds' => 10,
 
+    // Show every camera's live picture through ONE connection (mux.php) instead of one connection per camera
+    // (stream.php). A browser allows only about 6 connections per address over HTTP/1.1, and a connection per camera
+    // used up all of them: the file list, a clip or the other requests of the page then waited for ever. The relay
+    // (server.js) must be the version that has GET /mux. If it cannot be used from the browser, the dashboard
+    // goes back to one connection per camera by itself. On unless this says false; false = one connection per
+    // camera, as before. The same connection also carries the detectors' pictures and numbers and the cameras'
+    // recording state (the REC pills, FILES counts and switches), which are otherwise fetched on their own.
+    'mux_enabled' => true,
+
     // Cameras shown on the dashboard. 'id' must exactly match the
     // CAMERA_ID configured in that device's sketch (its CAMERA_ID setting).
     // Optional 'detector' => '<DETECTOR_ID>' pairs the camera with the person detector board wired to
