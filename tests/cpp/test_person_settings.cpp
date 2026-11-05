@@ -19,13 +19,13 @@ static bool has(const std::string& s, const char* part) { return s.find(part) !=
 
 // A complete configuration with the live view ON, as one line.
 static const char* WITH_STREAM =
-    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;STREAM_ENABLED=1;"
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=1;"
     "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
 // The minimal one: no live view, no Wi-Fi.
-static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;STREAM_ENABLED=0";
+static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=0";
 
 // Stores a line the way the conversation does (including the cross-setting rule).
 static std::vector<std::string> storeLine(MemoryStore& st, const std::string& line) {
@@ -78,7 +78,9 @@ TEST(the_two_example_templates_are_valid_complete_configurations) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
     const char* files[] = { "example.person.template.txt", "example.person-no-wifi.template.txt" };
-    const size_t expected[] = { PERSON_SCHEMA.count, 12 };
+    // Every setting except MOTION_EMA_PCT: the templates keep the motion auto-calibration off (MOTION_EMA_LEN=0),
+    // and then its percentage is not asked for.
+    const size_t expected[] = { PERSON_SCHEMA.count - 1, 13 };
     for (size_t i = 0; i < 2; ++i) {
         std::ifstream f(dir + "../../Arduino/templates/" + files[i]);
         std::string line;
@@ -100,11 +102,11 @@ TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_val
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
-TEST(with_the_live_view_off_only_twelve_settings_are_needed_and_no_wifi_is_asked_for) {
+TEST(with_the_live_view_off_only_thirteen_settings_are_needed_and_no_wifi_is_asked_for) {
     MemoryStore st;
     TEST_ASSERT(store(st, NO_STREAM), "stored");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those twelve");
-    TEST_ASSERT_EQ((int)st.m.size(), 12, "exactly twelve stored");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those thirteen");
+    TEST_ASSERT_EQ((int)st.m.size(), 13, "exactly thirteen stored");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
@@ -145,23 +147,25 @@ TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off) {
     MemoryStore st;
     TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0"), "an old five-setting configuration is stored");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 7, "exactly the seven new ones are missing (what a firmware update to this version leaves behind)");
+    TEST_ASSERT_EQ((int)ps.size(), 9, "exactly the nine new ones are missing (what a firmware update to this version leaves behind)");
     TEST_ASSERT(listed(ps, "DARK_THRESH") && listed(ps, "MOTION_THRESH") && listed(ps, "MOTION_HOLD_S"), "the scene gate's three");
     TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "and the motion area's four");
+    TEST_ASSERT(listed(ps, "MOTION_EMA_LEN") && listed(ps, "MOTION_EMA_PCT"), "and the motion auto-calibration's two (its switch is unknown, so its percentage counts as needed)");
     bool allMissing = true;
     for (size_t i = 0; i < ps.size(); ++i) if (!ps[i].missing) allMissing = false;
     TEST_ASSERT(allMissing, "reported as not set, not as invalid");
 }
 
-TEST(a_board_from_before_the_motion_area_is_missing_exactly_the_four_area_settings) {
+TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_the_ema_pair) {
     MemoryStore st;
     TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0"), "the previous version's configuration is stored");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 4, "four settings are missing");
+    TEST_ASSERT_EQ((int)ps.size(), 6, "six settings are missing");
     TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "the area's corners");
-    // The line the INSTALL.md tells you to stage on the relay (the whole picture = what the board did before) completes it.
-    TEST_ASSERT(store(st, "MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96"), "the whole-picture line is accepted");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and the board is complete again");
+    TEST_ASSERT(listed(ps, "MOTION_EMA_LEN") && listed(ps, "MOTION_EMA_PCT"), "and the motion auto-calibration's two");
+    // The line the INSTALL.md tells you to stage on the relay (the whole picture and no auto-calibration = what the board did before).
+    TEST_ASSERT(store(st, "MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0"), "the whole-picture, auto-calibration-off line is accepted");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and the board is complete again: MOTION_EMA_PCT is not asked for while the EMA is off");
 }
 
 TEST(loop_delay_and_stream_tuning_ranges) {
@@ -309,6 +313,65 @@ TEST(the_motion_area_loads_into_the_typed_settings) {
                 "...and the sketch's sampler then refuses that area and watches the whole picture (see configureScene)");
 }
 
+// ── the motion auto-calibration (motion_baseline.h) ─────────────────────
+
+TEST(the_motion_ema_settings_are_whole_numbers_in_their_ranges_and_zero_length_switches_it_off) {
+    TEST_ASSERT(valid("MOTION_EMA_LEN=0") && valid("MOTION_EMA_LEN=3000") && valid("MOTION_EMA_LEN=100000"), "length 0 (off) .. 100000 frames");
+    TEST_ASSERT(!valid("MOTION_EMA_LEN=100001") && !valid("MOTION_EMA_LEN=-1") && !valid("MOTION_EMA_LEN=") && !valid("MOTION_EMA_LEN=1.5") && !valid("MOTION_EMA_LEN=long"),
+                "outside / empty / not a whole number");
+    TEST_ASSERT(valid("MOTION_EMA_PCT=0") && valid("MOTION_EMA_PCT=30") && valid("MOTION_EMA_PCT=1000"), "percentage 0 .. 1000");
+    TEST_ASSERT(!valid("MOTION_EMA_PCT=1001") && !valid("MOTION_EMA_PCT=-30") && !valid("MOTION_EMA_PCT=") && !valid("MOTION_EMA_PCT=30%") && !valid("MOTION_EMA_PCT=0.3"),
+                "outside / empty / not a whole number");
+}
+
+TEST(the_ema_percentage_is_only_asked_for_while_the_ema_is_on) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, NO_STREAM), "a complete configuration with MOTION_EMA_LEN=0");
+    TEST_ASSERT(!st.m.count("MOTION_EMA_PCT"), "it holds no percentage");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and needs none while the EMA is off");
+
+    TEST_ASSERT(store(st, "MOTION_EMA_LEN=3000"), "switching the EMA on...");
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
+    TEST_ASSERT(ps.size() == 1 && listed(ps, "MOTION_EMA_PCT") && ps[0].missing, "...makes exactly the percentage needed, as not set");
+    TEST_ASSERT(store(st, "MOTION_EMA_PCT=30"), "30 is accepted");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete again");
+
+    TEST_ASSERT(store(st, "MOTION_EMA_LEN=0"), "switching it off again...");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "...needs nothing more (the stored percentage just stays)");
+}
+
+TEST(a_stored_ema_percentage_out_of_range_is_named_only_while_the_ema_is_on) {
+    MemoryStore st;
+    store(st, NO_STREAM);
+    st.m["MOTION_EMA_PCT"] = "5000";   // damaged in flash behind the rules' back
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "unused while MOTION_EMA_LEN=0: nobody is bothered by it");
+    st.m["MOTION_EMA_LEN"] = "3000";
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
+    TEST_ASSERT(ps.size() == 1 && ps[0].key == "MOTION_EMA_PCT" && !ps[0].missing, "in use it is reported as invalid, not as missing");
+}
+
+TEST(the_ema_settings_load_into_the_typed_copy_and_off_keeps_the_threshold_fixed) {
+    MemoryStore st;
+    store(st, NO_STREAM);
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT_EQ((int)s.motionEmaLength, 0, "length 0 = off (the original behaviour)");
+    TEST_ASSERT_EQ((int)s.motionEmaPercent, 30, "the percentage is the default 30 when none is stored");
+
+    st.m["MOTION_EMA_PCT"] = "80";   // left over from an earlier try
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT_EQ((int)s.motionEmaPercent, 30, "a stored percentage is not read while the EMA is off");
+
+    TEST_ASSERT(store(st, "MOTION_EMA_LEN=3000;MOTION_EMA_PCT=50"), "EMA on, 50% above the average");
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT_EQ((int)s.motionEmaLength, 3000, "length loaded");
+    TEST_ASSERT_EQ((int)s.motionEmaPercent, 50, "percentage loaded");
+
+    st.m.erase("MOTION_EMA_PCT");
+    TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "MOTION_EMA_PCT is not set"), "EMA on without its percentage: refused, and named");
+}
+
 // ── the conversation on a blank detector ────────────────────────────────
 
 TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
@@ -318,7 +381,7 @@ TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
     con.in = std::string(NO_STREAM) + "\n";
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (uint32_t t = 0; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
-    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the twelve settings");
+    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the thirteen settings");
     TEST_ASSERT(con.said("These settings need a value (" + std::to_string(PERSON_SCHEMA.count) + ")"), "first it asked for all of them");
     TEST_ASSERT(con.said("STREAM_ENABLED - ") && con.said("DETECT_THRESH - "), "with their help text");
 }
@@ -396,10 +459,10 @@ int main() {
     RUN_TEST(the_person_schema_is_consistent);
     RUN_TEST(the_two_example_templates_are_valid_complete_configurations);
     RUN_TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists);
-    RUN_TEST(with_the_live_view_off_only_twelve_settings_are_needed_and_no_wifi_is_asked_for);
+    RUN_TEST(with_the_live_view_off_only_thirteen_settings_are_needed_and_no_wifi_is_asked_for);
     RUN_TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_check_off);
     RUN_TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off);
-    RUN_TEST(a_board_from_before_the_motion_area_is_missing_exactly_the_four_area_settings);
+    RUN_TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_the_ema_pair);
     RUN_TEST(turning_the_live_view_on_asks_for_the_whole_live_view_group_and_nothing_else);
     RUN_TEST(the_output_gpio_must_be_a_pin_the_board_leaves_free);
     RUN_TEST(thresholds_are_scores_between_0_01_and_1);
@@ -413,6 +476,10 @@ int main() {
     RUN_TEST(the_four_motion_area_numbers_must_make_a_usable_area);
     RUN_TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_threshold_rule_working);
     RUN_TEST(the_motion_area_loads_into_the_typed_settings);
+    RUN_TEST(the_motion_ema_settings_are_whole_numbers_in_their_ranges_and_zero_length_switches_it_off);
+    RUN_TEST(the_ema_percentage_is_only_asked_for_while_the_ema_is_on);
+    RUN_TEST(a_stored_ema_percentage_out_of_range_is_named_only_while_the_ema_is_on);
+    RUN_TEST(the_ema_settings_load_into_the_typed_copy_and_off_keeps_the_threshold_fixed);
     RUN_TEST(a_blank_detector_is_configured_with_one_line_and_restarts);
     RUN_TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown);
     RUN_TEST(a_detector_without_wifi_shows_the_live_view_settings_as_not_used);

@@ -332,14 +332,16 @@ static_assert(IMAGE_WIDTH == person_scene::FRAME_SIZE && IMAGE_HEIGHT == person_
 person_scene::SceneSampler g_sampler(IMAGE_WIDTH, IMAGE_HEIGHT);
 person_scene::SceneGate g_gate;
 
-// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S settings to the gate and the motion area
-// (MOTION_X0 / Y0 / X1 / Y1) to the sampler.
+// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S / MOTION_EMA_LEN / MOTION_EMA_PCT settings to the
+// gate and the motion area (MOTION_X0 / Y0 / X1 / Y1) to the sampler.
 void configureScene()
 {
     person_scene::SceneConfig scene;
     scene.darkBelow = g_cfg.darkThreshold;
     scene.motionAtLeast = g_cfg.motionThreshold;
     scene.holdMs = g_cfg.motionHoldSec * 1000UL;
+    scene.motionEmaFrames = g_cfg.motionEmaLength;
+    scene.motionEmaPercent = g_cfg.motionEmaPercent;
     g_gate.configure(scene);
 
     if (!g_sampler.setMotionArea(g_cfg.motionArea))
@@ -1507,9 +1509,10 @@ bool captureFrameIntoInput(bool &run)
 
 #if PRINT_SCENE_READINGS
     Serial.printf(
-        "Brightness: %3d   Motion: %5u\n",
+        "Brightness: %3d   Motion: %5u   Limit: %5u\n",
         reading.brightness,
-        (unsigned)reading.motion
+        (unsigned)reading.motion,
+        (unsigned)verdict.motionLimit
     );
 #endif
 
@@ -1517,7 +1520,7 @@ bool captureFrameIntoInput(bool &run)
     {
         Serial.println(
             person_scene::describeScene(
-                verdict.state, reading, g_gate.config()
+                verdict.state, reading, g_gate.config(), verdict.motionLimit
             ).c_str()
         );
     }
@@ -1634,14 +1637,16 @@ void logBootInfo()
 #endif
 
     RLOG_INFO(
-        "settings: alarm GPIO %d, detect at %.0f%%, clear below %.0f%%, dark below %d, motion at %u, hold %u s, motion area %d,%d - %d,%d",
+        "settings: alarm GPIO %d, detect at %.0f%%, clear below %.0f%%, dark below %d, motion at %u, hold %u s, motion area %d,%d - %d,%d, motion EMA %u frames +%u%%",
         g_cfg.personGpio,
         g_cfg.detectThreshold * 100.0f,
         g_cfg.clearThreshold * 100.0f,
         g_cfg.darkThreshold,
         (unsigned)g_cfg.motionThreshold,
         (unsigned)g_cfg.motionHoldSec,
-        g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1
+        g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1,
+        (unsigned)g_cfg.motionEmaLength,
+        (unsigned)g_cfg.motionEmaPercent
     );
 
     if (g_cfg.streamEnabled)
@@ -1760,6 +1765,12 @@ void setup()
         "Motion area: %d,%d - %d,%d (left, top - right, bottom; whole picture = 0,0 - %d,%d)\n",
         g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1,
         IMAGE_WIDTH, IMAGE_HEIGHT
+    );
+
+    Serial.printf(
+        "Motion auto-calibration: %u frames, threshold = average + %u%% (0 frames = off, fixed threshold)\n",
+        (unsigned)g_cfg.motionEmaLength,
+        (unsigned)g_cfg.motionEmaPercent
     );
 
 #endif

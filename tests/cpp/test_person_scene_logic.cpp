@@ -377,6 +377,155 @@ TEST(dark_and_motion_together_light_and_moving_runs_the_model) {
     TEST_ASSERT(!g.update(200, reading(20, 800), false).run, "moving but dark: do not run");
 }
 
+// ── the motion auto-calibration in the gate ─────────────────────────────
+
+// A gate whose motion threshold follows a moving average of `emaFrames` frames (+ `percent`%); MOTION_THRESH is its floor.
+static SceneConfig cfgEma(int dark, uint32_t motionFloor, uint32_t holdMs, uint32_t emaFrames, uint32_t percent) {
+    SceneConfig c = cfg(dark, motionFloor, holdMs);
+    c.motionEmaFrames = emaFrames;
+    c.motionEmaPercent = percent;
+    return c;
+}
+
+// Feeds `frames` readings of `motion`, 100 ms apart from `*t` on; returns the last verdict.
+static SceneVerdict feedGate(SceneGate& g, uint32_t* t, uint32_t motion, int frames) {
+    SceneVerdict v;
+    for (int i = 0; i < frames; ++i) { *t += 100; v = g.update(*t, reading(120, motion), false); }
+    return v;
+}
+
+TEST(a_config_without_the_ema_keeps_the_fixed_threshold_exactly_as_before) {
+    SceneConfig c = cfg(0, 300, 0);
+    TEST_ASSERT_EQ((int)c.motionEmaFrames, 0, "the length defaults to 0 = off");
+    SceneGate g(c);
+    g.configure(c);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "the threshold is MOTION_THRESH");
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    // A scene that keeps "moving" at 500: with the fixed threshold the model runs on every single frame, for ever.
+    for (int i = 0; i < 300; ++i) {
+        t += 100;
+        SceneVerdict v = g.update(t, reading(120, 500), false);
+        TEST_ASSERT(v.state == SceneState::Active && v.run, "still active");
+        TEST_ASSERT_EQ((int)v.motionLimit, 300, "judged against the fixed threshold");
+    }
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "and it never moved");
+}
+
+TEST(with_the_ema_on_a_scene_that_keeps_moving_stops_counting_as_motion_and_a_person_still_does) {
+    SceneGate g(cfgEma(0, 300, 0, 9, 30));
+    g.configure(cfgEma(0, 300, 0, 9, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+
+    SceneVerdict v = feedGate(g, &t, 500, 1);
+    TEST_ASSERT(v.state == SceneState::Active && v.motionLimit == 300, "at first the storm counts as motion: 500 >= 300");
+
+    v = feedGate(g, &t, 500, 200);
+    TEST_ASSERT_EQ((int)v.motionLimit, 650, "the threshold has followed the noise: 500 + 30%");
+    TEST_ASSERT(v.state == SceneState::Idle && !v.run, "the storm no longer keeps the model busy");
+
+    v = feedGate(g, &t, 2000, 1);
+    TEST_ASSERT(v.state == SceneState::Active && v.run, "a person walking through (2000) is far above it");
+    TEST_ASSERT_EQ((int)v.motionLimit, 650, "judged against the level the storm had made, not one the person's own motion raised");
+}
+
+TEST(the_threshold_never_drops_below_motion_thresh_so_a_calm_scene_is_unchanged) {
+    SceneGate g(cfgEma(0, 300, 0, 9, 30));
+    g.configure(cfgEma(0, 300, 0, 9, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    SceneVerdict v = feedGate(g, &t, 20, 200);   // sensor noise only: 20 + 30% = 26
+    TEST_ASSERT_EQ((int)v.motionLimit, 300, "MOTION_THRESH is the floor");
+    TEST_ASSERT(v.state == SceneState::Idle, "idle, as without the EMA");
+    v = feedGate(g, &t, 300, 1);
+    TEST_ASSERT(v.state == SceneState::Active, "and 300 still switches it on");
+}
+
+TEST(the_threshold_comes_back_down_after_the_storm) {
+    SceneGate g(cfgEma(0, 300, 0, 9, 30));
+    g.configure(cfgEma(0, 300, 0, 9, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    feedGate(g, &t, 500, 200);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 650, "raised");
+    feedGate(g, &t, 10, 200);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "and down on the floor again");
+}
+
+TEST(a_frame_is_judged_before_it_is_learnt_so_a_spike_cannot_raise_its_own_bar) {
+    SceneGate g(cfgEma(0, 100, 0, 3, 30));   // alpha 0.5
+    g.configure(cfgEma(0, 100, 0, 3, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    feedGate(g, &t, 100, 1);   // seeds the average with 100
+    SceneVerdict v = feedGate(g, &t, 1000, 1);
+    TEST_ASSERT_EQ((int)v.motionLimit, 130, "the spike met the threshold of the average before it (100 + 30%)");
+    TEST_ASSERT(v.state == SceneState::Active, "so it counts as motion");
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 715, "and only then raised the average to 550 -> 715 for the next frame");
+}
+
+TEST(the_first_frame_has_no_reading_so_the_average_does_not_learn_from_it) {
+    SceneGate g(cfgEma(0, 300, 0, 9, 30));
+    g.configure(cfgEma(0, 300, 0, 9, 30));
+    SceneVerdict v = g.update(0, reading(120, 5000, false), false);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "nothing learnt from a frame that was compared with nothing");
+    TEST_ASSERT(v.state == SceneState::Idle && !v.run, "and it is no motion either");
+    g.update(100, reading(120, 400), false);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 520, "the first real reading (400) seeds it");
+}
+
+TEST(with_the_motion_check_off_the_ema_changes_nothing) {
+    SceneGate g(cfgEma(0, 0, 0, 9, 30));
+    g.configure(cfgEma(0, 0, 0, 9, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    SceneVerdict v = feedGate(g, &t, 800, 50);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 0, "MOTION_THRESH=0 stays 'off' however long the EMA is");
+    TEST_ASSERT_EQ((int)v.motionLimit, 0, "reported as off");
+    TEST_ASSERT(v.state == SceneState::Active && v.run, "every frame counts as moving, as before");
+}
+
+TEST(the_hold_time_and_the_person_rule_work_as_before_with_the_ema_on) {
+    SceneGate g(cfgEma(0, 300, 1000, 9, 30));
+    g.configure(cfgEma(0, 300, 1000, 9, 30));
+    g.update(0, reading(120, 0, false), false);
+    TEST_ASSERT(g.update(100, reading(120, 400), false).run, "motion");
+    TEST_ASSERT(g.update(1000, reading(120, 0), false).run, "still held 900 ms later");
+    TEST_ASSERT(!g.update(1200, reading(120, 0), false).run, "no longer after the hold");
+    TEST_ASSERT(g.update(1300, reading(120, 0), true).run, "but a flagged person keeps it running");
+}
+
+TEST(darkness_works_as_before_with_the_ema_on) {
+    SceneGate g(cfgEma(40, 300, 0, 9, 30));
+    g.configure(cfgEma(40, 300, 0, 9, 30));
+    g.update(0, reading(120, 0, false), false);
+    SceneVerdict v = g.update(100, reading(10, 800), true);
+    TEST_ASSERT(v.state == SceneState::Dark && v.clearPerson && !v.run, "dark pictures pause detection and clear a person");
+}
+
+TEST(configure_forgets_what_the_average_learnt) {
+    SceneGate g(cfgEma(0, 300, 0, 9, 30));
+    g.configure(cfgEma(0, 300, 0, 9, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    feedGate(g, &t, 500, 200);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 650, "learnt");
+    g.configure(cfgEma(0, 300, 0, 9, 30));
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "a new configuration starts from the floor");
+    g.configure(cfgEma(0, 300, 0, 0, 30));
+    feedGate(g, &t, 500, 200);
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "and with the length 0 it does not learn at all");
+}
+
+TEST(the_idle_serial_line_shows_the_threshold_the_frame_was_judged_against) {
+    SceneConfig c = cfgEma(40, 300, 0, 9, 30);
+    std::string idle = describeScene(SceneState::Idle, reading(120, 500), c, 650);
+    TEST_ASSERT(has(idle, "still") && has(idle, "motion 500 < 650"), idle.c_str());
+    std::string fixed = describeScene(SceneState::Idle, reading(120, 7), c);
+    TEST_ASSERT(has(fixed, "motion 7 < 300"), "the short form shows MOTION_THRESH");
+}
+
 // ── the log lines ───────────────────────────────────────────────────────
 
 TEST(each_state_has_a_readable_serial_line) {
@@ -425,6 +574,18 @@ int main() {
     RUN_TEST(the_hold_survives_the_millis_wrap_around);
     RUN_TEST(configure_starts_afresh);
     RUN_TEST(dark_and_motion_together_light_and_moving_runs_the_model);
+
+    RUN_TEST(a_config_without_the_ema_keeps_the_fixed_threshold_exactly_as_before);
+    RUN_TEST(with_the_ema_on_a_scene_that_keeps_moving_stops_counting_as_motion_and_a_person_still_does);
+    RUN_TEST(the_threshold_never_drops_below_motion_thresh_so_a_calm_scene_is_unchanged);
+    RUN_TEST(the_threshold_comes_back_down_after_the_storm);
+    RUN_TEST(a_frame_is_judged_before_it_is_learnt_so_a_spike_cannot_raise_its_own_bar);
+    RUN_TEST(the_first_frame_has_no_reading_so_the_average_does_not_learn_from_it);
+    RUN_TEST(with_the_motion_check_off_the_ema_changes_nothing);
+    RUN_TEST(the_hold_time_and_the_person_rule_work_as_before_with_the_ema_on);
+    RUN_TEST(darkness_works_as_before_with_the_ema_on);
+    RUN_TEST(configure_forgets_what_the_average_learnt);
+    RUN_TEST(the_idle_serial_line_shows_the_threshold_the_frame_was_judged_against);
 
     RUN_TEST(each_state_has_a_readable_serial_line);
 

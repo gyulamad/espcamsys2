@@ -25,6 +25,7 @@
 //   Person detector: Arduino/ESP32_CAM_TFLite_Person/report_logic.h
 //                    Arduino/ESP32_CAM_TFLite_Person/settings_schema.h
 //                    Arduino/ESP32_CAM_TFLite_Person/scene_logic.h
+//                    Arduino/ESP32_CAM_TFLite_Person/motion_baseline.h
 //                    <build-dir>/person_glue.inc  (model constants, setPersonDetected,
 //                                                  detectPerson and loop of the .ino)
 //                    <build-dir>/person_settings_glue.inc  (settings block of the .ino)
@@ -67,6 +68,7 @@ const groups = [
             path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'report_logic.h'),
             path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'settings_schema.h'),
             path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'scene_logic.h'),
+            path.join(rootDir, 'Arduino', 'ESP32_CAM_TFLite_Person', 'motion_baseline.h'),
             path.join(buildDir, 'person_glue.inc'),
             path.join(buildDir, 'person_settings_glue.inc'),
             path.join(buildDir, 'person_log_glue.inc'),

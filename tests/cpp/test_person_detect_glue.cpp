@@ -184,6 +184,13 @@ static void sceneGate(int dark, uint32_t motion, uint32_t holdSec) {
     configureScene();
 }
 
+// The same with the motion auto-calibration (MOTION_EMA_LEN / MOTION_EMA_PCT) on.
+static void sceneGateEma(int dark, uint32_t motion, uint32_t holdSec, uint32_t emaLength, uint32_t emaPercent) {
+    g_cfg.motionEmaLength = emaLength;
+    g_cfg.motionEmaPercent = emaPercent;
+    sceneGate(dark, motion, holdSec);
+}
+
 static bool has(const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; }
 
 // Runs one loop() iteration with the model reporting this raw person value.
@@ -638,6 +645,59 @@ TEST(the_scene_readings_can_be_printed_for_every_frame_for_tuning_the_thresholds
     TEST_ASSERT(has(g_serial, "Brightness: 130   Motion:  1000"), "100 samples, each changed by 10");
 }
 
+TEST(without_the_ema_the_threshold_printed_with_every_frame_stays_the_fixed_one) {
+    reset();
+    sceneGate(40, 300, 0);
+    float p, n;
+    for (int i = 0; i < 6; ++i) {
+        fillFrame(i % 2 ? 120 : 130);                 // every frame changes by 10 on all 100 samples = 1000
+        g_millis += 100;
+        g_serial.clear();
+        bool ran = detectPerson(p, n);
+        if (i == 0) continue;                         // nothing to compare with yet
+        TEST_ASSERT(has(g_serial, "Motion:  1000   Limit:   300"), "limit = MOTION_THRESH, frame after frame");
+        TEST_ASSERT(ran, "and the model runs on every one of them, as before the EMA existed");
+    }
+}
+
+TEST(with_the_ema_on_the_settings_reach_the_gate_and_a_constant_noise_stops_waking_the_model) {
+    reset();
+    sceneGateEma(40, 300, 0, 9, 30);
+    float p, n;
+    fillFrame(120);
+    detectPerson(p, n);                               // the first frame has nothing to compare to
+    fillFrame(130);
+    g_millis += 100;                                  // frames are never in the same millisecond on the real board
+    g_serial.clear();
+    TEST_ASSERT(detectPerson(p, n), "the first real change runs the model");
+    TEST_ASSERT(has(g_serial, "Motion:  1000   Limit:   300"), "it is judged against MOTION_THRESH");
+    TEST_ASSERT(has(g_serial, "Scene: active"), "and wakes the model");
+
+    fillFrame(120);
+    g_millis += 100;
+    g_serial.clear();
+    TEST_ASSERT(!detectPerson(p, n), "the same change again: the model is not run");
+    TEST_ASSERT(has(g_serial, "Motion:  1000   Limit:  1300"), "the threshold has become 1000 + 30%");
+    TEST_ASSERT(has(g_serial, "Scene: still (motion 1000 < 1300)"), "and the serial line shows the limit that was applied");
+    TEST_ASSERT_EQ(g_interp.invokes, 1, "the model ran only for the first one");
+}
+
+TEST(the_ema_percentage_from_the_settings_is_the_one_the_gate_uses) {
+    reset();
+    sceneGateEma(40, 300, 0, 9, 100);
+    float p, n;
+    fillFrame(120);
+    detectPerson(p, n);
+    fillFrame(130);
+    g_millis += 100;
+    detectPerson(p, n);
+    fillFrame(120);
+    g_millis += 100;
+    g_serial.clear();
+    detectPerson(p, n);
+    TEST_ASSERT(has(g_serial, "Limit:  2000"), "1000 + 100%");
+}
+
 TEST(a_bad_frame_never_reaches_the_scene_gate) {
     reset();
     sceneGate(40, 300, 0);
@@ -690,6 +750,9 @@ int main() {
     RUN_TEST(no_false_positive_in_the_dark_even_if_the_model_would_report_one);
     RUN_TEST(with_both_checks_off_every_frame_is_detected_on_as_before);
     RUN_TEST(the_scene_readings_can_be_printed_for_every_frame_for_tuning_the_thresholds);
+    RUN_TEST(without_the_ema_the_threshold_printed_with_every_frame_stays_the_fixed_one);
+    RUN_TEST(with_the_ema_on_the_settings_reach_the_gate_and_a_constant_noise_stops_waking_the_model);
+    RUN_TEST(the_ema_percentage_from_the_settings_is_the_one_the_gate_uses);
     RUN_TEST(a_bad_frame_never_reaches_the_scene_gate);
 
     return test::summarize();

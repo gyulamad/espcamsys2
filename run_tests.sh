@@ -31,7 +31,8 @@
 #                    ESP32_CAM_Recorder.ino
 #   Person detector: report_logic.h (what is sent to the relay for the dashboard,
 #                    and the connection that carries it), scene_logic.h
-#                    (darkness/motion gate), settings_schema.h, and the detection,
+#                    (darkness/motion gate), motion_baseline.h (the motion
+#                    threshold's auto-calibration), settings_schema.h, and the detection,
 #                    settings, remote-logging and uplink code of
 #                    ESP32_CAM_TFLite_Person.ino (setPersonDetected, detectPerson,
 #                    loop, the settings block, WifiUplinkEnv, the log glue)
@@ -176,15 +177,17 @@ else
 
     # The settings engine and the Recorder's key table (flash-stored settings,
     # see settings_logic.h): also compiled by the sketch, so also C++11.
-    # ...and the darkness/motion gate.
-    echo "--- scene_logic.h as C++11 (the ESP32 toolchain's dialect)"
-    if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
-           -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/scene_logic.h" -x c++ /dev/null; then
-        echo "ok"
-    else
-        echo "FAIL: scene_logic.h does not compile as C++11"
-        overall_status=1
-    fi
+    # ...and the darkness/motion gate, with the moving average behind its motion threshold.
+    for h in scene_logic.h motion_baseline.h; do
+        echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
+        if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
+               -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/$h" -x c++ /dev/null; then
+            echo "ok"
+        else
+            echo "FAIL: $h does not compile as C++11"
+            overall_status=1
+        fi
+    done
 
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
              ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h \
@@ -248,6 +251,7 @@ else
     run_cpp_test test_alarm_logic
     run_cpp_test test_remote_log
     run_cpp_test test_person_scene_logic
+    run_cpp_test test_person_motion_baseline
     run_cpp_test test_person_report_logic
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote

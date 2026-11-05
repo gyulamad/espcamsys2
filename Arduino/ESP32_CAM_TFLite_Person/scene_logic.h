@@ -29,6 +29,10 @@
 // A threshold of 0 switches its check off: DARK_THRESH=0 never reports Dark,
 // MOTION_THRESH=0 treats every frame as moving. With both 0 the gate is always
 // Active, i.e. the detector behaves exactly as it did before this gate existed.
+//
+// Optionally (MOTION_EMA_LEN > 0) the motion threshold calibrates itself: it follows a moving
+// average of the motion readings, so wind and rain that make an empty scene "move" raise it instead
+// of keeping the model busy - see motion_baseline.h. MOTION_THRESH is then its lower limit.
 
 #pragma once
 
@@ -37,6 +41,8 @@
 
 #include <string>
 #include <vector>
+
+#include "motion_baseline.h"
 
 namespace person_scene {
 
@@ -160,8 +166,10 @@ enum class SceneState { Dark, Idle, Active };
 
 struct SceneConfig {
     int darkBelow = 0;             // DARK_THRESH: brightness below this = dark; 0 = check off
-    uint32_t motionAtLeast = 0;    // MOTION_THRESH: motion at or above this = moving; 0 = check off
+    uint32_t motionAtLeast = 0;    // MOTION_THRESH: motion at or above this = moving; 0 = check off (with an EMA: the lowest threshold)
     uint32_t holdMs = 0;           // MOTION_HOLD_S in ms: how long detection stays on after the last motion
+    uint32_t motionEmaFrames = 0;  // MOTION_EMA_LEN: frames the motion average spans; 0 = threshold stays fixed
+    uint32_t motionEmaPercent = DEFAULT_MOTION_EMA_PERCENT;   // MOTION_EMA_PCT: threshold = average + this many percent
 };
 
 struct SceneVerdict {
@@ -169,6 +177,7 @@ struct SceneVerdict {
     bool run = true;               // run the person model on this frame
     bool clearPerson = false;      // a person is flagged but the scene is dark: drop it
     bool changed = false;          // the state differs from the previous frame's (worth a log line)
+    uint32_t motionLimit = 0;      // the motion threshold this frame was judged against (0 = motion check off)
 };
 
 class SceneGate {
@@ -178,6 +187,7 @@ public:
 
     void configure(const SceneConfig& cfg) {
         cfg_ = cfg;
+        baseline_.configure(cfg.motionEmaFrames, cfg.motionEmaPercent);
         dark_ = false;
         motionSeen_ = false;
         lastMotionMs_ = 0;
@@ -185,6 +195,13 @@ public:
     }
 
     const SceneConfig& config() const { return cfg_; }
+
+    // The motion threshold in force right now: MOTION_THRESH, or - with the EMA on - the moving average
+    // plus its percentage when that is higher. 0 while the motion check is off, EMA or not.
+    uint32_t motionThreshold() const {
+        if (cfg_.motionAtLeast == 0) return 0;
+        return baseline_.threshold(cfg_.motionAtLeast);
+    }
 
     // `personActive`: the detector currently has a person flagged.
     SceneVerdict update(uint32_t nowMs, const SceneReading& r, bool personActive) {
@@ -197,20 +214,10 @@ public:
             dark_ = false;
         }
 
-        // Motion, held for holdMs after the last frame that moved.
-        bool moving;
-        if (cfg_.motionAtLeast == 0) {
-            moving = true;
-        } else {
-            if (r.hasPrevious && r.motion >= cfg_.motionAtLeast) {
-                motionSeen_ = true;
-                lastMotionMs_ = nowMs;
-            }
-            // Unsigned subtraction: correct across the 49-day millis() wrap.
-            moving = motionSeen_ && static_cast<uint32_t>(nowMs - lastMotionMs_) <= cfg_.holdMs;
-        }
-
         SceneVerdict v;
+        v.motionLimit = motionThreshold();   // fixed before this frame is learnt: a spike must not raise its own bar
+        const bool moving = isMoving(nowMs, r, v.motionLimit);
+
         if (dark_) v.state = SceneState::Dark;
         else if (moving || personActive) v.state = SceneState::Active;
         else v.state = SceneState::Idle;
@@ -223,27 +230,49 @@ public:
     }
 
 private:
+    // Motion, held for holdMs after the last frame that moved. `limit` is the threshold this frame is
+    // judged against; the frame is learnt by the average only afterwards.
+    bool isMoving(uint32_t nowMs, const SceneReading& r, uint32_t limit) {
+        if (limit == 0) return true;   // motion check off: every frame counts as moving
+        if (r.hasPrevious) {
+            if (r.motion >= limit) {
+                motionSeen_ = true;
+                lastMotionMs_ = nowMs;
+            }
+            baseline_.observe(r.motion);   // the first frame has no reading to learn from
+        }
+        // Unsigned subtraction: correct across the 49-day millis() wrap.
+        return motionSeen_ && static_cast<uint32_t>(nowMs - lastMotionMs_) <= cfg_.holdMs;
+    }
+
     SceneConfig cfg_;
+    MotionBaseline baseline_;
     bool dark_ = false;
     bool motionSeen_ = false;
     uint32_t lastMotionMs_ = 0;
     SceneState last_ = SceneState::Active;
 };
 
-// One line for the serial monitor when the state changes.
-inline std::string describeScene(SceneState state, const SceneReading& r, const SceneConfig& cfg) {
+// One line for the serial monitor when the state changes. `motionLimit` is the motion threshold the
+// frame was judged against (SceneVerdict::motionLimit): with the EMA on it differs from MOTION_THRESH.
+inline std::string describeScene(SceneState state, const SceneReading& r, const SceneConfig& cfg, uint32_t motionLimit) {
     switch (state) {
         case SceneState::Dark:
             return "Scene: DARK (brightness " + std::to_string(r.brightness) + " < " +
                    std::to_string(cfg.darkBelow) + ") - detection paused";
         case SceneState::Idle:
             return "Scene: still (motion " + std::to_string(r.motion) + " < " +
-                   std::to_string(cfg.motionAtLeast) + ") - detection paused";
+                   std::to_string(motionLimit) + ") - detection paused";
         case SceneState::Active:
         default:
             return "Scene: active (brightness " + std::to_string(r.brightness) + ", motion " +
                    std::to_string(r.motion) + ") - detecting";
     }
+}
+
+// The same with the fixed MOTION_THRESH as the threshold (no EMA).
+inline std::string describeScene(SceneState state, const SceneReading& r, const SceneConfig& cfg) {
+    return describeScene(state, r, cfg, cfg.motionAtLeast);
 }
 
 }  // namespace person_scene

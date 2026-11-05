@@ -17,6 +17,8 @@
 // New in the scene gate (scene_logic.h): DARK_THRESH, MOTION_THRESH, MOTION_HOLD_S.
 // New with the motion area: MOTION_X0, MOTION_Y0, MOTION_X1, MOTION_Y1 - the part of the
 // picture that is watched for motion (the whole 96x96 picture is 0, 0, 96, 96).
+// New with the motion auto-calibration (motion_baseline.h): MOTION_EMA_LEN (0 = off, the fixed
+// MOTION_THRESH as before) and, only while that is not 0, MOTION_EMA_PCT.
 //
 // There are no defaults. Everything about the live view (Wi-Fi, the relay it
 // pushes to, and the tuning of that stream) is only asked for while
@@ -108,6 +110,11 @@ static const KeyDef PERSON_KEYS[] = {
     { "MOTION_Y1",     Kind::Int,       0,    person_scene::FRAME_SIZE, Cond::Always, nullptr,        nullptr,
       "motion area, bottom edge in pixels, first row outside the area (96 = the picture's bottom edge); at least 10 more than MOTION_Y0" },
 
+    { "MOTION_EMA_LEN", Kind::Int,      0,    person_scene::MAX_MOTION_EMA_LEN, Cond::Always, nullptr,  nullptr,
+      "motion auto-calibration: the motion threshold follows a moving average of the motion over this many frames (a few minutes' worth), so wind and rain raise it; MOTION_THRESH stays its lowest value; 0 = off, the threshold stays fixed" },
+    { "MOTION_EMA_PCT", Kind::Int,      0,    person_scene::MAX_MOTION_EMA_PERCENT, Cond::WhenNotEquals, "MOTION_EMA_LEN", "0",
+      "motion auto-calibration: how far above the moving average the threshold lies, in percent (30 is a good start)" },
+
     { "STREAM_ENABLED",  Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
       "1: join Wi-Fi and send the live view (picture + values) to the relay's dashboard; 0: no Wi-Fi at all (everything below is then not needed)" },
     { "WIFI",            Kind::Wifi,      0,    0,       Cond::WhenEquals, "STREAM_ENABLED", "1",
@@ -149,6 +156,8 @@ struct PersonSettings {
     uint32_t motionThreshold = 0;   // 0 = motion check off
     uint32_t motionHoldSec = 0;
     person_scene::MotionArea motionArea;   // the part of the picture watched for motion; default = all of it
+    uint32_t motionEmaLength = 0;   // frames the motion average spans; 0 = auto-calibration off
+    uint32_t motionEmaPercent = person_scene::DEFAULT_MOTION_EMA_PERCENT;   // only read while the above is not 0
 
     bool streamEnabled = false;
     std::vector<WifiNet> wifi;
@@ -207,6 +216,8 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
                                             static_cast<int>(storedInt(store, "MOTION_Y0")),
                                             static_cast<int>(storedInt(store, "MOTION_X1")),
                                             static_cast<int>(storedInt(store, "MOTION_Y1")));
+    s.motionEmaLength = static_cast<uint32_t>(storedInt(store, "MOTION_EMA_LEN"));
+    if (s.motionEmaLength > 0) s.motionEmaPercent = static_cast<uint32_t>(storedInt(store, "MOTION_EMA_PCT"));   // not asked for while off
 
     s.streamEnabled = store.get("STREAM_ENABLED") == "1";
     if (s.streamEnabled) {

@@ -564,6 +564,7 @@ camtest_test('the generated schema is complete and the connection settings are t
 function camtest_detector_reported(): array {
     return ['PERSON_GPIO' => '13', 'DETECT_THRESH' => '0.6', 'CLEAR_THRESH' => '0.5', 'LOOP_DELAY_MS' => '10', 'DARK_THRESH' => '40',
             'MOTION_THRESH' => '300', 'MOTION_HOLD_S' => '10', 'MOTION_X0' => '0', 'MOTION_Y0' => '0', 'MOTION_X1' => '96', 'MOTION_Y1' => '96',
+            'MOTION_EMA_LEN' => '0',
             'STREAM_ENABLED' => '1', 'WIFI' => 'net:********', 'SERVER_HOST' => '192.168.1.117',
             'HTTP_PORT' => '8080', 'API_KEY' => '********', 'DETECTOR_ID' => 'detector-1', 'STREAM_MAX_FPS' => '10', 'STREAM_JPEG_Q' => '80',
             'STREAM_WR_TMO_S' => '3', 'ANN_HEARTBEAT' => '600', 'ANN_RETRY' => '30'];
@@ -583,7 +584,7 @@ camtest_test('the generated schema has the person detector: the calibration sett
     }
     sort($locked);
     camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'STREAM_ENABLED', 'WIFI']);
-    foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
+    foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1', 'MOTION_EMA_LEN', 'MOTION_EMA_PCT', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
         camtest_assert_true(in_array($n, $names, true), $n);
     }
 });
@@ -593,6 +594,40 @@ camtest_test('buildDeviceChange for a detector: a calibration change becomes a l
     camtest_assert_equal($r['ok'], true);
     camtest_assert_equal($r['changed'], ['DARK_THRESH', 'MOTION_HOLD_S']);
     camtest_assert_equal($r['line'], 'DARK_THRESH=55;MOTION_HOLD_S=20');
+});
+
+// The motion auto-calibration: MOTION_EMA_LEN (0 = off) and, only while that is not 0, MOTION_EMA_PCT.
+
+camtest_test('buildDeviceChange for a detector: the motion auto-calibration is open to the dashboard and its percentage is only needed while it is on', function () {
+    $sc = camtest_schema()['detector'];
+    $def = [];
+    foreach ($sc['keys'] as $k) { $def[$k['name']] = $k; }
+    camtest_assert_true(isset($def['MOTION_EMA_LEN'], $def['MOTION_EMA_PCT']), 'both are in the schema');
+    camtest_assert_equal([$def['MOTION_EMA_LEN']['locked'], $def['MOTION_EMA_PCT']['locked']], [false, false]);
+    camtest_assert_equal([$def['MOTION_EMA_LEN']['cond'], $def['MOTION_EMA_PCT']['cond']], ['always', 'not_equals']);
+    camtest_assert_equal([$def['MOTION_EMA_PCT']['condKey'], $def['MOTION_EMA_PCT']['condValue']], ['MOTION_EMA_LEN', '0']);
+    camtest_assert_equal([$def['MOTION_EMA_LEN']['max'], $def['MOTION_EMA_PCT']['max']], [100000, 1000]);
+});
+
+camtest_test('buildDeviceChange for a detector: switching the motion auto-calibration on needs its percentage, and both can be queued together', function () {
+    $r = camtest_detector_change(['MOTION_EMA_LEN' => '3000']);
+    camtest_assert_equal($r['ok'], false);
+    camtest_assert_true(strpos($r['error'], 'MOTION_EMA_PCT') !== false, 'the error names the missing percentage');
+    $r = camtest_detector_change(['MOTION_EMA_LEN' => '3000', 'MOTION_EMA_PCT' => '30']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'MOTION_EMA_LEN=3000;MOTION_EMA_PCT=30']);
+});
+
+camtest_test('buildDeviceChange for a detector: the motion auto-calibration values are range-checked and it can be switched off again', function () {
+    camtest_assert_equal(camtest_detector_change(['MOTION_EMA_LEN' => '100001', 'MOTION_EMA_PCT' => '30'])['ok'], false);
+    camtest_assert_equal(camtest_detector_change(['MOTION_EMA_LEN' => '-1'])['ok'], false);
+    camtest_assert_equal(camtest_detector_change(['MOTION_EMA_LEN' => '3000', 'MOTION_EMA_PCT' => '1001'])['ok'], false);
+    camtest_assert_equal(camtest_detector_change(['MOTION_EMA_LEN' => '3000', 'MOTION_EMA_PCT' => 'thirty'])['ok'], false);
+    $rep = camtest_detector_reported();
+    $rep['MOTION_EMA_LEN'] = '3000';
+    $rep['MOTION_EMA_PCT'] = '30';
+    $sc = camtest_schema()['detector'];
+    $r = CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], $rep, ['MOTION_EMA_LEN' => '0'], $sc['rules'] ?? []);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'MOTION_EMA_LEN=0']);
 });
 
 // The motion area: the picture the detector watches for motion, as left/top (inside) and right/bottom (outside).
