@@ -146,6 +146,7 @@ async function main() {
       ['recordings.php delete ALL', `recordings.php?cam=${CAM}&deleteAll=1`],
       ['recordings.php mark seen', `recordings.php?cam=${CAM}&seen=${FILE}`],
       ['recordings.php delete ARCHIVE', `recordings.php?cam=${CAM}&deleteArchive=1`],
+      ['recordings.php restore from the archive', `recordings.php?cam=${CAM}&restore=${FILE}`],
     ];
 
     // ── attacks are refused and never reach the relay ───────────────
@@ -169,6 +170,7 @@ async function main() {
       ['recordings.php delete ALL', `recordings.php?cam=${CAM}&deleteAll=1`, 'DELETE', `/recordings/${CAM}`],
       ['recordings.php mark seen', `recordings.php?cam=${CAM}&seen=${FILE}`, 'POST', `/recordings/${CAM}/${FILE}/seen`],
       ['recordings.php delete ARCHIVE', `recordings.php?cam=${CAM}&deleteArchive=1`, 'DELETE', `/recordings/${CAM}/archive`],
+      ['recordings.php restore from the archive', `recordings.php?cam=${CAM}&restore=${FILE}`, 'POST', `/recordings/${CAM}/archive/${FILE}/restore`],
     ];
     for (const [name, q, method, relayUrl] of expect) {
       const before = seen.length;
@@ -199,6 +201,25 @@ async function main() {
     check('deleteArchive over GET is refused (405) and never reaches the relay', r.status === 405 && !seen.some((x) => x.method === 'GET' && x.url.endsWith('/archive') && x.headers['x-actor']), `status=${r.status}`);
     r = await dash(`recordings.php?cam=${CAM}&archive=1`, 'form', 'GET');
     check('GET recordings.php?archive=1 (the count) refuses a count the relay did not send as a plain number (502)', r.status === 502, `status=${r.status} ${r.text}`);
+    r = await dash(`recordings.php?cam=${CAM}&restore=${FILE}`, 'own', 'GET');
+    check('restore over GET is refused (405)', r.status === 405, `status=${r.status}`);
+    for (const bad of ['../x.mp4', 'x.txt', '..%2F..%2Fetc%2Fpasswd', 'a%20b.mp4']) {
+      const before = seen.length;
+      r = await dash(`recordings.php?cam=${CAM}&restore=${bad}`, 'own');
+      check(`restore of ${bad} is refused (400) and never reaches the relay`, r.status === 400 && seen.length === before, `status=${r.status}`);
+      for (const kind of ['archivePlay', 'archiveDownload']) {
+        r = await dash(`recordings.php?cam=${CAM}&${kind}=${bad}`, 'form', 'GET');
+        check(`${kind} of ${bad} is refused (400) and never reaches the relay`, r.status === 400 && seen.length === before, `status=${r.status}`);
+      }
+    }
+    r = await dash(`recordings.php?cam=${CAM}&archiveList=1`, 'form', 'GET');
+    check('GET archiveList answers a list (the relay\'s [] passes the sanitiser)', r.status === 200 && Array.isArray(r.json), `status=${r.status} ${r.text}`);
+    check('...asked from the relay\'s archive/files with the control key', (() => { const c = seen[seen.length - 1]; return c.url === `/recordings/${CAM}/archive/files` && c.headers['x-control-key'] === KEY; })());
+    for (const [kind, disposition] of [['archivePlay', 'inline'], ['archiveDownload', 'attachment']]) {
+      r = await dash(`recordings.php?cam=${CAM}&${kind}=${FILE}`, 'form', 'GET');
+      const c = seen[seen.length - 1];
+      check(`GET ${kind} streams from the relay's archive (${disposition}) with the control key`, r.status === 200 && c.url === `/recordings/${CAM}/archive/${FILE}` && c.headers['x-control-key'] === KEY, `status=${r.status} ${JSON.stringify(c)}`);
+    }
     r = await dash(`record.php?cam=${CAM}`, 'form', 'GET');
     check('GET record.php (status) needs no header', r.status === 200, `status=${r.status}`);
     r = await dash('settings.php', 'curl', 'GET');
@@ -207,6 +228,7 @@ async function main() {
     // ── audit trail ─────────────────────────────────────────────────
     await sleep(200);
     check('deleting leaves an audit line with who and what', phpLog.includes(`camdash audit: ${AUTH.user}@127.0.0.1 delete ALL recordings of ${CAM}`) && phpLog.includes(`delete recording ${CAM}/${FILE}`), phpLog.slice(-600));
+    check('restoring leaves an audit line too', phpLog.includes(`camdash audit: ${AUTH.user}@127.0.0.1 restore archived recording ${CAM}/${FILE}`), phpLog.slice(-600));
     check('deleting the archive leaves an audit line too', phpLog.includes(`camdash audit: ${AUTH.user}@127.0.0.1 delete ARCHIVE of ${CAM}`), phpLog.slice(-600));
     check('...and so do start and stop', phpLog.includes(`start recording ${CAM} for 60s`) && phpLog.includes(`stop recording ${CAM}`));
     check('the control key is not written to the log', !phpLog.includes(KEY));

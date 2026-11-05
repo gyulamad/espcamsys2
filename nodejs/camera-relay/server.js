@@ -2039,6 +2039,40 @@ app.get('/recordings/:id/archive', requireReadKey, (req, res) => {
   res.json({ count: archive.count(cameraDir(req.params.id)) });
 });
 
+// The archived clips, newest first (same entries as the list of recordings).
+app.get('/recordings/:id/archive/files', requireReadKey, (req, res) => {
+  res.json(archive.list(cameraDir(req.params.id)));
+});
+
+// Resolves /recordings/:id/archive/:filename to req.archivePath, or answers 404 — also for a name that is
+// not an archived plain clip file (archive.pathOf checks the name and the file).
+function requireArchivedClip(req, res, next) {
+  const clipPath = archive.pathOf(cameraDir(req.params.id), req.params.filename);
+  if (clipPath === null) return res.sendStatus(404);
+  req.archivePath = clipPath;
+  return next();
+}
+
+// Play / download one archived clip (Range requests work like for any recording).
+app.get('/recordings/:id/archive/:filename', requireReadKey, requireArchivedClip, (req, res) => {
+  res.download(req.archivePath);
+});
+
+// Give one archived clip back to the recordings: it is on the dashboard's list again. 409 when a recording
+// of that name exists already (nothing is overwritten).
+app.post('/recordings/:id/archive/:filename/restore', requireDashboardKey, (req, res) => {
+  const { id, filename } = req.params;
+  const outcome = archive.restore(cameraDir(id), filename);
+  if (outcome.state === 'missing') return res.sendStatus(404);
+  if (outcome.state === 'exists') return res.status(409).json({ error: 'a recording with this name exists already — nothing was overwritten' });
+  if (outcome.state === 'error') {
+    relayLog('WARN', `archive of ${id}: restoring ${filename} failed (${outcome.reason}), requested by ${actorOf(req)}`);
+    return res.status(500).json({ error: `could not restore the recording: ${outcome.reason}` });
+  }
+  relayLog('INFO', `archive of ${id}: ${filename} restored by ${actorOf(req)}`);
+  return res.json({ restored: filename });
+});
+
 // Delete the whole archive of a camera for good (the dashboard's "DELETE ARCHIVE" button).
 app.delete('/recordings/:id/archive', requireDashboardKey, (req, res) => {
   const { deleted, failed } = archive.removeAll(cameraDir(req.params.id));

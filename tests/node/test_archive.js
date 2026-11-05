@@ -1,6 +1,6 @@
 'use strict';
 
-// Tests lib/archive.js — counting and deleting the clips the person check filed under <camera>/no-person/ —
+// Tests lib/archive.js — counting, listing, restoring and deleting the clips the person check filed under <camera>/no-person/ —
 // against a REAL temporary folder (so symbolic links, folders and odd names behave as they do on the Pi),
 // and against a disk that refuses to delete one file.
 //
@@ -109,6 +109,107 @@ test('an archive folder that cannot be read is an error, not "empty"', () => {
   let thrown = null;
   try { createArchive({ fs: denied }).count(r.cameraDir); } catch (e) { thrown = e; }
   assertTrue(thrown && thrown.code === 'EACCES', 'the failure was swallowed');
+  r.cleanup();
+});
+
+// ── browsing ──
+
+test('list: newest first, with size, plain clip files only', () => {
+  const r = rig({ [CLIP_A]: 'aaa', [CLIP_B]: 'bbbbb', 'notes.txt': 'x' });
+  const t = (iso) => new Date(iso);
+  fs.utimesSync(path.join(r.archiveDir, CLIP_A), t('2026-10-01T10:00:00Z'), t('2026-10-01T10:00:00Z'));
+  const entries = r.archive.list(r.cameraDir);
+  assertEqual(entries.map((e) => e.filename).sort(), [CLIP_A, CLIP_B]);
+  assertEqual(entries.map((e) => e.sizeBytes).sort(), [3, 5]);
+  assertTrue(entries.every((e) => e.createdAt instanceof Date), 'createdAt missing');
+  r.cleanup();
+});
+
+test('list: equal times fall back to the name, newest name first, so the order never jumps', () => {
+  const r = rig({ [CLIP_A]: 'a', [CLIP_B]: 'b' });
+  const fixed = Object.assign(Object.create(fs), { statSync: (p) => Object.assign(fs.statSync(p), { birthtime: new Date(0) }) });
+  assertEqual(createArchive({ fs: fixed }).list(r.cameraDir).map((e) => e.filename), [CLIP_B, CLIP_A]);
+  r.cleanup();
+});
+
+test('list: no archive folder is an empty list; a clip that vanished meanwhile is left out; other failures throw', () => {
+  const r = rig({ [CLIP_A]: 'a', [CLIP_B]: 'b' });
+  const vanish = Object.assign(Object.create(fs), { statSync: (p) => { if (path.basename(p) === CLIP_A) throw Object.assign(new Error('gone'), { code: 'ENOENT' }); return fs.statSync(p); } });
+  assertEqual(createArchive({ fs: vanish }).list(r.cameraDir).map((e) => e.filename), [CLIP_B]);
+  const broken = Object.assign(Object.create(fs), { statSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } });
+  let thrown = null;
+  try { createArchive({ fs: broken }).list(r.cameraDir); } catch (e) { thrown = e; }
+  assertTrue(thrown && thrown.code === 'EIO', 'a disk error was swallowed');
+  fs.rmSync(r.archiveDir, { recursive: true });
+  assertEqual(r.archive.list(r.cameraDir), []);
+  r.cleanup();
+});
+
+test('pathOf: only an archived plain clip file has a path; names that are not clips, links and folders have none', () => {
+  const r = rig({ [CLIP_A]: 'a', 'notes.txt': 'x' });
+  fs.symlinkSync(path.join(r.root, 'x.mp4'), path.join(r.archiveDir, 'link.mp4'));
+  fs.mkdirSync(path.join(r.archiveDir, 'dir.mp4'));
+  assertEqual(r.archive.pathOf(r.cameraDir, CLIP_A), path.join(r.archiveDir, CLIP_A));
+  for (const bad of [CLIP_B, 'notes.txt', 'link.mp4', 'dir.mp4', '../' + CLIP_A, '..%2f' + CLIP_A, `${CLIP_A}/..`, '/etc/passwd', '', null, undefined, 5, ['x.mp4']]) {
+    assertEqual(r.archive.pathOf(r.cameraDir, bad), null, String(bad));
+  }
+  r.cleanup();
+});
+
+// ── restoring ──
+
+test('restore: the clip moves back next to the listed recordings and leaves the archive', () => {
+  const r = rig({ [CLIP_A]: 'footage' });
+  assertEqual(r.archive.restore(r.cameraDir, CLIP_A), { state: 'restored' });
+  assertEqual(fs.readFileSync(path.join(r.cameraDir, CLIP_A), 'utf8'), 'footage');
+  assertEqual(listing(r.archiveDir), []);
+  assertEqual(r.archive.count(r.cameraDir), 0);
+  r.cleanup();
+});
+
+test('restore: a recording of the same name is never overwritten, and the archived clip stays', () => {
+  const r = rig({ [CLIP_A]: 'archived' });
+  fs.writeFileSync(path.join(r.cameraDir, CLIP_A), 'newer recording with the same name');
+  assertEqual(r.archive.restore(r.cameraDir, CLIP_A), { state: 'exists' });
+  assertEqual(fs.readFileSync(path.join(r.cameraDir, CLIP_A), 'utf8'), 'newer recording with the same name');
+  assertEqual(fs.readFileSync(path.join(r.archiveDir, CLIP_A), 'utf8'), 'archived');
+  r.cleanup();
+});
+
+test('restore: a clip that is not in the archive is "missing" and nothing is touched', () => {
+  const r = rig({ [CLIP_A]: 'a', 'notes.txt': 'mine' });
+  const outside = path.join(r.root, 'secret.mp4');
+  fs.writeFileSync(outside, 'secret');
+  fs.symlinkSync(outside, path.join(r.archiveDir, 'link.mp4'));
+  for (const bad of [CLIP_B, 'notes.txt', 'link.mp4', '../secret.mp4', '..', null]) {
+    assertEqual(r.archive.restore(r.cameraDir, bad), { state: 'missing' }, String(bad));
+  }
+  assertEqual(listing(r.archiveDir), [CLIP_A, 'link.mp4', 'notes.txt']);
+  assertEqual(listing(r.cameraDir), ['no-person']);
+  assertTrue(fs.existsSync(outside), 'the target of a link was touched');
+  r.cleanup();
+});
+
+test('restore: a disk that refuses is an error that keeps the clip (no copy left half-way)', () => {
+  const r = rig({ [CLIP_A]: 'a' });
+  const noLink = Object.assign(Object.create(fs), { linkSync: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } });
+  const o = createArchive({ fs: noLink }).restore(r.cameraDir, CLIP_A);
+  assertEqual(o.state, 'error');
+  assertTrue(o.reason.includes('EACCES'));
+  assertEqual(listing(r.archiveDir), [CLIP_A]);
+  assertEqual(listing(r.cameraDir), ['no-person']);
+  r.cleanup();
+});
+
+test('restore: when the archived name cannot be removed, the new name is undone and the clip stays archived', () => {
+  const r = rig({ [CLIP_A]: 'a' });
+  const noUnlink = Object.assign(Object.create(fs), {
+    unlinkSync: (p) => { if (p.includes('no-person')) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); return fs.unlinkSync(p); },
+  });
+  const o = createArchive({ fs: noUnlink }).restore(r.cameraDir, CLIP_A);
+  assertEqual(o.state, 'error');
+  assertEqual(listing(r.archiveDir), [CLIP_A]);
+  assertEqual(listing(r.cameraDir), ['no-person']);
   r.cleanup();
 });
 

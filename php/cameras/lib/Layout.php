@@ -41,6 +41,9 @@ class CamLayout
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px solid var(--border);
   }
+  /* The archive's own list (what the person check sorted out), set apart from the recordings above it. */
+  .files-archive { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 6px 8px; border-left: 2px solid var(--border); }
+  .files-archive-title { color: var(--accent); }
   .files-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   /* A row is "seen" (normal weight, gray) unless it carries .unseen. Weight alone is hard to tell apart
      on phones and some browsers, so colour carries the difference too. */

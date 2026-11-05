@@ -14,6 +14,9 @@
 //   - the archive (<camera>/no-person/): GET .../archive counts its clips, DELETE .../archive removes them for
 //     good — needs the right key, leaves the listed clips, other files, folders and links alone, and is not
 //     mistaken for a clip name
+//   - browsing the archive: GET .../archive/files lists its clips, GET .../archive/<clip> serves one (with Range),
+//     POST .../archive/<clip>/restore puts it back into the list — never over a recording of the same name,
+//     never for a name that is not an archived clip file, and only with the dashboard key
 // Needs python3 (skips if missing). Writes a temporary config.js (the real one is restored). Own ports.
 // Usage:  node tests/e2e/test_person_scan_e2e.js        Exit code 0 if all passed.
 
@@ -183,19 +186,56 @@ const scanConfig = (extra) => ({ enabled: true, auto: false, action: 'move', mod
     r = await archive();
     check('the archive counts only its plain clip files (3), not folders, links or other files', r.status === 200 && r.json.count === 3, JSON.stringify(r.json));
     check('…and its clips are not in the list of recordings', !(await names()).some((n) => n.startsWith('arch_')));
+    // browse, play, restore
+    r = await request('GET', `/recordings/${CAM}/archive/files`);
+    check('GET archive/files lists the archived clips (names and sizes, no folder, link or other file)',
+      r.status === 200 && JSON.stringify(r.json.map((f) => f.filename).sort()) === JSON.stringify(['arch_1.mp4', 'arch_2.mp4', 'arch_3.mp4']) && r.json.every((f) => f.sizeBytes === 5), JSON.stringify(r.json));
+    r = await request('GET', `/recordings/${CAM}/archive/files`, { key: null });
+    check('listing the archive needs the key', [401, 403].includes(r.status), String(r.status));
+    r = await request('GET', `/recordings/${CAM}/archive/arch_1.mp4`);
+    check('an archived clip can be downloaded', r.status === 200 && r.raw.toString() === 'EMPTY', `${r.status} ${r.raw}`);
+    check('…and read in parts (Range)', await (async () => {
+      const part = await new Promise((resolve, reject) => {
+        const q = nodeHttp.request(`http://127.0.0.1:${PORT}/recordings/${CAM}/archive/arch_1.mp4`, { headers: { 'X-Control-Key': CONTROL_KEY, Range: 'bytes=0-1' } }, (res) => {
+          const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(c).toString() }));
+        });
+        q.on('error', reject); q.end();
+      });
+      return part.status === 206 && part.body === 'EM';
+    })());
+    r = await request('GET', `/recordings/${CAM}/archive/arch_1.mp4`, { key: null });
+    check('downloading an archived clip needs the key', [401, 403].includes(r.status), String(r.status));
+    for (const bad of ['nothing.mp4', 'notes.txt', 'link.mp4', 'folder.mp4', '..%2Flisted.mp4', 'x.txt']) {
+      const got = await request('GET', `/recordings/${CAM}/archive/${bad}`);
+      check(`downloading ${bad} from the archive is refused (404)`, got.status === 404, String(got.status));
+      const rest = await request('POST', `/recordings/${CAM}/archive/${bad}/restore`);
+      check(`restoring ${bad} is refused (404) and touches nothing`, rest.status === 404 && exists('no-person', 'notes.txt') && exists('no-person', 'link.mp4') && fs.existsSync(outside), String(rest.status));
+    }
+    r = await request('POST', `/recordings/${CAM}/archive/arch_1.mp4/restore`, { key: null });
+    check('restoring needs the dashboard key', [401, 403].includes(r.status) && exists('no-person', 'arch_1.mp4') && !exists('arch_1.mp4'), String(r.status));
+    clip('arch_2.mp4', 'a recording with the same name');
+    r = await request('POST', `/recordings/${CAM}/archive/arch_2.mp4/restore`);
+    check('a recording of the same name is never overwritten (409)', r.status === 409 && fs.readFileSync(path.join(CAM_DIR, 'arch_2.mp4'), 'utf8') === 'a recording with the same name' && exists('no-person', 'arch_2.mp4'), String(r.status));
+    fs.rmSync(path.join(CAM_DIR, 'arch_2.mp4'));
+    r = await request('POST', `/recordings/${CAM}/archive/arch_1.mp4/restore`);
+    check('restoring a clip puts it back (200)', r.status === 200 && r.json.restored === 'arch_1.mp4' && exists('arch_1.mp4') && !exists('no-person', 'arch_1.mp4'), JSON.stringify(r.json));
+    check('…it is in the list again and out of the archive', (await names()).includes('arch_1.mp4') && (await archive()).json.count === 2);
+    check('…and the restore was logged', /archive of .*: arch_1\.mp4 restored/.test(relay.output()));
+    fs.rmSync(path.join(CAM_DIR, 'arch_1.mp4'));
+
     r = await request('GET', `/recordings/${CAM}/archive`, { key: null });
     check('reading the count needs the key (401/403 without)', [401, 403].includes(r.status), String(r.status));
     r = await wipe({ key: null });
-    check('deleting the archive needs the dashboard key (401/403 without)', [401, 403].includes(r.status) && exists('no-person', 'arch_1.mp4'), String(r.status));
+    check('deleting the archive needs the dashboard key (401/403 without)', [401, 403].includes(r.status) && exists('no-person', 'arch_3.mp4'), String(r.status));
     r = await wipe({ key: 'wrong-key' });
     check('…and the right one', [401, 403].includes(r.status) && exists('no-person', 'arch_2.mp4'), String(r.status));
     r = await wipe();
-    check('deleting the archive answers with the deleted names', r.status === 200 && JSON.stringify(r.json.deleted) === JSON.stringify(['arch_1.mp4', 'arch_2.mp4', 'arch_3.mp4']), JSON.stringify(r.json));
-    check('…the clips are gone for good', !exists('no-person', 'arch_1.mp4') && !exists('no-person', 'arch_2.mp4') && !exists('no-person', 'arch_3.mp4'));
+    check('deleting the archive answers with the deleted names', r.status === 200 && JSON.stringify(r.json.deleted) === JSON.stringify(['arch_2.mp4', 'arch_3.mp4']), JSON.stringify(r.json));
+    check('…the clips are gone for good', !exists('no-person', 'arch_2.mp4') && !exists('no-person', 'arch_3.mp4'));
     check('…the listed clip, the folder, the link, its target and the other file are untouched',
       exists('listed.mp4') && exists('no-person', 'folder.mp4') && exists('no-person', 'link.mp4') && fs.existsSync(outside) && exists('no-person', 'notes.txt'));
     check('…the archive now counts 0', (await archive()).json.count === 0);
-    check('…and the deletion was logged with the count', /archive of .*: 3 recording\(s\) deleted/.test(relay.output()));
+    check('…and the deletion was logged with the count', /archive of .*: 2 recording\(s\) deleted/.test(relay.output()));
     check('deleting an empty archive is fine', (await wipe()).status === 200);
     check('"archive" is not mistaken for a clip name (400/404 for a real clip route stays)', (await request('GET', `/recordings/${CAM}/archive.mp4`)).status === 404);
     r = await request('GET', '/recordings/..%2Fx/archive');

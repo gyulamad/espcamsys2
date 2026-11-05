@@ -109,6 +109,9 @@
     return `${ENDPOINT}?cam=${encodeURIComponent(cam)}&${query}`;
   }
   const archiveUrl = (cam) => recordingUrl(cam, 'archive=1');
+  const archiveListUrl = (cam) => recordingUrl(cam, 'archiveList=1');
+  const archivePlayUrl = (cam, filename) => recordingUrl(cam, `archivePlay=${encodeURIComponent(filename)}`);
+  const archiveDownloadUrl = (cam, filename) => recordingUrl(cam, `archiveDownload=${encodeURIComponent(filename)}`);
   const thumbUrl = (cam, filename) => recordingUrl(cam, `thumb=${encodeURIComponent(filename)}`);
   const downloadUrl = (cam, filename) => recordingUrl(cam, `download=${encodeURIComponent(filename)}`);
   const playUrl = (cam, filename) => recordingUrl(cam, `play=${encodeURIComponent(filename)}`);
@@ -161,19 +164,25 @@
 
   // ── Talking to recordings.php ────────────────────────────────────────────
 
-  // One camera's clips, tagged with the camera. Throws when recordings.php does not answer with a list.
-  async function fetchCameraFiles(cam, fetchFn) {
-    const res = await fetchFn(`${ENDPOINT}?cam=${encodeURIComponent(cam)}`);
+  // The clips a recordings.php list URL answers with, tagged with the camera. Throws when it is not a list.
+  async function fetchTagged(cam, url, fetchFn) {
+    const res = await fetchFn(url);
     const list = await res.json();
     if (!res.ok || !Array.isArray(list)) throw new Error('not a list');
     return tagFiles(cam, list);
   }
 
+  // One camera's clips. Throws when recordings.php does not answer with a list.
+  const fetchCameraFiles = (cam, fetchFn) => fetchTagged(cam, `${ENDPOINT}?cam=${encodeURIComponent(cam)}`, fetchFn);
+
+  // One camera's archived clips (what the person check sorted out), the same way.
+  const fetchArchiveFiles = (cam, fetchFn) => fetchTagged(cam, archiveListUrl(cam), fetchFn);
+
   // Every given camera's clips, merged. A camera that cannot be read is reported in `failed` and does not
   // stop the others (one camera's folder being unreadable must not blank the whole list).
-  async function loadCameras(cams, fetchFn) {
+  async function loadCameras(cams, fetchFn, fetchOne = fetchCameraFiles) {
     const results = await Promise.all(cams.map((cam) =>
-      fetchCameraFiles(cam, fetchFn).then((files) => ({ cam, files }), () => ({ cam, files: null }))));
+      fetchOne(cam, fetchFn).then((files) => ({ cam, files }), () => ({ cam, files: null }))));
     return mergeResults(results);
   }
 
@@ -199,6 +208,10 @@
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || ('HTTP ' + res.status));
   }
+
+  // What differs between a row of the recordings and a row of the archive: the element ids and the URLs.
+  const RECORDING_ROW = { rowId: 'row', playerId: 'player', playUrl, downloadUrl };
+  const ARCHIVE_ROW = { rowId: 'archived', playerId: 'archived-player', playUrl: archivePlayUrl, downloadUrl: archiveDownloadUrl };
 
   // ── The list on a page ───────────────────────────────────────────────────
 
@@ -228,6 +241,7 @@
       alert: (text) => root.alert(text),
     }, options.hooks);
     const elId = (key) => `files-${key}-${prefix}`;
+    let archiveOpen = false;   // is the archive's own list showing?
 
     function boxes(onlySeen) {
       return Array.from(panel.querySelectorAll('.files-select')).filter((b) => !onlySeen || b.dataset.seen === '1');
@@ -283,8 +297,9 @@
 
     // A plain HTML5 <video> under the clicked row; the browser's own player does the rest. ?play= streams
     // the same bytes as ?download= with Range forwarding, so seeking works.
-    function togglePlay(cam, filename) {
-      const container = document.getElementById(`player-${cam}-${filename}`);
+    // `kind` says which list's row it is: the recordings' (default) or the archive's.
+    function togglePlay(cam, filename, kind = RECORDING_ROW) {
+      const container = document.getElementById(`${kind.playerId}-${cam}-${filename}`);
       if (!container) return;
       if (container.dataset.open === '1') {
         container.replaceChildren();   // removing the <video> stops playback
@@ -292,7 +307,7 @@
         hooks.playersChanged();
         return;
       }
-      container.replaceChildren(h('video', { controls: true, autoplay: true, src: playUrl(cam, filename), onended: hooks.playersChanged }));
+      container.replaceChildren(h('video', { controls: true, autoplay: true, src: kind.playUrl(cam, filename), onended: hooks.playersChanged }));
       container.dataset.open = '1';
       hooks.playersChanged();
     }
@@ -331,6 +346,24 @@
       if (archiveTotal === 0) return;
       if (!hooks.confirm(`Permanently delete the ${plural(archiveTotal, 'archived recording')} that the person check sorted out? This cannot be undone.`)) return;
       await runDeletes(cams.map((cam) => post(cam, 'deleteArchive=1', fetchFn)), 'Could not delete the archive');
+    }
+
+    // Gives one archived clip back to the recordings; the relay never overwrites one of the same name.
+    async function restoreOne(cam, filename) {
+      if (!hooks.confirm(`Restore ${filename} to the recordings?`)) return;
+      try {
+        await hooks.withPaused(async () => {
+          await post(cam, `restore=${encodeURIComponent(filename)}`, fetchFn);
+        });
+      } catch (e) {
+        hooks.alert(`Could not restore the recording: ${e.message}`);
+      }
+      await refresh();
+    }
+
+    function toggleArchive() {
+      archiveOpen = !archiveOpen;
+      return refresh();
     }
 
     // Downloads every ticked clip. A browser takes one download per click, so they start one after another
@@ -402,6 +435,30 @@
       ];
     }
 
+    // One row of the archive: where it is from, its name and size, and what can be done with it.
+    function archiveRow(f) {
+      const label = options.camLabel ? options.camLabel(f.cam) : null;
+      return [
+        h('div', { className: 'files-row', id: `${ARCHIVE_ROW.rowId}-${f.cam}-${f.filename}` },
+          ...(label === null ? [] : [h('span', { className: 'files-cam', textContent: label })]),
+          h('span', { className: 'files-name', textContent: f.filename }),
+          h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
+          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => togglePlay(f.cam, f.filename, ARCHIVE_ROW) }),
+          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: archiveDownloadUrl(f.cam, f.filename), onclick: () => hooks.holdForDownload() }),
+          h('button', { className: 'cam-btn', textContent: '♻ RESTORE', title: 'Put this recording back into the list', onclick: () => restoreOne(f.cam, f.filename) })),
+        h('div', { className: 'files-player', id: `${ARCHIVE_ROW.playerId}-${f.cam}-${f.filename}` }),
+      ];
+    }
+
+    // The archive's list under the header while it is open. { files, failed } as loadCameras gives them.
+    function archiveSection({ files, failed }) {
+      const notes = failed.length === 0 ? [] : [empty(`Could not load the archive of: ${failed.map((c) => (options.camLabel ? options.camLabel(c) : c)).join(', ')}`)];
+      const body = files.length === 0 && failed.length === 0 ? [empty('The archive is empty.')] : files.flatMap(archiveRow);
+      return h('div', { className: 'files-archive' },
+        h('div', { className: 'files-archive-title', textContent: `Archive: ${plural(files.length, 'recording')} that the person check sorted out` }),
+        ...notes, ...body);
+    }
+
     function footer() {
       return h('div', { className: 'files-panel-footer' },
         h('button', { className: 'cam-btn', id: elId('sel-all'), textContent: '☑ SELECT ALL', onclick: () => toggleSelectAll(false) }),
@@ -418,6 +475,8 @@
       return h('div', { className: 'files-panel-header' },
         h('span', { textContent: fileCount > 0 ? plural(fileCount, 'recording') : '' }),
         ...(fileCount > 0 ? [h('button', { className: 'cam-btn', id: elId('sort-all'), textContent: '🧑 SORT OUT ALL', onclick: sortOutAll })] : []),
+        ...(archiveTotal > 0 ? [h('button', { className: 'cam-btn', id: elId('browse-archive'), title: 'Look at the archived recordings and put back the ones you want to keep',
+                                             textContent: archiveOpen ? '📂 HIDE ARCHIVE' : '📂 BROWSE ARCHIVE', onclick: toggleArchive })] : []),
         ...(archiveTotal > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-archive'), title: ARCHIVE_HINT,
                                              textContent: `🗄 DELETE ARCHIVE (${archiveTotal})`, onclick: () => deleteArchive(archiveTotal) })] : []),
         ...(fileCount > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-all'), textContent: '🗑 DELETE ALL', onclick: deleteAll })] : []));
@@ -427,6 +486,9 @@
     async function refresh() {
       try {
         const [{ files, failed }, archiveTotal] = await Promise.all([loadCameras(cams, fetchFn), loadArchiveTotal(cams, fetchFn)]);
+        if (archiveTotal === 0) archiveOpen = false;   // nothing left to browse (restored or deleted)
+        const archived = archiveOpen ? await loadCameras(cams, fetchFn, fetchArchiveFiles) : null;
+        const archiveNodes = archived ? [archiveSection(archived)] : [];
         hooks.loaded(files, failed);
         schedulePoll(files);
         if (cams.length > 0 && failed.length === cams.length) {   // every camera failed (no cameras is just an empty list)
@@ -436,12 +498,12 @@
         const notice = failed.length === 0 ? [] : [empty(`Could not load the recordings of: ${failed.map((c) => (options.camLabel ? options.camLabel(c) : c)).join(', ')}`)];
         if (files.length === 0) {
           // Everything may have been sorted into the archive: it can still be deleted from here.
-          setContent(...(archiveTotal > 0 ? [header(0, archiveTotal)] : []), ...notice, empty('No recordings yet.'));
+          setContent(...(archiveTotal > 0 ? [header(0, archiveTotal)] : []), ...archiveNodes, ...notice, empty('No recordings yet.'));
           return;
         }
         // Keep whatever was ticked across a re-render (the list refreshes itself when a recording finishes).
         const keep = new Set(selected().map((p) => `${p.cam}/${p.filename}`));
-        setContent(header(files.length, archiveTotal), ...notice, ...files.flatMap((f) => row(f, keep)), footer());
+        setContent(header(files.length, archiveTotal), ...archiveNodes, ...notice, ...files.flatMap((f) => row(f, keep)), footer());
         updateSelectionUI();
       } catch (e) {
         setContent(empty('Could not load recordings.'));
@@ -453,7 +515,7 @@
 
   Object.assign(api, {
     create, loadCameras, fetchCameraFiles, post, recordedAtMs, sortNewestFirst, tagFiles, mergeResults,
-    fetchArchiveCount, loadArchiveTotal, ARCHIVE_HINT,
+    fetchArchiveCount, fetchArchiveFiles, loadArchiveTotal, ARCHIVE_HINT, archiveListUrl, archivePlayUrl, archiveDownloadUrl,
     recordingUrl, downloadUrl, playUrl, archiveUrl, thumbUrl, showPicture, scanOf, scanLabel, hasPendingScan, formatBytes, h,
   });
 

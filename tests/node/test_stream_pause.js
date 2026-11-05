@@ -87,8 +87,8 @@ test('the shared footage list asks for room around every request that needs it',
   for (const snippet of ['hooks.withPaused(async () => {', 'hooks.holdForDownload()', 'hooks.playersChanged()']) {
     assertTrue(list.includes(snippet), `recordings-list.js does not call: ${snippet}`);
   }
-  // one hold for a GET click, one for DOWNLOAD SELECTED
-  assertEqual(list.split('hooks.holdForDownload()').length - 1, 2);
+  // one hold for a GET click, one for DOWNLOAD SELECTED, one for the GET of an archived clip
+  assertEqual(list.split('hooks.holdForDownload()').length - 1, 3);
 });
 
 summarize();

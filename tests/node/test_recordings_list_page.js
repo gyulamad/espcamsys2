@@ -42,6 +42,7 @@ function fakeServer(initial, options = {}) {
   const requests = [];
   const failingDeletes = new Set(options.failingDeletes || []);
   const archive = Object.assign({}, options.archive || {});   // camera -> number of archived clips
+  const archivedFiles = JSON.parse(JSON.stringify(options.archiveFiles || {}));   // camera -> archived clips (when the test browses them)
   const reply = (status, body) => ({ ok: status < 400, status, json: async () => body });
   async function fetch(url, init = {}) {
     const u = new URL(url, 'http://dash/');
@@ -52,7 +53,20 @@ function fakeServer(initial, options = {}) {
     if (!clips[cam]) return reply(404, 'Camera not found');
     if (u.searchParams.has('archive')) {
       if (options.archiveUnreadable && options.archiveUnreadable.includes(cam)) return reply(502, { error: 'Could not reach relay' });
-      return reply(200, { count: archive[cam] || 0 });
+      return reply(200, { count: archivedFiles[cam] ? archivedFiles[cam].length : (archive[cam] || 0) });
+    }
+    if (u.searchParams.has('archiveList')) {
+      if (options.archiveListUnreadable && options.archiveListUnreadable.includes(cam)) return reply(502, { error: 'Could not reach relay' });
+      return reply(200, archivedFiles[cam] || []);
+    }
+    const restore = u.searchParams.get('restore');
+    if (restore !== null) {
+      if (options.failingRestores && options.failingRestores.includes(`${cam}/${restore}`)) return reply(409, { error: 'a recording with this name exists already — nothing was overwritten' });
+      const hit = (archivedFiles[cam] || []).find((f) => f.filename === restore);
+      if (!hit) return reply(404, {});
+      archivedFiles[cam] = archivedFiles[cam].filter((f) => f !== hit);
+      clips[cam].push(Object.assign({ seen: false }, hit));
+      return reply(200, { restored: restore });
     }
     if (u.searchParams.has('deleteArchive')) {
       if (options.failingArchiveDeletes && options.failingArchiveDeletes.includes(cam)) return reply(500, { error: 'disk said no' });
@@ -117,6 +131,8 @@ function build(server, extra = {}) {
 const rows = (panel) => panel.querySelectorAll('.files-row');
 const names = (panel) => panel.querySelectorAll('.files-name').map((e) => e.text());
 const byId = (doc, id) => doc.getElementById(id);
+// What the archive's own section contains (the fake DOM models only single-class selectors).
+const inArchive = (panel, selector) => { const box = panel.querySelector('.files-archive'); return box ? box.querySelectorAll(selector) : []; };
 
 async function main() {
   // ── the all-cameras list ──
@@ -200,7 +216,7 @@ async function main() {
     await view.refresh();
     const btn = btnOf(doc);
     check('the button shows how many clips are archived, over every camera of the list', !!btn && btn.text() === '🗄 DELETE ARCHIVE (7)', btn && btn.text());
-    check('…next to SORT OUT ALL, before DELETE ALL', same(header(panel).querySelectorAll('.cam-btn').map((b) => b.text()), ['🧑 SORT OUT ALL', '🗄 DELETE ARCHIVE (7)', '🗑 DELETE ALL']));
+    check('…next to SORT OUT ALL (and BROWSE ARCHIVE), before DELETE ALL', same(header(panel).querySelectorAll('.cam-btn').map((b) => b.text()), ['🧑 SORT OUT ALL', '📂 BROWSE ARCHIVE', '🗄 DELETE ARCHIVE (7)', '🗑 DELETE ALL']));
     check('…its hover text says how to check the archive first', btn.title.includes('no-person') && btn.title.includes('INSTALL.md') && btn.title.includes('cannot be undone'));
     check('…and is a danger button', btn.classes().includes('danger'));
 
@@ -239,7 +255,7 @@ async function main() {
     const { doc, panel, view } = build(server);
     await view.refresh();
     check('no clips but an archive: the button is there, SORT OUT ALL and DELETE ALL are not',
-      same(panel.querySelectorAll('.cam-btn').map((b) => b.text()), ['🗄 DELETE ARCHIVE (5)']) && panel.text().includes('No recordings yet.'), show(panel.querySelectorAll('.cam-btn').map((b) => b.text())));
+      same(panel.querySelectorAll('.cam-btn').map((b) => b.text()), ['📂 BROWSE ARCHIVE', '🗄 DELETE ARCHIVE (5)']) && panel.text().includes('No recordings yet.'), show(panel.querySelectorAll('.cam-btn').map((b) => b.text())));
     byId(doc, 'files-delete-archive-all').click();
     await new Promise((r) => setTimeout(r, 5));
     check('…and deleting it leaves the plain "No recordings yet."', panel.text() === 'No recordings yet.' && panel.querySelectorAll('.cam-btn').length === 0);
@@ -255,6 +271,97 @@ async function main() {
       : { ok: true, status: 200, json: async () => [{ filename: A, sizeBytes: 1, seen: true }] }) }, { cams: ['cam1'], camLabel: null });
     await junk.view.refresh();
     check('a count that is not a whole number shows no button', byId(junk.doc, 'files-delete-archive-all') === null && names(junk.panel).length === 1);
+  }
+
+  // ── browsing and restoring the archive ──
+  {
+    const X1 = name('cam1', '2026-09-01T10:00:00.000Z');
+    const X2 = name('cam3', '2026-09-03T10:00:00.000Z');
+    const X3 = name('cam1', '2026-09-02T10:00:00.000Z');
+    const archived = () => ({ cam1: [{ filename: X1, sizeBytes: 2048 }, { filename: X3, sizeBytes: 5 }], cam3: [{ filename: X2, sizeBytes: 3 * 1024 * 1024 }] });
+    const browseBtn = (doc) => byId(doc, 'files-browse-archive-all');
+    const archiveNames = (panel) => inArchive(panel, '.files-name').map((e) => e.text());
+    const listNames = (panel) => names(panel).filter((n) => !archiveNames(panel).includes(n));   // the normal list only
+
+    const server = fakeServer(fleet(), { archiveFiles: archived() });
+    const { doc, panel, view, events, answers } = build(server);
+    await view.refresh();
+    check('the archive is not listed (nor even asked for) until BROWSE ARCHIVE is pressed', panel.querySelector('.files-archive') === null && !server.requests.some((r) => r.query.includes('archiveList')));
+
+    browseBtn(doc).click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('BROWSE ARCHIVE lists the archived clips of every camera, newest first, under the header', same(archiveNames(panel), [X2, X3, X1]), show(archiveNames(panel)));
+    check('…asking each camera once with GET archiveList', same(server.requests.filter((r) => r.query.includes('archiveList')).map((r) => `${r.method} ${r.cam}`).sort(), ['GET cam1', 'GET cam2', 'GET cam3']));
+    check('…each archived row names its camera and shows its size', same(inArchive(panel, '.files-cam').map((e) => e.text()), ['🚗 Drive', '🚪 Front', '🚪 Front']) && same(inArchive(panel, '.files-size').map((e) => e.text()), ['3.0 MB', '5 B', '2.0 KB']));
+    check('…each archived row can be played, downloaded and restored — and not deleted one by one',
+      inArchive(panel, '.files-row').every((r) => same(r.querySelectorAll('.cam-btn').map((b) => b.text()), ['▶ PLAY', '⬇ GET', '♻ RESTORE'])));
+    check('…the title says how many', panel.querySelector('.files-archive-title').text() === 'Archive: 3 recordings that the person check sorted out');
+    check('…the normal list is still there and the button now hides the archive', same(listNames(panel), [D, B, C, A]) && browseBtn(doc).text() === '📂 HIDE ARCHIVE');
+    check('…GET points at archiveDownload (never at the recordings)', panel.querySelector('.files-archive').descendants().filter((e) => e.tagName === 'A').every((a) => a.href.includes('archiveDownload=') && !a.href.includes('&download=')));
+
+    // playing
+    const play = inArchive(panel, '.files-row')[0].querySelectorAll('.cam-btn')[0];
+    play.click();
+    const player = byId(doc, `archived-player-cam3-${X2}`);
+    check('PLAY opens a player on the archive URL', player.dataset.open === '1' && player.children[0].src === `recordings.php?cam=cam3&archivePlay=${encodeURIComponent(X2)}`, player.children[0] && player.children[0].src);
+    check('…and changes nothing on the server', server.posts().length === 0);
+    play.click();
+    check('…pressing it again closes the player', player.dataset.open === '0' && player.children.length === 0);
+
+    // restoring
+    const restoreBtn = inArchive(panel, '.files-row')[0].querySelectorAll('.cam-btn')[2];
+    answers.confirm = false;
+    restoreBtn.click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('answering no to RESTORE restores nothing', server.posts().length === 0 && events.confirms[events.confirms.length - 1] === `Restore ${X2} to the recordings?`);
+    answers.confirm = true;
+    restoreBtn.click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('RESTORE posts restore for that camera and clip, with the anti-forgery header',
+      same(server.posts().map((r) => `${r.cam} ${r.query}`), [`cam3 ?cam=cam3&restore=${encodeURIComponent(X2)}`]) && server.posts()[0].headers['X-Requested-With'] === 'camdash', show(server.posts()));
+    check('…the clip is back in the list and out of the archive, and the archive stays open', listNames(panel).includes(X2) && same(archiveNames(panel), [X3, X1]), show([listNames(panel), archiveNames(panel)]));
+    check('…the delete button count follows', byId(doc, 'files-delete-archive-all').text() === '🗄 DELETE ARCHIVE (2)');
+  }
+  {
+    // a restore the relay refuses is reported, nothing else changes
+    const X = name('cam1', '2026-09-01T10:00:00.000Z');
+    const server = fakeServer(fleet(), { archiveFiles: { cam1: [{ filename: X, sizeBytes: 1 }] }, failingRestores: [`cam1/${X}`] });
+    const { doc, panel, view, events } = build(server);
+    await view.refresh();
+    byId(doc, 'files-browse-archive-all').click();
+    await new Promise((r) => setTimeout(r, 5));
+    inArchive(panel, '.files-row')[0].querySelectorAll('.cam-btn')[2].click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('a refused restore says why (nothing overwritten) and the clip stays in the archive', events.alerts.length === 1 && events.alerts[0].includes('Could not restore the recording') && events.alerts[0].includes('nothing was overwritten')
+      && inArchive(panel, '.files-name').length === 1);
+  }
+  {
+    // the last archived clip restored: the archive section and its buttons go away
+    const X = name('cam1', '2026-09-01T10:00:00.000Z');
+    const server = fakeServer(fleet(), { archiveFiles: { cam1: [{ filename: X, sizeBytes: 1 }] } });
+    const { doc, panel, view } = build(server);
+    await view.refresh();
+    byId(doc, 'files-browse-archive-all').click();
+    await new Promise((r) => setTimeout(r, 5));
+    inArchive(panel, '.files-row')[0].querySelectorAll('.cam-btn')[2].click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('restoring the last archived clip closes the archive and removes its buttons', panel.querySelector('.files-archive') === null && byId(doc, 'files-browse-archive-all') === null && byId(doc, 'files-delete-archive-all') === null && names(panel).includes(X));
+  }
+  {
+    // an archive that cannot be listed, hostile names
+    const X = name('cam1', '2026-09-01T10:00:00.000Z');
+    const evil = ["x');window.__pwned=1;('.mp4", '"><img src=x onerror=alert(1)>.mp4', '../../etc/passwd'];
+    const server = fakeServer(fleet(), { archive: { cam1: 1, cam2: 1 }, archiveFiles: { cam1: [...evil.map((filename) => ({ filename, sizeBytes: 1 })), { filename: X, sizeBytes: 1 }] }, archiveListUnreadable: ['cam2'] });
+    const { doc, panel, view } = build(server);
+    await view.refresh();
+    byId(doc, 'files-browse-archive-all').click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('archived names that are not plain recording names never become a row or an id', same(inArchive(panel, '.files-name').map((e) => e.text()), [X])
+      && !panel.descendants().some((e) => evil.some((n) => e.id.includes(n) || (e.href || '').includes(n) || e.text().includes(n))));
+    check('an archive that cannot be listed for one camera says so and still shows the others', panel.text().includes('Could not load the archive of: 🌿 Back') && inArchive(panel, '.files-row').length === 1);
+    byId(doc, 'files-browse-archive-all').click();
+    await new Promise((r) => setTimeout(r, 5));
+    check('HIDE ARCHIVE closes it again', panel.querySelector('.files-archive') === null && byId(doc, 'files-browse-archive-all').text() === '📂 BROWSE ARCHIVE');
   }
 
   // ── hostile names ──

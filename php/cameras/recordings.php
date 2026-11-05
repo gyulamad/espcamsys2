@@ -18,6 +18,10 @@
 // POST recordings.php?cam=ID&scanAll=1          -> the same for every clip of this camera not checked yet
 // GET  recordings.php?cam=ID&archive=1          -> {"count": N}: how many clips the sorting out has put in the archive
 //                                                  (the relay's recordings/<camera>/no-person/ folder)
+// GET  recordings.php?cam=ID&archiveList=1      -> JSON list of the archived files (same shape as the list of recordings)
+// GET  recordings.php?cam=ID&archivePlay=FILENAME      -> streams an archived file inline
+// GET  recordings.php?cam=ID&archiveDownload=FILENAME  -> streams an archived file down as an attachment
+// POST recordings.php?cam=ID&restore=FILENAME   -> gives an archived file back to the recordings (nothing is overwritten)
 // POST recordings.php?cam=ID&deleteArchive=1    -> deletes that camera's whole archive for good
 //
 // The POSTs need the dashboard's X-Requested-With header and a same-origin request (see
@@ -34,7 +38,7 @@ require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/relay.php';
 
 // ?cam[]=x, ?play[]=x ... are arrays, not names: refuse them plainly instead of crashing (review F-16)
-if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen', 'thumb', 'scan', 'scanAll', 'archive', 'deleteArchive']) !== null) {
+if (CamLogic::firstNonStringParam($_GET, ['cam', 'download', 'play', 'delete', 'deleteAll', 'seen', 'thumb', 'scan', 'scanAll', 'archive', 'deleteArchive', 'archiveList', 'archivePlay', 'archiveDownload', 'restore']) !== null) {
     http_response_code(400);
     exit('Invalid parameter');
 }
@@ -55,6 +59,10 @@ $scan = $_GET['scan'] ?? null;
 $scanAll = isset($_GET['scanAll']);
 $archive = isset($_GET['archive']);
 $deleteArchive = isset($_GET['deleteArchive']);
+$archiveList = isset($_GET['archiveList']);
+$archivePlay = $_GET['archivePlay'] ?? null;
+$archiveDownload = $_GET['archiveDownload'] ?? null;
+$restore = $_GET['restore'] ?? null;
 
 // Streams a recording to the browser. Shared by $download and $play — the only
 // difference between them is the Content-Disposition we send back; the byte
@@ -166,6 +174,43 @@ if ($scan !== null || $scanAll) {
 
 if ($thumb !== null) {
     stream_thumbnail($relayBase, $thumb);
+}
+
+if ($restore !== null) {
+    header('Content-Type: application/json');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_fail(405, 'Use POST to restore a recording');
+    }
+    require_dashboard_mutation();
+    if (!CamLogic::isSafeFilename($restore)) {
+        json_fail(400, 'Invalid filename');
+    }
+    audit_log('restore archived recording ' . $camera['id'] . '/' . $restore);
+    relay_proxy_json($relayBase . '/archive/' . rawurlencode($restore) . '/restore', 'POST', 10, relay_actor_headers($config));
+    exit;
+}
+
+if ($archivePlay !== null) {
+    stream_named_recording($relayBase . '/archive', $archivePlay, 'inline');
+}
+
+if ($archiveDownload !== null) {
+    stream_named_recording($relayBase . '/archive', $archiveDownload, 'attachment');
+}
+
+if ($archiveList) {
+    header('Content-Type: application/json');
+    [$archiveFilesBody] = relay_fetch($relayBase . '/archive/files', 'GET', 10, relay_read_headers($config));
+    if ($archiveFilesBody === false) {
+        json_fail(502, 'Could not reach relay');
+    }
+    // PHP is the trust boundary, here as for the list of recordings.
+    $archiveFiles = CamLogic::sanitizeRecordingList(json_decode($archiveFilesBody, true));
+    if ($archiveFiles === null) {
+        json_fail(502, 'The relay did not answer with a list of archived recordings');
+    }
+    echo json_encode($archiveFiles);
+    exit;
 }
 
 if ($archive) {
