@@ -11,8 +11,10 @@
 //   length   the number of bytes that follow it (version .. payload), so a reader that does not know a
 //            type can skip it and an unknown type never breaks the stream
 //   version  VERSION; a reader refuses any other
-//   type     TYPE_FRAME (payload = one JPEG) or TYPE_HEARTBEAT (nothing; proves the connection is alive)
-//   source   who the message is about, namespaced by kind: "cam:cam1". Empty for a heartbeat.
+//   type     TYPE_FRAME (payload = one JPEG), TYPE_STATE (payload = JSON: the newest value of something, e.g. the
+//            detectors' readings) or TYPE_HEARTBEAT (nothing; proves the connection is alive)
+//   source   who the message is about, namespaced by kind: "cam:cam1" (a camera's picture), "det:det1" (a detector's
+//            picture), "state:detectors" (the readings of every detector). Empty for a heartbeat.
 //
 // Pure functions only (no sockets): the relay writes what these return, and the browser reads it with
 // php/cameras/js/mux-codec.js, which has to agree with this file (tests/node/test_muxcodec.js checks that).
@@ -20,6 +22,7 @@
 const VERSION = 1;
 const TYPE_FRAME = 1;       // a "stream" message: when the viewer is too slow it may be dropped, newer ones follow
 const TYPE_HEARTBEAT = 2;
+const TYPE_STATE = 3;       // like a picture, only the newest matters: a viewer that is behind gets the latest, never the missed ones
 const CONTENT_TYPE = 'application/x-espcam-mux';
 
 const LENGTH_BYTES = 4;
@@ -28,9 +31,15 @@ const MAX_SOURCE_BYTES = 80;
 const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024;  // what the camera push connection accepts as one frame (protocol.isFrameLengthValid)
 
 const CAMERA_KIND = 'cam';
+const DETECTOR_KIND = 'det';
+const STATE_DETECTORS = 'state:detectors';
 
 function cameraSource(id) {
   return `${CAMERA_KIND}:${id}`;
+}
+
+function detectorSource(id) {
+  return `${DETECTOR_KIND}:${id}`;
 }
 
 function encode(type, source, payload) {
@@ -49,12 +58,16 @@ function encodeFrame(source, jpeg) {
   return encode(TYPE_FRAME, source, jpeg);
 }
 
+function encodeState(source, json) {
+  return encode(TYPE_STATE, source, json);
+}
+
 function encodeHeartbeat() {
   return encode(TYPE_HEARTBEAT, '', Buffer.alloc(0));
 }
 
 module.exports = {
-  VERSION, TYPE_FRAME, TYPE_HEARTBEAT, CONTENT_TYPE,
+  VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, CONTENT_TYPE, STATE_DETECTORS,
   LENGTH_BYTES, FIXED_BODY_BYTES, MAX_SOURCE_BYTES, MAX_PAYLOAD_BYTES,
-  cameraSource, encodeFrame, encodeHeartbeat,
+  cameraSource, detectorSource, encodeFrame, encodeState, encodeHeartbeat,
 };

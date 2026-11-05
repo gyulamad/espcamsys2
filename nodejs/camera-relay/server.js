@@ -646,22 +646,30 @@ app.get('/stream/:id', requireReadKey, (req, res) => {
 
 // The pictures of several cameras on ONE connection (see lib/muxcodec.js for the format): a browser allows only
 // about 6 connections per address over HTTP/1.1, so one MJPEG connection per camera left no room for the
-// dashboard's other requests. ?cams=cam1,cam2 names the cameras (the dashboard leaves out the ones its user hid).
-// Like /stream, a viewer that cannot keep up gets the newest picture of each camera instead of a backlog.
+// dashboard's other requests. ?cams=cam1,cam2 names the cameras (the dashboard leaves out the ones its user hid),
+// ?dets=det1,det2 the detectors whose pictures are wanted too, ?status=1 the readings of every detector (what
+// /detectors/events pushes). Like /stream, a viewer that cannot keep up gets the newest picture of each camera and
+// detector and the newest readings instead of a backlog.
 // Reading needs the read key, like /stream — only the PHP layer should reach this port.
 let muxViewers = 0;
 app.get('/mux', requireReadKey, (req, res) => {
-  const parsed = muxfeed.parseCameraIds(req.query.cams, { idPattern: logentry.CAMERA_ID_RE, max: MAX_CAMERAS });
-  if (parsed.error) return res.status(400).set('Cache-Control', 'no-store').json({ error: parsed.error });
+  const request = muxfeed.parseRequest(req.query, { idPattern: logentry.CAMERA_ID_RE, maxCameras: MAX_CAMERAS, maxDetectors: MAX_DETECTORS });
+  if (request.error) return res.status(400).set('Cache-Control', 'no-store').json({ error: request.error });
   if (muxViewers >= muxfeed.MAX_VIEWERS) {
     return res.status(503).set('Cache-Control', 'no-store').json({ error: `already ${muxfeed.MAX_VIEWERS} viewers of the live pictures` });
   }
-  const cameraList = parsed.ids.map((id) => ({ id, cam: getCamera(id) }));
+  const cameraList = request.cams.map((id) => ({ id, cam: getCamera(id) }));
+  request.dets.filter((id) => !knownDetector(id)).forEach(warnNoDetectorPicture);
   muxViewers += 1;
   res.writeHead(200, muxfeed.HEADERS);
   res.flushHeaders();
   req.socket.setNoDelay(true);
-  const session = muxfeed.openSession({ write: (bytes) => res.write(bytes), cameras: cameraList });
+  const session = muxfeed.openSession({
+    write: (bytes) => res.write(bytes),
+    cameras: cameraList,
+    detectors: request.dets.length ? { ids: request.dets, lookup: knownDetector, bus: detectorBus } : null,
+    status: request.status ? { snapshot: detectorViews, bus: detectorBus } : null,
+  });
   res.on('drain', session.drain);
   req.on('close', () => {
     muxViewers -= 1;
@@ -699,7 +707,7 @@ const MAX_BAD_MESSAGES_IN_A_ROW = 25;         // then the connection is not a de
 const detectors = {}; // id -> record, see getDetector()
 const DETECTOR_VIEW_MINUTES = detectorview.viewMinutes(fromEnv('DETECTOR_VIEW_MINUTES', config.detectorViewMinutes)); // how long a detector streams after somebody asked (10 by default)
 const detectorBus = new EventEmitter();        // 'change' whenever any detector's readings or connection change: feeds /detectors/events
-detectorBus.setMaxListeners(detectorevents.MAX_VIEWERS + 4);
+detectorBus.setMaxListeners(detectorevents.MAX_VIEWERS + 2 * muxfeed.MAX_VIEWERS + 4);   // a /mux viewer listens up to twice: its detector pictures and its readings
 const detectorViewThrottle = new Throttle(5 * 60 * 1000); // the dashboard asking for a picture that is not there: once per 5 min per detector and state
 
 function getDetector(id) {
@@ -916,6 +924,22 @@ app.get('/detector/:id/uplink', (req, res) => {
 });
 
 // Every detector the relay has heard from: { id: view } — see detectorstate.buildView().
+// The detector with this id, if the relay has heard from it (a read never creates one: that would let a viewer
+// fill the MAX_DETECTORS places that real detectors need).
+function knownDetector(id) {
+  return Object.prototype.hasOwnProperty.call(detectors, id) ? detectors[id] : undefined;
+}
+
+// The dashboard asks for the picture of a detector that has never connected: said in the log (once in a while,
+// like the per-detector stream does) — the usual cause is a DETECTOR_ID that differs from the one paired with
+// the camera in the dashboard's config.php.
+function warnNoDetectorPicture(id) {
+  const t = detectorViewThrottle.check(`${id}:never`, Date.now());
+  if (!t.allow) return;
+  const known = Object.keys(detectors).sort();
+  detLog('WARN', id, `the dashboard asked for the picture of detector '${id}' but no detector called '${id}' has connected to the relay since it started${known.length ? ` (detectors seen: ${known.join(', ')})` : ' (no detector has connected at all)'} — check that DETECTOR_ID on the board equals the detector paired with the camera in the dashboard's config.php${suppressedNote(t.suppressed)}`);
+}
+
 function detectorViews() {
   const now = Date.now();
   const out = {};

@@ -420,10 +420,46 @@ class CamLogic
         return $ids;
     }
 
-    // Where the relay serves the mux stream of these cameras.
-    public static function muxUrl(string $relayUrl, array $ids): string
+    // The cameras whose DETECTOR's picture a mux request asks for ("cam1,cam2": the cameras' ids, as the page knows
+    // them): each once, in the order given; [] when it asks for none. Null when the list is not a string, has an empty
+    // entry, or names a camera that does not exist or has no detector paired.
+    public static function muxDetectorCameraIds(array $cameras, $requested): ?array
     {
-        return rtrim($relayUrl, '/') . '/mux?cams=' . rawurlencode(implode(',', $ids));
+        if (!is_string($requested)) {
+            return null;
+        }
+        if ($requested === '') {
+            return [];
+        }
+        $ids = array_values(array_unique(explode(',', $requested)));
+        foreach ($ids as $id) {
+            $camera = self::findCameraById($cameras, $id);
+            if ($camera === null || self::detectorIdOf($camera) === null) {
+                return null;
+            }
+        }
+        return $ids;
+    }
+
+    // camera id => the id of the detector paired with it, for these cameras (all of which have one).
+    public static function detectorIdsByCamera(array $cameras, array $camIds): array
+    {
+        $out = [];
+        foreach ($camIds as $id) {
+            $out[$id] = self::detectorIdOf(self::findCameraById($cameras, $id) ?? []);
+        }
+        return $out;
+    }
+
+    // Where the relay serves the mux stream: the pictures of these cameras, of these detectors (their own ids), and
+    // when $status also the readings of the detectors.
+    public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false): string
+    {
+        $url = rtrim($relayUrl, '/') . '/mux?cams=' . rawurlencode(implode(',', $ids));
+        if ($detectorIds) {
+            $url .= '&dets=' . rawurlencode(implode(',', $detectorIds));
+        }
+        return $status ? $url . '&status=1' : $url;
     }
 
     // Whether the relay's answer says it is the mux stream. Anything else (JSON saying why not, or text/html from

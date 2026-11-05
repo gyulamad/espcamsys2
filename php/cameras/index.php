@@ -567,7 +567,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       <div class="det-row offline" id="det-<?= $camId ?>" data-cam="<?= $camId ?>">
         <div class="det-pic">
           <img data-cam="<?= $camId ?>" id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
-               data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>"
+               data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" <?= $muxEnabled ? '' : 'src="detector-stream.php?cam=' . urlencode($cam['id']) . '"' ?>
+
                onload="this.dataset.failed=''" onerror="onDetectorImgError(this.dataset.cam)">
           <div class="det-area" id="detarea-<?= $camId ?>" data-cam="<?= $camId ?>" hidden title="Motion area: only motion inside this rectangle counts. Drag it to move it, drag an edge or corner to resize it, then APPLY.">
             <?php foreach (['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as $h): ?><span class="h h-<?= $h ?>" data-h="<?= $h ?>"></span><?php endforeach; ?>
@@ -686,7 +687,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   const MUX_ENABLED = <?= $muxEnabled ? 'true' : 'false' ?>;
   let pictures = MUX_ENABLED && window.CamMuxPictures ? CamMuxPictures.create({
     url: 'mux.php',
-    imgFor: (id) => document.getElementById('img-' + id),
+    imgFor: (kind, id) => document.getElementById((kind === 'det' ? 'detimg-' : 'img-') + id),
+    onStatus: (data) => onLiveDetectorData(data),
     onDown: (ids) => ids.forEach((id) => onStreamError(id)),   // it is reopened by itself; pictures resume on their own
     onFallback: fallBackToStreams,
   }) : null;
@@ -709,16 +711,35 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     document.getElementById('img-' + id).src = '';
   }
 
+  // The picture of the detector paired with a camera (the page asks for it in reconnectDetectorImg).
+  function closeDetectorPicture(id) {
+    if (pictures) {
+      pictures.hideDetector(id);
+      return;
+    }
+    const di = document.getElementById('detimg-' + id);
+    if (di) di.src = '';
+  }
+
+  // The detectors' pictures and readings had their own connections too (detector-stream.php, detector-events.php).
   function fallBackToStreams() {
     console.warn('mux.php cannot be used from here: showing one stream.php connection per camera');
     pictures.close();
     pictures = null;
     getAllCameraIds().forEach((id) => reloadStream(id));
+    const detectorRows = document.querySelectorAll('.det-row');
+    detectorRows.forEach((row) => reconnectDetectorImg(row.dataset.cam));
+    if (detectorRows.length > 0) openDetectorEvents();
   }
 
-  // With mux.php the images have no src yet (a src would open a stream.php connection per camera): start them now.
+  // With mux.php the images have no src yet (a src would open a connection per picture): start them now.
   // (Also when the mux scripts could not be loaded: then every camera gets its own stream.php, via openPicture.)
   if (MUX_ENABLED) getAllCameraIds().forEach((id) => reloadStream(id));
+  if (pictures) {
+    const detectorRows = document.querySelectorAll('.det-row');
+    detectorRows.forEach((row) => pictures.showDetector(row.dataset.cam));
+    if (detectorRows.length > 0) pictures.watchStatus(true);   // the readings come on the same connection, whatever the tab does
+  }
   // </pictures-source>
 
   function setStatus(id, cls, label) {
@@ -817,8 +838,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function stopPictures(id) {
     clearStreamWatchdog(id);
     closePicture(id);
-    const di = document.getElementById('detimg-' + id);
-    if (di) di.src = '';
+    closeDetectorPicture(id);
   }
 
   // Opens them again (cameras the user pressed HIDE on stay closed: both functions skip them).
@@ -1815,6 +1835,15 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   const isStatusMap = (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error;
 
+  // A { camId: status } answer that arrived over a live connection (detector-events.php below, or mux.php): it is
+  // what the page shows, and while they keep coming the polling fallback stays quiet.
+  function onLiveDetectorData(data) {
+    if (!isStatusMap(data)) return;
+    detectorEventsAt = Date.now();
+    detectorPollFailures = 0;
+    showDetectorData(data);
+  }
+
   // LIVE: the dashboard keeps one Server-Sent Events stream open (detector-events.php) and the relay pushes
   // the numbers the moment a detector sends them — no polling interval in between. If the stream cannot be
   // had (an older relay, a proxy that buffers, a network hiccup) the polling below takes over by itself.
@@ -1830,16 +1859,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   function openDetectorEvents() {
     closeDetectorEvents();
-    if (document.hidden || typeof EventSource === 'undefined') return;
+    if (pictures || document.hidden || typeof EventSource === 'undefined') return;   // (with mux.php the readings come on its connection)
     const source = new EventSource('detector-events.php');
     detectorEvents = source;
     source.addEventListener('detectors', (e) => {
       let data = null;
       try { data = JSON.parse(e.data); } catch (err) { /* not JSON: ignore this message */ }
-      if (!isStatusMap(data)) return;
-      detectorEventsAt = Date.now();
-      detectorPollFailures = 0;
-      showDetectorData(data);
+      onLiveDetectorData(data);
     });
     source.onerror = () => {
       // The browser retries by itself while it is CONNECTING; once CLOSED (an HTTP error answer) it never does.
@@ -1883,7 +1909,12 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     delete detImgTimers[id];
     const img = document.getElementById('detimg-' + id);
     const cam = document.getElementById('img-' + id);
-    if (!img || document.hidden || streamsPaused || detIdle[id] || (cam && cam.dataset.hidden === '1')) return;   // idle: the picture comes back by itself when the view is switched on
+    if (!img || document.hidden || streamsPaused || (cam && cam.dataset.hidden === '1')) return;
+    if (pictures) {   // the picture comes on the one connection, whenever the detector streams (also after it was idle)
+      pictures.showDetector(id);
+      return;
+    }
+    if (detIdle[id]) return;   // idle: the picture comes back by itself when the view is switched on
     img.dataset.failed = '';
     img.dataset.lastTry = String(Date.now());
     img.src = img.dataset.src + '&_=' + Date.now();
@@ -1923,6 +1954,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   window.addEventListener('pageshow', (ev) => { if (ev.persisted) resumeAfterHidden(); });
 
   if (document.querySelector('.det-row')) {
+    // (mux.php wanted but its scripts did not load: the detectors' pictures start the old way, like the cameras')
+    if (MUX_ENABLED && !pictures) document.querySelectorAll('.det-row').forEach((row) => reconnectDetectorImg(row.dataset.cam));
     openDetectorEvents();
     pollDetectors();
     setInterval(pollDetectors, DETECTOR_POLL_MS);

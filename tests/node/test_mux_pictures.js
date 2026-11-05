@@ -6,6 +6,7 @@
 // object URLs, and what the page is told.
 
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
+// (state messages carry JSON text)
 const codec = require('../../php/cameras/js/mux-codec');
 const Pictures = require('../../php/cameras/js/mux-pictures');
 
@@ -13,11 +14,14 @@ function setup() {
   const calls = [];
   const deferred = [];
   const urls = { made: [], revoked: [] };
-  const imgs = {};
+  const imgs = {};      // the cameras' images
+  const detImgs = {};   // the images of the detectors paired with them
+  const makeImg = () => ({ src: '', removed: 0, removeAttribute(name) { if (name === 'src') { this.src = ''; this.removed += 1; } } });
   for (const id of ['a', 'b', 'c']) {
-    imgs[id] = { src: '', removed: 0, removeAttribute(name) { if (name === 'src') { this.src = ''; this.removed += 1; } } };
+    imgs[id] = makeImg();
+    detImgs[id] = makeImg();
   }
-  const page = { down: [], fallbacks: 0 };
+  const page = { down: [], fallbacks: 0, status: [] };
   let clientOptions = null;
   let state = 'idle';
   const fakeClient = {
@@ -28,7 +32,8 @@ function setup() {
   };
   const pictures = Pictures.create({
     url: 'mux.php',
-    imgFor: (id) => imgs[id] || null,
+    imgFor: (kind, id) => (kind === 'det' ? detImgs : imgs)[id] || null,
+    onStatus: (data) => page.status.push(data),
     onDown: (ids) => page.down.push(ids),
     onFallback: () => { page.fallbacks += 1; },
     env: {
@@ -41,8 +46,9 @@ function setup() {
     },
   });
   const settle = () => { while (deferred.length) deferred.shift()(); };
-  const frame = (id, bytes = [1, 2, 3]) => clientOptions.onMessage({ type: codec.TYPE_FRAME, source: 'cam:' + id, payload: new Uint8Array(bytes) });
-  return { pictures, calls, imgs, urls, page, settle, frame, options: () => clientOptions, setState: (s) => { state = s; } };
+  const frame = (id, bytes = [1, 2, 3], kind = 'cam') => clientOptions.onMessage({ type: codec.TYPE_FRAME, source: kind + ':' + id, payload: new Uint8Array(bytes) });
+  const sendState = (text, source = codec.STATE_DETECTORS) => clientOptions.onMessage({ type: codec.TYPE_STATE, source, payload: new TextEncoder().encode(text) });
+  return { pictures, calls, imgs, detImgs, sendState, urls, page, settle, frame, options: () => clientOptions, setState: (s) => { state = s; } };
 }
 
 test('showing several cameras together opens ONE connection, for all of them (sorted)', () => {
@@ -111,7 +117,7 @@ test('pictures of cameras that are not shown, of other kinds, and heartbeats are
   t.pictures.show('a'); t.settle();
   t.frame('b');
   t.options().onMessage({ type: codec.TYPE_HEARTBEAT, source: '', payload: new Uint8Array(0) });
-  t.options().onMessage({ type: codec.TYPE_FRAME, source: 'det:a', payload: new Uint8Array([1]) });
+  t.options().onMessage({ type: codec.TYPE_FRAME, source: 'det:a', payload: new Uint8Array([1]) });   // its detector's picture is not wanted
   t.options().onMessage({ type: 77, source: 'cam:a', payload: new Uint8Array([1]) });
   t.frame('zzz');
   assertEqual([t.urls.made.length, t.imgs.a.src, t.imgs.b.src], [0, '', '']);
@@ -162,6 +168,75 @@ test('reconnect with no camera shown does nothing', () => {
   const t = setup();
   t.pictures.reconnect();
   assertEqual(t.calls, []);
+});
+
+test('detector pictures: asked for with dets=, painted on the detector\'s image, never on the camera\'s', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.show('b'); t.pictures.showDetector('b'); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a%2Cb&dets=b');
+  t.frame('b', [7], 'det');
+  assertEqual([t.detImgs.b.src, t.imgs.b.src, t.detImgs.a.src], ['blob:0', '', '']);
+  t.frame('b', [8], 'cam');
+  assertEqual([t.detImgs.b.src, t.imgs.b.src], ['blob:0', 'blob:1'], 'each picture on its own image');
+});
+
+test('detector pictures: hiding one empties its image, releases its URL and reopens the connection without it', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.showDetector('a'); t.settle();
+  t.frame('a', [1], 'det');
+  t.pictures.hideDetector('a'); t.settle();
+  assertEqual([t.detImgs.a.src, t.detImgs.a.removed, t.urls.revoked], ['', 1, ['blob:0']]);
+  assertEqual(t.calls, ['restart', 'restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a');
+  t.frame('a', [1], 'det');
+  assertEqual(t.urls.made.length, 1, 'a detector picture still on its way is dropped');
+});
+
+test('readings: asked for with status=1, delivered as the page\'s { camId: status } object', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.watchStatus(true); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a&status=1');
+  t.sendState('{"a":{"state":"online"}}');
+  assertEqual(t.page.status, [{ a: { state: 'online' } }]);
+});
+
+test('readings: not JSON, another source, or not asked for: ignored', () => {
+  const t = setup();
+  t.pictures.show('a'); t.settle();
+  t.sendState('{"a":1}');
+  assertEqual(t.page.status, [], 'not asked for');
+  t.pictures.watchStatus(true); t.settle();
+  t.sendState('not json {');
+  t.sendState('{"a":1}', 'state:other');
+  assertEqual(t.page.status, []);
+});
+
+test('readings: turning them on or off reopens the connection once, asking for the same twice does not', () => {
+  const t = setup();
+  t.pictures.show('a'); t.settle();
+  t.pictures.watchStatus(true); t.settle();
+  t.pictures.watchStatus(true); t.settle();
+  t.pictures.watchStatus(false); t.settle();
+  assertEqual(t.calls, ['restart', 'restart', 'restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a');
+});
+
+test('no camera shown closes the connection even if readings and detector pictures are wanted (the footage needs the room)', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.showDetector('a'); t.pictures.watchStatus(true); t.settle();
+  t.pictures.hide('a'); t.settle();
+  assertEqual(t.calls, ['restart', 'stop']);
+});
+
+test('close forgets detector pictures and readings too', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.showDetector('a'); t.pictures.watchStatus(true); t.settle();
+  t.frame('a', [1], 'det');
+  t.pictures.close();
+  assertEqual(t.urls.revoked, ['blob:0']);
+  t.sendState('{"a":1}');
+  t.frame('a', [1], 'det');
+  assertEqual([t.page.status.length, t.urls.made.length], [0, 1]);
 });
 
 test('close stops the connection, releases every object URL and forgets the cameras', () => {

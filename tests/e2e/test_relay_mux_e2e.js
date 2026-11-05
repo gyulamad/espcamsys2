@@ -5,6 +5,9 @@
 //   * a heartbeat comes at once and then on its own; a picture reaches the viewer within a fraction of a second,
 //     intact, tagged with its camera; cameras that were not asked for do not come
 //   * a viewer that connects later gets each camera's last picture at once
+//   * detectors: ?dets= brings their pictures (as det:<id>, also from a detector that connects after the viewer asked),
+//     ?status=1 the readings of every detector once a second and on every change; neither is sent unasked; a detector
+//     the relay never heard from is said in the log and costs nothing
 //   * a viewer that stops reading never makes the relay queue up: it gets fewer pictures, the NEWEST one among them
 //   * a viewer limit (503 that says why), and closed viewers free their slot
 //   * with a controlKey set, /mux needs it like /stream does
@@ -18,6 +21,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const codec = require('../../nodejs/camera-relay/lib/muxcodec');
 const feed = require('../../nodejs/camera-relay/lib/muxfeed');
+const fakeDetector = require('./fake_detector');
 const decoder = require('../../php/cameras/js/mux-codec');
 
 const RELAY_DIR = path.join(__dirname, '../../nodejs/camera-relay');
@@ -89,6 +93,9 @@ function view(port, query, headers = {}) {
 }
 const framesOf = (v, id) => v.messages.filter((m) => m.type === codec.TYPE_FRAME && m.source === `cam:${id}`);
 const numberOf = (m) => (m.payload[2] << 8) | m.payload[3];
+const detFrames = (v, id) => v.messages.filter((m) => m.type === codec.TYPE_FRAME && m.source === `det:${id}`);
+const states = (v) => v.messages.filter((m) => m.type === codec.TYPE_STATE && m.source === codec.STATE_DETECTORS);
+const readings = (m) => JSON.parse(Buffer.from(m.payload).toString('utf8'));
 
 async function main() {
   if (!fs.existsSync(path.join(RELAY_DIR, 'node_modules', 'express'))) {
@@ -131,6 +138,45 @@ async function main() {
     viewers.push(late);
     check('a viewer that comes later gets the last picture of each camera at once', await waitFor(() => framesOf(late, 'mux-c').length === 1 && framesOf(late, 'mux-a').length === 1)
       && numberOf(framesOf(late, 'mux-c')[0]) === 4 && numberOf(framesOf(late, 'mux-a')[0]) === 3);
+
+    // ── detectors: pictures and readings on the same connection ──
+    const dv = await view(PORT, '?cams=mux-a&dets=mux-det,mux-late,mux-ghost&status=1');
+    viewers.push(dv);
+    check('before any detector has connected there is nothing to send but the (empty) readings',
+      await waitFor(() => states(dv).length >= 1) && Object.keys(readings(states(dv)[0])).length === 0 && detFrames(dv, 'mux-det').length === 0);
+    const up = await fakeDetector.uplink(PORT, 'mux-det', { key: CAM_KEY });
+    check('a detector connects', up.status === 101, `status ${up.status}`);
+    up.socket.write(fakeDetector.wire(fakeDetector.status(), fakeDetector.JPEG));
+    check('its picture arrives as det:<its id>, byte for byte, though it connected AFTER the viewer asked',
+      await waitFor(() => detFrames(dv, 'mux-det').length >= 1) && Buffer.from(detFrames(dv, 'mux-det')[0].payload).equals(fakeDetector.JPEG));
+    check('the readings follow it at once: the detector is listed, with its report', await waitFor(() => states(dv).some((m) => {
+      const r = readings(m)['mux-det'];
+      return r && r.report && r.report.fw === 'e2e';
+    })));
+    const lateUp = await fakeDetector.uplink(PORT, 'mux-late', { key: CAM_KEY });
+    lateUp.socket.write(fakeDetector.wire(fakeDetector.status(), fakeDetector.JPEG2));
+    check('a second detector that connects later is picked up too', await waitFor(() => detFrames(dv, 'mux-late').length >= 1)
+      && Buffer.from(detFrames(dv, 'mux-late')[0].payload).equals(fakeDetector.JPEG2));
+    const countBefore = states(dv).length;
+    check('the readings are sent once a second even when nothing changes (their ages keep moving)', await waitFor(() => states(dv).length >= countBefore + 2, 3500), `${states(dv).length - countBefore} new`);
+    check('a detector that never connected is said in the log, once', await waitFor(() => /asked for the picture of detector 'mux-ghost'/.test(fs.readFileSync(path.join(tmp, `relay-${PORT}.log`), 'utf8')))
+      && (fs.readFileSync(path.join(tmp, `relay-${PORT}.log`), 'utf8').match(/asked for the picture of detector 'mux-ghost'/g) || []).length === 1);
+    const plain = await view(PORT, '?cams=mux-a');
+    viewers.push(plain);
+    up.socket.write(fakeDetector.wire(fakeDetector.status(), fakeDetector.JPEG));
+    await sleep(1500);
+    check('a viewer that asked for neither gets neither pictures nor readings of detectors', states(plain).length === 0 && !plain.messages.some((m) => m.source.startsWith('det:')));
+    for (const [what, query] of [['dets with an invalid id', '?cams=mux-a&dets=a/b'], ['dets with an empty entry', '?cams=mux-a&dets=d1,'], ['a repeated dets', '?cams=mux-a&dets=d1&dets=d2'],
+      ['too many detectors', '?cams=mux-a&dets=' + Array.from({ length: 65 }, (_, i) => `d${i}`).join(',')]]) {
+      const bad = await view(PORT, query);
+      check(`${what}: 400`, bad.status === 400, `status ${bad.status}`);
+      bad.close();
+    }
+    const ghosts = await view(PORT, '?cams=mux-a&dets=__proto__,constructor');
+    viewers.push(ghosts);
+    check('a detector id like __proto__ is just a detector nobody has heard of (no crash, the stream runs)', ghosts.status === 200 && await waitFor(() => ghosts.messages.length >= 1));
+    up.socket.destroy();
+    lateUp.socket.destroy();
 
     // ── a viewer that cannot keep up ──
     const slow = await view(PORT, '?cams=mux-slow');

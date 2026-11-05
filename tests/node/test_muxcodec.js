@@ -22,6 +22,8 @@ test('both sides use the same constants', () => {
   assertEqual(dec.VERSION, enc.VERSION);
   assertEqual(dec.TYPE_FRAME, enc.TYPE_FRAME);
   assertEqual(dec.TYPE_HEARTBEAT, enc.TYPE_HEARTBEAT);
+  assertEqual(dec.TYPE_STATE, enc.TYPE_STATE);
+  assertEqual(dec.STATE_DETECTORS, enc.STATE_DETECTORS);
   assertEqual(dec.CONTENT_TYPE, enc.CONTENT_TYPE);
 });
 
@@ -38,10 +40,21 @@ test('encodeHeartbeat: a message with no source and no payload', () => {
   assertEqual(asText(bytes), '000000030102' + '00');
 });
 
-test('cameraSource names the kind of the source', () => {
+test('the source names the kind of thing it is about', () => {
   assertEqual(enc.cameraSource('cam1'), 'cam:cam1');
-  assertEqual(dec.cameraIdOf('cam:cam1'), 'cam1');
-  assertEqual(dec.cameraIdOf('det:cam1'), null, 'a detector picture is not a camera picture');
+  assertEqual(enc.detectorSource('det1'), 'det:det1');
+  assertEqual(dec.idOf('cam:cam1', 'cam'), 'cam1');
+  assertEqual(dec.idOf('det:cam1', 'cam'), null, 'a detector picture is not a camera picture');
+  assertEqual(dec.idOf('det:cam1', 'det'), 'cam1');
+  assertEqual(dec.idOf('state:detectors', 'det'), null);
+  assertEqual(dec.idOf('cam:', 'cam'), '', 'an empty id is still an id of that kind: the caller finds no such camera');
+});
+
+test('a state message carries JSON and survives encode -> decode', () => {
+  const json = Buffer.from(JSON.stringify({ a: { state: 'online' } }));
+  const [message] = parseAll(enc.encodeState(enc.STATE_DETECTORS, json), 3);
+  assertEqual([message.type, message.source], [enc.TYPE_STATE, 'state:detectors']);
+  assertEqual(JSON.parse(Buffer.from(message.payload).toString('utf8')), { a: { state: 'online' } });
 });
 
 test('a picture survives encode -> decode', () => {

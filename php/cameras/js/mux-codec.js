@@ -6,7 +6,8 @@
 //   const parser = CamMuxCodec.createParser();
 //   for (const message of parser.push(chunk)) ...   // { type, source, payload }, payload is a Uint8Array
 //
-// push() accepts chunks of any size (a picture usually arrives in several) and throws a CamMuxCodec.ProtocolError
+// The messages are pictures (TYPE_FRAME: a JPEG), the newest readings of the detectors (TYPE_STATE: JSON) and
+// heartbeats. push() accepts chunks of any size (a picture usually arrives in several) and throws a CamMuxCodec.ProtocolError
 // on bytes that are not this format. A message of a type this file does not know is still returned, so the
 // caller skips it by its type: new kinds of message never break an older page.
 
@@ -14,6 +15,8 @@
   const VERSION = 1;
   const TYPE_FRAME = 1;
   const TYPE_HEARTBEAT = 2;
+  const TYPE_STATE = 3;
+  const STATE_DETECTORS = 'state:detectors';
   const CONTENT_TYPE = 'application/x-espcam-mux';
 
   const LENGTH_BYTES = 4;
@@ -63,12 +66,15 @@
     };
   }
 
-  // The "kind:id" source of a picture message -> the camera's id, or null when it is not a camera's.
-  function cameraIdOf(source) {
-    return source.startsWith('cam:') ? source.slice('cam:'.length) : null;
+  // The "kind:id" source of a message -> the id, or null when the source is of another kind. As the page sees
+  // them, ids are always camera ids: "cam:<id>" is that camera's picture, "det:<id>" the picture of the detector
+  // paired with that camera (mux.php renames the detector's own id).
+  function idOf(source, kind) {
+    const prefix = kind + ':';
+    return source.startsWith(prefix) ? source.slice(prefix.length) : null;
   }
 
-  const api = { VERSION, TYPE_FRAME, TYPE_HEARTBEAT, CONTENT_TYPE, ProtocolError, createParser, cameraIdOf };
+  const api = { VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, STATE_DETECTORS, CONTENT_TYPE, ProtocolError, createParser, idOf };
   root.CamMuxCodec = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

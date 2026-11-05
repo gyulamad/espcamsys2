@@ -10,7 +10,7 @@ const codec = require('../../nodejs/camera-relay/lib/muxcodec');
 const decoder = require('../../php/cameras/js/mux-codec');
 const { CAMERA_ID_RE } = require('../../nodejs/camera-relay/lib/logentry');
 
-const RULES = { idPattern: CAMERA_ID_RE, max: 3 };
+const RULES = { idPattern: CAMERA_ID_RE, maxCameras: 3, maxDetectors: 2 };
 const pic = (n) => Buffer.from([0xff, 0xd8, n]);
 
 // Everything written, decoded back into [type, source, first payload byte].
@@ -21,19 +21,30 @@ function recorder(answers = []) {
   return { write, writes, decoded };
 }
 
-test('parseCameraIds: a comma-separated list, each camera once, in the order given', () => {
-  assertEqual(feedLib.parseCameraIds('a,b,c', RULES), { ids: ['a', 'b', 'c'] });
-  assertEqual(feedLib.parseCameraIds('b,a,b', RULES), { ids: ['b', 'a'] });
-  assertEqual(feedLib.parseCameraIds('cam-1.x_2', RULES), { ids: ['cam-1.x_2'] });
+test('parseRequest: a comma-separated list of cameras, each once, in the order given', () => {
+  assertEqual(feedLib.parseRequest({ cams: 'a,b,c' }, RULES), { cams: ['a', 'b', 'c'], dets: [], status: false });
+  assertEqual(feedLib.parseRequest({ cams: 'b,a,b' }, RULES).cams, ['b', 'a']);
+  assertEqual(feedLib.parseRequest({ cams: 'cam-1.x_2' }, RULES).cams, ['cam-1.x_2']);
 });
 
-test('parseCameraIds: everything else is an error that says why', () => {
-  for (const raw of [undefined, '', ',', 'a,', 'a,,b', ['a', 'b'], 'a b', '../x', 'a/b', 'a'.repeat(65), {}, 5]) {
-    const r = feedLib.parseCameraIds(raw, RULES);
-    assertTrue(typeof r.error === 'string' && r.ids === undefined, `${JSON.stringify(raw)} must be refused`);
+test('parseRequest: detectors and the readings are optional extras', () => {
+  assertEqual(feedLib.parseRequest({ cams: 'a', dets: 'd1,d2', status: '1' }, RULES), { cams: ['a'], dets: ['d1', 'd2'], status: true });
+  assertEqual(feedLib.parseRequest({ cams: 'a', status: '0' }, RULES).status, false);
+  assertEqual(feedLib.parseRequest({ cams: 'a', status: 'yes' }, RULES).status, false, 'only "1" asks for the readings');
+});
+
+test('parseRequest: everything else is an error that says why', () => {
+  for (const cams of [undefined, '', ',', 'a,', 'a,,b', ['a', 'b'], 'a b', '../x', 'a/b', 'a'.repeat(65), {}, 5]) {
+    const r = feedLib.parseRequest({ cams }, RULES);
+    assertTrue(typeof r.error === 'string' && r.cams === undefined, `cams ${JSON.stringify(cams)} must be refused`);
   }
-  assertTrue(/more than 3/.test(feedLib.parseCameraIds('a,b,c,d', RULES).error));
-  assertEqual(feedLib.parseCameraIds('a,a,a,b', RULES), { ids: ['a', 'b'] }, 'the limit counts distinct cameras');
+  assertTrue(/cams.*more than 3/.test(feedLib.parseRequest({ cams: 'a,b,c,d' }, RULES).error));
+  assertEqual(feedLib.parseRequest({ cams: 'a,a,a,b' }, RULES).cams, ['a', 'b'], 'the limit counts distinct cameras');
+  for (const dets of ['', ',', 'd1,', ['d1', 'd2'], 'a/b', '__proto__/x', 5]) {
+    const r = feedLib.parseRequest({ cams: 'a', dets }, RULES);
+    assertTrue(typeof r.error === 'string' && /dets/.test(r.error), `dets ${JSON.stringify(dets)} must be refused`);
+  }
+  assertTrue(/dets.*more than 2/.test(feedLib.parseRequest({ cams: 'a', dets: 'x,y,z' }, RULES).error));
 });
 
 test('createFeed: while the connection keeps up every picture is written at once', () => {
@@ -87,8 +98,8 @@ function cameras(...ids) {
   return ids.map((id) => ({ id, cam: { emitter: new EventEmitter(), frame: null } }));
 }
 function fakeTimers() {
-  const t = { fn: null, ms: null, cleared: 0 };
-  t.set = (fn, ms) => { t.fn = fn; t.ms = ms; return 'timer'; };
+  const t = { fn: null, ms: null, cleared: 0, all: [] };
+  t.set = (fn, ms) => { t.fn = fn; t.ms = ms; t.all.push({ fn, ms }); return 'timer'; };
   t.clear = (h) => { if (h === 'timer') t.cleared += 1; };
   return t;
 }
@@ -135,6 +146,94 @@ test('openSession: drain() lets a viewer that was behind catch up', () => {
   list[0].cam.emitter.emit('frame', pic(3));
   session.drain();
   assertEqual(r.decoded().map((m) => m[2]), [undefined, 1, 3]);
+});
+
+test('createFeed: the readings are made when they are SENT, so a viewer that is behind gets the newest and nothing is built for the rest', () => {
+  const r = recorder([false]);
+  const feed = feedLib.createFeed(r.write);
+  let made = 0;
+  const snapshot = () => ({ n: ++made });
+  feed.offerState(codec.STATE_DETECTORS, snapshot);   // sent: the buffer is now full
+  feed.offerState(codec.STATE_DETECTORS, snapshot);
+  feed.offerState(codec.STATE_DETECTORS, snapshot);
+  assertEqual(made, 1, 'nothing was built for the two that had to wait');
+  feed.drain();
+  assertEqual(made, 2);
+  const states = r.writes.flatMap((b) => decoder.createParser().push(new Uint8Array(b))).filter((m) => m.type === codec.TYPE_STATE);
+  assertEqual(states.map((m) => JSON.parse(Buffer.from(m.payload).toString())), [{ n: 1 }, { n: 2 }]);
+  assertEqual(states[0].source, 'state:detectors');
+});
+
+test('createFeed: pictures and readings wait in the same line: one message per source, the newest', () => {
+  const r = recorder([false]);
+  const feed = feedLib.createFeed(r.write);
+  feed.offer('cam:a', pic(1));
+  feed.offerState(codec.STATE_DETECTORS, () => ({ v: 1 }));
+  feed.offer('det:d', pic(2));
+  feed.offer('det:d', pic(3));
+  feed.drain();
+  assertEqual(r.decoded().map((m) => [m[0], m[1]]), [[1, 'cam:a'], [3, 'state:detectors'], [1, 'det:d']]);
+  assertEqual(r.decoded()[2][2], 3, 'the newest picture of det:d');
+});
+
+function bus() {
+  return new EventEmitter();
+}
+function detector(frame = null) {
+  return { emitter: new EventEmitter(), frame };
+}
+
+test('openSession: a detector\'s pictures arrive under its own source, the last one at once', () => {
+  const r = recorder();
+  const d = detector(pic(7));
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), detectors: { ids: ['d1'], lookup: (id) => (id === 'd1' ? d : undefined), bus: bus() }, setTimer: () => 't', clearTimer: () => {} });
+  assertEqual(r.decoded().filter((m) => m[1] !== ''), [[1, 'det:d1', 7]]);
+  d.emitter.emit('frame', pic(8));
+  assertEqual(r.decoded().pop(), [1, 'det:d1', 8]);
+});
+
+test('openSession: a detector that connects later is picked up when the relay says something changed', () => {
+  const r = recorder();
+  const known = {};
+  const b = bus();
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), detectors: { ids: ['d1', 'd2'], lookup: (id) => known[id], bus: b }, setTimer: () => 't', clearTimer: () => {} });
+  const d2 = detector();
+  known.d2 = d2;
+  b.emit('change');
+  d2.emitter.emit('frame', pic(5));
+  assertEqual(r.decoded().filter((m) => m[1] === 'det:d2'), [[1, 'det:d2', 5]]);
+  b.emit('change'); b.emit('change');
+  assertEqual(d2.emitter.listenerCount('frame'), 1, 'followed once, however often the relay says something changed');
+});
+
+test('openSession: the readings are sent at once, on every change, and once a second', () => {
+  const r = recorder();
+  const b = bus();
+  const timers = fakeTimers();
+  let n = 0;
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), status: { snapshot: () => ({ n: ++n }), bus: b }, setTimer: timers.set, clearTimer: timers.clear });
+  const states = () => r.writes.flatMap((x) => decoder.createParser().push(new Uint8Array(x))).filter((m) => m.type === codec.TYPE_STATE).length;
+  assertEqual(states(), 1, 'at once');
+  b.emit('change');
+  assertEqual(states(), 2, 'on a change');
+  assertEqual(timers.all.map((x) => x.ms), [feedLib.STATUS_REFRESH_MS, feedLib.HEARTBEAT_MS], 'a timer for the readings, one for the heartbeat');
+  timers.all[0].fn();
+  assertEqual(states(), 3, 'and every second');
+});
+
+test('openSession: close() stops following detectors and readings too', () => {
+  const r = recorder();
+  const b = bus();
+  const d = detector();
+  const timers = fakeTimers();
+  const session = feedLib.openSession({ write: r.write, cameras: cameras('a'), detectors: { ids: ['d1'], lookup: () => d, bus: b }, status: { snapshot: () => ({}), bus: b }, setTimer: timers.set, clearTimer: timers.clear });
+  assertEqual([b.listenerCount('change'), d.emitter.listenerCount('frame')], [2, 1]);
+  session.close();
+  assertEqual([b.listenerCount('change'), d.emitter.listenerCount('frame')], [0, 0]);
+  const written = r.writes.length;
+  b.emit('change');
+  d.emitter.emit('frame', pic(1));
+  assertEqual(r.writes.length, written, 'nothing is written after close');
 });
 
 test('HEADERS: a mux stream is never sniffed as anything else and never cached', () => {

@@ -1,22 +1,29 @@
 'use strict';
-// mux-pictures.js — shows the cameras' live pictures from ONE mux.php connection on the page's existing
-// <img> elements. The page says which cameras it wants shown (show / hide); this keeps the connection open for
-// exactly that list and paints each arriving picture onto its image. The image is an ordinary <img> whose
-// source is replaced for every picture, so the page's load / error handling, fullscreen and styling work
-// as they did with one MJPEG stream per camera.
+// mux-pictures.js — shows the live pictures of the cameras and of their person detectors, and delivers the
+// detectors' readings, from ONE mux.php connection. The pictures go onto the page's existing <img> elements: an
+// image whose source is replaced for every picture, so the page's load / error handling, fullscreen and
+// styling work as they did with one MJPEG stream per image. The page says what it wants to see; this keeps the
+// connection open for exactly that and paints each arriving picture onto its image.
 //
-//   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onDown, onFallback });
-//   pictures.show('cam1');   pictures.hide('cam1');   pictures.reconnect();   pictures.close();
+//   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onStatus, onDown, onFallback });
+//   pictures.show('cam1');           pictures.hide('cam1');            the camera's picture
+//   pictures.showDetector('cam1');   pictures.hideDetector('cam1');    the picture of the detector paired with that camera
+//   pictures.watchStatus(true);      the detectors' readings (onStatus gets { camId: status }, as detector-status.php)
+//   pictures.reconnect();   pictures.close();
 //
-//   imgFor(id)      the <img> of that camera (or null)
-//   onDown(ids)     the connection ended (it is reopened by itself): the cameras that were being shown
-//   onFallback()    mux.php is unusable from here (see js/mux-client.js): the page must show the pictures another way
+//   imgFor(kind, id)  the <img> of a camera ('cam') or of the detector paired with it ('det'), or null
+//   onStatus(data)    the newest readings of the detectors
+//   onDown(ids)       the connection ended (it is reopened by itself): the cameras that were being shown
+//   onFallback()      mux.php is unusable from here (see js/mux-client.js): the page must show the pictures another way
 //
-// Calls that arrive together (the page restarts every camera in a loop) become ONE (re)connection, and the
-// connection is reopened only when the list of cameras changes.
+// The connection exists while at least one camera is shown; detector pictures and readings ride along on it. Calls
+// that arrive together (the page restarts every camera in a loop) become ONE (re)connection, and the connection
+// is reopened only when what is wanted changes.
 
 (function (root) {
-  function create({ url, imgFor, onDown, onFallback, env = {} }) {
+  const KINDS = ['cam', 'det'];
+
+  function create({ url, imgFor, onStatus, onDown, onFallback, env = {} }) {
     const io = Object.assign({
       createClient: (options) => root.CamMuxClient.create(options),
       codec: root.CamMuxCodec,
@@ -26,47 +33,68 @@
       revokeObjectURL: (objectUrl) => root.URL.revokeObjectURL(objectUrl),
     }, env);
 
-    const wanted = new Set();     // camera ids the page wants shown
-    const objectUrls = new Map(); // camera id -> the object URL of the picture now on its image
-    let subscribed = '';          // the list the open connection was made for
+    const wanted = { cam: new Set(), det: new Set() };   // camera ids whose picture / whose detector's picture is wanted
+    let statusWanted = false;
+    const objectUrls = new Map();   // "kind:id" -> the object URL of the picture now on that image
+    let subscribed = '';            // what the open connection was made for
     let syncScheduled = false;
 
-    const cameraList = () => [...wanted].sort();
+    const idsOf = (kind) => [...wanted[kind]].sort();
+    const requestKey = () => `${idsOf('cam').join(',')}|${idsOf('det').join(',')}|${statusWanted ? 1 : 0}`;
 
-    function paint(id, bytes) {
-      const img = imgFor(id);
+    function buildUrl() {
+      const parts = ['cams=' + encodeURIComponent(idsOf('cam').join(','))];
+      if (wanted.det.size > 0) parts.push('dets=' + encodeURIComponent(idsOf('det').join(',')));
+      if (statusWanted) parts.push('status=1');
+      return url + '?' + parts.join('&');
+    }
+
+    function paint(kind, id, bytes) {
+      const img = imgFor(kind, id);
       if (!img) return;
       const objectUrl = io.createObjectURL(new io.Blob([bytes], { type: 'image/jpeg' }));
-      const previous = objectUrls.get(id);
-      objectUrls.set(id, objectUrl);
+      const key = kind + ':' + id;
+      const previous = objectUrls.get(key);
+      objectUrls.set(key, objectUrl);
       img.src = objectUrl;
       if (previous) io.revokeObjectURL(previous);
     }
 
+    function deliverStatus(payload) {
+      let data = null;
+      try { data = JSON.parse(new TextDecoder().decode(payload)); } catch (err) { return; }   // not JSON: ignore this message
+      onStatus(data);
+    }
+
     function onMessage(message) {
+      if (message.type === io.codec.TYPE_STATE) {
+        if (statusWanted && message.source === io.codec.STATE_DETECTORS) deliverStatus(message.payload);
+        return;
+      }
       if (message.type !== io.codec.TYPE_FRAME) return;
-      const id = io.codec.cameraIdOf(message.source);
-      if (id === null || !wanted.has(id)) return;   // not shown any more (hidden since this connection was opened)
-      paint(id, message.payload);
+      for (const kind of KINDS) {
+        const id = io.codec.idOf(message.source, kind);
+        // (not wanted any more: hidden since this connection was opened)
+        if (id !== null && wanted[kind].has(id)) paint(kind, id, message.payload);
+      }
     }
 
     const client = io.createClient({
-      buildUrl: () => url + '?cams=' + encodeURIComponent(cameraList().join(',')),
+      buildUrl,
       onMessage,
-      onDown: () => onDown(cameraList()),
+      onDown: () => onDown(idsOf('cam')),
       onGiveUp: () => onFallback(),
     });
 
     function sync() {
       syncScheduled = false;
-      if (wanted.size === 0) {
+      if (wanted.cam.size === 0) {
         client.stop();
         subscribed = '';
         return;
       }
-      const list = cameraList().join(',');
-      if (list !== subscribed) {
-        subscribed = list;
+      if (requestKey() !== subscribed) {
+        subscribed = requestKey();
         client.restart();
         return;
       }
@@ -81,33 +109,41 @@
       io.defer(sync);
     }
 
-    function forget(id) {
-      const objectUrl = objectUrls.get(id);
+    function forget(key) {
+      const objectUrl = objectUrls.get(key);
       if (objectUrl) io.revokeObjectURL(objectUrl);
-      objectUrls.delete(id);
+      objectUrls.delete(key);
+    }
+
+    const add = (kind, id) => { wanted[kind].add(id); scheduleSync(); };
+    function remove(kind, id) {
+      wanted[kind].delete(id);
+      forget(kind + ':' + id);
+      const img = imgFor(kind, id);
+      if (img) img.removeAttribute('src');
+      scheduleSync();
     }
 
     return {
-      show(id) {
-        wanted.add(id);
-        scheduleSync();
-      },
-      hide(id) {
-        wanted.delete(id);
-        forget(id);
-        const img = imgFor(id);
-        if (img) img.removeAttribute('src');
+      show: (id) => add('cam', id),
+      hide: (id) => remove('cam', id),
+      showDetector: (id) => add('det', id),
+      hideDetector: (id) => remove('det', id),
+      watchStatus(on) {
+        if (statusWanted === on) return;
+        statusWanted = on;
         scheduleSync();
       },
       // Opens the connection again even if it looks open (a locked phone drops it without a sound).
       reconnect() {
-        if (wanted.size === 0) return;
-        subscribed = cameraList().join(',');
+        if (wanted.cam.size === 0) return;
+        subscribed = requestKey();
         client.restart();
       },
       close() {
         client.stop();
-        wanted.clear();
+        KINDS.forEach((kind) => wanted[kind].clear());
+        statusWanted = false;
         [...objectUrls.keys()].forEach(forget);
       },
     };

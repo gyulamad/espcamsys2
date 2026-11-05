@@ -18,21 +18,32 @@ const PLACEHOLDER = "<?= $muxEnabled ? 'true' : 'false' ?>";
 assertTrue(SOURCE.includes(PLACEHOLDER), 'the block gets its on/off switch from PHP in the one expected place');
 
 // Runs the block as the page would, with mux on or off, and `withScripts` = whether js/mux-pictures.js was loaded.
-function run({ mux, withScripts = true, ids = ['a', 'b'] }) {
+function run({ mux, withScripts = true, ids = ['a', 'b'], detectorRows = [] }) {
   const log = [];
   const imgs = {};
   for (const id of ids) imgs[id] = { src: '', dataset: { src: `stream.php?cam=${id}` } };
+  const detImgs = {};
+  for (const id of detectorRows) detImgs[id] = { src: '', dataset: { src: `detector-stream.php?cam=${id}` } };
   const created = [];
   const fakePictures = {
     show: (id) => log.push(`show ${id}`),
     hide: (id) => log.push(`hide ${id}`),
+    showDetector: (id) => log.push(`showDetector ${id}`),
+    hideDetector: (id) => log.push(`hideDetector ${id}`),
+    watchStatus: (on) => log.push(`watchStatus ${on}`),
     close: () => log.push('close'),
   };
   const win = withScripts ? { CamMuxPictures: { create: (options) => { created.push(options); return fakePictures; } } } : {};
   const env = {
     window: win,
     CamMuxPictures: win.CamMuxPictures,
-    document: { getElementById: (name) => imgs[name.replace('img-', '')] || null },
+    document: {
+      getElementById: (name) => (name.startsWith('detimg-') ? detImgs[name.slice('detimg-'.length)] : imgs[name.replace('img-', '')]) || null,
+      querySelectorAll: () => detectorRows.map((id) => ({ dataset: { cam: id } })),
+    },
+    onLiveDetectorData: (data) => log.push(`status ${JSON.stringify(data)}`),
+    reconnectDetectorImg: (id) => log.push(`reconnectDetector ${id}`),
+    openDetectorEvents: () => log.push('openDetectorEvents'),
     getAllCameraIds: () => ids,
     reloadStream: (id) => log.push(`reload ${id}`),
     armStreamWatchdog: (id) => log.push(`watchdog ${id}`),
@@ -41,8 +52,8 @@ function run({ mux, withScripts = true, ids = ['a', 'b'] }) {
   };
   const names = Object.keys(env);
   const body = SOURCE.replace(PLACEHOLDER, mux ? 'true' : 'false');
-  const api = new Function(...names, `${body}\nreturn { openPicture, closePicture, fallBackToStreams, pictures: () => pictures };`)(...names.map((n) => env[n]));
-  return { api, log, imgs, created, env };
+  const api = new Function(...names, `${body}\nreturn { openPicture, closePicture, closeDetectorPicture, fallBackToStreams, pictures: () => pictures };`)(...names.map((n) => env[n]));
+  return { api, log, imgs, detImgs, created, env };
 }
 
 test('mux off: nothing is started by this block, no mux object exists', () => {
@@ -70,8 +81,8 @@ test('mux on: one mux object for the whole page, pointed at mux.php, finding eac
   const t = run({ mux: true });
   assertEqual(t.created.length, 1);
   assertEqual(t.created[0].url, 'mux.php');
-  assertEqual(t.created[0].imgFor('b'), t.imgs.b);
-  assertEqual(t.created[0].imgFor('nope'), null);
+  assertEqual(t.created[0].imgFor('cam', 'b'), t.imgs.b);
+  assertEqual(t.created[0].imgFor('cam', 'nope'), null);
 });
 
 test('mux on: the images have no source yet, so every camera is started at load', () => {
@@ -114,6 +125,51 @@ test('mux on but its scripts did not load: the same old way, started at load', (
   t.log.length = 0;
   t.api.openPicture('b');
   assertTrue(/^stream\.php\?cam=b&_=\d+$/.test(t.imgs.b.src));
+});
+
+test('mux on, with detectors: their pictures and readings are asked for at load, after the cameras are started', () => {
+  const t = run({ mux: true, detectorRows: ['a', 'b'] });
+  assertEqual(t.log, ['reload a', 'reload b', 'showDetector a', 'showDetector b', 'watchStatus true']);
+});
+
+test('mux on, no detectors: the readings are not asked for', () => {
+  const t = run({ mux: true });
+  assertEqual(t.log, ['reload a', 'reload b'], 'no detector picture, no readings');
+});
+
+test('mux on: a detector image is found by its own id, and the readings go to the page\'s handler', () => {
+  const t = run({ mux: true, detectorRows: ['a'] });
+  assertEqual(t.created[0].imgFor('det', 'a'), t.detImgs.a);
+  assertEqual(t.created[0].imgFor('det', 'b'), null);
+  t.log.length = 0;
+  t.created[0].onStatus({ a: { state: 'online' } });
+  assertEqual(t.log, ['status {"a":{"state":"online"}}']);
+});
+
+test('mux on: closing a detector picture goes to the mux object; mux off it empties the image as before', () => {
+  const on = run({ mux: true, detectorRows: ['a'] });
+  on.log.length = 0;
+  on.api.closeDetectorPicture('a');
+  assertEqual(on.log, ['hideDetector a']);
+  const off = run({ mux: false, detectorRows: ['a'] });
+  off.detImgs.a.src = 'detector-stream.php?cam=a&_=1';
+  off.api.closeDetectorPicture('a');
+  assertEqual(off.detImgs.a.src, '');
+  off.api.closeDetectorPicture('nope');   // a camera without a detector: nothing to close, no crash
+});
+
+test('mux on, falling back: the detectors\' pictures and the readings stream come back the old way too', () => {
+  const t = run({ mux: true, detectorRows: ['a', 'b'] });
+  t.log.length = 0;
+  t.created[0].onFallback();
+  assertEqual(t.log, ['warn mux.php', 'close', 'reload a', 'reload b', 'reconnectDetector a', 'reconnectDetector b', 'openDetectorEvents']);
+});
+
+test('mux on, falling back, no detectors: the readings stream is not opened', () => {
+  const t = run({ mux: true });
+  t.log.length = 0;
+  t.created[0].onFallback();
+  assertEqual(t.log.includes('openDetectorEvents'), false);
 });
 
 summarize();

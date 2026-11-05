@@ -1671,4 +1671,29 @@ camtest_test('isMuxContentType accepts exactly the mux type (any case, spaces ar
     camtest_assert_true(!CamLogic::isMuxContentType([]));
 });
 
+$muxDetCams = [['id' => 'cam1', 'name' => 'A', 'detector' => 'det1'], ['id' => 'cam2', 'name' => 'B'], ['id' => 'cam-3', 'name' => 'C', 'detector' => 'det-3']];
+
+camtest_test('muxDetectorCameraIds: none asked for is an empty list, else the cameras that have a detector, each once', function () use ($muxDetCams) {
+    camtest_assert_equal(CamLogic::muxDetectorCameraIds($muxDetCams, ''), []);
+    camtest_assert_equal(CamLogic::muxDetectorCameraIds($muxDetCams, 'cam-3,cam1,cam-3'), ['cam-3', 'cam1']);
+});
+
+camtest_test('muxDetectorCameraIds: null for a camera without a detector, one that does not exist, an empty entry, or not a string', function () use ($muxDetCams) {
+    foreach (['cam2', 'nope', 'cam1,nope', 'cam1,', ',cam1', 'det1', ['cam1'], null, 5] as $bad) {
+        camtest_assert_equal(CamLogic::muxDetectorCameraIds($muxDetCams, $bad), null, var_export($bad, true));
+    }
+});
+
+camtest_test('detectorIdsByCamera: camera id => its detector id', function () use ($muxDetCams) {
+    camtest_assert_equal(CamLogic::detectorIdsByCamera($muxDetCams, ['cam-3', 'cam1']), ['cam-3' => 'det-3', 'cam1' => 'det1']);
+    camtest_assert_equal(CamLogic::detectorIdsByCamera($muxDetCams, []), []);
+});
+
+camtest_test('muxUrl: detector pictures and readings are added only when asked for, with the detectors\' own ids', function () {
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a']), 'http://r:8080/mux?cams=a');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a', 'b'], ['d1', 'd2']), 'http://r:8080/mux?cams=a%2Cb&dets=d1%2Cd2');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a'], [], true), 'http://r:8080/mux?cams=a&status=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080/', ['a'], ['d1'], true), 'http://r:8080/mux?cams=a&dets=d1&status=1');
+});
+
 exit(camtest_summarize());
