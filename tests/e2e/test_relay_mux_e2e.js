@@ -5,6 +5,7 @@
 //   * a heartbeat comes at once and then on its own; a picture reaches the viewer within a fraction of a second,
 //     intact, tagged with its camera; cameras that were not asked for do not come
 //   * a viewer that connects later gets each camera's last picture at once
+//   * ?rec=1 brings the recording state of every camera (what GET /status answers) every 2 s, from one shared round
 //   * detectors: ?dets= brings their pictures (as det:<id>, also from a detector that connects after the viewer asked),
 //     ?status=1 the readings of every detector once a second and on every change; neither is sent unasked; a detector
 //     the relay never heard from is said in the log and costs nothing
@@ -177,6 +178,21 @@ async function main() {
     check('a detector id like __proto__ is just a detector nobody has heard of (no crash, the stream runs)', ghosts.status === 200 && await waitFor(() => ghosts.messages.length >= 1));
     up.socket.destroy();
     lateUp.socket.destroy();
+
+    // ── the cameras' recording state ──
+    const rv = await view(PORT, '?cams=mux-a&rec=1');
+    viewers.push(rv);
+    const recStates = (x) => x.messages.filter((m) => m.type === codec.TYPE_STATE && m.source === codec.STATE_CAMERAS);
+    check('the recording state arrives at once: every camera the relay knows, as GET /status answers it',
+      await waitFor(() => recStates(rv).length >= 1, 4000) && readings(recStates(rv)[0])['mux-a'] !== undefined
+      && typeof readings(recStates(rv)[0])['mux-a'].recording === 'boolean' && typeof readings(recStates(rv)[0])['mux-a'].recordingCount === 'number',
+      JSON.stringify(recStates(rv).slice(0, 1).map(readings)));
+    check('...and again every few seconds, so a changed state shows up without anyone asking', await waitFor(() => recStates(rv).length >= 2, 4500), `${recStates(rv).length} so far`);
+    const statusAnswer = await new Promise((resolve) => nodeHttp.get({ host: '127.0.0.1', port: PORT, path: '/status' }, (res) => {
+      let body = ''; res.on('data', (c) => { body += c; }); res.on('end', () => resolve(JSON.parse(body)));
+    }));
+    check('it is the same map GET /status answers', Object.keys(readings(recStates(rv)[0])).sort().join() === Object.keys(statusAnswer).sort().join());
+    check('a viewer that did not ask for it is not sent it', recStates(plain).length === 0);
 
     // ── a viewer that cannot keep up ──
     const slow = await view(PORT, '?cams=mux-slow');

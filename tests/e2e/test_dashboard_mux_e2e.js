@@ -3,11 +3,12 @@
 // test_dashboard_mux_e2e.js — mux.php: the pictures of SEVERAL cameras, of their detectors, and the detectors'
 // readings on ONE connection, through a real php -S in front of a fake relay that speaks the mux format
 // (nodejs/camera-relay/lib/muxcodec.js).
-//   * with 'mux_enabled' => true, one request carries every camera asked for, pictures intact, as the mux type,
+//   * on unless 'mux_enabled' => false (also when the key is left out), one request carries every camera asked for, pictures intact, as the mux type,
 //     and the relay is asked for exactly those cameras, with the relay key
 //   * &dets=<camera> brings the picture of the detector paired with it, renamed to the camera (det:<camId>), and
 //     &status=1 the readings shaped like detector-status.php ({ camId: status }); the detector's own id never
 //     reaches the browser
+//   * &rec=1 brings the cameras' recording state (the map status.php answers), untouched
 //   * what the page did not ask for is not passed on, whatever the relay sends: other cameras, other detectors,
 //     readings nobody asked for, message types it does not know
 //   * a browser that leaves frees the relay connection (no leaked PHP worker / relay subscription)
@@ -33,6 +34,7 @@ const DEAD_PORT = BASE + 2;
 const AUTH = { user: 'owner', pass: 'a-good-long-password' };
 const KEY = 'a-long-secret-control-key-0123456789';
 const PERIOD_MS = 100;
+const CAMERA_STATUS = JSON.stringify({ camA: { recording: true, recordingEndAt: 1234, recordingCount: 7, recordingOff: null } });
 
 let pass = 0, fail = 0, finished = false;
 process.on('exit', () => { if (!finished) { console.error('[FAIL] the test ended without finishing'); process.exitCode = 1; } });
@@ -74,6 +76,7 @@ const relay = nodeHttp.createServer((req, res) => {
     unknownType[5] = 99;
     res.write(unknownType);
     res.write(enc.encodeState(enc.STATE_DETECTORS, Buffer.from(JSON.stringify(readings))));
+    res.write(enc.encodeState(enc.STATE_CAMERAS, Buffer.from(CAMERA_STATUS)));
   }, PERIOD_MS);
   req.on('close', () => { clearInterval(timer); fake.closed += 1; });
 });
@@ -168,6 +171,11 @@ async function main() {
       readings.length >= 1 && shaped && JSON.stringify(Object.keys(shaped)) === '["camA"]' && shaped.camA.detector === 'detA' && shaped.camA.state === 'online' && shaped.camA.report.fw === 'e2e', JSON.stringify(shaped));
     check("the detector's own id and everything unasked-for stay behind",
       all.every((m) => m.source !== 'det:detA' && m.source !== 'det:rogue' && m.source !== 'cam:camZ' && m.type !== 99), JSON.stringify([...new Set(all.map((m) => `${m.type} ${m.source}`))]));
+    r = await get('/mux.php?cams=camA&rec=1');
+    const recState = (r.messages || []).filter((m) => m.type === enc.TYPE_STATE);
+    check('&rec=1: the recording state of the cameras arrives untouched, and only that kind of readings',
+      r.status === 200 && fake.urls[fake.urls.length - 1] === '/mux?cams=camA&rec=1' && recState.length >= 1
+      && recState.every((m) => m.source === enc.STATE_CAMERAS && Buffer.from(m.payload).toString('utf8') === CAMERA_STATUS), JSON.stringify(recState.map((m) => m.source)));
     r = await get('/mux.php?cams=camB,camA&dets=camA');
     check('readings only when asked for', (r.messages || []).every((m) => m.type !== enc.TYPE_STATE) && (r.messages || []).some((m) => m.source === 'det:camA'));
 
@@ -179,7 +187,7 @@ async function main() {
     check('no login: 401, no pictures', r.status === 401 && r.messages !== null && r.messages.length === 0, `status ${r.status}`);
     const before = fake.urls.length;
     for (const bad of ['', '?cams=', '?cams=nope', '?cams=camA,nope', '?cams=camA,', '?cams[]=camA',
-      '?cams=camA&dets=camB', '?cams=camA&dets=detA', '?cams=camA&dets=nope', '?cams=camA&dets=camA,', '?cams=camA&dets[]=camA', '?cams=camA&status[]=1']) {
+      '?cams=camA&dets=camB', '?cams=camA&dets=detA', '?cams=camA&dets=nope', '?cams=camA&dets=camA,', '?cams=camA&dets[]=camA', '?cams=camA&status[]=1', '?cams=camA&rec[]=1']) {
       r = await get(`/mux.php${bad}`, { ms: 500 });
       check(`mux.php${bad || ' (no cams)'}: 400, and the relay is not even asked`, r.status === 400 && fake.urls.length === before, `status ${r.status}`);
     }
@@ -192,11 +200,12 @@ async function main() {
     writeConfig(docroot, { mux: true, relayPort: DEAD_PORT });
     r = await get('/mux.php?cams=camA', { ms: 500 });
     check('a relay that is down: 502', r.status === 502, `status ${r.status}`);
-    for (const mux of [undefined, false]) {
-      writeConfig(docroot, { mux });
-      r = await get('/mux.php?cams=camA', { ms: 500 });
-      check(`mux_enabled ${mux === undefined ? 'not set' : 'false'}: 404 (the pages use stream.php)`, r.status === 404, `status ${r.status}`);
-    }
+    writeConfig(docroot, { mux: false });
+    r = await get('/mux.php?cams=camA', { ms: 500 });
+    check('mux_enabled false: 404 (the dashboard uses stream.php)', r.status === 404, `status ${r.status}`);
+    writeConfig(docroot, { mux: undefined });
+    r = await get('/mux.php?cams=camA', { ms: 500 });
+    check('mux_enabled left out: ON, the stream is served', r.status === 200 && r.headers['content-type'] === enc.CONTENT_TYPE, `status ${r.status}`);
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
   } finally {

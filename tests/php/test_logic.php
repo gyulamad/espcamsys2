@@ -1625,18 +1625,24 @@ camtest_test('cameraSummaries: id and name only; a missing or blank name falls b
 
 // ── mux.php: every camera's picture on one connection ────────────────
 
-camtest_test('muxEnabled is off unless config.php says yes', function () {
-    camtest_assert_equal(CamLogic::muxEnabled([]), false);
+camtest_test('muxEnabled is on unless config.php says no', function () {
+    camtest_assert_equal(CamLogic::muxEnabled([]), true);
     camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => true]), true);
     camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => false]), false);
 });
 
-camtest_test('muxEnabled reads the usual ways of writing yes and no, and treats nonsense as off', function () {
-    foreach ([1, '1', 'true', 'on', 'yes'] as $yes) {
+camtest_test('muxEnabled reads the usual ways of writing yes and no', function () {
+    foreach ([true, 1, '1', 'true', 'on', 'yes'] as $yes) {
         camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $yes]), true, var_export($yes, true));
     }
-    foreach ([0, '0', 'false', 'off', 'no', '', null, 'banana', [], ['x']] as $no) {
+    foreach ([false, 0, '0', 'false', 'off', 'no', ''] as $no) {
         camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $no]), false, var_export($no, true));
+    }
+});
+
+camtest_test('muxEnabled: anything that is not a yes or a no is the default, on', function () {
+    foreach ([null, 'banana', 2, [], ['x']] as $other) {
+        camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $other]), true, var_export($other, true));
     }
 });
 
@@ -1694,6 +1700,8 @@ camtest_test('muxUrl: detector pictures and readings are added only when asked f
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a', 'b'], ['d1', 'd2']), 'http://r:8080/mux?cams=a%2Cb&dets=d1%2Cd2');
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a'], [], true), 'http://r:8080/mux?cams=a&status=1');
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080/', ['a'], ['d1'], true), 'http://r:8080/mux?cams=a&dets=d1&status=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a'], [], false, true), 'http://r:8080/mux?cams=a&rec=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a', 'b'], ['d1'], true, true), 'http://r:8080/mux?cams=a%2Cb&dets=d1&status=1&rec=1');
 });
 
 exit(camtest_summarize());

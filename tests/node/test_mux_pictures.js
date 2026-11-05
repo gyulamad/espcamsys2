@@ -21,7 +21,7 @@ function setup() {
     imgs[id] = makeImg();
     detImgs[id] = makeImg();
   }
-  const page = { down: [], fallbacks: 0, status: [] };
+  const page = { down: [], fallbacks: 0, status: [], cameraStatus: [] };
   let clientOptions = null;
   let state = 'idle';
   const fakeClient = {
@@ -34,6 +34,7 @@ function setup() {
     url: 'mux.php',
     imgFor: (kind, id) => (kind === 'det' ? detImgs : imgs)[id] || null,
     onStatus: (data) => page.status.push(data),
+    onCameraStatus: (data) => page.cameraStatus.push(data),
     onDown: (ids) => page.down.push(ids),
     onFallback: () => { page.fallbacks += 1; },
     env: {
@@ -219,6 +220,39 @@ test('readings: turning them on or off reopens the connection once, asking for t
   t.pictures.watchStatus(false); t.settle();
   assertEqual(t.calls, ['restart', 'restart', 'restart']);
   assertEqual(t.options().buildUrl(), 'mux.php?cams=a');
+});
+
+test('the cameras\' recording state: asked for with rec=1, delivered to its own callback, never to the detectors\'', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.watchCameraStatus(true); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a&rec=1');
+  t.sendState('{"a":{"recording":true,"recordingCount":3}}', 'state:cameras');
+  assertEqual([t.page.cameraStatus, t.page.status], [[{ a: { recording: true, recordingCount: 3 } }], []]);
+});
+
+test('both kinds of readings: both asked for, each delivered to its own callback', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.watchStatus(true); t.pictures.watchCameraStatus(true); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a&rec=1&status=1');
+  t.sendState('{"d":1}');
+  t.sendState('{"c":2}', 'state:cameras');
+  assertEqual([t.page.status, t.page.cameraStatus], [[{ d: 1 }], [{ c: 2 }]]);
+  t.pictures.watchStatus(false); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a&rec=1');
+  t.sendState('{"d":3}');
+  assertEqual(t.page.status.length, 1, 'no longer asked for: ignored');
+});
+
+test('the cameras\' recording state: not asked for, not JSON, or turned off again: ignored', () => {
+  const t = setup();
+  t.pictures.show('a'); t.settle();
+  t.sendState('{"a":1}', 'state:cameras');
+  t.pictures.watchCameraStatus(true); t.settle();
+  t.sendState('nope {', 'state:cameras');
+  t.pictures.watchCameraStatus(false); t.settle();
+  t.sendState('{"a":1}', 'state:cameras');
+  assertEqual(t.page.cameraStatus, []);
+  assertEqual(t.calls, ['restart', 'restart', 'restart'], 'each change of what is asked for reopens the connection once');
 });
 
 test('no camera shown closes the connection even if readings and detector pictures are wanted (the footage needs the room)', () => {

@@ -38,27 +38,31 @@ function parseIdList(name, raw, { idPattern, max, optional }) {
 //   cams    the cameras whose pictures are wanted (at least one)
 //   dets    the detectors whose pictures are wanted (none by default)
 //   status  "1": the readings of every detector are wanted too
-// -> { cams, dets, status } or { error } saying what is wrong.
+//   rec     "1": the recording state of every camera (what GET /status answers) is wanted too
+// -> { cams, dets, status, rec } or { error } saying what is wrong.
 function parseRequest(query, { idPattern, maxCameras, maxDetectors }) {
   const cams = parseIdList('cams', query.cams, { idPattern, max: maxCameras, optional: false });
   if (cams.error) return cams;
   const dets = parseIdList('dets', query.dets, { idPattern, max: maxDetectors, optional: true });
   if (dets.error) return dets;
-  return { cams: cams.ids, dets: dets.ids, status: query.status === '1' };
+  return { cams: cams.ids, dets: dets.ids, status: query.status === '1', rec: query.rec === '1' };
 }
 
 // write(buffer) -> false when the connection's buffer is full (Node's stream convention).
 //   offer(source, jpeg)           = "a new picture"
-//   offerState(source, snapshot)  = "the readings changed"; snapshot() makes them (called when they are sent, so
-//                                   a viewer that is behind never makes the relay build what it will not get)
+//   offerState(source, snapshot)  = "the readings changed"; snapshot() makes them (an object, or JSON text; called
+//                                   when they are sent, so a viewer that is behind never makes the relay build what
+//                                   it will not get)
 //   drain() = "the connection can take more", heartbeat() = "still here".
 function createFeed(write) {
   let ready = true;
   const waiting = new Map();   // source -> its newest message, while the connection is not keeping up
 
-  const encodeEntry = (source, entry) => (entry.snapshot
-    ? codec.encodeState(source, Buffer.from(JSON.stringify(entry.snapshot())))
-    : codec.encodeFrame(source, entry.jpeg));
+  const encodeEntry = (source, entry) => {
+    if (!entry.snapshot) return codec.encodeFrame(source, entry.jpeg);
+    const value = entry.snapshot();
+    return codec.encodeState(source, Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)));
+  };
 
   const flush = () => {
     for (const [source, entry] of waiting) {
@@ -128,11 +132,17 @@ function followStatus(feed, { snapshot, bus, refreshMs = STATUS_REFRESH_MS }, se
   };
 }
 
+// The recording state of every camera, worked out once for all viewers (lib/sharedsnapshot.js).
+// cameraStatus: { subscribe(listener(jsonText)) -> unsubscribe }.
+function followCameraStatus(feed, { subscribe }) {
+  return subscribe((text) => feed.offerState(codec.STATE_CAMERAS, () => text));
+}
+
 // cameras: [{ id, cam }] where cam has `emitter` ('frame' events) and `frame` (the last picture, or null).
-// detectors, status: as above, or null for "not asked for". -> { drain(), close() }. Nothing is left
+// detectors, status, cameraStatus: as above, or null for "not asked for". -> { drain(), close() }. Nothing is left
 // subscribed after close().
 function openSession({
-  write, cameras, detectors = null, status = null,
+  write, cameras, detectors = null, status = null, cameraStatus = null,
   heartbeatMs = HEARTBEAT_MS, setTimer = setInterval, clearTimer = clearInterval,
 }) {
   const feed = createFeed(write);
@@ -141,6 +151,7 @@ function openSession({
   const stops = cameras.map(({ id, cam }) => followPictures(feed, codec.cameraSource(id), cam));
   if (detectors) stops.push(followDetectorPictures(feed, detectors));
   if (status) stops.push(followStatus(feed, status, setTimer, clearTimer));
+  if (cameraStatus) stops.push(followCameraStatus(feed, cameraStatus));
   const heartbeat = setTimer(feed.heartbeat, heartbeatMs);
 
   return {

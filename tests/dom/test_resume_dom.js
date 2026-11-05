@@ -82,7 +82,7 @@ function makeDashboard() {
   spawnSync('cp', ['-r', DASH_SRC + '/.', dir]);
   fs.rmSync(path.join(dir, 'config.php'), { force: true });
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'cameras' => [` +
+    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'mux_enabled' => false, 'cameras' => [` +
     "['id' => 'camA', 'name' => 'A', 'icon' => 'x', 'detector' => 'det-A'], ['id' => 'camB', 'name' => 'B', 'icon' => 'y']]];\n");
   return dir;
 }

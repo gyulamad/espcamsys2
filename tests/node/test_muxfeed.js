@@ -22,13 +22,20 @@ function recorder(answers = []) {
 }
 
 test('parseRequest: a comma-separated list of cameras, each once, in the order given', () => {
-  assertEqual(feedLib.parseRequest({ cams: 'a,b,c' }, RULES), { cams: ['a', 'b', 'c'], dets: [], status: false });
+  assertEqual(feedLib.parseRequest({ cams: 'a,b,c' }, RULES), { cams: ['a', 'b', 'c'], dets: [], status: false, rec: false });
   assertEqual(feedLib.parseRequest({ cams: 'b,a,b' }, RULES).cams, ['b', 'a']);
   assertEqual(feedLib.parseRequest({ cams: 'cam-1.x_2' }, RULES).cams, ['cam-1.x_2']);
 });
 
+test('parseRequest: the cameras\' recording state is an optional extra, asked for with rec=1 only', () => {
+  assertEqual(feedLib.parseRequest({ cams: 'a' }, RULES).rec, false);
+  assertEqual(feedLib.parseRequest({ cams: 'a', rec: '1' }, RULES).rec, true);
+  assertEqual(feedLib.parseRequest({ cams: 'a', rec: 'true' }, RULES).rec, false);
+  assertEqual(feedLib.parseRequest({ cams: 'a', rec: ['1', '1'] }, RULES).rec, false);
+});
+
 test('parseRequest: detectors and the readings are optional extras', () => {
-  assertEqual(feedLib.parseRequest({ cams: 'a', dets: 'd1,d2', status: '1' }, RULES), { cams: ['a'], dets: ['d1', 'd2'], status: true });
+  assertEqual(feedLib.parseRequest({ cams: 'a', dets: 'd1,d2', status: '1' }, RULES), { cams: ['a'], dets: ['d1', 'd2'], status: true, rec: false });
   assertEqual(feedLib.parseRequest({ cams: 'a', status: '0' }, RULES).status, false);
   assertEqual(feedLib.parseRequest({ cams: 'a', status: 'yes' }, RULES).status, false, 'only "1" asks for the readings');
 });
@@ -234,6 +241,46 @@ test('openSession: close() stops following detectors and readings too', () => {
   b.emit('change');
   d.emitter.emit('frame', pic(1));
   assertEqual(r.writes.length, written, 'nothing is written after close');
+});
+
+test('createFeed: readings given as JSON text are sent as they are (not encoded a second time)', () => {
+  const r = recorder();
+  const feed = feedLib.createFeed(r.write);
+  feed.offerState(codec.STATE_CAMERAS, () => '{"a":{"recording":true}}');
+  const [m] = r.writes.flatMap((b) => decoder.createParser().push(new Uint8Array(b)));
+  assertEqual([m.type, m.source, Buffer.from(m.payload).toString()], [codec.TYPE_STATE, 'state:cameras', '{"a":{"recording":true}}']);
+});
+
+function sharedSnapshot() {
+  const s = { listeners: new Set(), unsubscribed: 0 };
+  s.subscribe = (listener) => { s.listeners.add(listener); return () => { s.listeners.delete(listener); s.unsubscribed += 1; }; };
+  s.push = (text) => [...s.listeners].forEach((l) => l(text));
+  return s;
+}
+
+test('openSession: the cameras\' recording state is sent as state:cameras every time the shared snapshot has a new one', () => {
+  const r = recorder();
+  const shared = sharedSnapshot();
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), cameraStatus: shared, setTimer: () => 't', clearTimer: () => {} });
+  shared.push('{"a":{"recording":false}}');
+  shared.push('{"a":{"recording":true}}');
+  const states = r.writes.flatMap((x) => decoder.createParser().push(new Uint8Array(x))).filter((m) => m.type === codec.TYPE_STATE);
+  assertEqual(states.map((m) => [m.source, Buffer.from(m.payload).toString()]),
+    [['state:cameras', '{"a":{"recording":false}}'], ['state:cameras', '{"a":{"recording":true}}']]);
+});
+
+test('openSession: not asked for = not subscribed; close() unsubscribes', () => {
+  const r = recorder();
+  const shared = sharedSnapshot();
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), setTimer: () => 't', clearTimer: () => {} });
+  assertEqual(shared.listeners.size, 0);
+  const session = feedLib.openSession({ write: r.write, cameras: cameras('a'), cameraStatus: shared, setTimer: () => 't', clearTimer: () => {} });
+  assertEqual(shared.listeners.size, 1);
+  session.close();
+  assertEqual([shared.listeners.size, shared.unsubscribed], [0, 1]);
+  const written = r.writes.length;
+  shared.push('{}');
+  assertEqual(r.writes.length, written);
 });
 
 test('HEADERS: a mux stream is never sniffed as anything else and never cached', () => {

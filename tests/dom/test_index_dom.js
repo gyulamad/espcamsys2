@@ -95,7 +95,7 @@ function makeDashboard() {
     { id: EVIL_ID, name: 'evil id', icon: '📷' },
   ];
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ${'['}'auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'cameras' => json_decode(${JSON.stringify(JSON.stringify(cams))}, true)${']'};\n`);
+    `<?php return ${'['}'auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'mux_enabled' => false, 'cameras' => json_decode(${JSON.stringify(JSON.stringify(cams))}, true)${']'};\n`);
   return dir;
 }
 function startPhp(dir) {

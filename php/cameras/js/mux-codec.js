@@ -6,8 +6,8 @@
 //   const parser = CamMuxCodec.createParser();
 //   for (const message of parser.push(chunk)) ...   // { type, source, payload }, payload is a Uint8Array
 //
-// The messages are pictures (TYPE_FRAME: a JPEG), the newest readings of the detectors (TYPE_STATE: JSON) and
-// heartbeats. push() accepts chunks of any size (a picture usually arrives in several) and throws a CamMuxCodec.ProtocolError
+// The messages are pictures (TYPE_FRAME: a JPEG), the newest readings of the detectors and the newest recording
+// state of the cameras (TYPE_STATE: JSON) and heartbeats. push() accepts chunks of any size (a picture usually arrives in several) and throws a CamMuxCodec.ProtocolError
 // on bytes that are not this format. A message of a type this file does not know is still returned, so the
 // caller skips it by its type: new kinds of message never break an older page.
 
@@ -17,6 +17,7 @@
   const TYPE_HEARTBEAT = 2;
   const TYPE_STATE = 3;
   const STATE_DETECTORS = 'state:detectors';
+  const STATE_CAMERAS = 'state:cameras';
   const CONTENT_TYPE = 'application/x-espcam-mux';
 
   const LENGTH_BYTES = 4;
@@ -74,7 +75,7 @@
     return source.startsWith(prefix) ? source.slice(prefix.length) : null;
   }
 
-  const api = { VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, STATE_DETECTORS, CONTENT_TYPE, ProtocolError, createParser, idOf };
+  const api = { VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, STATE_DETECTORS, STATE_CAMERAS, CONTENT_TYPE, ProtocolError, createParser, idOf };
   root.CamMuxCodec = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

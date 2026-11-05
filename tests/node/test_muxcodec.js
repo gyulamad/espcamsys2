@@ -24,6 +24,7 @@ test('both sides use the same constants', () => {
   assertEqual(dec.TYPE_HEARTBEAT, enc.TYPE_HEARTBEAT);
   assertEqual(dec.TYPE_STATE, enc.TYPE_STATE);
   assertEqual(dec.STATE_DETECTORS, enc.STATE_DETECTORS);
+  assertEqual(dec.STATE_CAMERAS, enc.STATE_CAMERAS);
   assertEqual(dec.CONTENT_TYPE, enc.CONTENT_TYPE);
 });
 

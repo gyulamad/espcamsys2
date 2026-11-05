@@ -112,7 +112,7 @@ $allowed = CamMuxStream::allowedSources(['cam1', 'cam2'], ['cam1' => 'det1']);
 
 camtest_test('forward: heartbeats and the pictures that were asked for go through, a detector\'s renamed to its camera', function () use ($allowed, $cams) {
     $buffer = mux_bytes(MUX_HEARTBEAT . MUX_FRAME_CAM . MUX_FRAME_DET);
-    $out = CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, false, $cams);
+    $out = CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [], $cams);
     camtest_assert_equal(mux_read($out), [
         [CamMuxStream::TYPE_HEARTBEAT, '', ''],
         [CamMuxStream::TYPE_FRAME, 'cam:cam1', mux_bytes('ffd80102ffd9')],
@@ -123,14 +123,14 @@ camtest_test('forward: heartbeats and the pictures that were asked for go throug
 camtest_test('forward: a picture nobody asked for, a type nobody asked for and readings nobody asked for are dropped', function () use ($cams) {
     $only = CamMuxStream::allowedSources(['cam2'], []);
     $buffer = mux_bytes(MUX_FRAME_CAM . MUX_FRAME_DET . MUX_STATE) . CamMuxStream::encode(99, 'cam:cam2', 'x');
-    $out = CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $only, false, $cams);
+    $out = CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $only, [], $cams);
     camtest_assert_equal($out, '');
 });
 
 camtest_test('forward: readings are shaped like detector-status.php answers, under the same source', function () use ($allowed, $cams) {
     $relayReadings = json_encode(['det1' => ['online' => true, 'state' => 'online', 'hasPicture' => true, 'connected' => true, 'ageMs' => 40, 'message' => '', 'report' => ['fw' => 'x']]]);
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, $relayReadings);
-    $out = CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, true, $cams);
+    $out = CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams);
     $read = mux_read($out);
     camtest_assert_equal(count($read), 1);
     camtest_assert_equal([$read[0][0], $read[0][1]], [CamMuxStream::TYPE_STATE, 'state:detectors']);
@@ -143,22 +143,63 @@ camtest_test('forward: of several readings in one read only the newest is passed
     $one = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, json_encode(['det1' => ['online' => true, 'state' => 'online']]));
     $two = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, json_encode(['det1' => ['online' => false, 'state' => 'offline']]));
     $buffer = $one . $two;
-    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, true, $cams));
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams));
     camtest_assert_equal(count($read), 1);
     camtest_assert_equal(json_decode($read[0][2], true)['cam1']['state'], 'offline');
 });
 
 camtest_test('forward: readings that are not a JSON object are skipped, the rest of the read still goes through', function () use ($allowed, $cams) {
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, 'not json {') . mux_bytes(MUX_HEARTBEAT);
-    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, true, $cams));
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams));
     camtest_assert_equal(array_map(function ($m) { return $m[0]; }, $read), [CamMuxStream::TYPE_HEARTBEAT]);
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, '5');
-    camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, true, $cams), '');
+    camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams), '');
 });
 
 camtest_test('forward: readings under another source are not the detectors\' readings', function () use ($allowed, $cams) {
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, 'state:other', '{"det1":{}}');
-    camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, true, $cams), '');
+    camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams), '');
+});
+
+camtest_test('wantedStates: the detectors\' readings and the cameras\' recording state, as asked for', function () {
+    camtest_assert_equal(CamMuxStream::wantedStates(false, false), []);
+    camtest_assert_equal(CamMuxStream::wantedStates(true, false), ['state:detectors']);
+    camtest_assert_equal(CamMuxStream::wantedStates(false, true), ['state:cameras']);
+    camtest_assert_equal(CamMuxStream::wantedStates(true, true), ['state:detectors', 'state:cameras']);
+});
+
+camtest_test('cameraStatusJson: a JSON object (or list) passes as it is, anything else is null', function () {
+    camtest_assert_equal(CamMuxStream::cameraStatusJson('{"cam1":{"recording":true}}'), '{"cam1":{"recording":true}}');
+    camtest_assert_equal(CamMuxStream::cameraStatusJson('{}'), '{}');
+    foreach (['not json', '5', 'null', '"x"', ''] as $bad) {
+        camtest_assert_equal(CamMuxStream::cameraStatusJson($bad), null, var_export($bad, true));
+    }
+});
+
+camtest_test('forward: the cameras\' recording state goes through untouched when asked for, and only then', function () use ($allowed, $cams) {
+    $json = '{"cam1":{"recording":true,"recordingEndAt":123,"recordingCount":4}}';
+    $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_CAMERAS], $cams));
+    camtest_assert_equal($read, [[CamMuxStream::TYPE_STATE, 'state:cameras', $json]]);
+    $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
+    camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams), '', 'only the detectors\' readings were asked for');
+    $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
+    camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [], $cams), '');
+});
+
+camtest_test('forward: both kinds of readings, each its newest only, each under its own source', function () use ($allowed, $cams) {
+    $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, '{"cam1":{"recording":false}}')
+        . CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, json_encode(['det1' => ['online' => true, 'state' => 'online']]))
+        . CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, '{"cam1":{"recording":true}}');
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS, CamMuxStream::STATE_CAMERAS], $cams));
+    camtest_assert_equal(array_map(function ($m) { return $m[1]; }, $read), ['state:cameras', 'state:detectors']);
+    camtest_assert_equal($read[0][2], '{"cam1":{"recording":true}}');
+});
+
+camtest_test('forward: recording state that is not a JSON object is skipped, the rest of the read still goes through', function () use ($allowed, $cams) {
+    $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, 'not json {') . mux_bytes(MUX_HEARTBEAT);
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_CAMERAS], $cams));
+    camtest_assert_equal(array_map(function ($m) { return $m[0]; }, $read), [CamMuxStream::TYPE_HEARTBEAT]);
 });
 
 exit(camtest_summarize());

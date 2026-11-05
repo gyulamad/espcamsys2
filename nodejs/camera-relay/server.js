@@ -29,6 +29,7 @@ const detectorlink = require('./lib/detectorlink');
 const detectorevents = require('./lib/detectorevents');
 const detectorview = require('./lib/detectorview');
 const muxfeed = require('./lib/muxfeed');
+const sharedsnapshot = require('./lib/sharedsnapshot');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
@@ -648,7 +649,7 @@ app.get('/stream/:id', requireReadKey, (req, res) => {
 // about 6 connections per address over HTTP/1.1, so one MJPEG connection per camera left no room for the
 // dashboard's other requests. ?cams=cam1,cam2 names the cameras (the dashboard leaves out the ones its user hid),
 // ?dets=det1,det2 the detectors whose pictures are wanted too, ?status=1 the readings of every detector (what
-// /detectors/events pushes). Like /stream, a viewer that cannot keep up gets the newest picture of each camera and
+// /detectors/events pushes), ?rec=1 the recording state of every camera (what GET /status answers). Like /stream, a viewer that cannot keep up gets the newest picture of each camera and
 // detector and the newest readings instead of a backlog.
 // Reading needs the read key, like /stream — only the PHP layer should reach this port.
 let muxViewers = 0;
@@ -669,6 +670,7 @@ app.get('/mux', requireReadKey, (req, res) => {
     cameras: cameraList,
     detectors: request.dets.length ? { ids: request.dets, lookup: knownDetector, bus: detectorBus } : null,
     status: request.status ? { snapshot: detectorViews, bus: detectorBus } : null,
+    cameraStatus: request.rec ? cameraStatusFeed : null,
   });
   res.on('drain', session.drain);
   req.on('close', () => {
@@ -1057,20 +1059,36 @@ const NEVER_SEEN = { lastSeen: null, recording: null, preRoll: null };
 // originate from a click in that browser tab: another tab, another user,
 // or a camera's alarm-trigger GPIO calling /alarm directly. Includes each
 // camera's pre-roll buffer fill, handy for checking the feature is working.
+// Every camera's recording state, FILES count and switch, as { camId: view } — what GET /status answers and what
+// the mux stream pushes (see cameraStatusFeed).
+async function buildStatusMap() {
+  const ids = [...new Set([...Object.keys(cameras), ...(await recordingFolderIds())])].sort();
+  refreshSwitch();
+  const now = Date.now();
+  const views = await Promise.all(ids.map(async (id) =>
+    statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id), describeOff(recSwitch.offState(id, now), now))));
+  const out = {};
+  ids.forEach((id, i) => { out[id] = views[i]; });
+  return out;
+}
+
 app.get('/status', requireReadKey, async (req, res) => {
   try {
-    const ids = [...new Set([...Object.keys(cameras), ...(await recordingFolderIds())])].sort();
-    refreshSwitch();
-    const now = Date.now();
-    const views = await Promise.all(ids.map(async (id) =>
-      statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id), describeOff(recSwitch.offState(id, now), now))));
-    const out = {};
-    ids.forEach((id, i) => { out[id] = views[i]; });
-    res.json(out);
+    res.json(await buildStatusMap());
   } catch (err) {
     relayLog('ERROR', `GET /status failed: ${err.message}`, { trace: err && err.stack });
     res.sendStatus(500);
   }
+});
+
+// The same map for the viewers of GET /mux?rec=1: worked out once every CAMERA_STATUS_PUSH_MS for all of them, and
+// only while there is one (see lib/sharedsnapshot.js). The dashboard stops asking GET /status every few seconds
+// while these arrive; it still asks once after each of its own commands, and when they stop.
+const CAMERA_STATUS_PUSH_MS = 2000;
+const cameraStatusFeed = sharedsnapshot.createSharedSnapshot({
+  compute: async () => JSON.stringify(await buildStatusMap()),
+  intervalMs: CAMERA_STATUS_PUSH_MS,
+  onError: (err) => relayLog('ERROR', `the live camera status failed: ${err.message}`, { trace: err && err.stack }),
 });
 
 // ── Recording storage ──

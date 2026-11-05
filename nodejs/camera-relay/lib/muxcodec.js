@@ -14,7 +14,8 @@
 //   type     TYPE_FRAME (payload = one JPEG), TYPE_STATE (payload = JSON: the newest value of something, e.g. the
 //            detectors' readings) or TYPE_HEARTBEAT (nothing; proves the connection is alive)
 //   source   who the message is about, namespaced by kind: "cam:cam1" (a camera's picture), "det:det1" (a detector's
-//            picture), "state:detectors" (the readings of every detector). Empty for a heartbeat.
+//            picture), "state:detectors" (the readings of every detector), "state:cameras" (the recording state of
+//            every camera). Empty for a heartbeat.
 //
 // Pure functions only (no sockets): the relay writes what these return, and the browser reads it with
 // php/cameras/js/mux-codec.js, which has to agree with this file (tests/node/test_muxcodec.js checks that).
@@ -33,6 +34,7 @@ const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024;  // what the camera push connection a
 const CAMERA_KIND = 'cam';
 const DETECTOR_KIND = 'det';
 const STATE_DETECTORS = 'state:detectors';
+const STATE_CAMERAS = 'state:cameras';
 
 function cameraSource(id) {
   return `${CAMERA_KIND}:${id}`;
@@ -67,7 +69,7 @@ function encodeHeartbeat() {
 }
 
 module.exports = {
-  VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, CONTENT_TYPE, STATE_DETECTORS,
+  VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, CONTENT_TYPE, STATE_DETECTORS, STATE_CAMERAS,
   LENGTH_BYTES, FIXED_BODY_BYTES, MAX_SOURCE_BYTES, MAX_PAYLOAD_BYTES,
   cameraSource, detectorSource, encodeFrame, encodeState, encodeHeartbeat,
 };

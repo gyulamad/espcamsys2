@@ -394,14 +394,16 @@ class CamLogic
 
     public const MUX_CONTENT_TYPE = 'application/x-espcam-mux';
 
-    // Whether the dashboard shows the cameras through mux.php (config.php: 'mux_enabled', off unless set: example.config.php
-    // turns it on). Off = one stream.php connection per camera, as before. A value that is not a yes/no is off.
+    // Whether the dashboard shows the cameras through mux.php: on, unless config.php says 'mux_enabled' => false (or
+    // 0, 'off', 'no' ...). Off = one stream.php connection per camera, as before. Anything that is not a yes/no (a
+    // missing key, null, a list, a word nobody knows) is the default: on.
     public static function muxEnabled(array $config): bool
     {
-        if (!array_key_exists('mux_enabled', $config)) {
-            return false;
+        $value = $config['mux_enabled'] ?? null;
+        if (!is_scalar($value)) {
+            return true;
         }
-        return filter_var($config['mux_enabled'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false;
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
     }
 
     // The cameras a mux request asks for ("cam1,cam2"): each once, in the order given. Null when the list is not
@@ -452,14 +454,17 @@ class CamLogic
     }
 
     // Where the relay serves the mux stream: the pictures of these cameras, of these detectors (their own ids), and
-    // when $status also the readings of the detectors.
-    public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false): string
+    // when $status also the readings of the detectors, when $recording the recording state of the cameras.
+    public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false, bool $recording = false): string
     {
         $url = rtrim($relayUrl, '/') . '/mux?cams=' . rawurlencode(implode(',', $ids));
         if ($detectorIds) {
             $url .= '&dets=' . rawurlencode(implode(',', $detectorIds));
         }
-        return $status ? $url . '&status=1' : $url;
+        if ($status) {
+            $url .= '&status=1';
+        }
+        return $recording ? $url . '&rec=1' : $url;
     }
 
     // Whether the relay's answer says it is the mux stream. Anything else (JSON saying why not, or text/html from

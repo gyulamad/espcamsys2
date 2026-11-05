@@ -31,6 +31,7 @@ function run({ mux, withScripts = true, ids = ['a', 'b'], detectorRows = [] }) {
     showDetector: (id) => log.push(`showDetector ${id}`),
     hideDetector: (id) => log.push(`hideDetector ${id}`),
     watchStatus: (on) => log.push(`watchStatus ${on}`),
+    watchCameraStatus: (on) => log.push(`watchCameraStatus ${on}`),
     close: () => log.push('close'),
   };
   const win = withScripts ? { CamMuxPictures: { create: (options) => { created.push(options); return fakePictures; } } } : {};
@@ -42,6 +43,7 @@ function run({ mux, withScripts = true, ids = ['a', 'b'], detectorRows = [] }) {
       querySelectorAll: () => detectorRows.map((id) => ({ dataset: { cam: id } })),
     },
     onLiveDetectorData: (data) => log.push(`status ${JSON.stringify(data)}`),
+    onLiveCameraStatus: (data) => log.push(`cameraStatus ${JSON.stringify(data)}`),
     reconnectDetectorImg: (id) => log.push(`reconnectDetector ${id}`),
     openDetectorEvents: () => log.push('openDetectorEvents'),
     getAllCameraIds: () => ids,
@@ -85,9 +87,9 @@ test('mux on: one mux object for the whole page, pointed at mux.php, finding eac
   assertEqual(t.created[0].imgFor('cam', 'nope'), null);
 });
 
-test('mux on: the images have no source yet, so every camera is started at load', () => {
+test('mux on: the images have no source yet, so every camera is started at load, and their recording state is asked for', () => {
   const t = run({ mux: true });
-  assertEqual(t.log, ['reload a', 'reload b']);
+  assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true']);
 });
 
 test('mux on: opening and closing a picture go to the mux object, never to the image', () => {
@@ -129,12 +131,12 @@ test('mux on but its scripts did not load: the same old way, started at load', (
 
 test('mux on, with detectors: their pictures and readings are asked for at load, after the cameras are started', () => {
   const t = run({ mux: true, detectorRows: ['a', 'b'] });
-  assertEqual(t.log, ['reload a', 'reload b', 'showDetector a', 'showDetector b', 'watchStatus true']);
+  assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true', 'showDetector a', 'showDetector b', 'watchStatus true']);
 });
 
 test('mux on, no detectors: the readings are not asked for', () => {
   const t = run({ mux: true });
-  assertEqual(t.log, ['reload a', 'reload b'], 'no detector picture, no readings');
+  assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true'], 'no detector picture, no detector readings');
 });
 
 test('mux on: a detector image is found by its own id, and the readings go to the page\'s handler', () => {
@@ -144,6 +146,13 @@ test('mux on: a detector image is found by its own id, and the readings go to th
   t.log.length = 0;
   t.created[0].onStatus({ a: { state: 'online' } });
   assertEqual(t.log, ['status {"a":{"state":"online"}}']);
+});
+
+test('mux on: the cameras\' recording state goes to the page\'s handler', () => {
+  const t = run({ mux: true });
+  t.log.length = 0;
+  t.created[0].onCameraStatus({ a: { recording: true } });
+  assertEqual(t.log, ['cameraStatus {"a":{"recording":true}}']);
 });
 
 test('mux on: closing a detector picture goes to the mux object; mux off it empties the image as before', () => {
