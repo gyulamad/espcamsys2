@@ -520,6 +520,18 @@ Two tests need a package that is installed separately: `tests/dom/test_index_dom
 
 You need `g++`, `node` and `php` on `PATH` (and `gdb`, which gives a backtrace if a C++ test crashes; without it the tests still run). The end-to-end tests also need `npm install` to have been run in `nodejs/camera-relay/`. A missing tool is reported as a failure rather than silently skipped. The exit code is `0` only if everything passed.
 
+### How much of the output you see: `--verbose`
+
+By default the run prints one dot for every test case that passed, and the failed ones in full (`[FAIL] ...`), so a thousand passing tests do not bury the one that failed. Anything else that is not a pass — a crash, a `SKIP`, a compile error, a warning — is shown too.
+
+| | |
+|---|---|
+| `./run_tests.sh` or `--verbose 0` | a dot per passed test case; the failures in full (the default) |
+| `./run_tests.sh --verbose 1` | the same, and the text of the groups: the suite titles, the test file names, each suite's summary |
+| `./run_tests.sh --verbose 2` | everything, one line per test case |
+
+`--verbose` on its own means `--verbose 2`, and `--verbose=1` works too. The exit code is the same at every level. The levels are applied by `tools/test_output.sh`, which can wrap any command whose test output uses the `[PASS]` / `[FAIL]` lines.
+
 ### Compiling the sketches: does the sketch itself still build?
 
 The C++ tests build only *parts* of the sketches (the logic headers, and blocks cut out of the `.ino` files) against desktop fakes, so a patch can pass all of them and still leave a sketch that does not compile — a name used above its declaration, a missing `#include`, a call the real core does not have. `run_tests.sh` therefore also compiles both sketch folders as a whole with the real toolchain, through `tools/compile_sketches.sh`. It writes nothing into the repository and flashes nothing. Run it before you start a patch (to know you start from a sketch that builds) and again before you finish it.

@@ -17,6 +17,13 @@
 #                                   (0-100): the two Arduino sketches (gcov),
 #                                   the dashboard's PHP logic, the relay's
 #                                   Node.js logic and the relay's server.js
+#   ./run_tests.sh --verbose [N]    how much of the test output to show (tools/test_output.sh):
+#                                     0  a dot for every passed test case, the failed ones in full
+#                                        (the default)
+#                                     1  the same, and the text of the groups too (suite titles, test
+#                                        file names, summaries)
+#                                     2  everything: every test case on a line of its own
+#                                   --verbose without a number is --verbose 2; --verbose=N works too
 #   ./run_tests.sh -h | --help
 #
 # The sketches themselves are compiled too (tools/compile_sketches.sh): the tests below only build
@@ -62,8 +69,15 @@ overall_status=0
 # ── Arguments ────────────────────────────────────────────────────────────
 COVERAGE_MIN=""
 COMPILE_SKETCHES=1
+VERBOSE=0
+ORIGINAL_ARGS=("$@")
 while [ $# -gt 0 ]; do
     case "$1" in
+        --verbose)
+            # the number is optional: a bare --verbose shows everything
+            if [ $# -ge 2 ] && [[ "$2" =~ ^[0-9]+$ ]]; then VERBOSE="$2"; shift 2; else VERBOSE=2; shift; fi ;;
+        --verbose=*)
+            VERBOSE="${1#--verbose=}"; shift ;;
         --no-sketch-compile)
             COMPILE_SKETCHES=0; shift ;;
         --coverage)
@@ -79,6 +93,19 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if ! [[ "$VERBOSE" =~ ^[012]$ ]]; then
+    echo "--verbose level must be 0, 1 or 2 (got: $VERBOSE)" >&2
+    exit 2
+fi
+
+# The levels below 2 show the output of this run through tools/test_output.sh (dots for the passed test
+# cases): this script starts itself again inside it, and RUN_TESTS_FILTERED keeps that from repeating.
+# Level 2 is this script as it is. The exit code is this script's own either way.
+if [ -z "${RUN_TESTS_FILTERED:-}" ]; then
+    RUN_TESTS_FILTERED=1 exec "$ROOT_DIR/tools/test_output.sh" "$VERBOSE" \
+        "${BASH_SOURCE[0]}" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
+fi
+
 # Instrumentation flags are only added when coverage was asked for, so a
 # normal run builds exactly as before.
 COV_FLAGS=()
@@ -92,6 +119,19 @@ if [ -n "$COVERAGE_MIN" ]; then
 fi
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
+
+# The text of a group of tests (a suite's title, a test file's name) helps to follow a run, but the quietest
+# level (--verbose 0, the default) leaves it out: only the dots and the failures are left there.
+heading() {
+    [ "$VERBOSE" -ge 1 ] || return 0
+    hr
+    echo "$1"
+    hr
+}
+group_text() {
+    [ "$VERBOSE" -ge 1 ] || return 0
+    echo "$1"
+}
 
 # Installs a test-only package folder from its lockfile (npm ci) when its packages are missing, or when the
 # lockfile is newer than what is installed (a patch changed a version). Does nothing otherwise, so a normal
@@ -120,9 +160,7 @@ ensure_npm_deps() {
 # a backtrace instead of just "Aborted". A clean run behaves exactly like
 # running the binary directly; `quit $_exitcode` makes gdb itself exit with
 # the test binary's real exit code so this script can check it.
-hr
-echo "C++ (Arduino logic) tests"
-hr
+heading "C++ (Arduino logic) tests"
 
 mkdir -p "$BUILD_DIR"
 # Stale coverage data from an earlier run would be merged into this one.
@@ -134,7 +172,7 @@ run_cpp_test() {
     local name="$1"
     shift
     local bin="$BUILD_DIR/$name"
-    echo "--- $name"
+    group_text "--- $name"
     # -Werror=unused-function: a TEST(...) that main() never RUN_TESTs is an unused function, and it would
     # otherwise sit there silently, never running (three did, once). It must break the build instead.
     if ! g++ -std=c++17 -Wall -Wextra -Werror=unused-function ${COV_FLAGS[@]+"${COV_FLAGS[@]}"} "$@" -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
@@ -144,7 +182,7 @@ run_cpp_test() {
         gdb -q -batch -ex run -ex bt -ex 'quit $_exitcode' --args "$bin"
         [ $? -ne 0 ] && overall_status=1
     else
-        echo "gdb not found on PATH — running the test binary directly instead"
+        group_text "gdb not found on PATH — running the test binary directly instead"
         "$bin"
         [ $? -ne 0 ] && overall_status=1
     fi
@@ -156,7 +194,7 @@ if ! command -v g++ >/dev/null 2>&1; then
 else
     # The ESP32 Arduino toolchain compiles older C++ than the tests do, so the
     # header it will really build must also be valid as C++11 (strictly).
-    echo "--- remote_log.h as C++11 (the ESP32 toolchain's dialect)"
+    group_text "--- remote_log.h as C++11 (the ESP32 toolchain's dialect)"
     if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
            -include "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/remote_log.h" -x c++ /dev/null; then
         echo "ok"
@@ -166,7 +204,7 @@ else
     fi
 
     # The person detector's connection to the relay and what it reports (also compiled by the sketch).
-    echo "--- report_logic.h as C++11 (the ESP32 toolchain's dialect)"
+    group_text "--- report_logic.h as C++11 (the ESP32 toolchain's dialect)"
     if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
            -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/report_logic.h" -x c++ /dev/null; then
         echo "ok"
@@ -179,7 +217,7 @@ else
     # see settings_logic.h): also compiled by the sketch, so also C++11.
     # ...and the darkness/motion gate, with the moving average behind its motion threshold.
     for h in scene_logic.h motion_baseline.h; do
-        echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
+        group_text "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/$h" -x c++ /dev/null; then
             echo "ok"
@@ -192,7 +230,7 @@ else
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
              ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h \
              ESP32_CAM_Recorder/relay_find_logic.h; do
-        echo "--- $h as C++11 (the ESP32 toolchain's dialect)"
+        group_text "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
             echo "ok"
@@ -205,7 +243,7 @@ else
     # settings_logic.h is deliberately copied into every sketch folder that uses
     # it (an Arduino sketch can only include files from its own folder). The
     # copies must be identical: edit one, copy it over the others.
-    echo "--- settings_logic.h copies are identical"
+    group_text "--- settings_logic.h copies are identical"
     SETTINGS_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/settings_logic.h"
     settings_copies_ok=1
     settings_copies_found=0
@@ -228,7 +266,7 @@ else
     # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
     # must be identical too.
     for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h; do
-        echo "--- $shared copies are identical"
+        group_text "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
         shared_found=0
@@ -267,7 +305,7 @@ else
     run_cpp_test test_settings_sync_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
 
     # The dashboard's copy of the Recorder's settings table is generated from the firmware's own.
-    echo "--- the dashboard's settings table is up to date with the firmware's"
+    group_text "--- the dashboard's settings table is up to date with the firmware's"
     if ! "$ROOT_DIR/tools/gen_device_schema.sh" --check; then
         overall_status=1
     fi
@@ -329,9 +367,7 @@ else
 
     # ── Coverage gate (only with --coverage N) ───────────────────────────
     if [ -n "$COVERAGE_MIN" ]; then
-        hr
-        echo "C++ coverage (gcov), minimum ${COVERAGE_MIN}%"
-        hr
+        heading "C++ coverage (gcov), minimum ${COVERAGE_MIN}%"
         if ! command -v gcov >/dev/null 2>&1; then
             echo "FAIL: gcov not found on PATH"
             overall_status=1
@@ -348,9 +384,7 @@ fi
 # ── The sketches themselves ──────────────────────────────────────────────
 # The C++ tests above compile parts of the sketches against fakes; this compiles each sketch folder as a
 # whole with the real toolchain. Exit 1 = a sketch does not compile, 2 = no toolchain: both fail the run.
-hr
-echo "Arduino sketches compile (arduino-cli, the real toolchain)"
-hr
+heading "Arduino sketches compile (arduino-cli, the real toolchain)"
 if [ "$COMPILE_SKETCHES" = 0 ]; then
     echo "SKIPPED (--no-sketch-compile): the sketches were NOT compiled"
 else
@@ -359,9 +393,7 @@ else
 fi
 
 # ── Node.js logic tests ──────────────────────────────────────────────────
-hr
-echo "Node.js (camera-relay logic) tests"
-hr
+heading "Node.js (camera-relay logic) tests"
 
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
@@ -378,7 +410,7 @@ else
     fi
 
     for f in "$ROOT_DIR"/tests/node/test_*.js; do
-        echo "-- $(basename "$f")"
+        group_text "-- $(basename "$f")"
         if [ -n "$NODE_COV_DIR" ]; then
             NODE_V8_COVERAGE="$NODE_COV_DIR" node "$f"
         else
@@ -389,9 +421,7 @@ else
 
     # ── Coverage gate (only with --coverage N) ───────────────────────────
     if [ -n "$NODE_COV_DIR" ]; then
-        hr
-        echo "Node.js coverage, minimum ${COVERAGE_MIN}%"
-        hr
+        heading "Node.js coverage, minimum ${COVERAGE_MIN}%"
         node "$ROOT_DIR/tests/node/coverage_report.js" "$NODE_COV_DIR" "$ROOT_DIR" "$COVERAGE_MIN"
         [ $? -ne 0 ] && overall_status=1
         rm -rf "$NODE_COV_DIR"
@@ -401,9 +431,7 @@ fi
 # ── Python (person detector script) tests ────────────────────────────────
 # tools/person_scan.py decides whether a recording shows a person. Needs python3 with numpy and OpenCV
 # (sudo apt install python3-opencv); without them the suite is reported as a failure like any missing tool.
-hr
-echo "Python (person detector) tests"
-hr
+heading "Python (person detector) tests"
 if ! command -v python3 >/dev/null 2>&1; then
     echo "FAIL: python3 not found on PATH"
     overall_status=1
@@ -541,25 +569,23 @@ run_node_e2e() {
     fi
 }
 
-hr
-echo "Shell tests (the dashboard's privileged power helper)"
-hr
+heading "Shell tests (the dashboard's privileged power helper)"
 "$ROOT_DIR/tests/shell/test_camdash_power.sh"
 [ $? -ne 0 ] && overall_status=1
 
-hr
-echo "Shell tests (the sketch compile check, tools/compile_sketches.sh, against a fake arduino-cli)"
-hr
+heading "Shell tests (the sketch compile check, tools/compile_sketches.sh, against a fake arduino-cli)"
 "$ROOT_DIR/tests/shell/test_compile_sketches.sh"
+[ $? -ne 0 ] && overall_status=1
+
+heading "Shell tests (the output levels, tools/test_output.sh, and --verbose)"
+"$ROOT_DIR/tests/shell/test_test_output.sh"
 [ $? -ne 0 ] && overall_status=1
 
 # The relay itself needs its packages (express ...) for every end-to-end test below: installed here from
 # the lockfile when missing or out of date (a normal run costs nothing). Needs node and npm on the PATH.
 ensure_npm_deps "$ROOT_DIR/nodejs/camera-relay" "the relay (end-to-end tests)"
 
-hr
-echo "End-to-end (alarm settings) test"
-hr
+heading "End-to-end (alarm settings) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -568,9 +594,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (person detector uplink, relay) test"
-hr
+heading "End-to-end (person detector uplink, relay) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -579,9 +603,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (the detector firmware's real uplink code against the real relay) test"
-hr
+heading "End-to-end (the detector firmware's real uplink code against the real relay) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -590,9 +612,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (dashboard person-detector row) test"
-hr
+heading "End-to-end (dashboard person-detector row) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -601,9 +621,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (live push of the detector numbers, relay) test"
-hr
+heading "End-to-end (live push of the detector numbers, relay) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -612,9 +630,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (live push of the detector numbers, dashboard) test"
-hr
+heading "End-to-end (live push of the detector numbers, dashboard) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -623,9 +639,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (small live pictures reach the browser one by one, dashboard) test"
-hr
+heading "End-to-end (small live pictures reach the browser one by one, dashboard) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -634,9 +648,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (detector live view switch, relay) test"
-hr
+heading "End-to-end (detector live view switch, relay) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -645,9 +657,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (detector live view switch, dashboard) test"
-hr
+heading "End-to-end (detector live view switch, dashboard) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -656,9 +666,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (recording ON/OFF switch, relay) test"
-hr
+heading "End-to-end (recording ON/OFF switch, relay) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -667,9 +675,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (recording ON/OFF switch, dashboard proxy) test"
-hr
+heading "End-to-end (recording ON/OFF switch, dashboard proxy) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -680,9 +686,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (dashboard CSRF guard: record, delete, settings) test"
-hr
+heading "End-to-end (dashboard CSRF guard: record, delete, settings) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -691,9 +695,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (dashboard login: unsafe config refused, guess throttle) test"
-hr
+heading "End-to-end (dashboard login: unsafe config refused, guess throttle) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -702,9 +704,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (dashboard LOG OUT button) test"
-hr
+heading "End-to-end (dashboard LOG OUT button) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -713,9 +713,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (simple camera pages: list, large view, slideshow time) test"
-hr
+heading "End-to-end (simple camera pages: list, large view, slideshow time) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -724,9 +722,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (PHP security headers) test"
-hr
+heading "End-to-end (PHP security headers) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -735,9 +731,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (real Apache: shipped vhost, headers, denied files) test"
-hr
+heading "End-to-end (real Apache: shipped vhost, headers, denied files) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -746,9 +740,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (deploy.sh: web folder, config carry-over) test"
-hr
+heading "End-to-end (deploy.sh: web folder, config carry-over) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -757,9 +749,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (relay redirects never followed; relay_url restricted) test"
-hr
+heading "End-to-end (relay redirects never followed; relay_url restricted) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -768,9 +758,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (hostile relay: stream types, Range, statuses, array params, leaks) test"
-hr
+heading "End-to-end (hostile relay: stream types, Range, statuses, array params, leaks) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -779,9 +767,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (settings saved in data/settings.json: atomic, locked, damage-proof) test"
-hr
+heading "End-to-end (settings saved in data/settings.json: atomic, locked, damage-proof) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -790,9 +776,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "DOM helper (closing a jsdom window without a late frame crashing the run) test"
-hr
+heading "DOM helper (closing a jsdom window without a late frame crashing the run) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -802,9 +786,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "DOM (the real dashboard page in jsdom: nothing from the relay or config becomes markup) test"
-hr
+heading "DOM (the real dashboard page in jsdom: nothing from the relay or config becomes markup) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -816,9 +798,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "DOM (the dashboard page after the phone was locked: pictures start over) test"
-hr
+heading "DOM (the dashboard page after the phone was locked: pictures start over) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -828,9 +808,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (relay logging) test"
-hr
+heading "End-to-end (relay logging) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -839,9 +817,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (firmware over the air, relay) test"
-hr
+heading "End-to-end (firmware over the air, relay) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -850,9 +826,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (ota-deploy.sh) test"
-hr
+heading "End-to-end (ota-deploy.sh) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -861,9 +835,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (camera push connection on a weak link) test"
-hr
+heading "End-to-end (camera push connection on a weak link) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -872,9 +844,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (dashboard FILES count on first load) test"
-hr
+heading "End-to-end (dashboard FILES count on first load) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -883,9 +853,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (recording pre-roll) test"
-hr
+heading "End-to-end (recording pre-roll) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -894,9 +862,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (settings staged on the relay for boards missing some) test"
-hr
+heading "End-to-end (settings staged on the relay for boards missing some) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -905,9 +871,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (relay HTTP/TCP behaviour and failure handling) test"
-hr
+heading "End-to-end (relay HTTP/TCP behaviour and failure handling) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -916,9 +880,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (reads need the control key) test"
-hr
+heading "End-to-end (reads need the control key) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -927,9 +889,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (key guessing lockout, folder settings confined) test"
-hr
+heading "End-to-end (key guessing lockout, folder settings confined) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -938,9 +898,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (HTTP upload checks the key before reading the body) test"
-hr
+heading "End-to-end (HTTP upload checks the key before reading the body) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -949,9 +907,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (dashboard-only relay routes need the control key) test"
-hr
+heading "End-to-end (dashboard-only relay routes need the control key) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -960,9 +916,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (camera id validation and camera cap) test"
-hr
+heading "End-to-end (camera id validation and camera cap) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -971,9 +925,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (cameras find the relay again: UDP discovery) test"
-hr
+heading "End-to-end (cameras find the relay again: UDP discovery) test"
 # tests/e2e/test_discovery_e2e.js: a real relay answers on UDP, and the question is asked by the firmware's
 # real search code (relay_find_logic.h, compiled by tests/cpp/relay_find_tool.cpp) — so the C++ and the
 # JavaScript are proven to agree over real sockets. Junk gets no answer; the wrong key finds nothing;
@@ -987,9 +939,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (settings page: relay + dashboard, save and restart) test"
-hr
+heading "End-to-end (settings page: relay + dashboard, save and restart) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -998,9 +948,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (camera settings page: change queued on the relay, simulated board, cameras add/remove) test"
-hr
+heading "End-to-end (camera settings page: change queued on the relay, simulated board, cameras add/remove) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -1009,9 +957,7 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-hr
-echo "End-to-end (ALL FILES page: login, cameras handed over safely, per-camera lists, deletes) test"
-hr
+heading "End-to-end (ALL FILES page: login, cameras handed over safely, per-camera lists, deletes) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"
     overall_status=1
@@ -1022,9 +968,7 @@ fi
 
 # ── Coverage gate for server.js (only with --coverage N) ─────────────────
 if [ -n "$E2E_COV_DIR" ]; then
-    hr
-    echo "Relay server.js coverage (from the end-to-end tests), minimum ${COVERAGE_MIN}%"
-    hr
+    heading "Relay server.js coverage (from the end-to-end tests), minimum ${COVERAGE_MIN}%"
     if ! command -v node >/dev/null 2>&1; then
         echo "FAIL: node not found on PATH"
         overall_status=1
@@ -1036,9 +980,7 @@ if [ -n "$E2E_COV_DIR" ]; then
 fi
 
 # ── PHP logic tests ───────────────────────────────────────────────────────
-hr
-echo "PHP (dashboard logic) tests"
-hr
+heading "PHP (dashboard logic) tests"
 
 if ! command -v php >/dev/null 2>&1; then
     echo "FAIL: php not found on PATH"
@@ -1077,16 +1019,14 @@ else
     fi
 
     for f in "$ROOT_DIR"/tests/php/test_*.php; do
-        echo "-- $(basename "$f")"
+        group_text "-- $(basename "$f")"
         php ${PHP_COV_FLAGS[@]+"${PHP_COV_FLAGS[@]}"} "$f"
         [ $? -ne 0 ] && overall_status=1
     done
 
     # ── Coverage gate (only with --coverage N) ───────────────────────────
     if [ -n "$PHP_COV_DIR" ]; then
-        hr
-        echo "PHP coverage, minimum ${COVERAGE_MIN}%"
-        hr
+        heading "PHP coverage, minimum ${COVERAGE_MIN}%"
         php "$ROOT_DIR/tests/php/coverage_report.php" "$PHP_COV_DIR" "$ROOT_DIR" "$COVERAGE_MIN"
         [ $? -ne 0 ] && overall_status=1
         rm -rf "$PHP_COV_DIR"
