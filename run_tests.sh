@@ -134,7 +134,9 @@ run_cpp_test() {
     shift
     local bin="$BUILD_DIR/$name"
     echo "--- $name"
-    if ! g++ -std=c++17 -Wall -Wextra ${COV_FLAGS[@]+"${COV_FLAGS[@]}"} "$@" -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
+    # -Werror=unused-function: a TEST(...) that main() never RUN_TESTs is an unused function, and it would
+    # otherwise sit there silently, never running (three did, once). It must break the build instead.
+    if ! g++ -std=c++17 -Wall -Wextra -Werror=unused-function ${COV_FLAGS[@]+"${COV_FLAGS[@]}"} "$@" -o "$bin" "$ROOT_DIR/tests/cpp/$name.cpp"; then
         echo "FAIL: could not compile $name"
         overall_status=1
     elif command -v gdb >/dev/null 2>&1; then
@@ -781,6 +783,18 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_config_overrides_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+hr
+echo "DOM helper (closing a jsdom window without a late frame crashing the run) test"
+hr
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_dom_helpers.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

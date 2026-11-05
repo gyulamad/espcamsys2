@@ -26,6 +26,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { closeWindow } = require('./dom_helpers');
 
 let JSDOM;
 let VirtualConsole;
@@ -226,7 +227,7 @@ async function main() {
   } catch (err) {
     check('the test ran without an unexpected error', false, err && err.stack ? err.stack : String(err));
   } finally {
-    if (dom) dom.window.close();
+    closeWindow(dom);
     await stopProc(php);
     if (relay) await new Promise((r) => relay.close(r));
     if (dir) fs.rmSync(dir, { recursive: true, force: true });

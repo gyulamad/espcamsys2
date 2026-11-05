@@ -1099,6 +1099,9 @@ int main() {
     RUN_TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio);
     RUN_TEST(somebody_watching_opens_the_picture_link_and_wakes_the_radio);
     RUN_TEST(the_network_task_puts_wi_fi_in_station_mode_without_sleep_and_adds_every_network);
+    RUN_TEST(once_wi_fi_is_up_the_task_asks_for_dashboard_settings_changes_every_pass);
+    RUN_TEST(without_a_network_the_task_does_not_ask_for_settings_changes);
+    RUN_TEST(a_wi_fi_driver_that_cannot_start_is_retried_quietly_every_five_seconds);
     RUN_TEST(while_wi_fi_is_down_the_task_waits_half_a_second_and_does_nothing_else);
     RUN_TEST(once_wi_fi_is_up_the_task_checks_for_updates_and_opens_the_uplink_with_the_settings);
     RUN_TEST(a_wi_fi_drop_closes_the_relay_connection_and_the_log_says_so);
