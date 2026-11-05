@@ -98,4 +98,18 @@ test('the ALL FILES page defines every colour variable the shared list style use
   for (const v of used) assertTrue(new RegExp(`${v}\\s*:`).test(page), `all-recordings.php does not define ${v}`);
 });
 
+test('the camera name cell has one fixed width, so the thumbnails next to it line up in every row', () => {
+  const body = ruleBody('.files-cam');
+  const width = declaration(body, 'width');
+  assertTrue(/^\d+(\.\d+)?(ch|em|rem|px)$/.test(width), `not a fixed width: ${width}`);
+  assertEqual(declaration(body, 'flex'), `0 0 ${width}`);   // it neither grows nor shrinks with the name
+});
+
+test('a camera name longer than its cell is cut with an ellipsis, not wrapped or overflowing', () => {
+  const body = ruleBody('.files-cam');
+  assertEqual(declaration(body, 'overflow'), 'hidden');
+  assertEqual(declaration(body, 'text-overflow'), 'ellipsis');
+  assertEqual(declaration(body, 'white-space'), 'nowrap');
+});
+
 summarize();

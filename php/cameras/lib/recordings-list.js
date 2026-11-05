@@ -361,7 +361,7 @@
         h('div', { className: 'files-row' + (f.seen ? '' : ' unseen'), id: `row-${f.cam}-${f.filename}` },
           h('input', { type: 'checkbox', className: 'files-select', value: f.filename, checked: keep.has(`${f.cam}/${f.filename}`),
                        ariaLabel: `Select ${f.filename}`, dataset: { cam: f.cam, seen: f.seen ? '1' : '0' }, onchange: updateSelectionUI }),
-          ...(label === null ? [] : [h('span', { className: 'files-cam', textContent: label })]),
+          ...(label === null ? [] : [h('span', { className: 'files-cam', title: label, textContent: label })]),
           ...(f.person ? [h('button', { className: 'files-thumb-btn', type: 'button', title: 'Click to enlarge', ariaLabel: `Enlarge the picture of the person in ${f.filename}`,
                                        onclick: () => showPicture(thumbUrl(f.cam, f.filename), f.filename) },
             h('img', { className: 'files-thumb', src: thumbUrl(f.cam, f.filename), alt: `Person in ${f.filename}`, loading: 'lazy', width: 96 }))] : []),

@@ -60,7 +60,9 @@ class CamLayout
   .files-scan { color: var(--accent); flex-shrink: 0; font-size: 0.85em; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .files-scan.error { color: #e57373; }
   /* Which camera a clip is from (shown on the all-files page only). */
-  .files-cam { color: var(--accent); flex-shrink: 0; }
+  /* A fixed-width cell (long names are cut with an ellipsis; the full name is its tooltip), so the person
+     thumbnails and everything after them line up in every row, whatever the camera is called. */
+  .files-cam { color: var(--accent); flex: 0 0 12ch; width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Footage nobody has played or downloaded yet is bold and bright. */
   .files-row.unseen .files-name, .files-row.unseen .files-size { color: var(--text); font-weight: 700; }
   .files-select { flex-shrink: 0; margin: 0; cursor: pointer; accent-color: var(--accent2); }

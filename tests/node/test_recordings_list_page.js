@@ -117,6 +117,7 @@ async function main() {
     check('the list asks recordings.php once per camera, with GET', same(server.requests.map((r) => `${r.method} ${r.cam}`).sort(), ['GET cam1', 'GET cam2', 'GET cam3']));
     check('every camera\'s clips are in the one list, newest first', same(names(panel), [D, B, C, A]), show(names(panel)));
     check('each row names its camera', same(panel.querySelectorAll('.files-cam').map((e) => e.text()), ['🚗 Drive', '🌿 Back', '🚪 Front', '🚪 Front']));
+    check('a camera name is also the tooltip of its cell, as the cell cuts a long name short', same(panel.querySelectorAll('.files-cam').map((e) => e.title), ['🚗 Drive', '🌿 Back', '🚪 Front', '🚪 Front']));
     check('each row shows the file size', same(panel.querySelectorAll('.files-size').map((e) => e.text()), ['10 B', '3.0 MB', '2.0 KB', '1.0 KB']));
     check('the header counts the clips', panel.querySelector('.files-panel-header').text().startsWith('4 recordings'));
     check('every row has PLAY, GET, DEL buttons as a camera\'s own panel does',
