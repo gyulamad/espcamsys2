@@ -29,10 +29,11 @@ test('config: cooldown is a whole number of seconds, 0 allowed, anything else fa
   for (const bad of [-1, 1.5, '30', 86401, null]) assertEqual([c(bad).cooldownMs, c(bad).warnings.length], [60000, 1], String(bad));
 });
 
-test('footageUrl: points at the dashboard player and encodes every part', () => {
-  assertEqual(n.footageUrl('http://pi/camdash', 'cam1', 'cam1_2026-11-06T14-05-09-000Z.mp4'), 'http://pi/camdash/recordings.php?cam=cam1&play=cam1_2026-11-06T14-05-09-000Z.mp4');
+test('footageUrl: opens the ALL FILES list on the clip (never the bare video) and encodes every part', () => {
+  assertEqual(n.footageUrl('http://pi/camdash', 'cam1', 'cam1_2026-11-06T14-05-09-000Z.mp4'), 'http://pi/camdash/all-recordings.php?cam=cam1&play=cam1_2026-11-06T14-05-09-000Z.mp4');
   const u = n.footageUrl('http://pi', 'a&b=c', 'x y#z.mp4');
-  assertEqual(u, 'http://pi/recordings.php?cam=a%26b%3Dc&play=x%20y%23z.mp4');
+  assertEqual(u, 'http://pi/all-recordings.php?cam=a%26b%3Dc&play=x%20y%23z.mp4');
+  assertTrue(!u.includes('/recordings.php'));
 });
 
 test('formatBytes / formatTime', () => {
@@ -41,19 +42,18 @@ test('formatBytes / formatTime', () => {
   assertEqual(n.formatTime(T0), '2026-11-06 14:05:09 UTC');
 });
 
-test('buildPersonText: all the known facts, one per line', () => {
-  const text = n.buildPersonText({ camId: 'cam1', filename: 'a.mp4', confidence: 0.874, detectedAtMs: T0, sizeBytes: 2 * 1024 * 1024, footageBaseUrl: 'http://pi/camdash', suppressed: 0 });
+test('buildPersonText: the known facts, one per line — and no confidence', () => {
+  const text = n.buildPersonText({ camId: 'cam1', filename: 'a.mp4', detectedAtMs: T0, sizeBytes: 2 * 1024 * 1024, footageBaseUrl: 'http://pi/camdash', suppressed: 0 });
   assertEqual(text.split('\n'), [
     'Person detected on cam1',
     'Time: 2026-11-06 14:05:09 UTC',
-    'Confidence: 87%',
     'Clip: a.mp4 (2.0 MB)',
-    'Watch: http://pi/camdash/recordings.php?cam=cam1&play=a.mp4',
+    'Watch: http://pi/camdash/all-recordings.php?cam=cam1&play=a.mp4',
   ]);
 });
 
 test('buildPersonText: lines for unknown facts are left out; held-back detections are counted', () => {
-  const text = n.buildPersonText({ camId: 'c', filename: 'a.mp4', confidence: null, detectedAtMs: T0, sizeBytes: null, footageBaseUrl: null, suppressed: 1 });
+  const text = n.buildPersonText({ camId: 'c', filename: 'a.mp4', detectedAtMs: T0, sizeBytes: null, footageBaseUrl: null, suppressed: 1 });
   assertEqual(text.split('\n'), ['Person detected on c', 'Time: 2026-11-06 14:05:09 UTC', 'Clip: a.mp4', '(1 more detection on this camera were not announced)']);
   assertTrue(n.buildPersonText({ camId: 'c', filename: 'a.mp4', detectedAtMs: T0, suppressed: 4 }).endsWith('(4 more detections on this camera were not announced)'));
 });
@@ -84,7 +84,8 @@ const person = { state: 'person', confidence: 0.9 };
     assertEqual(a.channels[0].sent.length, 1);
     const m = a.channels[0].sent[0];
     assertTrue(m.image === jpeg);
-    assertEqual(m.text.split('\n'), ['Person detected on cam1', 'Time: 2026-11-06 14:05:09 UTC', 'Confidence: 90%', 'Clip: a.mp4 (4.0 KB)', 'Watch: http://pi/camdash/recordings.php?cam=cam1&play=a.mp4']);
+    assertEqual(m.text.split('\n'), ['Person detected on cam1', 'Time: 2026-11-06 14:05:09 UTC', 'Clip: a.mp4 (4.0 KB)', 'Watch: http://pi/camdash/all-recordings.php?cam=cam1&play=a.mp4']);
+    assertTrue(!m.text.toLowerCase().includes('confidence') && !m.text.includes('%'));
     assertEqual(a.logs, []);
   });
 
@@ -136,7 +137,7 @@ const person = { state: 'person', confidence: 0.9 };
       assertTrue(!('image' in s.channels[0].sent[0]));
       assertEqual(s.logs, []);
     }
-    assertEqual(noSize.channels[0].sent[0].text.split('\n').slice(3), ['Clip: a.mp4']);
+    assertEqual(noSize.channels[0].sent[0].text.split('\n').slice(2), ['Clip: a.mp4']);
   });
 
   const mixed = setup({ channels: [new Spy('quota exceeded'), new Spy()] });

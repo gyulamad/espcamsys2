@@ -116,6 +116,18 @@
   const downloadUrl = (cam, filename) => recordingUrl(cam, `download=${encodeURIComponent(filename)}`);
   const playUrl = (cam, filename) => recordingUrl(cam, `play=${encodeURIComponent(filename)}`);
 
+  // A link that opens the all-files page ON a clip (the person notification's link): "?cam=cam1&play=<clip>"
+  // -> { cam, filename }, or null when there is no such request or it is not about a known camera and a
+  // plain recording name (anything else in the address is ignored, never used).
+  function parsePlayRequest(search, cams) {
+    const params = new URLSearchParams(String(search || ''));
+    const cam = params.get('cam');
+    const filename = params.get('play');
+    if (cam === null || filename === null) return null;
+    if (!cams.includes(cam) || !api.SAFE_FILENAME.test(filename)) return null;
+    return { cam, filename };
+  }
+
   // What the button's hover text says: what the archive is, what the button does, and how to look first.
   const ARCHIVE_HINT = 'Permanently deletes the archive: the recordings the person check sorted out because nobody is in them. '
     + 'This cannot be undone. To check them first, look in recordings/<camera>/no-person/ on the relay (over SSH) — see INSTALL.md.';
@@ -304,12 +316,29 @@
       if (container.dataset.open === '1') {
         container.replaceChildren();   // removing the <video> stops playback
         container.dataset.open = '0';
+        container.dataset.large = '0';
         hooks.playersChanged();
         return;
       }
       container.replaceChildren(h('video', { controls: true, autoplay: true, src: kind.playUrl(cam, filename), onended: hooks.playersChanged }));
       container.dataset.open = '1';
       hooks.playersChanged();
+    }
+
+    // Opens a clip's player (never closes one that is open), large, and scrolls to the row, so the list
+    // stays around it: the visitor lands in the web app, not on a bare video. -> false when the clip is not
+    // in the list (deleted, or sorted into the archive since): the list is simply shown as it is.
+    function playClip(cam, filename) {
+      const clipRow = document.getElementById(`row-${cam}-${filename}`);
+      if (!clipRow) return false;
+      const container = document.getElementById(`${RECORDING_ROW.playerId}-${cam}-${filename}`);
+      if (container.dataset.open !== '1') {
+        markSeen(cam, filename);
+        togglePlay(cam, filename);
+      }
+      container.dataset.large = '1';
+      if (typeof clipRow.scrollIntoView === 'function') clipRow.scrollIntoView({ block: 'start' });
+      return true;
     }
 
     async function runDeletes(requests, failureText) {
@@ -510,11 +539,11 @@
       }
     }
 
-    return { refresh, selected, toggleSelectAll, deleteAll };
+    return { refresh, selected, toggleSelectAll, deleteAll, playClip };
   }
 
   Object.assign(api, {
-    create, loadCameras, fetchCameraFiles, post, recordedAtMs, sortNewestFirst, tagFiles, mergeResults,
+    create, parsePlayRequest, loadCameras, fetchCameraFiles, post, recordedAtMs, sortNewestFirst, tagFiles, mergeResults,
     fetchArchiveCount, fetchArchiveFiles, loadArchiveTotal, ARCHIVE_HINT, archiveListUrl, archivePlayUrl, archiveDownloadUrl,
     recordingUrl, downloadUrl, playUrl, archiveUrl, thumbUrl, showPicture, scanOf, scanLabel, hasPendingScan, formatBytes, h,
   });

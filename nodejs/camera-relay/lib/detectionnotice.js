@@ -50,9 +50,11 @@ function cleanBaseUrl(value) {
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 }
 
-// The dashboard's own player for one clip (recordings.php streams it after the dashboard's login).
+// The dashboard's ALL FILES page, opened on one clip: the list of recordings with that clip playing in it
+// (after the dashboard's login). Never the bare video: a visitor who closes a lone video tab would lose the
+// web app and the other recordings with it.
 function footageUrl(baseUrl, camId, filename) {
-  return `${baseUrl}/recordings.php?cam=${encodeURIComponent(camId)}&play=${encodeURIComponent(filename)}`;
+  return `${baseUrl}/all-recordings.php?cam=${encodeURIComponent(camId)}&play=${encodeURIComponent(filename)}`;
 }
 
 function formatBytes(bytes) {
@@ -66,13 +68,12 @@ function formatTime(ms) {
   return `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`;
 }
 
-// The text of the message. Lines for what is not known (no confidence, no size, no link) are left out.
-function buildPersonText({ camId, filename, confidence, detectedAtMs, sizeBytes, footageBaseUrl, suppressed }) {
+// The text of the message. Lines for what is not known (no size, no link) are left out.
+function buildPersonText({ camId, filename, detectedAtMs, sizeBytes, footageBaseUrl, suppressed }) {
   const size = formatBytes(sizeBytes);
   return [
     `Person detected on ${camId}`,
     `Time: ${formatTime(detectedAtMs)}`,
-    typeof confidence === 'number' ? `Confidence: ${Math.round(confidence * 100)}%` : null,
     `Clip: ${filename}${size ? ` (${size})` : ''}`,
     footageBaseUrl ? `Watch: ${footageUrl(footageBaseUrl, camId, filename)}` : null,
     suppressed > 0 ? `(${suppressed} more detection${suppressed === 1 ? '' : 's'} on this camera were not announced)` : null,
@@ -91,7 +92,7 @@ function createDetectionNotifier({ notifier, config, throttle, now, files, log }
     return isJpeg(image) && image.length <= MAX_IMAGE_BYTES ? image : null;
   }
 
-  async function announce(job, outcome) {
+  async function announce(job) {
     const { camId, clipPath } = job.payload;
     const t = config.cooldownMs > 0 ? throttle.check(`person:${camId}`, now()) : { allow: true, suppressed: 0 };
     if (!t.allow) return;
@@ -99,7 +100,6 @@ function createDetectionNotifier({ notifier, config, throttle, now, files, log }
     const text = buildPersonText({
       camId,
       filename: clipPath.split(/[\\/]/).pop(),
-      confidence: outcome.confidence,
       detectedAtMs: now(),
       sizeBytes: tolerate(() => files.sizeOf(clipPath), null),
       footageBaseUrl: config.footageBaseUrl,
@@ -114,7 +114,7 @@ function createDetectionNotifier({ notifier, config, throttle, now, files, log }
     if (!job.payload.notify) return;
     if (notifier.isEmpty()) return;
     try {
-      await announce(job, outcome);
+      await announce(job);
     } catch (e) {
       log('WARN', `the person notification could not be sent: ${e && e.message ? e.message : e}`, { sender: job.payload.camId });
     }

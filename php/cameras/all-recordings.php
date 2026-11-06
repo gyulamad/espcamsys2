@@ -3,6 +3,9 @@
 // first, with the same rows and buttons as a camera's own FILES panel on the dashboard (play, download,
 // delete, select, select all / all seen, download / delete selected, delete all).
 //
+// ?cam=<camera>&play=<clip> opens the page with that clip playing (the link in the person notification):
+// the visitor stays in the web app, with every other recording one click away.
+//
 // The page only draws the shell. The list itself is lib/recordings-list.js — the same code the
 // dashboard's per-camera panels run — and it reads and changes footage through recordings.php (one
 // request per camera and file), so the login, the anti-forgery header, the file-name check and the audit
@@ -83,7 +86,10 @@ $cameraLabelsJson = json_encode(
     deleteAllConfirm: 'Delete ALL recordings for EVERY camera? This cannot be undone.',
   });
   document.getElementById('btn-refresh').addEventListener('click', list.refresh);
-  list.refresh();
+  // Opened from a link ("all-recordings.php?cam=cam1&play=<clip>", e.g. the person notification): the list
+  // loads as always and that clip opens in its player, large. Anything else in the address is ignored.
+  const wanted = CamRecordingsList.parsePlayRequest(location.search, Object.keys(CAMERA_LABELS));
+  list.refresh().then(() => { if (wanted) list.playClip(wanted.cam, wanted.filename); });
 </script>
 <?= CamLayout::storageWarningScript() ?>
 </body>

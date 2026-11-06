@@ -416,6 +416,30 @@ async function main() {
     check('GET asks the page to make room for the download', events.downloads === 1);
   }
 
+  // ── opened from a link: playClip ──
+  {
+    const server = fakeServer(fleet());
+    const { doc, panel, view } = build(server);
+    await view.refresh();
+    const row = byId(doc, `row-cam2-${B}`);
+    let scrolled = null;
+    row.scrollIntoView = (o) => { scrolled = o; };
+    check('playClip finds the clip', view.playClip('cam2', B) === true);
+    const player = byId(doc, `player-cam2-${B}`);
+    const video = player.children[0];
+    check('playClip opens the clip in its player, in the list', video && video.tagName === 'VIDEO' && video.src === `recordings.php?cam=cam2&play=${B}` && player.dataset.open === '1');
+    check('playClip makes the player large', player.dataset.large === '1');
+    check('playClip scrolls the row to the top', same(scrolled, { block: 'start' }));
+    check('playClip marks the clip seen, like PLAY', !row.classes().includes('unseen') && server.posts().some((r) => r.query === `?cam=cam2&seen=${B}`));
+    check('the rest of the list is still there, every other clip one click away', rows(panel).length === Object.values(fleet()).flat().length && rows(panel).length > 1);
+    const posts = server.posts().length;
+    check('playClip again keeps it open (never toggles shut) and does not report it seen twice', view.playClip('cam2', B) === true && player.dataset.open === '1' && player.children.length === 1 && server.posts().length === posts);
+    row.querySelectorAll('.cam-btn')[0].click();   // PLAY closes it
+    check('closing the player drops the large size', player.dataset.open === '0' && player.dataset.large === '0');
+    check('a clip that is not in the list: false, nothing opened, nothing sent', view.playClip('cam2', 'cam2_1999-01-01T00-00-00-000Z.mp4') === false && view.playClip('nocam', B) === false && server.posts().length === posts + 1);
+    check('a row without scrollIntoView (an old browser) still plays', (() => { const r2 = byId(doc, `row-cam1-${A}`); r2.scrollIntoView = undefined; return view.playClip('cam1', A) === true; })());
+  }
+
   // ── deleting ──
   {
     const server = fakeServer(fleet());

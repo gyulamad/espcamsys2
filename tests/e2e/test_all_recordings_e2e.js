@@ -100,6 +100,9 @@ async function main() {
     check('the page has its list panel and the navigation bar with the way back to the dashboard', page.text.includes('id="files-all"') && page.text.includes('href="./?layout=grid"'));
     check('both cameras are handed to the page', page.text.includes('"cam-a"') && page.text.includes('"cam-b"') && page.text.includes('Front door'));
     check('a hostile camera name cannot end the script or become markup', !page.text.includes(EVIL_NAME) && !page.text.includes('<img src=x'), 'the raw name is on the page');
+    check('the page opens on a clip given in the address (?cam=&play=) inside its list, validated by the shared code', page.text.includes('CamRecordingsList.parsePlayRequest(location.search, Object.keys(CAMERA_LABELS))') && page.text.includes('list.playClip(wanted.cam, wanted.filename)') && page.text.includes('.files-player[data-large="1"] video'));
+    const linked = await dash('GET', 'all-recordings.php?cam=cam-a&play=cam-a_2026-11-06T14-05-09-000Z.mp4');
+    check('a link with a clip still serves the whole page (list, navigation bar), not a bare video', linked.status === 200 && linked.text.includes('id="files-all"') && linked.text.includes('data-nav="all-files"'));
     check('the lib/ folder is not asked for by the page (its script is inlined)', !/src="lib\//.test(page.text));
     check('the page has a LOG OUT button (in the navigation bar, once)', (page.text.match(/<nav class="site-nav"[\s\S]*action="logout\.php"[\s\S]*<\/nav>/g) || []).length === 1 && (page.text.match(/action="logout\.php"/g) || []).length === 1);
     check('the page is marked as the current one in the bar, and offers DELETE ALL itself (the dashboard has no such button any more)', page.text.includes('data-nav="all-files" aria-current="page"') && page.text.includes('deleteAllConfirm:'));

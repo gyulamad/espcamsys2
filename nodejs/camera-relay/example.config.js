@@ -87,7 +87,8 @@ module.exports = {
   //   },
   //   // A person found in a NEW recording (needs personScan above) is announced with its thumbnail:
   //   footageBaseUrl: 'http://raspberrypi.local/camdash',  // the dashboard as your phone reaches it; the message
-  //                                                        // links to the clip there (omit: no link)
+  //                                                        // links to its ALL FILES list with the clip playing
+  //                                                        // (omit: no link)
   //   cooldownSeconds: 60,           // at most one message per camera in this time (0 = every detection)
   // },
 };
