@@ -30,6 +30,7 @@ const OLD_RELAY_PORT = Number(process.env.E2E_DDET_OLD_RELAY_PORT || 19313);
 const PHP2_PORT = Number(process.env.E2E_DDET_PHP2_PORT || 19314);
 const AUTH = { user: 'e2e-user', pass: 'e2e-pass' };
 const KEY = 'e2e-key';
+const CONTROL_KEY = 'e2e-control-key';   // (review NODE-H2): reads need the control key now
 
 let pass = 0, fail = 0, finished = false;
 function check(name, cond, detail) {
@@ -70,7 +71,7 @@ function writeDashboard(dir, relayPort) {
   spawnSync('cp', ['-r', DASH_SRC + '/.', dir]);
   fs.rmSync(path.join(dir, 'config.php'), { force: true });
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${relayPort}', 'cameras' => [` +
+    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${relayPort}', 'relay_control_key' => '${CONTROL_KEY}', 'cameras' => [` +
     `['id' => 'camA', 'name' => 'A', 'icon' => 'x', 'detector' => 'det-A'], ['id' => 'camB', 'name' => 'B', 'icon' => 'y'], ['id' => 'camC', 'name' => 'C', 'icon' => 'z', 'detector' => 'det-C']]];\n`);
 }
 
@@ -99,7 +100,7 @@ async function main() {
 
   const relayLog = path.join(tmp, 'r.log');
   const readRelayLog = () => { try { return fs.readFileSync(relayLog, 'utf8'); } catch (e) { return ''; } };
-  const relay = spawn('node', ['server.js'], { cwd: RELAY_DIR, env: Object.assign({}, process.env, { PORT: String(RELAY_PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, SETTINGS_FILE: path.join(tmp, 's.json'), LOG_FILE: relayLog, SWITCH_FILE: path.join(tmp, 'sw.json'), DETECTOR_NO_PICTURE_WARN_MS: '800' }), stdio: 'ignore' });
+  const relay = spawn('node', ['server.js'], { cwd: RELAY_DIR, env: Object.assign({}, process.env, { PORT: String(RELAY_PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, CONTROL_KEY, SETTINGS_FILE: path.join(tmp, 's.json'), LOG_FILE: relayLog, SWITCH_FILE: path.join(tmp, 'sw.json'), DETECTOR_NO_PICTURE_WARN_MS: '800' }), stdio: 'ignore' });
 
   // The web server's error log: php -S writes error_log() lines to its stderr. The throttle's marker files
   // go to the temp directory, so each run gets its own (otherwise a rerun within 5 minutes would stay silent).

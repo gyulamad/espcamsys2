@@ -81,7 +81,7 @@ function makeDashboard(relayUrl) {
   fs.rmSync(path.join(dir, 'config.php'), { force: true });
   const cams = CAMS.map((id) => `['id' => '${id}', 'name' => '${id}', 'icon' => '📷']`).join(', ');
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => '${relayUrl}', 'cameras' => [${cams}]];\n`);
+    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => '${relayUrl}', 'relay_control_key' => 'e2e-control-key', 'cameras' => [${cams}]];\n`);
   return dir;
 }
 
@@ -175,7 +175,7 @@ function startRelay(settingsFile) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
-      env: Object.assign({}, process.env, { PORT: String(RELAY_PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: 'e2e-key', SETTINGS_FILE: settingsFile, LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), SWITCH_FILE: path.join(path.dirname(settingsFile), 'switch.json') }),
+      env: Object.assign({}, process.env, { PORT: String(RELAY_PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: 'e2e-key', CONTROL_KEY: 'e2e-control-key', SETTINGS_FILE: settingsFile, LOG_FILE: path.join(path.dirname(settingsFile), 'relay.log'), SWITCH_FILE: path.join(path.dirname(settingsFile), 'switch.json') }),
     });
     let out = '';
     const onData = (d) => {
