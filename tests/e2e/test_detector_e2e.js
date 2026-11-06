@@ -24,6 +24,7 @@ const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
 const PORT = Number(process.env.E2E_DETECTOR_PORT || 19290);
 const PUSH_PORT = Number(process.env.E2E_DETECTOR_PUSH_PORT || 19291);
 const KEY = 'e2e-detector-key';
+const CONTROL_KEY = 'e2e-detector-control-key';   // (review NODE-H2): reads need the control key now
 const ID = 'e2e-detector-1';
 
 let pass = 0, fail = 0, finished = false;
@@ -51,10 +52,13 @@ async function waitFor(fn, ms = 3000) {
   }
 }
 
+// (review NODE-H2): reads need the control key now. The test's request helper
+// adds X-Control-Key to every request unless the caller overrides headers.
 function request(method, p, { headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
-    const req = nodeHttp.request(`http://127.0.0.1:${PORT}${p}`, { method, headers }, (res) => {
+    const finalHeaders = Object.assign({ 'X-Control-Key': CONTROL_KEY }, headers);
+    const req = nodeHttp.request(`http://127.0.0.1:${PORT}${p}`, { method, headers: finalHeaders }, (res) => {
       let out = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { out += c; });
@@ -75,7 +79,7 @@ function startRelay(extraEnv = {}) {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
       env: Object.assign({}, process.env, {
-        PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY,
+        PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, CONTROL_KEY,
         SETTINGS_FILE: path.join(tmp, 'settings.json'), LOG_FILE: logFile, SWITCH_FILE: path.join(tmp, 'switch.json'),
       }, extraEnv),
     });
@@ -92,7 +96,7 @@ function openStream(id) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const chunks = [];
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detector/${id}/stream`, (res) => {
+    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detector/${id}/stream`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
       const out = { status: res.statusCode, type: res.headers['content-type'], headMs: Date.now() - started, body: () => Buffer.concat(chunks), close: () => req.destroy() };
       res.on('data', (c) => chunks.push(c));
       resolve(out);
@@ -196,7 +200,7 @@ async function main() {
     check('the picture itself is not in the JSON', !!d && d.report.jpeg === undefined && !JSON.stringify(d).includes('/9j') && !JSON.stringify(d).includes('/+A'));
     r = await request('GET', '/status');
     check('a detector is NOT listed as a camera in /status', r.status === 200 && r.json[ID] === undefined);
-    r = await request('POST', '/alarm/all');
+    r = await request('POST', '/alarm/all', { headers: { 'X-Api-Key': KEY, 'X-Control-Key': '' } });
     check('"alarm all" does not touch the detector', r.status === 200 && !JSON.stringify(r.json).includes(ID), JSON.stringify(r.json));
 
     const stream = await openStream(ID);

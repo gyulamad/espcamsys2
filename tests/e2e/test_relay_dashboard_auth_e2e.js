@@ -127,6 +127,9 @@ function request(method, urlPath, { headers = {}, body } = {}) {
 const post = (p, opts) => request('POST', p, opts);
 const get = (p, opts) => request('GET', p, opts);
 const del = (p, opts) => request('DELETE', p, opts);
+// POST with the CAMERA key — what the firmware's alarm HTTP fallback now sends
+// (review NODE-H1 / COMBINED-H3).
+const postCamKey = (p) => request('POST', p, { headers: { 'X-Api-Key': CAM_KEY } });
 
 // A camera on the raw push port: "<id>\t<key>\n" then optionally frames (4-byte big-endian length + payload).
 function pushConnect(id, key, preamble) {
@@ -164,7 +167,12 @@ const settingsOf = async () => (await get('/settings')).json;
     for (const n of ['clip1.mp4', 'clip2.mp4']) fs.writeFileSync(clip(n), 'clip ' + n);
   };
   const clips = () => (fs.existsSync(CAM_DIR) ? fs.readdirSync(CAM_DIR).filter((n) => n.endsWith('.mp4')).sort().join(',') : '');
-  const notRecording = async () => (await get(`/record/${CAM}`)).json.recording === false;
+  const notRecording = async () => {
+    // (review NODE-H2): with no controlKey, GET /record/:id returns 503 — that
+    // counts as "not recording" too, since the relay refuses to disclose state.
+    const r = await get(`/record/${CAM}`);
+    return r.status === 503 || (r.json && r.json.recording === false);
+  };
   let relay = null;
 
   try {
@@ -220,9 +228,9 @@ const settingsOf = async () => (await get('/settings')).json;
     check('GET /recordings/<id>, with the key, answers (200)', r.status === 200 && r.json.length === 2, `got ${r.status}`);
     r = await get(`/recordings/${CAM}/clip1.mp4`);
     check('downloading a clip, with the key, works (200)', r.status === 200 && r.text === 'clip clip1.mp4', `got ${r.status}`);
-    r = await post(`/alarm/${CAM}`);
+    r = await postCamKey(`/alarm/${CAM}`);
     check('POST /alarm/<id> is still open: the boards\' HTTP fallback sends no key (200)', r.status === 200, `got ${r.status} ${r.text.slice(0, 80)}`);
-    r = await post('/alarm/all');
+    r = await postCamKey('/alarm/all');
     check('POST /alarm/all is still open (200)', r.status === 200, `got ${r.status}`);
 
     // ── 4. with the control key everything works ──────────────────────
@@ -265,9 +273,9 @@ const settingsOf = async () => (await get('/settings')).json;
     check('...and nothing changed: clips are all there', clips() === 'clip1.mp4,clip2.mp4', clips());
     check('...the setting is unchanged', (await settingsOf()).alarmRecordSeconds === sBefore);
     check('...nothing is recording', await notRecording());
-    r = await post(`/alarm/${CAM}`);
+    r = await postCamKey(`/alarm/${CAM}`);
     check('...and the open routes still work (alarm 200)', r.status === 200, `got ${r.status}`);
-    check('the relay is still up, with no ERROR in its log', (await get('/status')).status === 200 && !/ ERROR /.test(readFile(logFile)));
+    check('the relay is still up, with no ERROR in its log', (await postCamKey(`/alarm/${CAM}`)).status === 200 && !/ ERROR /.test(readFile(logFile)));
   } catch (err) {
     check('the test ran to the end without an unexpected error', false, err && err.stack ? err.stack : String(err));
   } finally {

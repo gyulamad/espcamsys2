@@ -9,9 +9,12 @@
 //     cameras: no picture bytes, no file names, no camera ids, in the refusal;
 //   - with the control key every one of them answers, and answers with the real thing (the exact picture, the exact
 //     recording bytes, the list, the live stream's first frame);
-//   - what the boards use stays as it was: POST /alarm (keyless fallback), POST /upload and the push port with the
-//     camera key, GET /device-settings with the camera key;
-//   - with NO controlKey configured the reads are let through (nothing to check against), the relay says so in its
+//   - what the boards use: POST /alarm now needs the camera key (review NODE-H1 / COMBINED-H3;
+//     the firmware sends X-Api-Key on the alarm POST). POST /upload and the push port still
+//     use the camera key, GET /device-settings uses the camera key;
+//   - with NO controlKey configured the reads are REFUSED (503) until controlKey is set
+//     (review NODE-H2: was fail-open; now fail-closed for safety). READ_KEY_REQUIRED=0
+//     re-enables the old fail-open behaviour for trusted LANs. The relay says so in its
 //     log at startup, and what changes things is still refused (503);
 //   - refusals are WARN lines in the log, throttled, and never contain a key.
 //
@@ -250,8 +253,14 @@ function readStream(urlPath, headers) {
     check('the same live stream without the key is a 401, not a stream', r.status === 401, `got ${r.status}`);
 
     // ── 3. what the boards use is unchanged ───────────────────────────
+    // (review NODE-H1 / COMBINED-H3): POST /alarm is no longer keyless by
+    // default. The firmware now sends X-Api-Key on the alarm POST. Without
+    // the key, the relay refuses with 401 (unless ALLOW_KEYLESS_ALARM=1 is
+    // set for old firmware that cannot send the header).
     r = await request('POST', `/alarm/${CAM}`);
-    check('POST /alarm/<id> is still keyless (the boards\' HTTP fallback, 200)', r.status === 200, `got ${r.status} ${r.text.slice(0, 80)}`);
+    check('POST /alarm/<id> without a key is now refused (401) — NODE-H1', r.status === 401, `got ${r.status} ${r.text.slice(0, 80)}`);
+    r = await request('POST', `/alarm/${CAM}`, { headers: { 'X-Api-Key': CAM_KEY } });
+    check('POST /alarm/<id> WITH the camera key works (200)', r.status === 200, `got ${r.status} ${r.text.slice(0, 80)}`);
     r = await request('POST', `/record/${CAM}/stop`, withKey(CONTROL_KEY));
     check('(and what it started can be stopped with the key)', r.status === 200, `got ${r.status}`);
     r = await request('POST', `/upload/${CAM}?key=${CAM_KEY}`, { headers: { 'Content-Type': 'image/jpeg' }, body: PICTURE });
@@ -266,16 +275,26 @@ function readStream(urlPath, headers) {
     await stopRelay(relay); relay = null;
 
     // ── 4. no controlKey configured ───────────────────────────────────
+    // (review NODE-H2): requireReadKey now fails CLOSED (503) when no controlKey
+    // is set, instead of letting reads through. This protects a misconfigured
+    // relay from exposing live video and recordings to anyone on the LAN. The
+    // operator must set controlKey; READ_KEY_REQUIRED=0 re-enables the old
+    // fail-open behaviour for trusted LANs with no Tor exposure.
     relay = await startRelay(Object.assign({ CONTROL_KEY: '' }, files));
     for (const [u] of reads.filter(([x]) => !isStream(x))) {
       r = await request('GET', u);
-      check(`with no controlKey set, GET ${u.replace(CAM, '<cam>').replace(CLIP, '<clip>')} is let through (not 401)`, r.status !== 401 && r.status !== 503, `got ${r.status}`);
+      check(`with no controlKey set, GET ${u.replace(CAM, '<cam>').replace(CLIP, '<clip>')} is REFUSED (503) until controlKey is configured`, r.status === 503, `got ${r.status}`);
     }
     r = await readStream('/stream/' + CAM, {});
-    check('...and so is the live stream (it is a stream, not a refusal)', r.status === 200 || r.status === 0, `got ${r.status}`);
-    check('the relay says at startup that reads are open because no controlKey is set', await waitFor(() => /WARN .*controlKey is not set: live video, snapshots, recordings/.test(readLog()), 3000) !== null);
+    check('...and so is the live stream', r.status === 503 || r.status === 0, `got ${r.status}`);
+    check('the relay says at startup that reads are refused because no controlKey is set', await waitFor(() => /WARN .*controlKey is not set: live video, snapshots, recordings/.test(readLog()), 3000) !== null);
     r = await request('DELETE', `/recordings/${CAM}/${CLIP}`);
-    check('...but what CHANGES things is still refused (503), and the clip is still there', r.status === 503 && fs.existsSync(path.join(CAM_DIR, CLIP)), `got ${r.status}`);
+    check('...what CHANGES things is still refused (503), and the clip is still there', r.status === 503 && fs.existsSync(path.join(CAM_DIR, CLIP)), `got ${r.status}`);
+    // READ_KEY_REQUIRED=0 re-enables the old fail-open behaviour for trusted LANs
+    await stopRelay(relay); relay = null;
+    relay = await startRelay(Object.assign({ CONTROL_KEY: '', READ_KEY_REQUIRED: '0' }, files));
+    r = await request('GET', '/status');
+    check('with READ_KEY_REQUIRED=0 and no controlKey, reads are let through again', r.status === 200, `got ${r.status}`);
     check('the relay is still up, with no ERROR in its log', (await request('GET', '/status')).status === 200 && !errorLines().length, errorLines().slice(0, 2).join(' | '));
   } catch (err) {
     check('the test ran to the end without an unexpected error', false, err && err.stack ? err.stack : String(err));

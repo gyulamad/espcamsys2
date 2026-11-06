@@ -121,10 +121,13 @@ function request(method, urlPath, { headers = {} } = {}) {
     req.end();
   });
 }
-// Reads need the control key too (review R-08); with no controlKey configured the relay lets them through, key or not.
+// Reads need the control key too (review R-08); with no controlKey configured the relay now refuses reads (503, review NODE-H2) until controlKey is set.
 const get = (p) => request('GET', p, { headers: { 'X-Control-Key': CONTROL_KEY } });
 // /record/... is dashboard-only and needs the control key (review R-03); everything else here is sent as it is.
 const post = (p) => (p.startsWith('/record/') ? request('POST', p, { headers: { 'X-Control-Key': CONTROL_KEY } }) : request('POST', p));
+// POST with the CAMERA key — what the firmware's alarm HTTP fallback now sends
+// (review NODE-H1 / COMBINED-H3).
+const postCamKey = (p) => request('POST', p, { headers: { 'X-Api-Key': CAM_KEY } });
 const ctl = (p, extra) => request('POST', p, { headers: Object.assign({ 'X-Control-Key': CONTROL_KEY }, extra) });
 const camOff = (id, q = '', extra) => ctl(`/recording/camera/${id}/off${q}`, extra);
 const camOn = (id, extra) => ctl(`/recording/camera/${id}/on`, extra);
@@ -232,7 +235,7 @@ async function main() {
     // ── 4. while OFF, nothing can start a recording ─────────────────
     const stA = await statusOf(A);
     check('/status shows the camera as OFF, and the others as not', stA.recordingOff && stA.recordingOff.forever === true && (await statusOf(B)).recordingOff === null, JSON.stringify(stA.recordingOff));
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('HTTP alarm on an OFF camera: answered 200 (the camera did nothing wrong), but suppressed', r.status === 200 && r.json.suppressed === true && r.json.recording === false && r.json.reason === 'off', JSON.stringify(r));
     r = await post(`/record/${A}?seconds=5`);
     check('the RECORD button on an OFF camera is answered 409 with a clear message', r.status === 409 && r.json.suppressed === true && /OFF/.test(r.json.error), JSON.stringify(r));
@@ -251,12 +254,12 @@ async function main() {
     check('...once, not once per ignored request (several were made above)', (readFile(files.LOG_FILE).match(/recording request ignored — recording is switched OFF for this camera/g) || []).length === 1);
 
     // ── 5. cameras are independent; ON restores one ─────────────────
-    r = await post(`/alarm/${B}`);
+    r = await postCamKey(`/alarm/${B}`);
     check('another camera records normally while this one is OFF', r.json.recording === true && !r.json.suppressed, JSON.stringify(r.json));
     await post(`/record/${B}/stop`);
     r = await camOn(A);
     check('switching ON works and says so', r.status === 200 && r.json.off[A] === null && r.json.affected[0] === A, JSON.stringify(r.json));
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('the camera records again after switching ON', r.json.recording === true, JSON.stringify(r.json));
 
     // ── 6. switching OFF stops a recording that is running ──────────
@@ -274,18 +277,18 @@ async function main() {
     check('none of them records while all are OFF', (await Promise.all([A, B, C, D].map(isRecording))).every((x) => x === false));
     await startCam(LATE);
     await sleep(300);
-    r = await post(`/alarm/${LATE}`);
+    r = await postCamKey(`/alarm/${LATE}`);
     check('a camera the relay had not seen yet is NOT affected by an earlier "all OFF"', r.json.recording === true, JSON.stringify(r.json));
     await post(`/record/${LATE}/stop`);
     r = await camOn(C);
     check('after "all OFF", ONE camera can be switched ON alone', r.json.off[C] === null);
     check('...and the others stay OFF', (await statusOf(A)).recordingOff !== null && (await statusOf(B)).recordingOff !== null && (await statusOf(C)).recordingOff === null);
-    r = await post(`/alarm/${C}`);
+    r = await postCamKey(`/alarm/${C}`);
     check('...the one switched ON records', r.json.recording === true);
     await post(`/record/${C}/stop`);
     r = await ctl('/recording/all/on');
     check('"all cameras ON" switches every camera back', r.status === 200 && JSON.stringify((await get('/recording/state')).json.off) === '{}');
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('and they record again', r.json.recording === true);
     await post(`/record/${A}/stop`);
 
@@ -299,10 +302,10 @@ async function main() {
     await camOff(C, '?minutes=0');
     await sleep(4000);   // C keeps streaming for 4 s while OFF (~40 frames; its buffer holds the last 3 s)
     await camOn(C);
-    r = await post(`/alarm/${C}`);
+    r = await postCamKey(`/alarm/${C}`);
     const leaked = r.json.preRollFrames;
     await post(`/record/${C}/stop`);
-    r = await post(`/alarm/${B}`);   // B was never OFF during that time: its buffer holds a full 3 s
+    r = await postCamKey(`/alarm/${B}`);   // B was never OFF during that time: its buffer holds a full 3 s
     const normal = r.json.preRollFrames;
     await post(`/record/${B}/stop`);
     check('right after switching ON, the recording contains NO footage from the OFF period (pre-roll starts afterwards)', typeof leaked === 'number' && leaked <= 3, `leaked=${leaked}`);
@@ -322,7 +325,7 @@ async function main() {
     check('after a relay restart both cameras are still OFF',
       r.json.off[A] && r.json.off[A].forever === true && r.json.off[B] && between(r.json.off[B].remainingMs, 28 * MIN, 30 * MIN), JSON.stringify(r.json));
     check('...and the restart says so in the log', await logMatches(/recording is switched OFF \(restored from .*\) for: .*e2e-sw-a until it is switched back ON/));
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('...and it still blocks recording', r.json.suppressed === true);
     await camOn(A); await camOn(B);
     await stopRelay(relay);
@@ -336,12 +339,12 @@ async function main() {
     check('a timed OFF with time left is restored; one that ran out while the relay was down is not; forever is',
       r.json.off[A] && !r.json.off[B] && r.json.off[C] && r.json.off[C].forever, JSON.stringify(r.json));
     check('...and the one that ran out while the relay was stopped is reported in the log', await logMatches(/recording for e2e-sw-b was switched OFF for a limited time, which ran out while the relay was stopped/));
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('while its timer still runs, the camera does not record', r.json.suppressed === true);
     const timerEnded = await waitFor(async () => !(await get('/recording/state')).json.off[A], 5000);
     check('when the timer runs out the camera switches itself back ON', !!timerEnded);
     check('...and logs it', await logMatches(/recording switched back ON automatically/));
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('...and records again', r.json.recording === true && !r.json.suppressed, JSON.stringify(r.json));
     check('...with a pre-roll that starts when the timer ended, not before (A streamed ~3 s while it was OFF)', typeof r.json.preRollFrames === 'number' && r.json.preRollFrames <= 14, `pre-roll=${r.json.preRollFrames}`);
     await post(`/record/${A}/stop`);
@@ -355,7 +358,7 @@ async function main() {
     r = await get('/recording/state');
     check('a damaged state file: the relay starts and EVERY camera records', r.status === 200 && JSON.stringify(r.json.off) === '{}', JSON.stringify(r));
     check('...and warns about it', await logMatches(/the recording-switch file is not valid JSON/));
-    r = await post(`/alarm/${A}`);
+    r = await postCamKey(`/alarm/${A}`);
     check('...recording works', r.json.recording === true);
     await post(`/record/${A}/stop`);
     await stopRelay(relay);
@@ -367,8 +370,8 @@ async function main() {
     r = await request('POST', `/recording/camera/${A}/off`, { headers: { 'X-Control-Key': '' } });
     check('...an EMPTY key does not match an empty setting either', r.status === 503, JSON.stringify(r));
     r = await get('/recording/state');
-    check('...reading still works and says control is disabled', r.status === 200 && r.json.controlEnabled === false);
-    r = await post(`/alarm/${A}`);
+    check('...reading is refused (503, review NODE-H2) until controlKey is set', r.status === 503, JSON.stringify(r));
+    r = await postCamKey(`/alarm/${A}`);
     check('...and recording is unaffected', r.json.recording === true);
     check('the relay says at startup that the switch is disabled', await logMatches(/recording on\/off switch DISABLED/));
     await post(`/record/${A}/stop`);

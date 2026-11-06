@@ -1214,12 +1214,22 @@ function requireDashboardKey(req, res, next) {
 // Guards what the cameras SEE: live video, snapshots, recordings, and the lists of who is connected and what
 // state it is in. Only the dashboard's PHP asks for these (it sends X-Control-Key on every one; the browser never
 // talks to the relay), and the camera boards use none of them. Anyone who could reach this port used to be able to
-// watch and download everything. Unlike the routes that CHANGE things (requireDashboardKey fails closed with 503),
-// this one lets the request through when no controlKey is configured at all: there is then nothing to check
-// against, and refusing would blank the dashboard of an installation that has not set one yet — the relay says so
-// in its log at startup, and INSTALL.md says to set one.
+// watch and download everything.
+//
+// (review NODE-H2): requireReadKey used to fail OPEN when no controlKey was set, on the theory that a fresh
+// install should keep working until the operator configures one. That meant an unconfigured relay exposed every
+// camera's live stream and every recording to anyone on the LAN. It now fails CLOSED (503): the dashboard
+// shows "set controlKey" instead of live video, which is the safer default. The relay already logs a warning
+// at startup when controlKey is empty. Operators who genuinely want keyless reads (e.g. a trusted LAN with no
+// Tor exposure) can opt in with READ_KEY_REQUIRED=0 in the relay's environment.
+const READ_KEY_REQUIRED = process.env.READ_KEY_REQUIRED !== '0';
 function requireReadKey(req, res, next) {
-  if (!CONTROL_KEY) return next();
+  if (!CONTROL_KEY) {
+    if (READ_KEY_REQUIRED) {
+      return res.status(503).json({ error: 'this relay is not configured: set controlKey in config.js (and relay_control_key in the dashboard\'s config.php) — reads are refused until then' });
+    }
+    return next();
+  }
   const provided = req.headers['x-control-key'];
   const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
   if (keyState === 'ok') return next();
@@ -2200,21 +2210,24 @@ app.use((err, req, res, next) => {
   return res.sendStatus(500);
 });
 
-// Where the HTTP server listens. By default the relay binds to 127.0.0.1 only
-// (review NODE-H2 / COMBINED-M2): the dashboard's PHP layer reaches it on
-// loopback, and nothing else needs to. Cameras reach the relay via the raw
-// push port (which still binds to all interfaces, below) and via HTTP only
-// when relay_url in config.php points at the LAN address — operators who want
-// that must opt in with RELAY_BIND=0.0.0.0.
-const RELAY_BIND = process.env.RELAY_BIND || '127.0.0.1';
+// Where the HTTP server listens. The relay binds to all interfaces by
+// default because cameras (OTA, settings sync, /log, alarm fallback) and
+// detectors (the HTTP Upgrade uplink on /detector/:id/uplink) are on the LAN
+// and reach the relay at the Pi's LAN address.
+//
+// (review NODE-H2): a previous version of this patch defaulted to 127.0.0.1
+// on the theory that only the PHP layer needs the HTTP port. That broke
+// detector uplinks entirely and silently broke camera OTA / settings / log
+// calls — both use the HTTP port from the LAN. The correct NODE-H2 fix is
+// requireReadKey() failing closed when no controlKey is set (above), not
+// restricting the bind. Operators who genuinely want loopback-only (e.g.
+// everything on one machine) can still opt in with RELAY_BIND=127.0.0.1.
+const RELAY_BIND = process.env.RELAY_BIND || '0.0.0.0';
 
 const httpServer = app.listen(PORT, RELAY_BIND, () => {
   console.log(`Camera relay (HTTP) listening on ${RELAY_BIND}:${PORT}`);
   if (!CONTROL_KEY) {
-    relayLog('WARN', `controlKey is not set: live video, snapshots, recordings and the camera list can be read by anyone who can reach ${RELAY_BIND}:${PORT}, and recording on/off, deleting, record and the settings are disabled. Set controlKey in config.js (and relay_control_key in the dashboard's config.php).`);
-  }
-  if (RELAY_BIND === '0.0.0.0' || RELAY_BIND === '::') {
-    relayLog('WARN', `RELAY_BIND=${RELAY_BIND}: the relay is reachable from the network. The dashboard's PHP layer only needs loopback (127.0.0.1); set RELAY_BIND=0.0.0.0 only if you have cameras or a dashboard on another host that must reach this port.`);
+    relayLog('WARN', `controlKey is not set: live video, snapshots, recordings and the camera list are REFUSED (503) until controlKey is set in config.js (and relay_control_key in the dashboard's config.php). Set READ_KEY_REQUIRED=0 only on a trusted LAN with no Tor exposure.`);
   }
 });
 // A person detector opens its uplink with an HTTP Upgrade (see the "Person detectors" section above).

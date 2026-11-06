@@ -160,11 +160,14 @@ function stopRelay(child) {
 
 // Plain core-`http` request helper (no global fetch, which only exists on
 // Node 18+), so this test runs on any Node version the relay itself does.
-function http(method, pathAndQuery) {
+// Default headers: X-Control-Key (the dashboard's key for state-changing
+// routes). pass `extraHeaders` to add or override (e.g. the camera key on
+// the alarm routes, review NODE-H1 / COMBINED-H3).
+function http(method, pathAndQuery, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const req = nodeHttp.request(
       BASE + pathAndQuery,
-      { method, headers: { 'Content-Length': 0, 'X-Control-Key': CONTROL_KEY } },
+      { method, headers: Object.assign({ 'Content-Length': 0, 'X-Control-Key': CONTROL_KEY }, extraHeaders) },
       (res) => {
         let data = '';
         res.setEncoding('utf8');
@@ -183,6 +186,9 @@ function http(method, pathAndQuery) {
 }
 const get = (p) => http('GET', p);
 const post = (p) => http('POST', p);
+// POST with the CAMERA key instead of the control key — what the firmware's
+// alarm HTTP fallback now sends (review NODE-H1 / COMBINED-H3).
+const postCamKey = (p) => http('POST', p, { 'X-Api-Key': CAM_KEY, 'X-Control-Key': '' });
 
 async function main() {
   const overallTimer = setTimeout(() => {
@@ -252,7 +258,8 @@ async function main() {
       r.body.alarmRecordSeconds === 10 && r.body.preRollSeconds === 5, JSON.stringify(r.body));
 
     // ── THE BUG: alarm must use the stored 10s/20s, not 60s ───────────
-    r = await post(`/alarm/${CAM_A}`);
+    // (review NODE-H1 / COMBINED-H3): the alarm routes now need the camera key.
+    r = await postCamKey(`/alarm/${CAM_A}`);
     check('POST /alarm/:id succeeds and starts a recording',
       r.status === 200 && r.body && r.body.recording === true && r.body.extended === false, JSON.stringify(r));
 
@@ -264,7 +271,7 @@ async function main() {
     }
 
     // Even if a client still sends a duration, the relay must ignore it.
-    const cleanB = await post(`/alarm/${CAM_B}?seconds=60`);
+    const cleanB = await postCamKey(`/alarm/${CAM_B}?seconds=60`);
     if (cleanB.body && cleanB.body.startedAt) {
       const ms = Date.parse(cleanB.body.endAt) - Date.parse(cleanB.body.startedAt);
       check('a duration sent by the client is ignored — stored setting wins',
@@ -279,13 +286,13 @@ async function main() {
       r.body && r.body[CAM_A] && r.body[CAM_A].recording === true, JSON.stringify(r.body && r.body[CAM_A]));
 
     // ── Repeat alarm extends instead of starting a second recording ───
-    r = await post(`/alarm/${CAM_A}`);
+    r = await postCamKey(`/alarm/${CAM_A}`);
     check('a repeat alarm during a recording extends it',
       r.status === 200 && r.body.extended === true, JSON.stringify(r));
 
     // ── Changing the settings applies to the NEXT alarm ───────────────
     await post('/settings?alarmRecordSeconds=5');
-    r = await post(`/alarm/${CAM_ALL}`);
+    r = await postCamKey(`/alarm/${CAM_ALL}`);
     if (r.body && r.body.startedAt) {
       const startedAt = Date.parse(r.body.startedAt);
       const recordMs = Date.parse(r.body.endAt) - startedAt;
@@ -296,7 +303,7 @@ async function main() {
     }
 
     // ── /alarm/all hits every camera the relay knows about ────────────
-    r = await post('/alarm/all');
+    r = await postCamKey('/alarm/all');
     const ids = r.body && Array.isArray(r.body.cameras) ? r.body.cameras.map((c) => c.id) : [];
     check('POST /alarm/all triggers every known camera',
       r.status === 200 && [CAM_A, CAM_B, CAM_ALL].every((id) => ids.includes(id)), JSON.stringify(ids));
