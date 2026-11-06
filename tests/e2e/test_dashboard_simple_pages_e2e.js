@@ -143,6 +143,9 @@ async function main() {
     const links = (id) => new RegExp(`<a class="stream-link" href="simple-view\\.php\\?cam=${id}"[^>]*>\\s*<img data-cam="${id}"[^>]*id="img-${id}"`);
     check('dashboard: every camera\'s picture is a link to that camera\'s large view, and a click there no longer goes full screen',
       ['cam-a', 'cam-b', 'cam-c'].every((id) => links(id).test(r.text)) && !r.text.includes('toggleStreamFullscreen') && !/<img[^>]*class="stream"[^>]*onclick=/.test(r.text), detail(r));
+    check('dashboard: every camera\'s picture frame has the transparent-until-recording border (class rec-frame) and the page has its style',
+      ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`<div class="cam-stream-wrap rec-frame" id="wrap-${id}">`)) && r.text.includes('.rec-frame.recording { border-color: var(--accent2)'), detail(r));
+    check('dashboard: the recording state also switches the frame (updateCameraRecordButtonState)', /getElementById\('wrap-' \+ id\)[\s\S]{0,200}classList\.toggle\('recording', recording\)/.test(r.text), detail(r));
     for (const page of ['simple-list.php', 'simple-view.php', 'simple-view.php?cam=cam-a']) {
       r = await get(page, { auth: false });
       check(`${page}: without the dashboard login it is just the login prompt`, r.status === 401 && /^Basic realm=/.test(r.headers['www-authenticate'] || '') && !/cam-a|stream\.php/.test(r.text), detail(r));
@@ -151,7 +154,7 @@ async function main() {
     // ── the list ────────────────────────────────────────────────────
     r = await get('simple-list.php');
     check('list: 200, an HTML page with the safe headers', r.status === 200 && /text\/html/.test(r.headers['content-type'] || '') && safe(r), detail(r));
-    const thumbs = r.text.match(/<a class="thumb" href="[^"]*"[^>]*><img src="[^"]*"/g) || [];
+    const thumbs = r.text.match(/<a class="thumb rec-frame" data-cam="[^"]*" href="[^"]*"[^>]*><img src="[^"]*"/g) || [];
     check('list: one thumbnail per camera, each a live stream.php picture linking to its simple-view.php', thumbs.length === 3
       && ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`href="simple-view.php?cam=${id}"`) && r.text.includes(`src="stream.php?cam=${id}"`)), thumbs.join(' | '));
     check('list: the cameras\' names are the captions, and there is a way back to the dashboard', /Cam A/.test(r.text) && /Cam C/.test(r.text) && /href="\.\/"/.test(r.text));
@@ -159,7 +162,7 @@ async function main() {
       r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
 
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js']) {
+    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }
@@ -173,7 +176,7 @@ async function main() {
     check('view: pager, status line (time, camera name, recording) and slideshow button are there',
       ['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Cam A<', 'id="rec"', 'id="slideshow"'].every((s) => r.text.includes(s)));
     check('view: loads simple-logic.js, fullscreen.js and simple-view.js', r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
-    check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture" id="picture-box"><img id="picture"'));
+    check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture rec-frame" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);
     check('view: ?cam=cam-c shows that camera (and the title names it)', r.status === 200 && d && d.current === 'cam-c' && r.text.includes('<img id="picture" src="stream.php?cam=cam-c"') && /<title>Cam C — /.test(r.text), detail(r));

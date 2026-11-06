@@ -299,6 +299,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   .layout-list .cam-stream-wrap { aspect-ratio: 16/6; }
 
+  <?= CamLayout::recordingFrameStyle() ?>
+
   /* The picture is a link to the camera's simple view (where a click on it goes full screen). */
   .cam-stream-wrap a.stream-link { display: block; width: 100%; height: 100%; }
 
@@ -529,7 +531,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
       <div class="files-panel" id="files-<?= $camId ?>"></div>
 
-      <div class="cam-stream-wrap" id="wrap-<?= $camId ?>">
+      <div class="cam-stream-wrap rec-frame" id="wrap-<?= $camId ?>">
 
         <!-- Connecting spinner (visible until image loads) -->
         <div class="cam-overlay visible" id="overlay-<?= $camId ?>">
@@ -1150,6 +1152,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const stopBtn = document.getElementById('stop-btn-' + id);
     if (recBtn) recBtn.classList.toggle('recording', recording);
     if (stopBtn) stopBtn.style.display = recording ? '' : 'none';
+    const frame = document.getElementById('wrap-' + id);   // the picture's red blinking frame (CamLayout::recordingFrameStyle)
+    if (frame) frame.classList.toggle('recording', recording);
   }
 
   async function startRecording(id, seconds) {

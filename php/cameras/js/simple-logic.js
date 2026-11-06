@@ -5,6 +5,7 @@
 //
 //   fitThumbnails   how big the thumbnails of the list page are, and in how many columns
 //   neighbor        the previous / next camera of the pager (wraps around)
+//   isRecording     is a camera recording, from status.php's answer (the red frame of both pages)
 //   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
 //   nextByPriority  which camera follows after the slideshow time is up
@@ -56,6 +57,12 @@
     return ids[(at + step + ids.length) % ids.length];
   }
 
+  // Is the camera `id` recording, going by status.php's answer (`status`: id -> { recording, ... }, or null
+  // when the relay could not be asked)? Anything but a plain true — an unknown camera, no answer — is "not".
+  function isRecording(status, id) {
+    return !!(status && status[id] && status[id].recording === true);
+  }
+
   // Is the person detector of a camera reporting motion at or above its threshold? (A threshold of 0
   // means the motion check is off; an offline detector's last numbers are old news.)
   function inMotion(detector) {
@@ -91,7 +98,7 @@
   function priorities(ids, status, detectors) {
     const out = {};
     for (const id of ids) {
-      if (status && status[id] && status[id].recording === true) out[id] = PRIORITY.RECORDING;
+      if (isRecording(status, id)) out[id] = PRIORITY.RECORDING;
       else if (detectors && personSeen(detectors[id])) out[id] = PRIORITY.PERSON;
       else if (detectors && inMotion(detectors[id])) out[id] = PRIORITY.MOTION;
       else out[id] = PRIORITY.IDLE;
@@ -162,5 +169,5 @@
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, fitThumbnails, neighbor, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, formatClock };
+  return { PRIORITY, fitThumbnails, neighbor, isRecording, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, formatClock };
 });

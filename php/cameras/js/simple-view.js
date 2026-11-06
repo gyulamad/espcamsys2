@@ -1,13 +1,13 @@
 'use strict';
 // simple-view.js — simple-view.php: shows one camera, the pager, the status line and the slideshow. The
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
-// them to the page, status.php (recording) and detector-status.php (motion). A click on the picture
-// toggles full screen (js/fullscreen.js).
+// them to the page, status.php (recording: the status line and the red frame around the picture) and
+// detector-status.php (motion). A click on the picture toggles full screen (js/fullscreen.js).
 
 (function () {
   const S = window.CamSimple;
   const root = document.getElementById('view');
-  if (!S || !root) return;
+  if (!S || !window.CamRelayJson || !root) return;
 
   const POLL_MS = 2000;     // how often the relay is asked what the cameras do
   const TICK_MS = 1000;     // clock, and how often the slideshow looks at the situation
@@ -39,12 +39,13 @@
   let retryTimer = null;
   const viewAsked = {};            // detector id -> when its live view was last requested
 
+  // The status line and the red frame around the picture follow the recording state of the current camera.
   function renderRecording() {
     const rec = el('rec');
-    const known = status && status[current];
-    const on = known && status[current].recording === true;
+    const on = S.isRecording(status, current);
     rec.textContent = 'RECORDING: ' + (status === null ? '–' : on ? 'ON' : 'off');
     rec.className = on ? 'rec-on' : 'rec-off';
+    if (pictureBox) pictureBox.classList.toggle('recording', on);
   }
 
   // The stream is a never-ending picture: switching the camera replaces it, which closes the old connection.
@@ -82,17 +83,6 @@
     if (next !== null) show(next);
   }
 
-  async function getJson(url) {
-    try {
-      const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data && typeof data === 'object' && !Array.isArray(data) && !data.error ? data : null;
-    } catch (e) {
-      return null;   // the relay is out of reach this round; the next poll tries again
-    }
-  }
-
   // A resting detector sends no sensor values. The slideshow needs them (motion, person) of all cameras, so
   // while it runs the live view of every detector is switched on and renewed; it is never turned off here
   // (another viewer may be watching) but lapses by itself when nobody renews it.
@@ -108,7 +98,7 @@
   }
 
   async function poll() {
-    [status, detectors] = await Promise.all([getJson('status.php'), getJson('detector-status.php')]);
+    [status, detectors] = await Promise.all([window.CamRelayJson.get('status.php'), window.CamRelayJson.get('detector-status.php')]);
     renderRecording();
     keepViews();
     tick();   // a camera that has just started recording is shown now, not at the next second

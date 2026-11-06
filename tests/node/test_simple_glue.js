@@ -26,6 +26,7 @@ async function runAll() {
 
 const JS = path.join(__dirname, '../../php/cameras/js');
 const CamSimple = require(path.join(JS, 'simple-logic.js'));
+const CamRelayJson = require(path.join(JS, 'relay-json.js'));   // the real one: it asks the environment's fetch
 
 const CAMS = [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }, { id: 'c', name: 'Gamma' }];
 const flush = () => new Promise((r) => setImmediate(r));
@@ -45,10 +46,11 @@ function makeEl(extra) {
 }
 
 // A page environment. `relay`: what status.php / detector-status.php answer (mutable by the test; null = failed).
-function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true } = {}) {
+function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, relayJson = true } = {}) {
   const env = { now: 1000000, intervals: [], timeouts: [], urls: [], relay: { status: {}, detectors: {} }, clockWindow: {} };
   // js/fullscreen.js stand-in: records the elements it was asked to toggle (the real one is tested in test_fullscreen.js)
   env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
+  env.relayJson = relayJson;   // false: the helper script is not on the page
   const els = {};
   for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'rec']) els[id] = makeEl();
   els.view.dataset = {
@@ -97,7 +99,7 @@ function install(env) {
 // until the test is over.
 function load(env, file) {
   env.windowListeners = {};
-  env.window = { CamSimple, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
+  env.window = { CamSimple, CamRelayJson: env.relayJson ? CamRelayJson : undefined, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
   cleanups.push(install(env));
   delete require.cache[require.resolve(path.join(JS, file))];
   require(path.join(JS, file));
@@ -159,6 +161,34 @@ test('view: without the full-screen helper (script not loaded) the page still wo
   env.els.picture.fire('click');   // no listener, no crash
   env.els.next.fire('click');
   assertEqual(env.els['cam-name'].textContent, 'Beta');
+});
+
+test('view: the picture box has the red frame (class "recording") exactly while the CURRENT camera records', async () => {
+  const env = await started({ current: 'a' });
+  const framed = () => env.els['picture-box'].classList.contains('recording');
+  assertEqual(framed(), false, 'not known yet: no frame');
+  env.relay.status = { a: { recording: true }, b: { recording: false } };
+  await env.poll();
+  assertEqual(framed(), true);
+  env.els.next.fire('click');   // b does not record: the frame follows the camera that is shown
+  assertEqual(framed(), false);
+  env.els.prev.fire('click');
+  assertEqual(framed(), true);
+  env.relay.status = { a: { recording: false } };   // the recording is over
+  await env.poll();
+  assertEqual(framed(), false);
+  env.relay.status = { a: { recording: true } };
+  await env.poll();
+  assertEqual(framed(), true);
+  env.relay.status = null;   // the relay cannot be asked: not known is not "recording"
+  await env.poll();
+  assertEqual(framed(), false);
+});
+
+test('view: a page without the helper that asks the relay does nothing at all (it cannot know anything)', async () => {
+  const env = await started({ relayJson: false });
+  assertEqual(env.urls, []);
+  assertEqual(env.intervals.length, 0);
 });
 
 test('view: asks status.php and detector-status.php, and an HTTP error answer is treated as unknown', async () => {
@@ -327,9 +357,12 @@ test('view: the slideshow time falls back to 10 s when the page does not give a 
 
 // ── simple-list.js ───────────────────────────────────────────────────
 
-function listEnv(count, { width = 1024, height = 768 } = {}) {
-  const env = makeEnv();
-  const grid = makeEl({ dataset: { count: String(count) }, children: new Array(count) });
+const THUMB_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
+function listEnv(count, { width = 1024, height = 768, relayJson = true } = {}) {
+  const env = makeEnv({ relayJson });
+  // one thumbnail per camera, as the page has them: an element that carries its camera id in data-cam
+  env.thumbs = Array.from({ length: count }, (_, i) => makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i } }));
+  const grid = makeEl({ dataset: { count: String(count) }, children: env.thumbs });
   env.document.getElementById = (id) => (id === 'thumbs' ? grid : null);
   env.document.querySelector = (sel) => (sel === '.bar' ? { offsetHeight: 48 } : null);
   env.document.documentElement.clientWidth = width;
@@ -363,6 +396,46 @@ test('list: a very full list keeps the minimum size (the page scrolls)', () => {
   const env = listEnv(60, { width: 800 });
   load(env, 'simple-list.js');
   assertTrue(parseInt(env.grid.style.props['--thumb-w'], 10) >= 160);
+});
+
+test('list: a thumbnail whose camera records gets the red frame class, the others do not, and it follows the relay', async () => {
+  const env = listEnv(3);
+  env.relay.status = { a: { recording: true }, b: { recording: false } };   // c: unknown to the relay
+  load(env, 'simple-list.js');
+  await env.run(async () => {});
+  const framed = () => env.thumbs.map((t) => t.classList.contains('recording'));
+  assertEqual(framed(), [true, false, false]);
+  env.relay.status = { a: { recording: false }, c: { recording: true } };
+  await env.poll();
+  assertEqual(framed(), [false, false, true]);
+  env.relay.status = null;   // the relay cannot be asked: no frame is better than a stale one
+  await env.poll();
+  assertEqual(framed(), [false, false, false]);
+  env.relay.status = 'http-error';   // an error answer is "not known" too
+  await env.poll();
+  assertEqual(framed(), [false, false, false]);
+  env.relay.status = { a: { recording: true } };
+  await env.poll();
+  assertEqual(framed(), [true, false, false]);
+  assertTrue(env.urls.length >= 5 && env.urls.every((u) => u === 'status.php'), 'only status.php is asked: ' + env.urls.join());
+});
+
+test('list: the relay is asked once at once and then every 2 seconds, by one timer', async () => {
+  const env = listEnv(2);
+  load(env, 'simple-list.js');
+  await env.run(async () => {});
+  assertEqual(env.urls, ['status.php']);
+  assertEqual(env.interval(2000).length, 1);
+  assertEqual(env.intervals.length, 1);
+});
+
+test('list: without the helper that asks the relay the thumbnails are still sized, and nothing is polled', async () => {
+  const env = listEnv(3, { relayJson: false });
+  load(env, 'simple-list.js');
+  await env.run(async () => {});
+  assertEqual(env.urls, []);
+  assertEqual(env.intervals.length, 0);
+  assertTrue(env.grid.classList.contains('fitted'));
 });
 
 test('list: a page without the grid (no cameras) does nothing', () => {

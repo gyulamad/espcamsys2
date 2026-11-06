@@ -185,7 +185,7 @@ $HOSTILE = [['id' => 'cam1', 'name' => '"><script>window.__pwned=1</script>'], [
 camtest_test('simpleListPage: one thumbnail per camera, a live picture that links to its large view', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleListPage($SIMPLE_CAMS);
     camtest_assert_true(strpos($html, '<!DOCTYPE html>') === 0);
-    camtest_assert_equal(substr_count($html, 'class="thumb"'), 2);
+    camtest_assert_equal(substr_count($html, 'class="thumb rec-frame"'), 2);
     camtest_assert_true(strpos($html, 'href="simple-view.php?cam=cam1"') !== false);
     camtest_assert_true(strpos($html, 'src="stream.php?cam=cam-2"') !== false);
     camtest_assert_true(strpos($html, 'Front Door') !== false && strpos($html, 'Garage') !== false);
@@ -214,7 +214,7 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 3, 'only our two script files and the storage warning');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 4, 'only our three script files and the storage warning');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
@@ -248,7 +248,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 4);   // simple-logic.js, fullscreen.js, simple-view.js and the storage warning
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 5);   // simple-logic.js, fullscreen.js, simple-view.js and the storage warning
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
@@ -294,7 +294,7 @@ camtest_test('simple view: the picture fills the whole free area — it is laid 
 
 camtest_test('simple view: the picture sits in its own box — the thing that goes full screen — and the page loads the full-screen helper before its own script', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
-    camtest_assert_true(strpos($html, '<div class="picture" id="picture-box"><img id="picture"') !== false, 'the image is inside the box the script makes full screen');
+    camtest_assert_true(strpos($html, '<div class="picture rec-frame" id="picture-box"><img id="picture"') !== false, 'the image is inside the box the script makes full screen');
     $helper = strpos($html, '<script src="js/fullscreen.js">');
     $page = strpos($html, '<script src="js/simple-view.js">');
     camtest_assert_true($helper !== false && $page !== false && $helper < $page, 'fullscreen.js is loaded, and before the script that uses it');
@@ -318,6 +318,44 @@ camtest_test('simple list: the thumbnails still link to the large view, which is
 camtest_test('simpleViewUrl: the one address of a camera\'s large view, encoded (the dashboard\'s pictures link to it)', function () {
     camtest_assert_equal('simple-view.php?cam=cam1', CamLayout::simpleViewUrl('cam1'));
     camtest_assert_equal('simple-view.php?cam=a%20b%26c%3D%22', CamLayout::simpleViewUrl('a b&c="'));
+});
+
+camtest_test('recordingFrameStyle: the frame is always there but transparent, blinks red only with the class "recording", and holds still for reduced motion', function () {
+    $css = CamLayout::recordingFrameStyle();
+    camtest_assert_true(preg_match('/\.rec-frame \{ border: 3px solid transparent; \}/', $css) === 1, 'transparent frame: nothing moves when it lights up');
+    camtest_assert_true(strpos($css, '.rec-frame.recording { border-color: var(--accent2); animation: rec-frame-blink') !== false);
+    camtest_assert_true(strpos($css, '@keyframes rec-frame-blink') !== false);
+    camtest_assert_true(preg_match('/prefers-reduced-motion: reduce\) \{ \.rec-frame\.recording \{ animation: none; \} \}/', $css) === 1);
+});
+
+camtest_test('simple view and simple list: the frame style is on the page, and the picture box and every thumbnail wear the frame (and a thumbnail knows its camera)', function () use ($SIMPLE_CAMS) {
+    $view = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    $list = CamLayout::simpleListPage($SIMPLE_CAMS);
+    foreach ([$view, $list] as $html) {
+        camtest_assert_true(strpos($html, '.rec-frame.recording') !== false, 'the frame style is in the page');
+        camtest_assert_true(strpos($html, '<script src="js/relay-json.js">') !== false, 'relay-json.js is loaded');
+    }
+    camtest_assert_true(strpos($view, '<div class="picture rec-frame" id="picture-box">') !== false);
+    camtest_assert_equal(substr_count($list, 'class="thumb rec-frame" data-cam="'), count($SIMPLE_CAMS));
+    foreach ($SIMPLE_CAMS as $cam) {
+        camtest_assert_true(strpos($list, 'data-cam="' . htmlspecialchars($cam['id'], ENT_QUOTES) . '"') !== false, $cam['id']);
+    }
+});
+
+camtest_test('simple pages: relay-json.js is loaded before the script that uses it', function () use ($SIMPLE_CAMS) {
+    foreach ([['simple-view.js', CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10)], ['simple-list.js', CamLayout::simpleListPage($SIMPLE_CAMS)]] as [$script, $html]) {
+        $helper = strpos($html, '<script src="js/relay-json.js">');
+        $logic = strpos($html, '<script src="js/simple-logic.js">');
+        $page = strpos($html, '<script src="js/' . $script . '">');
+        camtest_assert_true($helper !== false && $page !== false && $helper < $page, $script);
+        camtest_assert_true($logic !== false && $logic < $page, 'simple-logic.js too: ' . $script);
+    }
+});
+
+camtest_test('simple list: a camera id with markup in it cannot break out of the data-cam attribute', function () {
+    $html = CamLayout::simpleListPage([['id' => 'x"><script>1</script>', 'name' => 'Evil', 'icon' => '📷']]);
+    camtest_assert_true(strpos($html, '<script>1</script>') === false);
+    camtest_assert_true(strpos($html, 'data-cam="x&quot;&gt;&lt;script&gt;1&lt;/script&gt;"') !== false);
 });
 
 exit(camtest_summarize());

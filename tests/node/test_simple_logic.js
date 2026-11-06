@@ -105,6 +105,14 @@ test('inMotion: off (threshold 0), offline, no report or odd values are never mo
   assertEqual(S.inMotion(undefined), false);
 });
 
+test('isRecording: only a plain true counts; an unknown camera and a failed request are "not recording"', () => {
+  const status = { a: { recording: true }, b: { recording: false }, c: {}, d: { recording: 'yes' }, e: { recording: 1 } };
+  assertEqual(['a', 'b', 'c', 'd', 'e', 'x'].map((id) => S.isRecording(status, id)), [true, false, false, false, false, false]);
+  assertEqual(S.isRecording(null, 'a'), false);
+  assertEqual(S.isRecording(undefined, 'a'), false);
+  assertEqual(S.isRecording({}, 'a'), false);
+});
+
 test('priorities: recording beats motion beats idle; a failed request counts as idle', () => {
   const status = { a: { recording: true }, b: { recording: false }, c: { recording: true } };
   const detectors = { b: det(), c: det(), d: det({ online: false }) };

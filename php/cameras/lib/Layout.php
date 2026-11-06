@@ -82,6 +82,20 @@ class CamLayout
 CSS;
     }
 
+    // The frame around a camera's picture, one copy for the dashboard, the simple view and the simple list.
+    // It is always there, so nothing moves when it lights up, but transparent until the camera records: the
+    // page then sets the class "recording" on the frame and it blinks red. Needs the page's --accent2.
+    public static function recordingFrameStyle(): string
+    {
+        return <<<'CSS'
+  .rec-frame { border: 3px solid transparent; }
+  .rec-frame.recording { border-color: var(--accent2); animation: rec-frame-blink 1.2s ease-in-out infinite; }
+  @keyframes rec-frame-blink { 0%, 100% { border-color: var(--accent2); } 50% { border-color: transparent; } }
+  /* for people who asked their system for less motion a steady red frame says it just as well */
+  @media (prefers-reduced-motion: reduce) { .rec-frame.recording { animation: none; } }
+CSS . "\n";
+    }
+
     // The footage list's script (lib/recordings-list.js) as one <script>, with the file-name rule of
     // CamLogic. Put it before the page's own script, which calls CamRecordingsList.create(...).
     public static function recordingsListScript(): string
@@ -228,7 +242,7 @@ HTML;
   .thumbs { --thumb-w: 160px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--thumb-w), 1fr)); gap: 8px; padding: 0 12px 12px; justify-content: center; }
   .thumbs.fitted { grid-template-columns: repeat(var(--cols), var(--thumb-w)); }
   /* an <a>: without its own colour the caption would take the browser's link blue, unreadable on this dark page */
-  .thumb { position: relative; display: block; color: var(--text); text-decoration: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3; }
+  .thumb { position: relative; display: block; color: var(--text); text-decoration: none; background: var(--surface); border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3; }
   .thumb:hover, .thumb:focus-visible { border-color: var(--accent); }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -250,21 +264,22 @@ HTML;
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
   .status .rec-off { color: var(--muted); }
-CSS . "\n";
+CSS . "\n" . self::recordingFrameStyle();
     }
 
-    // simple-list.php: every camera as a clickable thumbnail (a link to its large view).
+    // simple-list.php: every camera as a clickable thumbnail (a link to its large view); a camera that
+    // records has a blinking red frame (js/simple-list.js sets the class).
     public static function simpleListPage(array $cameras): string
     {
         $items = '';
         foreach (CamLogic::cameraSummaries($cameras) as $cam) {
-            $items .= '<a class="thumb" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '" title="' . self::esc($cam['name']) . '">'
+            $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '" title="' . self::esc($cam['name']) . '">'
                 . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
                 . '<span class="cap">' . self::esc($cam['name']) . '</span></a>';
         }
         $body = '<div class="bar"><a class="btn" href="./">← DASHBOARD</a><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
-        return self::simplePage('Cameras', 'simple-list', $body, ['simple-logic.js', 'simple-list.js']);
+        return self::simplePage('Cameras', 'simple-list', $body, ['simple-logic.js', 'relay-json.js', 'simple-list.js']);
     }
 
     // simple-view.php: one camera large (a click on it shows it full screen), the pager, the status line and
@@ -279,7 +294,7 @@ CSS . "\n";
             . ' data-current="' . self::esc($summary['id']) . '"'
             . ' data-slideshow-seconds="' . $slideshowSeconds . '"';
         $body = '<div class="simple-view-root" id="view"' . $data . '>'
-            . '<div class="picture" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen"></div>'
+            . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen"></div>'
             . '<div class="status" role="status">'
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'
             . '<button class="btn" type="button" id="next" title="Next camera">NEXT →</button>'
@@ -291,7 +306,7 @@ CSS . "\n";
             . '<a class="btn" href="simple-list.php">▦ LIST</a>'
             . '<a class="btn" href="./">DASHBOARD</a>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'fullscreen.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser
