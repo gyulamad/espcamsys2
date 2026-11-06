@@ -85,5 +85,9 @@ module.exports = {
   //     botToken: '123456789:AA...',   // from @BotFather
   //     chatId: '123456789',           // your chat (a group's is negative), or '@channelname'
   //   },
+  //   // A person found in a NEW recording (needs personScan above) is announced with its thumbnail:
+  //   footageBaseUrl: 'http://raspberrypi.local/camdash',  // the dashboard as your phone reaches it; the message
+  //                                                        // links to the clip there (omit: no link)
+  //   cooldownSeconds: 60,           // at most one message per camera in this time (0 = every detection)
   // },
 };

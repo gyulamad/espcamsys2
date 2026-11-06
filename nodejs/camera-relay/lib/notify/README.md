@@ -72,6 +72,31 @@ You should receive a message with a picture within a few seconds, and the answer
   send footage you would not want on a third party's server. Thumbnails only — never the clip itself.
 - If the token leaks, send `/revoke` to @BotFather and put the new one in.
 
+## When you are notified: a person in a recording
+
+With the person check switched on (`personScan` in `config.js`, see INSTALL.md), every recording the relay
+has just saved is checked, and if a person is found you get one message through every configured channel:
+
+```
+Person detected on cam1
+Time: 2026-11-06 14:05:09 UTC
+Confidence: 87%
+Clip: cam1_2026-11-06T14-05-09-000Z.mp4 (2.0 MB)
+Watch: http://raspberrypi.local/camdash/recordings.php?cam=cam1&play=cam1_2026-11-06T14-05-09-000Z.mp4
+```
+
+with the picture of the person (the frame the detector stopped at) attached. Set `notifications.footageBaseUrl`
+to the address of the dashboard **as your phone reaches it** (the Pi's name or LAN address; it is only
+reachable from your home network, or through your VPN/Tor setup, which is the point) — the link opens the
+dashboard's player, which asks for the dashboard login like any other page. Without it the message has no link.
+
+- At most one message per camera per `cooldownSeconds` (default 60); the next message says how many
+  detections were held back. `0` announces every detection.
+- Only fresh recordings are announced. Checking old footage by hand from the dashboard stays quiet.
+- A missing thumbnail never blocks the message (it is sent as text); a channel that fails is logged as a
+  `WARN` and the other channels still deliver.
+- A clip with nobody in it is never announced (and is filed or deleted as before).
+
 ## Adding another channel
 
 Write a class that extends `Notifier` and implements `deliver({ text, image })`, give the module a
