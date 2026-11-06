@@ -245,6 +245,7 @@ HTML;
   .thumb { position: relative; display: block; color: var(--text); text-decoration: none; background: var(--surface); border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3; }
   .thumb:hover, .thumb:focus-visible { border-color: var(--accent); }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cam-icon { margin-right: .4em; }
   .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* the large view: the picture takes everything the status line leaves */
@@ -267,6 +268,13 @@ HTML;
 CSS . "\n" . self::recordingFrameStyle();
     }
 
+    // The camera's icon in front of its name, as the page shows both. The icon is decoration (the name says it
+    // all to a screen reader); an element of its own so a script can change it with the name.
+    private static function iconSpan(string $icon, string $id = ''): string
+    {
+        return '<span class="cam-icon"' . ($id === '' ? '' : ' id="' . $id . '"') . ' aria-hidden="true">' . self::esc($icon) . '</span>';
+    }
+
     // simple-list.php: every camera as a clickable thumbnail (a link to its large view); a camera that
     // records has a blinking red frame (js/simple-list.js sets the class).
     public static function simpleListPage(array $cameras): string
@@ -275,7 +283,7 @@ CSS . "\n" . self::recordingFrameStyle();
         foreach (CamLogic::cameraSummaries($cameras) as $cam) {
             $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '" title="' . self::esc($cam['name']) . '">'
                 . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
-                . '<span class="cap">' . self::esc($cam['name']) . '</span></a>';
+                . '<span class="cap">' . self::iconSpan($cam['icon']) . self::esc($cam['name']) . '</span></a>';
         }
         $body = '<div class="bar"><a class="btn" href="./">← DASHBOARD</a><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
@@ -299,7 +307,7 @@ CSS . "\n" . self::recordingFrameStyle();
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'
             . '<button class="btn" type="button" id="next" title="Next camera">NEXT →</button>'
             . '<span id="clock">--:--:--</span>'
-            . '<span id="cam-name">' . self::esc($summary['name']) . '</span>'
+            . '<span class="cam-title">' . self::iconSpan($summary['icon'], 'cam-icon') . '<span id="cam-name">' . self::esc($summary['name']) . '</span></span>'
             . '<span id="rec" class="rec-off">RECORDING: –</span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'

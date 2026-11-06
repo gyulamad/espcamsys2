@@ -115,7 +115,7 @@ function viewData(html) {
   return m ? { cameras: JSON.parse(decodeAttr(m[1])), current: decodeAttr(m[2]), seconds: m[3] } : null;
 }
 
-const CAMS = "[['id' => 'cam-a', 'name' => 'Cam A', 'icon' => '📷'], ['id' => 'cam-b', 'name' => 'Cam B', 'icon' => '📷'], ['id' => 'cam-c', 'name' => 'Cam C', 'icon' => '📷']]";
+const CAMS = "[['id' => 'cam-a', 'name' => 'Cam A', 'icon' => '🚪'], ['id' => 'cam-b', 'name' => 'Cam B', 'icon' => '🚗'], ['id' => 'cam-c', 'name' => 'Cam C', 'icon' => '📷']]";
 
 async function main() {
   if (spawnSync('php', ['-v'], { stdio: 'ignore' }).status !== 0) {
@@ -157,6 +157,8 @@ async function main() {
     const thumbs = r.text.match(/<a class="thumb rec-frame" data-cam="[^"]*" href="[^"]*"[^>]*><img src="[^"]*"/g) || [];
     check('list: one thumbnail per camera, each a live stream.php picture linking to its simple-view.php', thumbs.length === 3
       && ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`href="simple-view.php?cam=${id}"`) && r.text.includes(`src="stream.php?cam=${id}"`)), thumbs.join(' | '));
+    check('list: each caption starts with that camera\'s own icon', r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚪</span>Cam A</span>')
+      && r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚗</span>Cam B</span>'), r.text.slice(0, 200));
     check('list: the cameras\' names are the captions, and there is a way back to the dashboard', /Cam A/.test(r.text) && /Cam C/.test(r.text) && /href="\.\/"/.test(r.text));
     check('list: loads simple-logic.js and simple-list.js, no inline handler, nothing of the relay\'s address',
       r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
@@ -171,11 +173,12 @@ async function main() {
     r = await get('simple-view.php');
     let d = viewData(r.text);
     check('view: no cam = the first camera, shown through stream.php', r.status === 200 && safe(r) && d !== null && d.current === 'cam-a' && r.text.includes('<img id="picture" src="stream.php?cam=cam-a"'), detail(r));
-    check('view: the script gets the camera list (id and name only) and the slideshow time from the setting (25)',
-      d !== null && JSON.stringify(d.cameras) === JSON.stringify([{ id: 'cam-a', name: 'Cam A' }, { id: 'cam-b', name: 'Cam B' }, { id: 'cam-c', name: 'Cam C' }]) && d.seconds === '25', JSON.stringify(d));
+    check('view: the script gets the camera list (id, name and icon only) and the slideshow time from the setting (25)',
+      d !== null && JSON.stringify(d.cameras) === JSON.stringify([{ id: 'cam-a', name: 'Cam A', icon: '🚪' }, { id: 'cam-b', name: 'Cam B', icon: '🚗' }, { id: 'cam-c', name: 'Cam C', icon: '📷' }]) && d.seconds === '25', JSON.stringify(d));
     check('view: pager, status line (time, camera name, recording) and slideshow button are there',
       ['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Cam A<', 'id="rec"', 'id="slideshow"'].every((s) => r.text.includes(s)));
     check('view: loads simple-logic.js, fullscreen.js and simple-view.js', r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
+    check('view: the icon of the camera is in front of its name', r.text.includes('<span class="cam-icon" id="cam-icon" aria-hidden="true">🚪</span><span id="cam-name">Cam A</span>'), r.text.slice(0, 200));
     check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture rec-frame" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);

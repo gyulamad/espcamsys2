@@ -306,14 +306,18 @@ class CamLogic
         return self::findCameraById($cameras, $requested);
     }
 
-    // What the simple pages' scripts need to know of every camera, nothing more: [{id, name}]
-    // (a camera without a name is shown by its id).
+    // The icon of a camera that has none (a camera the owner never gave one).
+    public const DEFAULT_CAMERA_ICON = '📷';
+
+    // What the simple pages' scripts need to know of every camera, nothing more: [{id, name, icon}]
+    // (a camera without a name is shown by its id, one without an icon by DEFAULT_CAMERA_ICON).
     public static function cameraSummaries(array $cameras): array
     {
         return array_map(static function (array $cam): array {
             $id = (string) $cam['id'];
             $name = trim((string) ($cam['name'] ?? ''));
-            return ['id' => $id, 'name' => $name === '' ? $id : $name];
+            $icon = trim((string) ($cam['icon'] ?? ''));
+            return ['id' => $id, 'name' => $name === '' ? $id : $name, 'icon' => $icon === '' ? self::DEFAULT_CAMERA_ICON : $icon];
         }, array_values($cameras));
     }
 

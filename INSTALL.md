@@ -847,6 +847,7 @@ A person detector no longer streams all the time. The sensor values and the smal
 
 Two plain pages for a wall screen or a quick look, behind the same login as the dashboard:
 
+- **Camera icon**: the simple view and the simple list show the icon set for a camera (⚙ SETTINGS) in front of its name (📷 when none is set).
 - **Recording frame** (dashboard, simple list and simple view): a camera that is recording has a **blinking red frame** around its picture; otherwise the frame is there but transparent, so nothing moves. The simple pages ask `status.php` every 2 s; with *reduce motion* set in the system the frame stays steady red.
 - **▦ SIMPLE LIST** (`simple-list.php`): every camera as a live thumbnail and nothing else. The thumbnails are as big as all of them fit on the screen, but never narrower than 160 px (below that a picture is no longer recognisable): with many cameras the page scrolls instead. Click a thumbnail to open it in the simple view.
 - **▣ SIMPLE VIEW** (`simple-view.php?cam=<id>`, no `cam` = the first camera): one camera in large, a **← PREV** / **NEXT →** pager (the arrow keys work too) and a status line: time, camera name and **RECORDING: ON / off** (`–` while the relay cannot be asked). **Click the picture to show it full screen**; another click (or Esc) leaves. On the dashboard, a click on a camera's picture opens that camera in this view.

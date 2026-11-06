@@ -28,7 +28,7 @@ const JS = path.join(__dirname, '../../php/cameras/js');
 const CamSimple = require(path.join(JS, 'simple-logic.js'));
 const CamRelayJson = require(path.join(JS, 'relay-json.js'));   // the real one: it asks the environment's fetch
 
-const CAMS = [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }, { id: 'c', name: 'Gamma' }];
+const CAMS = [{ id: 'a', name: 'Alpha', icon: '🚪' }, { id: 'b', name: 'Beta', icon: '🚗' }, { id: 'c', name: 'Gamma' }];   // c: an older page without icons
 const flush = () => new Promise((r) => setImmediate(r));
 
 // One element: what the scripts touch of it, and a way for the test to fire its events.
@@ -52,7 +52,7 @@ function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, ful
   env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
   env.relayJson = relayJson;   // false: the helper script is not on the page
   const els = {};
-  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'rec']) els[id] = makeEl();
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec']) els[id] = makeEl();
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -147,6 +147,17 @@ test('view: a click on the picture toggles full screen of the picture box — no
   assertTrue(env.fullscreen.toggled[0] === env.els['picture-box'], 'the box goes full screen, so what is laid over the picture goes with it');
   env.els.picture.fire('click');   // the same click leaves again (the helper decides): one more request, no state kept here
   assertEqual(env.fullscreen.toggled.length, 2);
+});
+
+test('view: the icon follows the name when the camera changes; a camera without an icon shows none', async () => {
+  const env = await started();
+  // (the server writes the first icon into the page; the script keeps it in step from the first switch on)
+  env.els.next.fire('click');
+  assertEqual([env.els['cam-name'].textContent, env.els['cam-icon'].textContent], ['Beta', '🚗']);
+  env.els.next.fire('click');
+  assertEqual([env.els['cam-name'].textContent, env.els['cam-icon'].textContent], ['Gamma', '']);
+  env.els.next.fire('click');
+  assertEqual([env.els['cam-name'].textContent, env.els['cam-icon'].textContent], ['Alpha', '🚪']);
 });
 
 test('view: the pager and the slideshow button do not touch full screen', async () => {

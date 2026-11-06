@@ -27,6 +27,7 @@
   const cameras = readCameras();
   const ids = cameras.map((c) => c.id);
   const nameOf = (id) => (cameras.find((c) => c.id === id) || { name: id }).name;
+  const iconOf = (id) => (cameras.find((c) => c.id === id) || {}).icon || '';
   const slideshowMs = (Number(root.dataset.slideshowSeconds) || DEFAULT_SLIDESHOW_SECONDS) * 1000;
 
   const el = (id) => document.getElementById(id);
@@ -54,6 +55,7 @@
     picture.src = 'stream.php?cam=' + encodeURIComponent(id);
     picture.alt = nameOf(id);
     el('cam-name').textContent = nameOf(id);
+    el('cam-icon').textContent = iconOf(id);
     document.title = nameOf(id) + ' — ESP32-CAM Dashboard';
     try { history.replaceState(null, '', 'simple-view.php?cam=' + encodeURIComponent(id)); } catch (e) { /* not allowed here: the address just stays */ }
     renderRecording();

@@ -238,7 +238,7 @@ camtest_test('simpleViewPage: the picture, pager, status line and slideshow butt
 camtest_test('simpleViewPage: the scripts get the camera list, the current camera and the slideshow time as data attributes', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 25);
     camtest_assert_true(preg_match('/id="view" data-cameras="([^"]*)" data-current="([^"]*)" data-slideshow-seconds="(\d+)"/', $html, $m) === 1);
-    camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true), [['id' => 'cam1', 'name' => 'Front Door'], ['id' => 'cam-2', 'name' => 'Garage']]);
+    camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true), [['id' => 'cam1', 'name' => 'Front Door', 'icon' => '📷'], ['id' => 'cam-2', 'name' => 'Garage', 'icon' => '📷']]);
     camtest_assert_equal($m[2], 'cam1');
     camtest_assert_equal($m[3], '25');
     camtest_assert_true(strpos($html, 'secret-relay') === false, 'only id and name leave the server');
@@ -356,6 +356,31 @@ camtest_test('simple list: a camera id with markup in it cannot break out of the
     $html = CamLayout::simpleListPage([['id' => 'x"><script>1</script>', 'name' => 'Evil', 'icon' => '📷']]);
     camtest_assert_true(strpos($html, '<script>1</script>') === false);
     camtest_assert_true(strpos($html, 'data-cam="x&quot;&gt;&lt;script&gt;1&lt;/script&gt;"') !== false);
+});
+
+camtest_test('simple list: every caption starts with the camera\'s own icon (decoration, hidden from screen readers); no icon set = the camera', function () {
+    $html = CamLayout::simpleListPage([
+        ['id' => 'a', 'name' => 'Front', 'icon' => '🚪'],
+        ['id' => 'b', 'name' => 'Back'],
+    ]);
+    camtest_assert_true(strpos($html, '<span class="cap"><span class="cam-icon" aria-hidden="true">🚪</span>Front</span>') !== false);
+    camtest_assert_true(strpos($html, '<span class="cap"><span class="cam-icon" aria-hidden="true">📷</span>Back</span>') !== false);
+});
+
+camtest_test('simple view: the icon sits in front of the name in the status line, in an element a script can change; the camera list carries the icons', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    $icon = htmlspecialchars($SIMPLE_CAMS[0]['icon'] ?? '📷', ENT_QUOTES);
+    camtest_assert_true(strpos($html, '<span class="cam-title"><span class="cam-icon" id="cam-icon" aria-hidden="true">' . $icon . '</span><span id="cam-name">Front Door</span></span>') !== false);
+    camtest_assert_true(strpos($html, '&quot;icon&quot;:') !== false, 'data-cameras has an icon for every camera');
+    camtest_assert_true(strpos($html, '.cam-icon {') !== false);
+});
+
+camtest_test('simple pages: a hostile icon is plain text, never markup', function () {
+    $evil = ['id' => 'a', 'name' => 'N', 'icon' => '<img src=x onerror=alert(1)>'];
+    foreach ([CamLayout::simpleListPage([$evil]), CamLayout::simpleViewPage([$evil], $evil, 10)] as $html) {
+        camtest_assert_true(strpos($html, '<img src=x') === false);
+        camtest_assert_true(strpos($html, '&lt;img src=x onerror=alert(1)&gt;') !== false || strpos($html, '<') !== false);
+    }
 });
 
 exit(camtest_summarize());

@@ -1656,14 +1656,14 @@ camtest_test('selectCamera: the named camera, the first one when none is named, 
     camtest_assert_equal(CamLogic::selectCamera([], 'a'), null);
 });
 
-camtest_test('cameraSummaries: id and name only; a missing or blank name falls back to the id', function () {
+camtest_test('cameraSummaries: id, name and icon only; a missing or blank name falls back to the id, a missing or blank icon to the camera', function () {
     camtest_assert_equal(CamLogic::cameraSummaries([
-        ['id' => 'a', 'name' => 'Front', 'icon' => 'x', 'url' => 'http://secret', 'detector' => 'd'],
+        ['id' => 'a', 'name' => 'Front', 'icon' => '🚪', 'url' => 'http://secret', 'detector' => 'd'],
         ['id' => 'b'],
-        ['id' => 'c', 'name' => '  '],
-    ]), [['id' => 'a', 'name' => 'Front'], ['id' => 'b', 'name' => 'b'], ['id' => 'c', 'name' => 'c']]);
+        ['id' => 'c', 'name' => '  ', 'icon' => ' '],
+    ]), [['id' => 'a', 'name' => 'Front', 'icon' => '🚪'], ['id' => 'b', 'name' => 'b', 'icon' => '📷'], ['id' => 'c', 'name' => 'c', 'icon' => '📷']]);
     camtest_assert_equal(CamLogic::cameraSummaries([]), []);
-    camtest_assert_equal(CamLogic::cameraSummaries([5 => ['id' => 'a', 'name' => 'A']]), [['id' => 'a', 'name' => 'A']], 'reindexed');
+    camtest_assert_equal(CamLogic::cameraSummaries([5 => ['id' => 'a', 'name' => 'A', 'icon' => 'i']]), [['id' => 'a', 'name' => 'A', 'icon' => 'i']], 'reindexed');
 });
 
 // ── mux.php: every camera's picture on one connection ────────────────
