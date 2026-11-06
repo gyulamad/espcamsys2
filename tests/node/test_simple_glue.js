@@ -114,9 +114,12 @@ function load(env, file) {
   return env;
 }
 
+// The page starts with the slideshow ON. Most tests want to switch it on themselves, so by default the
+// slideshow is stopped again here; pass { slideshowOn: true } to get the page as it opens.
 const started = async (opts) => {
   const env = load(makeEnv(opts), 'simple-view.js');
   await env.run(async () => {});
+  if (!(opts && opts.slideshowOn)) env.els.slideshow.fire('click');
   return env;
 };
 
@@ -167,7 +170,7 @@ const shown = (env) => ({ text: env.els.countdown.textContent, hidden: env.els.c
 
 test('countdown: nothing is shown until the slideshow runs, and it goes away when the slideshow stops', async () => {
   const env = await started({ seconds: 5 });
-  assertEqual(shown(env), { text: '', hidden: true, barHidden: true, width: undefined });
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true], 'hidden while the slideshow is stopped');
   env.els.slideshow.fire('click');
   assertEqual(shown(env), { text: 'NEXT IN 5 s', hidden: false, barHidden: false, width: '100%' }, 'at once, not at the next second');
   env.els.slideshow.fire('click');
@@ -333,6 +336,26 @@ test('view: SLIDESHOW button turns the slideshow on and off and says so', async 
   assertTrue(!/ON/.test(env.els.slideshow.textContent));
 });
 
+test('view: the slideshow is ON when the page opens (button pressed, running, counting down)', async () => {
+  const env = await started({ slideshowOn: true, seconds: 5 });
+  assertEqual(env.els.slideshow.attrs['aria-pressed'], 'true');
+  assertTrue(env.els.slideshow.classList.contains('on'));
+  assertTrue(/ON/.test(env.els.slideshow.textContent), env.els.slideshow.textContent);
+  assertTrue(env.els.countdown.hidden === false, 'the time-left indicator is shown');
+  await env.advance(1000, 5);
+  assertEqual(env.els.picture.src, 'stream.php?cam=b');   // moved on by itself, nothing was clicked
+});
+
+test('view: the button stops the slideshow that started by itself, and again starts it', async () => {
+  const env = await started({ slideshowOn: true, seconds: 5 });
+  env.els.slideshow.fire('click');
+  assertEqual(env.els.slideshow.attrs['aria-pressed'], 'false');
+  await env.advance(1000, 30);
+  assertEqual(env.els.picture.src, '');
+  env.els.slideshow.fire('click');
+  assertEqual(env.els.slideshow.attrs['aria-pressed'], 'true');
+});
+
 test('view: without the slideshow the picture never changes by itself', async () => {
   const env = await started();
   env.relay.status = { c: { recording: true } };
@@ -432,8 +455,7 @@ test('view: a page without the root element (the "no cameras" page) does nothing
 test('view: the slideshow time falls back to 10 s when the page does not give a usable one', async () => {
   const env = makeEnv({ seconds: 'x' });
   load(env, 'simple-view.js');
-  await env.run(async () => {});
-  env.els.slideshow.fire('click');
+  await env.run(async () => {});   // the slideshow starts by itself
   await env.advance(1000, 9);
   assertEqual(env.els.picture.src, '');
   await env.advance(1000, 1);

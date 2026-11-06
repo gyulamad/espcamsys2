@@ -3,7 +3,7 @@
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
 // them to the page, status.php (recording: the status line and the red frame around the picture) and
 // detector-status.php (motion). A click on the picture toggles full screen (js/fullscreen.js). While the
-// slideshow runs, "NEXT IN n s" and a bar under the picture show the time left before the next camera.
+// slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar under the picture show the time left before the next camera.
 
 (function () {
   const S = window.CamSimple;
@@ -142,6 +142,7 @@
     else if (e.key === 'ArrowRight') step(1);
   });
 
+  setSlideshow(true);   // the slideshow runs from the moment the page opens; the button stops it
   tick();
   setInterval(tick, TICK_MS);
   poll();
