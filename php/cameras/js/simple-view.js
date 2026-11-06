@@ -2,7 +2,8 @@
 // simple-view.js — simple-view.php: shows one camera, the pager, the status line and the slideshow. The
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
 // them to the page, status.php (recording: the status line and the red frame around the picture) and
-// detector-status.php (motion). A click on the picture toggles full screen (js/fullscreen.js).
+// detector-status.php (motion). A click on the picture toggles full screen (js/fullscreen.js). While the
+// slideshow runs, "NEXT IN n s" and a bar under the picture show the time left before the next camera.
 
 (function () {
   const S = window.CamSimple;
@@ -66,6 +67,7 @@
     if (id === null) return;
     if (slideshow) slideshow.show(id, Date.now());   // the viewer's choice gets a full time
     show(id);
+    renderCountdown(Date.now(), S.priorities(ids, status, detectors));
   }
 
   function setSlideshow(on) {
@@ -76,13 +78,33 @@
     button.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (on) keepViews();
     button.textContent = on ? '⏸ SLIDESHOW ON' : '▶ SLIDESHOW';
+    lastFraction = 0;
+    renderCountdown(Date.now(), on ? S.priorities(ids, status, detectors) : null);
+  }
+
+  // The slideshow's "time left" indicator: seconds in the status line and a bar under the picture that runs
+  // out. Both are hidden when no slideshow runs or it has nowhere to go (nothing to count down to).
+  let lastFraction = 0;
+  function renderCountdown(now, prio) {
+    const left = slideshow ? S.countdown(slideshow.remainingMs(now, prio), slideshowMs) : null;
+    el('countdown').hidden = left === null;
+    el('countdown-bar').hidden = left === null;
+    if (left === null) return;
+    el('countdown').textContent = 'NEXT IN ' + left.seconds + ' s';
+    // Back to full after a switch must not slide up slowly: only the running-out is animated.
+    el('countdown-fill').style.transition = left.fraction > lastFraction ? 'none' : '';
+    el('countdown-fill').style.width = (left.fraction * 100) + '%';
+    lastFraction = left.fraction;
   }
 
   function tick() {
     el('clock').textContent = S.formatClock(new Date());
-    if (!slideshow) return;
-    const next = slideshow.tick(Date.now(), S.priorities(ids, status, detectors));
+    if (!slideshow) { renderCountdown(Date.now(), null); return; }
+    const now = Date.now();
+    const prio = S.priorities(ids, status, detectors);
+    const next = slideshow.tick(now, prio);
     if (next !== null) show(next);
+    renderCountdown(now, prio);
   }
 
   // A resting detector sends no sensor values. The slideshow needs them (motion, person) of all cameras, so

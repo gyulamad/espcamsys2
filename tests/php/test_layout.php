@@ -383,4 +383,19 @@ camtest_test('simple pages: a hostile icon is plain text, never markup', functio
     }
 });
 
+camtest_test('simple view: the slideshow\'s time-left indicator is in the page, hidden until the script shows it — a bar under the picture and the seconds in the status line', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_true(strpos($html, '<div class="countdown-bar" id="countdown-bar" aria-hidden="true" hidden><div class="countdown-fill" id="countdown-fill"></div></div>') !== false);
+    camtest_assert_true(strpos($html, 'id="countdown"') !== false && preg_match('/id="countdown"[^>]*\bhidden>/', $html) === 1);
+    camtest_assert_true(strpos($html, 'id="countdown-bar"') < strpos($html, 'class="status"'), 'the bar is under the picture, above the status line');
+    camtest_assert_true(strpos($html, 'id="picture-box"') < strpos($html, 'id="countdown-bar"'));
+});
+
+camtest_test('simple view: the bar runs out smoothly, and holds still for reduced motion; nothing of it on the list page', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_true(strpos(layout_css_rule($html, '.countdown-fill'), 'transition: width 1s linear') !== false);
+    camtest_assert_true(preg_match('/prefers-reduced-motion: reduce\) \{ \.countdown-fill \{ transition: none; \} \}/', $html) === 1);
+    camtest_assert_true(strpos(CamLayout::simpleListPage($SIMPLE_CAMS), 'id="countdown') === false);
+});
+
 exit(camtest_summarize());

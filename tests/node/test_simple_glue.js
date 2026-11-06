@@ -52,7 +52,8 @@ function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, ful
   env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
   env.relayJson = relayJson;   // false: the helper script is not on the page
   const els = {};
-  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec']) els[id] = makeEl();
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill']) els[id] = makeEl();
+  for (const id of ['countdown', 'countdown-bar']) els[id].hidden = true;   // as the page is delivered
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -158,6 +159,79 @@ test('view: the icon follows the name when the camera changes; a camera without 
   assertEqual([env.els['cam-name'].textContent, env.els['cam-icon'].textContent], ['Gamma', '']);
   env.els.next.fire('click');
   assertEqual([env.els['cam-name'].textContent, env.els['cam-icon'].textContent], ['Alpha', '🚪']);
+});
+
+// ── the slideshow's time-left indicator ─────────────────────────────
+
+const shown = (env) => ({ text: env.els.countdown.textContent, hidden: env.els.countdown.hidden, barHidden: env.els['countdown-bar'].hidden, width: env.els['countdown-fill'].style.width });
+
+test('countdown: nothing is shown until the slideshow runs, and it goes away when the slideshow stops', async () => {
+  const env = await started({ seconds: 5 });
+  assertEqual(shown(env), { text: '', hidden: true, barHidden: true, width: undefined });
+  env.els.slideshow.fire('click');
+  assertEqual(shown(env), { text: 'NEXT IN 5 s', hidden: false, barHidden: false, width: '100%' }, 'at once, not at the next second');
+  env.els.slideshow.fire('click');
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true]);
+});
+
+test('countdown: the seconds and the bar run down with the time, and start over after the switch', async () => {
+  const env = await started({ seconds: 5 });
+  env.els.slideshow.fire('click');
+  await env.advance(1000, 1);
+  assertEqual(shown(env), { text: 'NEXT IN 4 s', hidden: false, barHidden: false, width: '80%' });
+  await env.advance(1000, 3);
+  assertEqual([env.els.countdown.textContent, env.els['countdown-fill'].style.width], ['NEXT IN 1 s', '20%']);
+  await env.advance(1000, 1);   // time is up: the picture changes and the next camera gets a full time
+  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual([env.els.countdown.textContent, env.els['countdown-fill'].style.width], ['NEXT IN 5 s', '100%']);
+});
+
+test('countdown: the bar jumps back to full without sliding, and runs down smoothly again', async () => {
+  const env = await started({ seconds: 3 });
+  env.els.slideshow.fire('click');
+  await env.advance(1000, 1);
+  assertEqual(env.els['countdown-fill'].style.transition, '', 'running out is animated (the stylesheet\'s transition)');
+  await env.advance(1000, 2);   // switch
+  assertEqual(env.els['countdown-fill'].style.transition, 'none', 'the refill is not');
+  await env.advance(1000, 1);
+  assertEqual(env.els['countdown-fill'].style.transition, '');
+});
+
+test('countdown: pressing NEXT or PREV during the slideshow gives the camera a full time, shown at once', async () => {
+  const env = await started({ seconds: 10 });
+  env.els.slideshow.fire('click');
+  await env.advance(1000, 6);
+  assertEqual(env.els.countdown.textContent, 'NEXT IN 4 s');
+  env.els.next.fire('click');
+  assertEqual([env.els.countdown.textContent, env.els['countdown-fill'].style.width], ['NEXT IN 10 s', '100%']);
+});
+
+test('countdown: a camera that starts recording is shown at once and its time starts over', async () => {
+  const env = await started({ seconds: 10 });
+  env.els.slideshow.fire('click');
+  await env.advance(1000, 4);
+  env.relay.status = { c: { recording: true }, b: { recording: true } };
+  await env.poll();
+  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(env.els.countdown.textContent, 'NEXT IN 10 s');
+});
+
+test('countdown: hidden while there is nowhere to go (the only recording camera stays), back when there is', async () => {
+  const env = await started({ seconds: 10 });
+  env.relay.status = { a: { recording: true } };
+  await env.poll();
+  env.els.slideshow.fire('click');
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true]);
+  env.relay.status = { a: { recording: true }, b: { recording: true } };
+  await env.poll();
+  assertEqual(env.els.countdown.hidden, false);
+});
+
+test('countdown: one camera only — a slideshow with nowhere to go shows no indicator', async () => {
+  const env = await started({ cameras: [CAMS[0]], seconds: 5 });
+  env.els.slideshow.fire('click');
+  await env.advance(1000, 2);
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true]);
 });
 
 test('view: the pager and the slideshow button do not touch full screen', async () => {

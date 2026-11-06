@@ -854,7 +854,7 @@ Two plain pages for a wall screen or a quick look, behind the same login as the 
 - **▶ SLIDESHOW** (button on the simple view): shows the cameras one after the other, each for **Slideshow time per camera** seconds (⚙ SETTINGS, `slideshow_seconds` in `config.php`, 2-300, default 10). Cameras that are busy come first:
   1. A camera that **starts recording**, or whose paired person detector reports **motion at or above its MOTION_THRESH**, is shown at once, without waiting for the time to run out. Motion does not pull the view away from a camera that is recording; a new recording does.
   2. When the time is up, only the cameras of the highest priority take part: while any camera records, the ones that do not are skipped; with none recording, the ones in motion; with none of either, all of them. Recording beats motion, motion beats the rest.
-  3. Pressing PREV / NEXT during a slideshow shows that camera for a full time. Pressing the button again ends the slideshow.
+  3. Pressing PREV / NEXT during a slideshow shows that camera for a full time. While the slideshow runs, **NEXT IN n s** (status line) and a thin bar under the picture show the time left before the next camera; both are hidden while there is nowhere to go (one camera, or the only camera that records). Pressing the button again ends the slideshow.
 
   A person detector that **sees a person** counts above plain motion (recording > person > motion). A detector rests while nobody watches (see the WATCH button), so while the slideshow runs it switches the live view on for **all** detectors and renews it every 20 s; it takes up to ~30 s until a resting detector answers the first time. The views lapse by themselves after the slideshow ends.
 

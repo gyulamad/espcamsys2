@@ -305,6 +305,57 @@ test('viewRequests: not again before keepMs; again after; no answer yet asks nob
   assertEqual(S.viewRequests(['a'], null, {}, 0, 20000), []);
 });
 
+// ── slideshow time left ──────────────────────────────────────────────
+
+test('remainingMs: counts down from the full interval to 0 and never below', () => {
+  const s = S.createSlideshow(IDS, 'a', 10000, 0);
+  assertEqual(s.remainingMs(0, prio({})), 10000);
+  assertEqual(s.remainingMs(2500, prio({})), 7500);
+  assertEqual(s.remainingMs(10000, prio({})), 0);
+  assertEqual(s.remainingMs(15000, prio({})), 0, 'late looks do not go negative');
+});
+
+test('remainingMs: starts over after the camera changes — by time, by a jump, or by the viewer', () => {
+  const s = S.createSlideshow(IDS, 'a', 10000, 0);
+  assertEqual(s.tick(10000, prio({})), 'b');
+  assertEqual(s.remainingMs(10000, prio({})), 10000);
+  assertEqual(s.remainingMs(14000, prio({})), 6000);
+  s.show('c', 14000);                                   // the viewer pressed PREV / NEXT
+  assertEqual(s.remainingMs(14000, prio({})), 10000);
+  const recording = prio({ a: RECORDING, d: RECORDING });
+  assertEqual(s.tick(15000, recording), 'a');   // cameras started recording: the first of them is shown at once
+  assertEqual(s.remainingMs(15000, recording), 10000);
+});
+
+test('remainingMs: null when the slideshow has nowhere to go (one camera, or the only recording one)', () => {
+  assertEqual(S.createSlideshow(['a'], 'a', 10000, 0).remainingMs(1000, prio({})), null);
+  const s = S.createSlideshow(IDS, 'c', 10000, 0);
+  assertEqual(s.remainingMs(1000, prio({ c: RECORDING })), null, 'the others are skipped while it records');
+  assertEqual(s.remainingMs(1000, prio({ c: RECORDING, a: RECORDING })), 9000, 'but another recording camera is a destination');
+});
+
+test('remainingMs: asking never changes anything (it is only a look)', () => {
+  const s = S.createSlideshow(IDS, 'a', 10000, 0);
+  s.remainingMs(9000, prio({}));
+  s.remainingMs(20000, prio({}));
+  assertEqual(s.current(), 'a');
+  assertEqual(s.tick(10000, prio({})), 'b');
+});
+
+test('countdown: whole seconds rounded up and the part of the time that is left', () => {
+  assertEqual(S.countdown(10000, 10000), { seconds: 10, fraction: 1 });
+  assertEqual(S.countdown(9001, 10000), { seconds: 10, fraction: 0.9001 });
+  assertEqual(S.countdown(1, 10000), { seconds: 1, fraction: 0.0001 }, 'never says 0 while there is time');
+  assertEqual(S.countdown(0, 10000), { seconds: 0, fraction: 0 });
+});
+
+test('countdown: out-of-range values are clamped, anything unusable is nothing to show', () => {
+  assertEqual(S.countdown(-5, 10000), { seconds: 0, fraction: 0 });
+  assertEqual(S.countdown(99999, 10000), { seconds: 10, fraction: 1 });
+  for (const bad of [null, undefined, NaN, Infinity, '5000', {}]) assertEqual(S.countdown(bad, 10000), null, String(bad));
+  for (const bad of [0, -1, NaN, undefined, null]) assertEqual(S.countdown(5000, bad), null, String(bad));
+});
+
 // ── formatClock ──────────────────────────────────────────────────────
 
 test('formatClock: HH:MM:SS with leading zeros', () => {

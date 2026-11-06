@@ -179,6 +179,8 @@ async function main() {
       ['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Cam A<', 'id="rec"', 'id="slideshow"'].every((s) => r.text.includes(s)));
     check('view: loads simple-logic.js, fullscreen.js and simple-view.js', r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
     check('view: the icon of the camera is in front of its name', r.text.includes('<span class="cam-icon" id="cam-icon" aria-hidden="true">🚪</span><span id="cam-name">Cam A</span>'), r.text.slice(0, 200));
+    check('view: the slideshow\'s time-left indicator (bar and seconds) is on the page, hidden until the slideshow runs',
+      r.text.includes('id="countdown-bar" aria-hidden="true" hidden>') && /id="countdown"[^>]*\shidden>/.test(r.text) && r.text.includes('id="countdown-fill"'), r.text.slice(0, 200));
     check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture rec-frame" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);

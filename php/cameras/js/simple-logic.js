@@ -6,6 +6,7 @@
 //   fitThumbnails   how big the thumbnails of the list page are, and in how many columns
 //   neighbor        the previous / next camera of the pager (wraps around)
 //   isRecording     is a camera recording, from status.php's answer (the red frame of both pages)
+//   countdown       what the slideshow's "time left" indicator shows (whole seconds and the part of the time left)
 //   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
 //   nextByPriority  which camera follows after the slideshow time is up
@@ -148,6 +149,13 @@
       current: () => current,
       // The viewer picked a camera (pager button): show it for a full interval.
       show(id, at) { current = id; shownAt = at; },
+      // How long (ms) until the slideshow moves on if nothing else happens, or null when it will not move:
+      // there is no other camera to go to (one camera, or the others are skipped for a recording one).
+      remainingMs(at, prio) {
+        const next = nextByPriority(ids, current, prio);
+        if (next === null || next === current) return null;
+        return Math.max(0, intervalMs - (at - shownAt));
+      },
       // Look at the situation. Returns the id to switch to, or null to stay on the current camera.
       tick(at, prio) {
         const jump = jumpTarget(ids, current, before, prio);
@@ -163,11 +171,20 @@
     };
   }
 
+  // The "time left before the next camera" indicator: `remainingMs` of createSlideshow().remainingMs and the
+  // time one camera stays. -> { seconds, fraction } (seconds rounded UP, so it never says 0 while there is
+  // time left; fraction 1 = just switched, 0 = switching now), or null when there is nothing to show.
+  function countdown(remainingMs, intervalMs) {
+    if (typeof remainingMs !== 'number' || !Number.isFinite(remainingMs) || !(intervalMs > 0)) return null;
+    const left = Math.min(Math.max(remainingMs, 0), intervalMs);
+    return { seconds: Math.ceil(left / 1000), fraction: left / intervalMs };
+  }
+
   // 14:05:09 — the clock of the status line (local time, like the dashboard's).
   function formatClock(date) {
     const two = (n) => String(n).padStart(2, '0');
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, fitThumbnails, neighbor, isRecording, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, formatClock };
+  return { PRIORITY, fitThumbnails, neighbor, isRecording, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, countdown, formatClock };
 });

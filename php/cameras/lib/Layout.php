@@ -261,6 +261,11 @@ HTML;
   .picture:-webkit-full-screen { background: #000; }
   .picture:fullscreen img { cursor: zoom-out; }
   .picture:-webkit-full-screen img { cursor: zoom-out; }
+  /* the slideshow's "time left" indicator: a thin bar under the picture that runs out, and its seconds in the status line */
+  .countdown-bar { flex: 0 0 auto; height: 4px; background: var(--border); }
+  .countdown-fill { height: 100%; width: 100%; background: var(--accent); transition: width 1s linear; }
+  .status .countdown { color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { .countdown-fill { transition: none; } }
   .status { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 14px; background: var(--surface); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 1.1rem; }
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
@@ -303,12 +308,14 @@ CSS . "\n" . self::recordingFrameStyle();
             . ' data-slideshow-seconds="' . $slideshowSeconds . '"';
         $body = '<div class="simple-view-root" id="view"' . $data . '>'
             . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen"></div>'
+            . '<div class="countdown-bar" id="countdown-bar" aria-hidden="true" hidden><div class="countdown-fill" id="countdown-fill"></div></div>'
             . '<div class="status" role="status">'
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'
             . '<button class="btn" type="button" id="next" title="Next camera">NEXT →</button>'
             . '<span id="clock">--:--:--</span>'
             . '<span class="cam-title">' . self::iconSpan($summary['icon'], 'cam-icon') . '<span id="cam-name">' . self::esc($summary['name']) . '</span></span>'
             . '<span id="rec" class="rec-off">RECORDING: –</span>'
+            . '<span class="countdown" id="countdown" title="Time left before the slideshow shows the next camera" hidden></span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             . '<a class="btn" href="simple-list.php">▦ LIST</a>'
