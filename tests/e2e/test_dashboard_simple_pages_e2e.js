@@ -6,6 +6,8 @@
 //   - the dashboard has the SIMPLE LIST and SIMPLE VIEW buttons, and both pages need the dashboard login
 //   - the list shows every camera as a thumbnail of stream.php that links to its large view, with the
 //     safe headers, the scripts and the logic file it needs, and nothing of the relay's address
+//   - the dashboard's pictures are links to their camera's large view (no full-screen click there any more);
+//     the large view's picture goes full screen on a click (its box and the helper script are on the page)
 //   - the large view shows the camera asked for (default: the first), carries the camera list and the
 //     slideshow time (the slideshow_seconds setting, or the default when it is unusable) for its script
 //   - an unknown camera is 404, an array / traversal id is refused, and no cameras at all is a plain notice
@@ -138,6 +140,9 @@ async function main() {
     check('the dashboard has a SIMPLE LIST button (a plain link to simple-list.php) and a SIMPLE VIEW button (to simple-view.php)',
       r.status === 200 && /<a class="btn" id="btn-simple-list" href="simple-list\.php"[^>]*>[^<]*SIMPLE LIST<\/a>/.test(r.text)
       && /<a class="btn" id="btn-simple-view" href="simple-view\.php"[^>]*>[^<]*SIMPLE VIEW<\/a>/.test(r.text), detail(r));
+    const links = (id) => new RegExp(`<a class="stream-link" href="simple-view\\.php\\?cam=${id}"[^>]*>\\s*<img data-cam="${id}"[^>]*id="img-${id}"`);
+    check('dashboard: every camera\'s picture is a link to that camera\'s large view, and a click there no longer goes full screen',
+      ['cam-a', 'cam-b', 'cam-c'].every((id) => links(id).test(r.text)) && !r.text.includes('toggleStreamFullscreen') && !/<img[^>]*class="stream"[^>]*onclick=/.test(r.text), detail(r));
     for (const page of ['simple-list.php', 'simple-view.php', 'simple-view.php?cam=cam-a']) {
       r = await get(page, { auth: false });
       check(`${page}: without the dashboard login it is just the login prompt`, r.status === 401 && /^Basic realm=/.test(r.headers['www-authenticate'] || '') && !/cam-a|stream\.php/.test(r.text), detail(r));
@@ -154,7 +159,7 @@ async function main() {
       r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
 
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js']) {
+    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }
@@ -167,7 +172,8 @@ async function main() {
       d !== null && JSON.stringify(d.cameras) === JSON.stringify([{ id: 'cam-a', name: 'Cam A' }, { id: 'cam-b', name: 'Cam B' }, { id: 'cam-c', name: 'Cam C' }]) && d.seconds === '25', JSON.stringify(d));
     check('view: pager, status line (time, camera name, recording) and slideshow button are there',
       ['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Cam A<', 'id="rec"', 'id="slideshow"'].every((s) => r.text.includes(s)));
-    check('view: loads simple-logic.js and simple-view.js', r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-view.js"'));
+    check('view: loads simple-logic.js, fullscreen.js and simple-view.js', r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
+    check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);
     check('view: ?cam=cam-c shows that camera (and the title names it)', r.status === 200 && d && d.current === 'cam-c' && r.text.includes('<img id="picture" src="stream.php?cam=cam-c"') && /<title>Cam C — /.test(r.text), detail(r));

@@ -299,23 +299,15 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   .layout-list .cam-stream-wrap { aspect-ratio: 16/6; }
 
+  /* The picture is a link to the camera's simple view (where a click on it goes full screen). */
+  .cam-stream-wrap a.stream-link { display: block; width: 100%; height: 100%; }
+
   .cam-stream-wrap img.stream {
     width: 100%;
     height: 100%;
     object-fit: contain;
     display: block;
-    cursor: zoom-in;
-  }
-
-  /* Fullscreen the stream by clicking it — browser chrome fills the
-     wrap div; the image itself just needs to stay centered/contained. */
-  .cam-stream-wrap:fullscreen,
-  .cam-stream-wrap:-webkit-full-screen {
-    background: #000;
-  }
-  .cam-stream-wrap:fullscreen img.stream,
-  .cam-stream-wrap:-webkit-full-screen img.stream {
-    cursor: zoom-out;
+    cursor: pointer;
   }
 
   /* Offline / error overlay */
@@ -545,18 +537,19 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <span>CONNECTING…</span>
         </div>
 
-        <img data-cam="<?= $camId ?>"
-          class="stream"
-          id="img-<?= $camId ?>"
-          <?= $muxEnabled ? '' : 'src="' . $proxyUrl . '"' ?>
+        <a class="stream-link" href="<?= htmlspecialchars(CamLayout::simpleViewUrl($cam['id'])) ?>"
+           title="Click to open this camera in the simple view">
+          <img data-cam="<?= $camId ?>"
+            class="stream"
+            id="img-<?= $camId ?>"
+            <?= $muxEnabled ? '' : 'src="' . $proxyUrl . '"' ?>
 
-          alt="<?= $camName ?>"
-          data-src="<?= $proxyUrl ?>"
-          onload="onStreamLoad(this.dataset.cam)"
-          onerror="onStreamError(this.dataset.cam)"
-          onclick="toggleStreamFullscreen(this.dataset.cam)"
-          title="Click to view full screen"
-        >
+            alt="<?= $camName ?>"
+            data-src="<?= $proxyUrl ?>"
+            onload="onStreamLoad(this.dataset.cam)"
+            onerror="onStreamError(this.dataset.cam)"
+          >
+        </a>
 
       </div>
 
@@ -788,23 +781,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       const id = img.id.replace('img-', '');
       reloadStream(id);
     });
-  }
-
-  // ── Fullscreen — click the stream image to blow it up, click it again
-  // (or press Esc) to leave. Fullscreens the wrap div rather than just the
-  // <img> so the connecting/error overlay stays layered correctly on top
-  // of it if the stream drops while zoomed in. ──
-  function toggleStreamFullscreen(id) {
-    const wrap = document.getElementById('wrap-' + id);
-    if (!wrap) return;
-    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-    if (fsEl === wrap) {
-      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    } else if (wrap.requestFullscreen) {
-      wrap.requestFullscreen().catch(err => console.error('Fullscreen failed:', err));
-    } else if (wrap.webkitRequestFullscreen) {
-      wrap.webkitRequestFullscreen(); // Safari
-    }
   }
 
   // ── Hide / show (local to this browser tab only — it just stops THIS tab

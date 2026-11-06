@@ -248,7 +248,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 3);
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 4);   // simple-logic.js, fullscreen.js, simple-view.js and the storage warning
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
@@ -290,6 +290,34 @@ camtest_test('simple view: the picture fills the whole free area — it is laid 
     camtest_assert_true(strpos($img, 'position: absolute') !== false && strpos($img, 'width: 100%') !== false && strpos($img, 'height: 100%') !== false, $img);
     camtest_assert_true(strpos($img, 'object-fit: contain') !== false, 'the shape of the stream is kept');
     camtest_assert_true(strpos($img, 'max-width') === false && strpos($img, 'max-height') === false, 'a max-* size can only shrink a picture, never enlarge it');
+});
+
+camtest_test('simple view: the picture sits in its own box — the thing that goes full screen — and the page loads the full-screen helper before its own script', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_true(strpos($html, '<div class="picture" id="picture-box"><img id="picture"') !== false, 'the image is inside the box the script makes full screen');
+    $helper = strpos($html, '<script src="js/fullscreen.js">');
+    $page = strpos($html, '<script src="js/simple-view.js">');
+    camtest_assert_true($helper !== false && $page !== false && $helper < $page, 'fullscreen.js is loaded, and before the script that uses it');
+    camtest_assert_true(strpos($html, 'title="Click to view full screen"') !== false, 'the picture says what a click does');
+});
+
+camtest_test('simple view: a full-screen picture box is black with a zoom-out cursor, in the standard and the WebKit spelling', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_true(strpos(layout_css_rule($html, '.picture img'), 'cursor: zoom-in') !== false, 'a click enlarges');
+    foreach (['.picture:fullscreen', '.picture:-webkit-full-screen'] as $selector) {
+        camtest_assert_true(strpos(layout_css_rule($html, $selector), 'background: #000') !== false, $selector);
+        camtest_assert_true(strpos(layout_css_rule($html, $selector . ' img'), 'cursor: zoom-out') !== false, $selector . ' img');
+    }
+});
+
+camtest_test('simple list: the thumbnails still link to the large view, which is where a click goes full screen — no full-screen script here', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleListPage($SIMPLE_CAMS);
+    camtest_assert_true(strpos($html, '<script src="js/fullscreen.js">') === false);
+});
+
+camtest_test('simpleViewUrl: the one address of a camera\'s large view, encoded (the dashboard\'s pictures link to it)', function () {
+    camtest_assert_equal('simple-view.php?cam=cam1', CamLayout::simpleViewUrl('cam1'));
+    camtest_assert_equal('simple-view.php?cam=a%20b%26c%3D%22', CamLayout::simpleViewUrl('a b&c="'));
 });
 
 exit(camtest_summarize());

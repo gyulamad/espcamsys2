@@ -188,7 +188,8 @@ HTML;
         return 'stream.php?cam=' . rawurlencode($id);
     }
 
-    private static function simpleViewUrl(string $id): string
+    // Public: the dashboard's pictures link to it too, so the address is built in one place.
+    public static function simpleViewUrl(string $id): string
     {
         return 'simple-view.php?cam=' . rawurlencode($id);
     }
@@ -238,7 +239,13 @@ HTML;
      max-width / max-height would only ever shrink it, never enlarge it. The image is laid over the whole area
      and object-fit: contain keeps its shape (black bars where the shapes differ). */
   .picture { position: relative; flex: 1 1 auto; min-height: 0; background: #000; }
-  .picture img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
+  .picture img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+  /* A click on the picture shows it full screen (js/fullscreen.js); the box is what goes full screen, so
+     whatever is laid over the picture goes with it. Another click leaves. */
+  .picture:fullscreen { background: #000; }
+  .picture:-webkit-full-screen { background: #000; }
+  .picture:fullscreen img { cursor: zoom-out; }
+  .picture:-webkit-full-screen img { cursor: zoom-out; }
   .status { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 14px; background: var(--surface); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 1.1rem; }
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
@@ -260,8 +267,8 @@ CSS . "\n";
         return self::simplePage('Cameras', 'simple-list', $body, ['simple-logic.js', 'simple-list.js']);
     }
 
-    // simple-view.php: one camera large, the pager, the status line and the slideshow button.
-    // $current: the camera shown first (one of $cameras, or null when there are none).
+    // simple-view.php: one camera large (a click on it shows it full screen), the pager, the status line and
+    // the slideshow button. $current: the camera shown first (one of $cameras, or null when there are none).
     public static function simpleViewPage(array $cameras, ?array $current, int $slideshowSeconds): string
     {
         if ($current === null) {
@@ -272,7 +279,7 @@ CSS . "\n";
             . ' data-current="' . self::esc($summary['id']) . '"'
             . ' data-slideshow-seconds="' . $slideshowSeconds . '"';
         $body = '<div class="simple-view-root" id="view"' . $data . '>'
-            . '<div class="picture"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '"></div>'
+            . '<div class="picture" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen"></div>'
             . '<div class="status" role="status">'
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'
             . '<button class="btn" type="button" id="next" title="Next camera">NEXT →</button>'
@@ -284,7 +291,7 @@ CSS . "\n";
             . '<a class="btn" href="simple-list.php">▦ LIST</a>'
             . '<a class="btn" href="./">DASHBOARD</a>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'fullscreen.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser

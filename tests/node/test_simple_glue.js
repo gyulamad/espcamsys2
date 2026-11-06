@@ -45,10 +45,12 @@ function makeEl(extra) {
 }
 
 // A page environment. `relay`: what status.php / detector-status.php answer (mutable by the test; null = failed).
-function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras } = {}) {
+function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true } = {}) {
   const env = { now: 1000000, intervals: [], timeouts: [], urls: [], relay: { status: {}, detectors: {} }, clockWindow: {} };
+  // js/fullscreen.js stand-in: records the elements it was asked to toggle (the real one is tested in test_fullscreen.js)
+  env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
   const els = {};
-  for (const id of ['view', 'picture', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'rec']) els[id] = makeEl();
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'rec']) els[id] = makeEl();
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -95,7 +97,7 @@ function install(env) {
 // until the test is over.
 function load(env, file) {
   env.windowListeners = {};
-  env.window = { CamSimple, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
+  env.window = { CamSimple, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
   cleanups.push(install(env));
   delete require.cache[require.resolve(path.join(JS, file))];
   require(path.join(JS, file));
@@ -134,6 +136,29 @@ test('view: the status line shows the recording state of the CURRENT camera: ON 
   env.relay.status = null;   // the relay cannot be reached: unknown, not "off"
   await env.poll();
   assertEqual(env.els.rec.textContent, 'RECORDING: –');
+});
+
+test('view: a click on the picture toggles full screen of the picture box — not of the bare image', async () => {
+  const env = await started();
+  env.els.picture.fire('click');
+  assertEqual(env.fullscreen.toggled.length, 1);
+  assertTrue(env.fullscreen.toggled[0] === env.els['picture-box'], 'the box goes full screen, so what is laid over the picture goes with it');
+  env.els.picture.fire('click');   // the same click leaves again (the helper decides): one more request, no state kept here
+  assertEqual(env.fullscreen.toggled.length, 2);
+});
+
+test('view: the pager and the slideshow button do not touch full screen', async () => {
+  const env = await started();
+  env.els.next.fire('click');
+  env.els.slideshow.fire('click');
+  assertEqual(env.fullscreen.toggled.length, 0);
+});
+
+test('view: without the full-screen helper (script not loaded) the page still works and a click does nothing', async () => {
+  const env = await started({ fullscreen: false });
+  env.els.picture.fire('click');   // no listener, no crash
+  env.els.next.fire('click');
+  assertEqual(env.els['cam-name'].textContent, 'Beta');
 });
 
 test('view: asks status.php and detector-status.php, and an HTTP error answer is treated as unknown', async () => {

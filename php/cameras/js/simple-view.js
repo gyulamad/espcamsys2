@@ -1,7 +1,8 @@
 'use strict';
 // simple-view.js — simple-view.php: shows one camera, the pager, the status line and the slideshow. The
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
-// them to the page, status.php (recording) and detector-status.php (motion).
+// them to the page, status.php (recording) and detector-status.php (motion). A click on the picture
+// toggles full screen (js/fullscreen.js).
 
 (function () {
   const S = window.CamSimple;
@@ -30,6 +31,7 @@
 
   const el = (id) => document.getElementById(id);
   const picture = el('picture');
+  const pictureBox = el('picture-box');   // what goes full screen: everything laid over the picture goes with it
   let current = ids.includes(root.dataset.current) ? root.dataset.current : ids[0];
   let slideshow = null;            // the running slideshow, or null
   let status = null;               // the last answers of the relay (null: not known)
@@ -116,6 +118,8 @@
     clearTimeout(retryTimer);
     retryTimer = setTimeout(() => show(current), RETRY_MS);
   });
+  // A click on the picture shows it full screen, another one leaves (the page works without the helper).
+  if (window.CamFullscreen && pictureBox) picture.addEventListener('click', () => window.CamFullscreen.toggle(pictureBox));
   el('prev').addEventListener('click', () => step(-1));
   el('next').addEventListener('click', () => step(1));
   el('slideshow').addEventListener('click', () => setSlideshow(slideshow === null));
