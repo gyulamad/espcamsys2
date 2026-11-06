@@ -1171,6 +1171,14 @@ private:
 };
 
 // What the Wi-Fi is doing, once per event instead of once per pass.
+// (review ARD-M1): the SSID is Personally Identifiable Information — it
+// identifies the household — so it is masked before it goes into the remote
+// log (the relay's logs/camera.log on the Pi).
+String maskedSsid() {
+  String s = WiFi.SSID();
+  if (s.length() <= 4) return String("****");
+  return s.substring(0, 2) + String("***") + s.substring(s.length() - 2);
+}
 void logWifi(const person_report::WifiEvent &ev)
 {
     using person_report::WifiEvent;
@@ -1180,13 +1188,13 @@ void logWifi(const person_report::WifiEvent &ev)
     case WifiEvent::Connected:
         RLOG_INFO(
             "Wi-Fi connected to '%s', IP %s, %d dBm",
-            WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI()
+            maskedSsid().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI()
         );
         break;
     case WifiEvent::Reconnected:
         RLOG_INFO(
             "Wi-Fi back on '%s', IP %s, %d dBm (it was down for %s)",
-            WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
+            maskedSsid().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
             person_report::formatDuration(ev.downForMs).c_str()
         );
         break;
@@ -1208,7 +1216,7 @@ void logHeartbeat(person_report::UplinkSession &session)
 {
     RLOG_INFO(
         "heartbeat: Wi-Fi '%s', IP %s, %d dBm, up %s, free heap %u (lowest %u)",
-        WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
+        maskedSsid().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
         person_report::formatDuration(millis()).c_str(),
         (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap()
     );

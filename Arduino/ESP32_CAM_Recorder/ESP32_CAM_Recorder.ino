@@ -404,6 +404,10 @@ void sendAlarmRequest(const String &id) {
   std::string url = buildAlarmUrl(g_cfg.serverHost, g_cfg.httpPort, id.c_str());
   http.begin(String(url.c_str()));
   http.setTimeout(5000);
+  // Send the camera key so the relay can authenticate this request (review
+  // NODE-H1 / COMBINED-H3): the alarm HTTP route is no longer keyless by
+  // default. Old relays ignore the header; new relays require it.
+  http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
   int code = http.POST(""); // relay expects no body, same as the dashboard's proxy_post()
   if (code > 0) {
     RLOG_INFO("alarm request for '%s' -> HTTP %d", id.c_str(), code);
@@ -610,6 +614,15 @@ void setupAlarmInput() {
 }
 
 // Brings WiFi up and blocks until one of the configured networks connects.
+// (review ARD-M1): the SSID is Personally Identifiable Information — it
+// identifies the household — so it is masked before it goes into the remote
+// log (the relay's logs/camera.log on the Pi). The serial console still
+// prints the SSID in full for the operator who is physically attached.
+String maskedSsid() {
+  String s = WiFi.SSID();
+  if (s.length() <= 4) return String("****");
+  return s.substring(0, 2) + String("***") + s.substring(s.length() - 2);
+}
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
@@ -626,7 +639,7 @@ void connectWifi() {
   }
   Serial.println();
   RLOG_INFO("connected to WiFi '%s', IP %s, RSSI %d dBm",
-            WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+            maskedSsid().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
 // ── Relay settings link ─────────────────────────────────────────────────
@@ -895,7 +908,7 @@ void logHeartbeat() {
   if (millis() - lastHeartbeat <= (unsigned long)g_cfg.logHeartbeatSec * 1000UL) return;
 
   RLOG_INFO("heartbeat: WiFi '%s', IP %s, RSSI %d dBm, uptime %lus, free heap %u (lowest ever %u), push connection %s",
-            WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+            maskedSsid().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
             millis() / 1000, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
             pushClient.connected() ? "up" : "down");
   lastHeartbeat = millis();
@@ -919,7 +932,7 @@ bool checkWifi() {
     // one grep shows which network this camera is on and what address it has —
     // a reconnect may well land on another extender with another address.
     RLOG_INFO("reconnected to WiFi '%s', IP %s, RSSI %d dBm after %lus",
-              WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+              maskedSsid().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI(),
               (millis() - wifiLostAt) / 1000);
   }
   return wifiUp;

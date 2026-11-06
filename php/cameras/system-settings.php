@@ -96,9 +96,9 @@ if ($method === 'GET') {
 
 // ── POST ──
 @set_time_limit(90); // saving can include waiting for the relay to restart
-$input = json_decode((string) file_get_contents('php://input'), true);
+$input = camdash_read_json_input(16384, $inputError);   // 16 KB cap (review PHP-H1)
 if (!is_array($input) || !isset($input['values'])) {
-    json_fail(400, 'send { "values": { "setting": value, ... } }');
+    json_fail($input === null ? 413 : 400, $inputError ?: 'send { "values": { "setting": value, ... } }');
 }
 $split = CamLogic::splitSettingsValues($input['values']);
 if (!$split['ok']) {

@@ -1246,10 +1246,23 @@ function requireControlKey(req, res, next) {
 
 // Who is doing this, for the log: the dashboard passes the logged-in user's
 // name in X-Actor (the relay only sees the web server's own address).
+// X-Actor is honoured ONLY when the request comes from loopback
+// (review NODE-M1): a non-loopback caller (someone reaching the relay
+// directly on the LAN, or a future attacker who has the control key) cannot
+// forge the audit log by setting X-Actor to "innocent-bystander". Their
+// address is used as the actor instead.
+function isLoopback(addr) {
+  if (typeof addr !== 'string') return false;
+  const a = addr.startsWith('::ffff:') ? addr.slice(7) : addr;
+  return a === '127.0.0.1' || a === '::1' || a === 'localhost';
+}
 function actorOf(req) {
   const ip = logfile.normalizeIp(req.socket.remoteAddress);
   const raw = req.headers['x-actor'];
-  return typeof raw === 'string' && raw.trim() !== '' ? `${logfile.safeToken(raw.trim())} (via ${ip || 'unknown address'})` : (ip || 'unknown address');
+  if (isLoopback(req.socket.remoteAddress) && typeof raw === 'string' && raw.trim() !== '') {
+    return `${logfile.safeToken(raw.trim())} (via ${ip || 'unknown address'})`;
+  }
+  return ip || 'unknown address';
 }
 
 // { id: description-or-null } for each of `ids`, in the shape the API returns.
@@ -1859,12 +1872,48 @@ function triggerAlarmAll(source = 'HTTP') {
   return Object.keys(cameras).map((id) => triggerAlarm(id, source));
 }
 
+// ── Alarm authentication (review NODE-H1 / COMBINED-H3) ──
+// The HTTP alarm routes used to be unauthenticated, on the assumption that the
+// firmware "cannot send a key there". That was wrong: the firmware has the
+// camera key flashed (it uses it on every other HTTP call). The current
+// firmware sends X-Api-Key on /alarm too, so the key is enforced by default.
+//
+// Old firmware that does not send the key still works IF the operator opts in
+// by setting ALLOW_KEYLESS_ALARM=1 in the relay's environment. The opt-in is
+// logged at startup. Without it, a keyless POST is refused with 401 (the same
+// answer every other camera-keyed route gives), which closes the easy
+// disk-filling DoS where anyone on the LAN could POST /alarm/all in a loop.
+const ALLOW_KEYLESS_ALARM = process.env.ALLOW_KEYLESS_ALARM === '1';
+
+function requireCameraKeyForAlarm(req, res, next) {
+  if (ALLOW_KEYLESS_ALARM) return next();
+  const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
+  if (keyState === 'ok') return next();
+  if (keyState === 'locked') return undefined;
+  const ip = logfile.normalizeIp(req.socket.remoteAddress);
+  const t = authFailThrottle.check(`alarm:${ip}`, Date.now());
+  if (t.allow) relayLog('WARN', `rejected a POST ${req.path} from ${ip || 'unknown address'}: missing or wrong key (set ALLOW_KEYLESS_ALARM=1 only if you have old firmware that cannot send X-Api-Key)${suppressedNote(t.suppressed)}`);
+  res.set('Connection', 'close');
+  return res.status(401).json({ error: 'missing or wrong key — send X-Api-Key (or set ALLOW_KEYLESS_ALARM=1 for old firmware)' });
+}
+
+// Hard cap on simultaneous recordings to keep a keyless (or compromised)
+// alarm source from filling the disk: once this many cameras are recording,
+// further alarm-triggered recordings are refused with 503.
+const MAX_ALARM_RECORDINGS = parseInt(process.env.MAX_ALARM_RECORDINGS, 10) || 16;
+function alarmRecordingAllowed() {
+  const active = Object.values(cameras).filter((c) => c && c.recording).length;
+  return active < MAX_ALARM_RECORDINGS;
+}
+
 // Registered before /alarm/:id so "all" isn't taken as a literal camera id.
-app.post('/alarm/all', (req, res) => {
+app.post('/alarm/all', requireCameraKeyForAlarm, (req, res) => {
+  if (!alarmRecordingAllowed()) return res.status(503).json({ error: `too many concurrent recordings (cap ${MAX_ALARM_RECORDINGS}) — refuse to start more` });
   res.json({ cameras: triggerAlarmAll() });
 });
 
-app.post('/alarm/:id', (req, res) => {
+app.post('/alarm/:id', requireCameraKeyForAlarm, (req, res) => {
+  if (!alarmRecordingAllowed()) return res.status(503).json({ error: `too many concurrent recordings (cap ${MAX_ALARM_RECORDINGS}) — refuse to start more` });
   res.json(triggerAlarm(req.params.id));
 });
 
@@ -2151,10 +2200,21 @@ app.use((err, req, res, next) => {
   return res.sendStatus(500);
 });
 
-const httpServer = app.listen(PORT, () => {
-  console.log(`Camera relay (HTTP) listening on :${PORT}`);
+// Where the HTTP server listens. By default the relay binds to 127.0.0.1 only
+// (review NODE-H2 / COMBINED-M2): the dashboard's PHP layer reaches it on
+// loopback, and nothing else needs to. Cameras reach the relay via the raw
+// push port (which still binds to all interfaces, below) and via HTTP only
+// when relay_url in config.php points at the LAN address — operators who want
+// that must opt in with RELAY_BIND=0.0.0.0.
+const RELAY_BIND = process.env.RELAY_BIND || '127.0.0.1';
+
+const httpServer = app.listen(PORT, RELAY_BIND, () => {
+  console.log(`Camera relay (HTTP) listening on ${RELAY_BIND}:${PORT}`);
   if (!CONTROL_KEY) {
-    relayLog('WARN', `controlKey is not set: live video, snapshots, recordings and the camera list can be read by anyone who can reach port ${PORT}, and recording on/off, deleting, record and the settings are disabled. Set controlKey in config.js (and relay_control_key in the dashboard's config.php).`);
+    relayLog('WARN', `controlKey is not set: live video, snapshots, recordings and the camera list can be read by anyone who can reach ${RELAY_BIND}:${PORT}, and recording on/off, deleting, record and the settings are disabled. Set controlKey in config.js (and relay_control_key in the dashboard's config.php).`);
+  }
+  if (RELAY_BIND === '0.0.0.0' || RELAY_BIND === '::') {
+    relayLog('WARN', `RELAY_BIND=${RELAY_BIND}: the relay is reachable from the network. The dashboard's PHP layer only needs loopback (127.0.0.1); set RELAY_BIND=0.0.0.0 only if you have cameras or a dashboard on another host that must reach this port.`);
   }
 });
 // A person detector opens its uplink with an HTTP Upgrade (see the "Person detectors" section above).
@@ -2430,6 +2490,10 @@ startDiscoveryResponder();
 // "dropped", and a crash is useless without its stack trace — so both leave a
 // line (written synchronously: the process may be about to die).
 relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file}; recording on/off switch ${CONTROL_KEY ? 'enabled' : 'DISABLED (no controlKey in config.js)'})`);
+
+if (ALLOW_KEYLESS_ALARM) {
+  relayLog('WARN', 'ALLOW_KEYLESS_ALARM=1 is set: POST /alarm/:id and /alarm/all accept requests with no camera key. This is for old firmware only — set X-Api-Key on every alarm POST and remove this env var once every camera runs firmware that sends it.');
+}
 
 for (const w of loadedOverrides.warnings) relayLog('WARN', w);
 

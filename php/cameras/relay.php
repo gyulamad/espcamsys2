@@ -75,6 +75,63 @@ function relay_pipe_stream($stream, ?callable $filter = null): void
     }
 }
 
+// Reads up to $maxBytes of php://input and returns the bytes (or null on a
+// read error). Refuses (returns null) when the body is larger than $maxBytes
+// — call sites answer 413 in that case. Without this, file_get_contents(
+// 'php://input') reads the whole body into memory before json_decode runs,
+// which lets an attacker who can reach the dashboard POST a multi-GB body and
+// exhaust Apache's MaxRequestWorkers pool (review PHP-H1).
+function camdash_read_bounded_input(int $maxBytes): ?string
+{
+    if ($maxBytes <= 0) {
+        return null;
+    }
+    $h = @fopen('php://input', 'rb');
+    if (!$h) {
+        return null;
+    }
+    $raw = '';
+    try {
+        while (!feof($h)) {
+            $chunk = fread($h, 8192);
+            if ($chunk === false) {
+                return null;
+            }
+            $raw .= $chunk;
+            if (strlen($raw) > $maxBytes) {
+                return null;   // overflowed: caller answers 413
+            }
+        }
+    } finally {
+        fclose($h);
+    }
+    return $raw;
+}
+
+// Reads a JSON object from php://input, capped at $maxBytes (default 16 KB,
+// generous for every JSON body the dashboard's settings pages accept today).
+// Returns the decoded array, or null when the body is missing, too large,
+// or not valid JSON. Sets $error to a short reason the caller can pass to
+// json_fail().
+function camdash_read_json_input(int $maxBytes = 16384, string &$error = ''): ?array
+{
+    $raw = camdash_read_bounded_input($maxBytes);
+    if ($raw === null) {
+        $error = 'request body too large (limit ' . $maxBytes . ' bytes) or could not be read';
+        return null;
+    }
+    if ($raw === '') {
+        $error = 'send { "values": { ... } }';
+        return null;
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        $error = 'body is not valid JSON';
+        return null;
+    }
+    return $decoded;
+}
+
 // Answers with a JSON error and stops.
 function json_fail(int $status, string $message): void
 {
