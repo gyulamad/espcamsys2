@@ -44,6 +44,8 @@ const { createSorter } = require('./lib/sorter');
 const { createArchive } = require('./lib/archive');
 const { ScanQueue } = require('./lib/scanqueue');
 const { runProcess } = require('./lib/runprocess');
+const { createNotifier } = require('./lib/notify');
+const { postRequest } = require('./lib/notify/httpspost');
 
 // What the dashboard's settings page saved (ports, keys, pre-roll, log, folders) is laid
 // over config.js, so config.js itself never has to be rewritten. See lib/sysconfig.js.
@@ -69,6 +71,10 @@ fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 // ── Sorting out footage without a person (see lib/personscan.js, INSTALL.md) ──
 const scanCfg = personscan.resolveScanConfig(config.personScan, __dirname);
 for (const w of scanCfg.warnings) console.warn(`[config] ${w}`);
+
+// ── Notifications (see lib/notify/README.md): one strategy per configured channel behind one interface ──
+const { notifier, warnings: notifyWarnings } = createNotifier(config.notifications, process.env, { post: postRequest });
+for (const w of notifyWarnings) console.warn(`[config] ${w}`);
 const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
 const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
@@ -2137,6 +2143,16 @@ app.post('/recordings/:id/scan', requireDashboardKey, requireScanEnabled, (req, 
   res.status(202).json({ queued });
 });
 
+// Sends a test notification (with the relay's test picture) through every configured channel, so a new setup
+// can be checked without waiting for a person: 409 when no channel is configured, else 200 with one entry per
+// channel ({ name, ok, error? } — an error never contains a secret, see lib/notify/telegram.js).
+app.post('/notifications/test', requireDashboardKey, async (req, res) => {
+  if (notifier.isEmpty()) return res.status(409).json({ error: 'no notification channel is configured (notifications in config.js — see lib/notify/README.md)' });
+  const results = await notifier.send({ text: `Test notification from the camera relay, requested by ${actorOf(req)}`, image: fs.readFileSync(path.join(__dirname, 'testimage.jpg')) });
+  for (const r of results.filter((x) => !x.ok)) relayLog('WARN', `test notification through ${r.name} failed: ${r.error}`);
+  return res.json({ results });
+});
+
 // Any error a route doesn't handle itself ends up here: recorded with its stack
 // trace (Express's default handler would only print it to the console), and
 // answered with a plain 500.
@@ -2429,6 +2445,7 @@ startDiscoveryResponder();
 // A relay that restarted is the first thing to rule in or out when a camera
 // "dropped", and a crash is useless without its stack trace — so both leave a
 // line (written synchronously: the process may be about to die).
+relayLog('INFO', notifier.isEmpty() ? 'notifications: no channel configured' : `notifications: ${notifier.names().join(', ')}`);
 relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file}; recording on/off switch ${CONTROL_KEY ? 'enabled' : 'DISABLED (no controlKey in config.js)'})`);
 
 for (const w of loadedOverrides.warnings) relayLog('WARN', w);

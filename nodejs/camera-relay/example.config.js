@@ -75,4 +75,15 @@ module.exports = {
   // the time. Whole number 1-1440; the board counts the time itself. Also: DETECTOR_VIEW_MINUTES.
   // detectorViewMinutes: 10,   // default
   // switchFile: 'recording-switch.json',  // where the state is kept so it survives a restart (default shown)
+
+  // Notifications (see lib/notify/README.md): the relay can message you — a text and, where there is one, a
+  // thumbnail. Each channel is optional; configure one or more. Secrets can live in the environment instead
+  // (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID), which wins over this file. Check a setup with:
+  //   curl -X POST -H "X-Control-Key: <controlKey>" http://localhost:8080/notifications/test
+  // notifications: {
+  //   telegram: {
+  //     botToken: '123456789:AA...',   // from @BotFather
+  //     chatId: '123456789',           // your chat (a group's is negative), or '@channelname'
+  //   },
+  // },
 };
