@@ -30,6 +30,7 @@ const PORT = Number(process.env.E2E_FWDET_PORT || 19330);
 const PUSH_PORT = Number(process.env.E2E_FWDET_PUSH_PORT || 19331);
 const STUB_BASE = Number(process.env.E2E_FWDET_STUB_BASE || 19340);
 const KEY = 'e2e-fw-key';
+const CONTROL_KEY = 'e2e-fw-control-key';   // (review NODE-H2): reads need the control key now
 
 let pass = 0, fail = 0, finished = false;
 function check(name, cond, detail) {
@@ -56,7 +57,7 @@ function embeddedJpeg() {
 
 function getJson(p, port = PORT) {
   return new Promise((resolve, reject) => {
-    const req = nodeHttp.get(`http://127.0.0.1:${port}${p}`, (res) => {
+    const req = nodeHttp.get(`http://127.0.0.1:${port}${p}`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
       let out = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { out += c; });
@@ -71,7 +72,7 @@ function getJson(p, port = PORT) {
 function collectPictures(id, ms) {
   return new Promise((resolve) => {
     const chunks = [];
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detector/${id}/stream`, (res) => {
+    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detector/${id}/stream`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
       res.on('data', (c) => chunks.push(c));
       setTimeout(() => {
         req.destroy();
@@ -103,7 +104,7 @@ function startRelay(tmp) {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
       env: Object.assign({}, process.env, {
-        PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY,
+        PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, CONTROL_KEY,
         SETTINGS_FILE: path.join(tmp, 'settings.json'), LOG_FILE: relayLogFile, SWITCH_FILE: path.join(tmp, 'switch.json'),
         DETECTOR_NO_PICTURE_WARN_MS: '800',
       }),

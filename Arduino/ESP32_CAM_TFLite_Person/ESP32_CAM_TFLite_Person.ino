@@ -1173,11 +1173,16 @@ private:
 // What the Wi-Fi is doing, once per event instead of once per pass.
 // (review ARD-M1): the SSID is Personally Identifiable Information — it
 // identifies the household — so it is masked before it goes into the remote
-// log (the relay's logs/camera.log on the Pi).
+// log (the relay's logs/camera.log on the Pi). Uses only c_str() and C-string
+// ops so the desktop glue tests (which compile this section against a fake
+// String class that has only c_str()) still build.
 String maskedSsid() {
-  String s = WiFi.SSID();
-  if (s.length() <= 4) return String("****");
-  return s.substring(0, 2) + String("***") + s.substring(s.length() - 2);
+  const char* s = WiFi.SSID().c_str();
+  size_t len = strlen(s);
+  if (len <= 4) return String("****");
+  char buf[80];
+  snprintf(buf, sizeof(buf), "%.2s***%s", s, s + len - 2);
+  return String(buf);
 }
 void logWifi(const person_report::WifiEvent &ev)
 {

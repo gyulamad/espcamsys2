@@ -639,10 +639,10 @@ TEST(wifi_events_become_one_log_line_each) {
     WifiEvent e;
     e.kind = WifiEvent::Connected;
     logWifi(e);
-    TEST_ASSERT(logged('I', "Wi-Fi connected to 'extender-1', IP 192.168.4.37, -61 dBm"), "connected: network, address, signal");
+    TEST_ASSERT(logged('I', "Wi-Fi connected to 'ex***-1', IP 192.168.4.37, -61 dBm"), "connected: network, address, signal");
     e.kind = WifiEvent::Reconnected; e.downForMs = 125000;
     logWifi(e);
-    TEST_ASSERT(logged('I', "Wi-Fi back on 'extender-1'") && logged('I', "it was down for 2m 05s"), "reconnected: and for how long it was gone");
+    TEST_ASSERT(logged('I', "Wi-Fi back on 'ex***-1'") && logged('I', "it was down for 2m 05s"), "reconnected: and for how long it was gone");
     e.kind = WifiEvent::Lost;
     logWifi(e);
     TEST_ASSERT(logged('W', "Wi-Fi connection lost - reconnecting"), "lost: a warning");
@@ -682,7 +682,7 @@ TEST(the_heartbeat_is_two_short_lines_one_for_the_board_one_for_the_link) {
     person_report::UplinkSession session(ucfg, nenv);
     session.step(true);     // one failed attempt, so describe() has a failure to quote
     logHeartbeat(session);
-    TEST_ASSERT(logged('I', "heartbeat: Wi-Fi 'extender-1', IP 192.168.4.37, -61 dBm, up 3h 12m, free heap 88000 (lowest 61000)"), "the board: network, address, signal, uptime, memory");
+    TEST_ASSERT(logged('I', "heartbeat: Wi-Fi 'ex***-1', IP 192.168.4.37, -61 dBm, up 3h 12m, free heap 88000 (lowest 61000)"), "the board: network, address, signal, uptime, memory");
     TEST_ASSERT(logged('I', "heartbeat: relay link down after 1 attempt: could not reach the relay at 192.168.4.9:8080: refused"), "the link: its state and the last failure");
     for (size_t i = 0; i < g_rlog.size(); i++) TEST_ASSERT(g_rlog[i].text.size() < 150, "each line fits the log's 160 bytes");
     TEST_ASSERT(!logged('W', "stack"), "no stack warning while there is plenty");
@@ -895,7 +895,7 @@ TEST(once_wi_fi_is_up_the_task_checks_for_updates_and_opens_the_uplink_with_the_
     TEST_ASSERT(g_taskDelays.size() == 3 && g_taskDelays[0] == 10, "a 10 ms pause per pass once connected, so the uplink is serviced promptly");
     TEST_ASSERT(g_otaCalls.size() == 3, "the firmware update check runs every pass (it only acts when one is due)");
     TEST_ASSERT(!g_otaCalls.empty() && g_otaCalls[0].host == "192.168.4.9" && g_otaCalls[0].port == 8080 && g_otaCalls[0].key == "s3cret" && g_otaCalls[0].id == "det-1", "with the relay's address, the key and the detector's id");
-    TEST_ASSERT(logged('I', "Wi-Fi connected to 'extender-1', IP 192.168.4.37, -61 dBm"), "the log says it connected, once");
+    TEST_ASSERT(logged('I', "Wi-Fi connected to 'ex***-1', IP 192.168.4.37, -61 dBm"), "the log says it connected, once");
     std::string req(WiFiClient::written.begin(), WiFiClient::written.end());
     TEST_ASSERT(req.rfind("GET /detector/det-1/uplink HTTP/1.1\r\nHost: 192.168.4.9:8080\r\n", 0) == 0, "the uplink request names the detector id and the relay's host and port, straight from the settings");
     TEST_ASSERT(has(req, "X-Api-Key: s3cret\r\n"), "and carries API_KEY");
@@ -909,7 +909,7 @@ TEST(a_wi_fi_drop_closes_the_relay_connection_and_the_log_says_so) {
     runNetworkTask(5);
     TEST_ASSERT(logged('W', "Wi-Fi connection lost - reconnecting"), "the loss is logged once");
     TEST_ASSERT(logged('W', "Wi-Fi is down: the relay connection is closed"), "and the half-open relay connection is closed with it");
-    TEST_ASSERT(logged('I', "Wi-Fi back on 'extender-1'"), "the return is logged");
+    TEST_ASSERT(logged('I', "Wi-Fi back on 'ex***-1'"), "the return is logged");
     TEST_ASSERT_EQ(WiFiClient::connects, 2, "and a fresh connection is made at once when it is back");
     TEST_ASSERT(g_taskDelays.size() == 5 && g_taskDelays[2] == 500 && g_taskDelays[3] == 500 && g_taskDelays[4] == 10, "slow polling while down, quick again when up");
 }
@@ -968,7 +968,7 @@ TEST(ann_heartbeat_sets_how_often_the_status_lines_come) {
     runNetworkTask(500);                                // 5 s
     int boardLines = 0, linkLines = 0;
     for (size_t i = 0; i < g_rlog.size(); i++) {
-        if (has(g_rlog[i].text, "heartbeat: Wi-Fi 'extender-1'")) boardLines++;
+        if (has(g_rlog[i].text, "heartbeat: Wi-Fi 'ex***-1'")) boardLines++;
         if (has(g_rlog[i].text, "heartbeat: relay link")) linkLines++;
     }
     TEST_ASSERT_EQ(boardLines, 2, "a board line at 2 s and at 4 s");
