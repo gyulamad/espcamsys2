@@ -3,7 +3,8 @@
 // test_dashboard_simple_pages_e2e.js — the two simple camera pages (simple-list.php, simple-view.php) and
 // the dashboard buttons that lead to them, against a REAL PHP server (php -S) with a generated config.php.
 // Checks that:
-//   - the dashboard has the SIMPLE LIST and SIMPLE VIEW buttons, and both pages need the dashboard login
+//   - every page behind the login has the navigation bar (dashboard, simple view, simple list), and both simple pages
+//     need the dashboard login
 //   - the list shows every camera as a thumbnail of stream.php that links to its large view, with the
 //     safe headers, the scripts and the logic file it needs, and nothing of the relay's address
 //   - the dashboard's pictures are links to their camera's large view (no full-screen click there any more);
@@ -137,9 +138,15 @@ async function main() {
 
     // ── the way in: the dashboard's buttons, and the login ──────────
     let r = await get('index.php');
-    check('the dashboard has a SIMPLE LIST button (a plain link to simple-list.php) and a SIMPLE VIEW button (to simple-view.php)',
-      r.status === 200 && /<a class="btn" id="btn-simple-list" href="simple-list\.php"[^>]*>[^<]*SIMPLE LIST<\/a>/.test(r.text)
-      && /<a class="btn" id="btn-simple-view" href="simple-view\.php"[^>]*>[^<]*SIMPLE VIEW<\/a>/.test(r.text), detail(r));
+    const NAV_LINKS = /<nav class="site-nav" aria-label="Pages"><a class="nav-link[^"]*" href="\.\/"[^>]*>[^<]*DASHBOARD<\/a><a class="nav-link[^"]*" href="simple-view\.php"[^>]*>[^<]*SIMPLE VIEW<\/a><a class="nav-link[^"]*" href="simple-list\.php"[^>]*>[^<]*SIMPLE LIST<\/a><\/nav>/;
+    check('the dashboard has the navigation bar (dashboard, simple view, simple list) as the first thing in its body, marked as the current page, and its old SIMPLE LIST / SIMPLE VIEW buttons are gone',
+      r.status === 200 && /<body>\s*<nav class="site-nav"/.test(r.text) && NAV_LINKS.test(r.text) && r.text.includes('class="nav-link current" href="./" aria-current="page"')
+      && !r.text.includes('id="btn-simple-list"') && !r.text.includes('id="btn-simple-view"') && r.text.includes('.site-nav { position: sticky; top: 0;'), detail(r));
+    for (const page of ['all-recordings.php', 'settings-page.php', 'camera-settings-page.php?cam=cam-a']) {
+      const n = await get(page);
+      check(`${page}: the navigation bar is on it, none of its links is marked, and the old "← DASHBOARD" button is gone`,
+        n.status === 200 && /<body>\s*<nav class="site-nav"/.test(n.text) && NAV_LINKS.test(n.text) && !n.text.includes('aria-current') && !n.text.includes('← DASHBOARD') && n.text.includes('.site-nav { position: sticky; top: 0;'), detail(n));
+    }
     const links = (id) => new RegExp(`<a class="stream-link" href="simple-view\\.php\\?cam=${id}"[^>]*>\\s*<img data-cam="${id}"[^>]*id="img-${id}"`);
     check('dashboard: every camera\'s picture is a link to that camera\'s large view, and a click there no longer goes full screen',
       ['cam-a', 'cam-b', 'cam-c'].every((id) => links(id).test(r.text)) && !r.text.includes('toggleStreamFullscreen') && !/<img[^>]*class="stream"[^>]*onclick=/.test(r.text), detail(r));
@@ -159,7 +166,8 @@ async function main() {
       && ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`href="simple-view.php?cam=${id}"`) && r.text.includes(`src="stream.php?cam=${id}"`)), thumbs.join(' | '));
     check('list: each caption starts with that camera\'s own icon', r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚪</span>Cam A</span>')
       && r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚗</span>Cam B</span>'), r.text.slice(0, 200));
-    check('list: the cameras\' names are the captions, and there is a way back to the dashboard', /Cam A/.test(r.text) && /Cam C/.test(r.text) && /href="\.\/"/.test(r.text));
+    check('list: the cameras\' names are the captions, and the navigation bar (list marked) is the way to the other pages — no second back button', /Cam A/.test(r.text) && /Cam C/.test(r.text)
+      && /<body class="simple-list">\s*<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-list.php" aria-current="page"') && !r.text.includes('← DASHBOARD'));
     check('list: loads simple-logic.js and simple-list.js, no inline handler, nothing of the relay\'s address',
       r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
 
@@ -181,6 +189,8 @@ async function main() {
     check('view: the icon of the camera is in front of its name', r.text.includes('<span class="cam-icon" id="cam-icon" aria-hidden="true">🚪</span><span id="cam-name">Cam A</span>'), r.text.slice(0, 200));
     check('view: the slideshow\'s time-left indicator (bar and seconds) is on the page, hidden until the slideshow runs',
       r.text.includes('id="countdown-bar" aria-hidden="true" hidden>') && /id="countdown"[^>]*\shidden>/.test(r.text) && r.text.includes('id="countdown-fill"'), r.text.slice(0, 200));
+    check('view: the navigation bar (view marked) is on the page and the status line has no dashboard / list buttons of its own',
+      /<body class="simple-view">\s*<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-view.php" aria-current="page"') && !r.text.includes('▦ LIST') && !r.text.includes('>DASHBOARD<'), r.text.slice(0, 200));
     check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture rec-frame" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);

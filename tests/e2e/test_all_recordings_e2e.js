@@ -97,7 +97,7 @@ async function main() {
     const page = await dash('GET', 'all-recordings.php');
     check('the page loads', page.status === 200, String(page.status));
     check('the page carries the footage list script and the file-name rule', page.text.includes('CamRecordingsList') && page.text.includes('CamRecordingsList.SAFE_FILENAME = new RegExp('));
-    check('the page has its list panel and a way back to the dashboard', page.text.includes('id="files-all"') && page.text.includes('href="index.php"'));
+    check('the page has its list panel and the navigation bar with the way back to the dashboard', page.text.includes('id="files-all"') && page.text.includes('<a class="nav-link" href="./"'));
     check('both cameras are handed to the page', page.text.includes('"cam-a"') && page.text.includes('"cam-b"') && page.text.includes('Front door'));
     check('a hostile camera name cannot end the script or become markup', !page.text.includes(EVIL_NAME) && !page.text.includes('<img src=x'), 'the raw name is on the page');
     check('the lib/ folder is not asked for by the page (its script is inlined)', !/src="lib\//.test(page.text));

@@ -843,7 +843,9 @@ A person detector no longer streams all the time. The sensor values and the smal
 - The simple view's SLIDESHOW switches the live view on for all detectors by itself.
 - Re-flash the person detector sketch and update the relay and the dashboard together.
 
-## The simple camera pages (dashboard → ▦ SIMPLE LIST / ▣ SIMPLE VIEW)
+## The navigation bar and the simple camera pages (▣ SIMPLE VIEW / ▦ SIMPLE LIST)
+
+Every page behind the login starts with a **navigation bar** that stays at the top of the window: **⊞ DASHBOARD**, **▣ SIMPLE VIEW** and **▦ SIMPLE LIST**, the current page highlighted. It is the only place with these links (the pages have no back buttons of their own). It is hidden while a picture or a recording plays full screen.
 
 Two plain pages for a wall screen or a quick look, behind the same login as the dashboard:
 

@@ -231,7 +231,8 @@ camtest_test('simpleViewPage: the picture, pager, status line and slideshow butt
     }
     camtest_assert_true(strpos($html, 'RECORDING: –') !== false, 'unknown until the relay has been asked');
     camtest_assert_true(strpos($html, '<title>Garage — ESP32-CAM Dashboard</title>') !== false);
-    camtest_assert_true(strpos($html, 'href="simple-list.php"') !== false && strpos($html, 'href="./"') !== false, 'ways back');
+    camtest_assert_true(strpos($html, 'class="nav-link" href="simple-list.php"') !== false && strpos($html, 'class="nav-link" href="./"') !== false, 'the navigation bar leads to the other pages');
+    camtest_assert_true(strpos($html, '>▦ LIST<') === false && strpos($html, '>DASHBOARD<') === false, 'no second copy of those links in the status line');
     camtest_assert_true(strpos($html, '<script src="js/simple-view.js">') !== false && strpos($html, 'js/simple-logic.js') !== false);
 });
 
@@ -396,6 +397,64 @@ camtest_test('simple view: the bar runs out smoothly, and holds still for reduce
     camtest_assert_true(strpos(layout_css_rule($html, '.countdown-fill'), 'transition: width 1s linear') !== false);
     camtest_assert_true(preg_match('/prefers-reduced-motion: reduce\) \{ \.countdown-fill \{ transition: none; \} \}/', $html) === 1);
     camtest_assert_true(strpos(CamLayout::simpleListPage($SIMPLE_CAMS), 'id="countdown') === false);
+});
+
+// ── the navigation bar ───────────────────────────────────────────────
+
+camtest_test('navBar: the three pages in a fixed order, as plain links with a hint', function () {
+    $html = CamLayout::navBar(null);
+    camtest_assert_true(strpos($html, '<nav class="site-nav" aria-label="Pages">') === 0);
+    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)"/', $html, $m), 3);
+    camtest_assert_equal($m[1], ['./', 'simple-view.php', 'simple-list.php']);
+    camtest_assert_true(preg_match_all('/ title="[^"]+"/', $html) === 3, 'every link says where it goes');
+    camtest_assert_true(strpos($html, 'aria-current') === false && strpos($html, ' current') === false, 'a page that is none of them marks nothing');
+});
+
+camtest_test('navBar: the page that shows it is marked (class and aria-current), and only that one', function () {
+    foreach (['dashboard' => './', 'simple-view' => 'simple-view.php', 'simple-list' => 'simple-list.php'] as $key => $href) {
+        $html = CamLayout::navBar($key);
+        camtest_assert_equal(substr_count($html, 'aria-current="page"'), 1, $key);
+        camtest_assert_true(strpos($html, '<a class="nav-link current" href="' . $href . '" aria-current="page"') !== false, $key);
+    }
+    camtest_assert_equal(substr_count(CamLayout::navBar('nonsense'), 'aria-current'), 0, 'an unknown key marks nothing');
+});
+
+camtest_test('navBarStyle: stays at the top (sticky), below the full-screen player, with a fixed height the pages leave room for', function () {
+    $css = CamLayout::navBarStyle();
+    camtest_assert_true(strpos($css, ':root { --nav-h: 44px; }') !== false);
+    $rule = layout_css_rule('<style>' . $css . '</style>', '.site-nav');
+    foreach (['position: sticky', 'top: 0', 'z-index: 900', 'height: var(--nav-h)'] as $needle) {
+        camtest_assert_true(strpos($rule, $needle) !== false, $needle);
+    }
+    camtest_assert_true(strpos($css, '.nav-link.current') !== false);
+});
+
+camtest_test('simple pages: the navigation bar is the first thing in the body, marked for that page, and the style is in the page', function () use ($SIMPLE_CAMS) {
+    $list = CamLayout::simpleListPage($SIMPLE_CAMS);
+    $view = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_true(strpos($list, "<body class=\"simple-list\">\n" . CamLayout::navBar('simple-list')) !== false);
+    camtest_assert_true(strpos($view, "<body class=\"simple-view\">\n" . CamLayout::navBar('simple-view')) !== false);
+    foreach ([$list, $view] as $html) camtest_assert_true(strpos($html, '.site-nav {') !== false);
+    // the empty view has it too: the way out of a page with nothing on it
+    camtest_assert_true(strpos(CamLayout::simpleViewPage([], null, 10), CamLayout::navBar('simple-view')) !== false);
+    camtest_assert_true(strpos(CamLayout::simpleListPage([]), CamLayout::navBar('simple-list')) !== false);
+});
+
+camtest_test('simple pages: no second set of links to the dashboard / list / view (the bar is the only one)', function () use ($SIMPLE_CAMS) {
+    foreach ([CamLayout::simpleListPage($SIMPLE_CAMS), CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), CamLayout::simpleViewPage([], null, 10)] as $html) {
+        camtest_assert_true(strpos($html, 'class="btn" href=') === false, 'no .btn link left');
+        camtest_assert_equal(substr_count($html, 'href="./"'), 1);
+    }
+});
+
+camtest_test('simple view: the page fills the window below the bar, not the whole window', function () use ($SIMPLE_CAMS) {
+    $rule = layout_css_rule(CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), '.simple-view-root');
+    camtest_assert_true(strpos($rule, 'height: calc(100vh - var(--nav-h))') !== false && strpos($rule, 'height: calc(100dvh - var(--nav-h))') !== false);
+    camtest_assert_true(strpos($rule, 'height: 100vh') === false);
+});
+
+camtest_test('the logged-out page has no navigation bar (its links would only ask for the login again)', function () {
+    camtest_assert_true(strpos(CamLayout::loggedOutPage(), 'site-nav') === false);
 });
 
 exit(camtest_summarize());

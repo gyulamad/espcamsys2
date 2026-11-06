@@ -443,13 +443,13 @@ test('view: the slideshow time falls back to 10 s when the page does not give a 
 // ── simple-list.js ───────────────────────────────────────────────────
 
 const THUMB_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
-function listEnv(count, { width = 1024, height = 768, relayJson = true } = {}) {
+function listEnv(count, { width = 1024, height = 768, relayJson = true, navHeight = 44 } = {}) {
   const env = makeEnv({ relayJson });
   // one thumbnail per camera, as the page has them: an element that carries its camera id in data-cam
   env.thumbs = Array.from({ length: count }, (_, i) => makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i } }));
   const grid = makeEl({ dataset: { count: String(count) }, children: env.thumbs });
   env.document.getElementById = (id) => (id === 'thumbs' ? grid : null);
-  env.document.querySelector = (sel) => (sel === '.bar' ? { offsetHeight: 48 } : null);
+  env.document.querySelector = (sel) => ({ '.bar': { offsetHeight: 48 }, '.site-nav': navHeight === null ? null : { offsetHeight: navHeight } }[sel] || null);
   env.document.documentElement.clientWidth = width;
   env.grid = grid;
   env.height = height;
@@ -459,10 +459,22 @@ function listEnv(count, { width = 1024, height = 768, relayJson = true } = {}) {
 test('list: sizes the thumbnails to the screen through CamSimple.fitThumbnails and marks the grid as fitted', () => {
   const env = listEnv(6, { width: 1024, height: 768 });
   load(env, 'simple-list.js');
-  const expected = CamSimple.fitThumbnails({ width: 1024 - 24, height: 800 - 48 - 12, count: 6, aspect: 4 / 3, gap: 8, minWidth: 160 });
+  const expected = CamSimple.fitThumbnails({ width: 1024 - 24, height: 800 - 44 - 48 - 12, count: 6, aspect: 4 / 3, gap: 8, minWidth: 160 });
   assertEqual(env.grid.style.props['--thumb-w'], expected.width + 'px');
   assertEqual(env.grid.style.props['--cols'], String(expected.cols));
   assertTrue(env.grid.classList.contains('fitted'));
+});
+
+test('list: the room the thumbnails get is the window minus the navigation bar and the count line', () => {
+  const room = (navHeight) => {
+    const env = listEnv(6, { navHeight });
+    load(env, 'simple-list.js');
+    return env.grid.style.props['--thumb-w'];
+  };
+  const fitFor = (above) => CamSimple.fitThumbnails({ width: 1000, height: 800 - above - 12, count: 6, aspect: 4 / 3, gap: 8, minWidth: 160 }).width + 'px';
+  assertEqual(room(44), fitFor(44 + 48));
+  assertEqual(room(70), fitFor(70 + 48), 'a taller bar (a large font) takes more');
+  assertEqual(room(null), fitFor(44 + 48), 'no bar element found: its designed height');
 });
 
 test('list: sizes again when the window changes size', () => {

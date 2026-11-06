@@ -82,6 +82,44 @@ class CamLayout
 CSS;
     }
 
+    // The pages the navigation bar leads to: key (what a page passes as its own), address, label, hint.
+    private const NAV_PAGES = [
+        ['dashboard', './', '⊞ DASHBOARD', 'All cameras with their controls'],
+        ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen'],
+        ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large'],
+    ];
+
+    // The navigation bar at the top of every page after the login: one place to go to the dashboard, the simple
+    // view and the simple list (and the only place that has these links). $active: the key of the page that
+    // shows it, or null on a page that is none of them (the settings, the file list): no link is marked then.
+    public static function navBar(?string $active): string
+    {
+        $links = '';
+        foreach (self::NAV_PAGES as [$key, $href, $label, $hint]) {
+            $current = $key === $active;
+            $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '"'
+                . ($current ? ' aria-current="page"' : '') . ' title="' . self::esc($hint) . '">' . self::esc($label) . '</a>';
+        }
+        return '<nav class="site-nav" aria-label="Pages">' . $links . "</nav>\n";
+    }
+
+    // Its style. It stays at the top of the window while the page scrolls (below a full-screen player, which
+    // covers the whole window on purpose, z-index 1000) and has a fixed height (--nav-h), so a page that fills the
+    // window (the simple view, the simple list) can leave exactly that much room for it. Needs the page's
+    // --surface --border --border-light --text --accent --mono.
+    public static function navBarStyle(): string
+    {
+        return <<<'CSS'
+  :root { --nav-h: 44px; }
+  .site-nav { position: sticky; top: 0; z-index: 900; display: flex; gap: 8px; align-items: center; height: var(--nav-h); padding: 0 12px;
+              background: var(--surface); border-bottom: 1px solid var(--border); font-family: var(--mono); overflow-x: auto; }
+  .nav-link { flex: 0 0 auto; padding: 5px 14px; font-size: .85rem; letter-spacing: .06em; color: var(--text); text-decoration: none;
+              border: 1px solid var(--border-light); border-radius: 6px; white-space: nowrap; }
+  .nav-link:hover, .nav-link:focus-visible { border-color: var(--accent); color: var(--accent); }
+  .nav-link.current { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,.08); }
+CSS . "\n";
+    }
+
     // The frame around a camera's picture, one copy for the dashboard, the simple view and the simple list.
     // It is always there, so nothing moves when it lights up, but transparent until the camera records: the
     // page then sets the class "recording" on the frame and it blinks red. Needs the page's --accent2.
@@ -209,6 +247,7 @@ HTML;
     }
 
     // The frame both simple pages share: the dashboard's look, a title, $body, and the scripts (file names in js/).
+    // $bodyClass is also the page's key in the navigation bar (NAV_PAGES): 'simple-list' or 'simple-view'.
     private static function simplePage(string $title, string $bodyClass, string $body, array $scripts): string
     {
         $tags = '';
@@ -220,7 +259,7 @@ HTML;
             . '<title>' . self::esc($title) . " — ESP32-CAM Dashboard</title>\n"
             . '<link rel="stylesheet" href="fonts/fonts.css">' . "\n"
             . "<style>\n" . self::simpleCss() . "</style>\n</head>\n"
-            . '<body class="' . self::esc($bodyClass) . "\">\n" . $body . "\n" . $tags
+            . '<body class="' . self::esc($bodyClass) . "\">\n" . self::navBar($bodyClass) . $body . "\n" . $tags
             . self::storageWarningScript() . "\n</body>\n</html>\n";
     }
 
@@ -249,7 +288,7 @@ HTML;
   .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* the large view: the picture takes everything the status line leaves */
-  .simple-view-root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  .simple-view-root { height: calc(100vh - var(--nav-h)); height: calc(100dvh - var(--nav-h)); display: flex; flex-direction: column; overflow: hidden; }
   /* The picture fills ALL the room the status line leaves, however big the screen and however small the stream:
      max-width / max-height would only ever shrink it, never enlarge it. The image is laid over the whole area
      and object-fit: contain keeps its shape (black bars where the shapes differ). */
@@ -270,7 +309,7 @@ HTML;
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
   .status .rec-off { color: var(--muted); }
-CSS . "\n" . self::recordingFrameStyle();
+CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
     }
 
     // The camera's icon in front of its name, as the page shows both. The icon is decoration (the name says it
@@ -290,7 +329,7 @@ CSS . "\n" . self::recordingFrameStyle();
                 . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
                 . '<span class="cap">' . self::iconSpan($cam['icon']) . self::esc($cam['name']) . '</span></a>';
         }
-        $body = '<div class="bar"><a class="btn" href="./">← DASHBOARD</a><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
+        $body = '<div class="bar"><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
         return self::simplePage('Cameras', 'simple-list', $body, ['simple-logic.js', 'relay-json.js', 'simple-list.js']);
     }
@@ -300,7 +339,7 @@ CSS . "\n" . self::recordingFrameStyle();
     public static function simpleViewPage(array $cameras, ?array $current, int $slideshowSeconds): string
     {
         if ($current === null) {
-            return self::simplePage('Camera', 'simple-view', '<p class="empty">No cameras are configured.</p><p class="empty"><a class="btn" href="./">← DASHBOARD</a></p>', []);
+            return self::simplePage('Camera', 'simple-view', '<p class="empty">No cameras are configured.</p>', []);
         }
         $summary = CamLogic::cameraSummaries([$current])[0];
         $data = ' data-cameras="' . self::esc(json_encode(CamLogic::cameraSummaries($cameras), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"'
@@ -318,8 +357,6 @@ CSS . "\n" . self::recordingFrameStyle();
             . '<span class="countdown" id="countdown" title="Time left before the slideshow shows the next camera" hidden></span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
-            . '<a class="btn" href="simple-list.php">▦ LIST</a>'
-            . '<a class="btn" href="./">DASHBOARD</a>'
             . '</div></div>';
         return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'simple-view.js']);
     }

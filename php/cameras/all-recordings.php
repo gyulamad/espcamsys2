@@ -53,16 +53,17 @@ $cameraLabelsJson = json_encode(
     header, main { padding-left: 16px; padding-right: 16px; }
   }
 <?= CamLayout::recordingsListStyle() ?>
+<?= CamLayout::navBarStyle() ?>
 </style>
 </head>
 <body>
+<?= CamLayout::navBar(null) ?>
 <header>
   <div>
     <h1>📼 ALL FILES</h1>
     <p>Every camera · newest first</p>
   </div>
   <div class="header-actions">
-    <a class="btn" href="index.php">← DASHBOARD</a>
     <button class="btn" id="btn-refresh" type="button" title="Load the list again">↺ REFRESH</button>
     <?= CamLayout::logoutForm() ?>
   </div>

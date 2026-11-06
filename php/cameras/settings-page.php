@@ -76,16 +76,17 @@ require_once __DIR__ . '/lib/Layout.php';
     header, main, .savebar { padding-left: 16px; padding-right: 16px; }
     .row { grid-template-columns: 1fr; } .help { grid-column: 1; }
   }
+<?= CamLayout::navBarStyle() ?>
 </style>
 </head>
 <body>
+<?= CamLayout::navBar(null) ?>
 <header>
   <div>
     <h1>⚙ SETTINGS</h1>
     <p>Main system · relay and dashboard</p>
   </div>
   <div class="header-actions">
-    <a class="btn" href="index.php">← DASHBOARD</a>
     <?= CamLayout::logoutForm() ?>
   </div>
 </header>

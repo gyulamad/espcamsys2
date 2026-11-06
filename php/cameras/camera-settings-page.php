@@ -58,16 +58,17 @@ require_once __DIR__ . '/lib/Layout.php';
   #status { font-family: var(--mono); font-size: .75rem; flex: 1; min-width: 200px; }
   #status.err { color: var(--accent2); } #status.ok { color: var(--ok); } #status.busy { color: var(--warn); }
   @media (max-width: 700px) { header, main, .savebar { padding-left: 16px; padding-right: 16px; } .row { grid-template-columns: 1fr; } .help { grid-column: 1; } }
+<?= CamLayout::navBarStyle() ?>
 </style>
 </head>
 <body>
+<?= CamLayout::navBar(null) ?>
 <header>
   <div>
     <h1>⚙ <span id="title">CAMERA</span></h1>
     <p id="subtitle">Camera settings</p>
   </div>
   <div class="header-actions">
-    <a class="btn" href="index.php">← DASHBOARD</a>
     <?= CamLayout::logoutForm() ?>
   </div>
 </header>
