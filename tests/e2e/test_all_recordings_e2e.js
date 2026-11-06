@@ -9,7 +9,7 @@
 //     camera answers its own list, and a camera that is not configured is refused
 //   - the page's DELETE goes through recordings.php too: it is refused without the dashboard header, and with
 //     it reaches the relay for that camera and file only
-//   - the dashboard's header has the ALL FILES link to the page
+//   - the dashboard's navigation bar has the ALL FILES link to the page
 //
 // Needs `php` on PATH (skips if not). Own ports, throwaway folders. Core modules only.
 // Usage:  node tests/e2e/test_all_recordings_e2e.js     Exit code 0 if all passed (or php is missing).
@@ -97,15 +97,16 @@ async function main() {
     const page = await dash('GET', 'all-recordings.php');
     check('the page loads', page.status === 200, String(page.status));
     check('the page carries the footage list script and the file-name rule', page.text.includes('CamRecordingsList') && page.text.includes('CamRecordingsList.SAFE_FILENAME = new RegExp('));
-    check('the page has its list panel and the navigation bar with the way back to the dashboard', page.text.includes('id="files-all"') && page.text.includes('<a class="nav-link" href="./"'));
+    check('the page has its list panel and the navigation bar with the way back to the dashboard', page.text.includes('id="files-all"') && page.text.includes('href="./?layout=grid"'));
     check('both cameras are handed to the page', page.text.includes('"cam-a"') && page.text.includes('"cam-b"') && page.text.includes('Front door'));
     check('a hostile camera name cannot end the script or become markup', !page.text.includes(EVIL_NAME) && !page.text.includes('<img src=x'), 'the raw name is on the page');
     check('the lib/ folder is not asked for by the page (its script is inlined)', !/src="lib\//.test(page.text));
-    check('the page has a LOG OUT button', page.text.includes('action="logout.php"'));
+    check('the page has a LOG OUT button (in the navigation bar, once)', (page.text.match(/<nav class="site-nav"[\s\S]*action="logout\.php"[\s\S]*<\/nav>/g) || []).length === 1 && (page.text.match(/action="logout\.php"/g) || []).length === 1);
+    check('the page is marked as the current one in the bar, and offers DELETE ALL itself (the dashboard has no such button any more)', page.text.includes('data-nav="all-files" aria-current="page"') && page.text.includes('deleteAllConfirm:'));
 
     // the dashboard links to it
     const home = await dash('GET', 'index.php');
-    check('the dashboard header has the ALL FILES link', home.status === 200 && home.text.includes('id="btn-all-files"') && home.text.includes('href="all-recordings.php"'));
+    check('the dashboard\'s navigation bar has the ALL FILES link (and no second one in the header)', home.status === 200 && home.text.includes('data-nav="all-files"') && home.text.includes('href="all-recordings.php"') && !home.text.includes('id="btn-all-files"'));
     check('…and the dashboard still carries the same list script (one copy, shared)', home.text.includes('CamRecordingsList.SAFE_FILENAME = new RegExp('));
 
     // what the page reads: each camera's own list through recordings.php

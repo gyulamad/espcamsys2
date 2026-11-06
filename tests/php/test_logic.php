@@ -61,6 +61,16 @@ camtest_test('findCameraById returns null when there is no match', function () {
     camtest_assert_equal(CamLogic::findCameraById([['id' => 'cam1']], 'camX'), null);
 });
 
+// ── dashboardLayout ──────────────────────────────────────────────────
+
+camtest_test('dashboardLayout: only grid and list are accepted', function () {
+    camtest_assert_equal(CamLogic::dashboardLayout('grid'), 'grid');
+    camtest_assert_equal(CamLogic::dashboardLayout('list'), 'list');
+    foreach ([null, '', 'GRID', 'table', 'grid ', ['list'], 1, false] as $bad) {
+        camtest_assert_equal(CamLogic::dashboardLayout($bad), null, var_export($bad, true));
+    }
+});
+
 // ── computeGridColumns ───────────────────────────────────────────────
 
 camtest_test('computeGridColumns: a single camera gets one column', function () {

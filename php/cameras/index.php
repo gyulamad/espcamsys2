@@ -5,6 +5,7 @@ require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/lib/Layout.php';
 require_once __DIR__ . '/relay.php';
 $count = count($cameras);
+$dashboardLayout = CamLogic::dashboardLayout($_GET['layout'] ?? null);
 $cols  = CamLogic::computeGridColumns($count);
 
 // Pictures through ONE mux.php connection (config.php 'mux_enabled') or one stream.php per camera.
@@ -430,7 +431,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </style>
 </head>
 <body>
-<?= CamLayout::navBar('dashboard') ?>
+<?= CamLayout::navBar('dashboard-' . ($dashboardLayout ?? 'grid')) ?>
 <header>
   <div class="logo">
     <div class="logo-icon">📷</div>
@@ -447,19 +448,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   </div>
 
   <div class="controls">
-    <button class="btn active" id="btn-grid" onclick="setLayout('grid')">⊞ GRID</button>
-    <button class="btn"        id="btn-list" onclick="setLayout('list')">☰ LIST</button>
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
     <a class="btn" id="btn-settings" href="settings-page.php"
        title="Settings of the whole system: recording lengths, relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
-    <?= CamLayout::allFilesLink('btn') ?>
-    <?= CamLayout::logoutForm() ?>
     <span class="record-controls">
       <button class="btn" id="btn-record-all" onclick="recordAll()"
               title="Record every camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it by that many seconds from now">⏺ RECORD ALL</button>
       <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
-      <button class="btn danger" id="btn-delete-all" onclick="deleteAllRecordingsEverywhere()"
-              title="Delete every saved recording, for every camera">🗑 DELETE ALL FOOTAGE</button>
     </span>
     <span class="switch-controls" id="switch-all"
           title="Switch recording OFF while people are on site, so nothing is recorded for no reason. Applies to every camera the relay currently knows; each camera can then be changed on its own.">
@@ -607,6 +602,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </footer>
 
 <?= CamLayout::recordingsListScript() ?>
+<script src="js/dashboard-layout.js"></script>
 <?php if ($muxEnabled): ?>
 <script src="js/mux-codec.js"></script>
 <script src="js/mux-client.js"></script>
@@ -1288,26 +1284,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   // </recordings-panels>
 
-  // Global "DELETE ALL FOOTAGE" button — fans out a deleteAll request to
-  // every configured camera, same pattern as recordAll()/stopRecordAll().
-  async function deleteAllRecordingsEverywhere() {
-    if (!confirm('Delete ALL recordings for EVERY camera? This cannot be undone.')) return;
-    const btn = document.getElementById('btn-delete-all');
-    btn.disabled = true;
-    try {
-      await withLiveViewPaused(async () => {
-        await Promise.all(getAllCameraIds().map(id =>
-          CamRecordingsList.post(id, 'deleteAll=1', fetch).catch(() => null)
-        ));
-        // Refresh any panels currently open so deleted files disappear immediately.
-        await Promise.all(getAllCameraIds().map(refreshRecordingsList));
-        await pollAllStatuses(); // update the FILES counts of cameras whose list panel is closed right away
-      });
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
   // ── Status polling — the single mechanism that keeps the dashboard in
   // sync with state that can change on the relay without this browser tab
   // being the one that caused it: another tab, another user, or a
@@ -1970,15 +1946,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   pollAllStatuses();
   setInterval(pollStatusesUnlessLive, STATUS_POLL_MS);
 
-  // ── Layout toggle ──
-  function setLayout(mode) {
-    document.getElementById('grid').classList.toggle('layout-list', mode === 'list');
-    document.getElementById('btn-grid').classList.toggle('active', mode === 'grid');
-    document.getElementById('btn-list').classList.toggle('active', mode === 'list');
-    localStorage.setItem('esp32-layout', mode);
+  // ── Layout: DASHBOARD GRID / DASHBOARD LIST of the navigation bar (js/dashboard-layout.js) ──
+  if (window.CamDashboardLayout) {
+    CamDashboardLayout.wire({ document, location, history, storage: localStorage });
   }
-  const saved = localStorage.getItem('esp32-layout');
-  if (saved) setLayout(saved);
 </script>
 <?= CamLayout::storageWarningScript() ?>
 </body>

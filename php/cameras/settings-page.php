@@ -26,7 +26,6 @@ require_once __DIR__ . '/lib/Layout.php';
     display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
     padding: 18px 32px; border-bottom: 1px solid var(--border); background: var(--surface);
   }
-  .header-actions { display: flex; align-items: center; gap: 8px; }
   header h1 { font-family: var(--mono); font-size: 1.1rem; letter-spacing: .12em; color: var(--accent); }
   header p { font-size: .72rem; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
   .btn {
@@ -87,9 +86,6 @@ require_once __DIR__ . '/lib/Layout.php';
   <div>
     <h1>⚙ SETTINGS</h1>
     <p>Main system · relay and dashboard</p>
-  </div>
-  <div class="header-actions">
-    <?= CamLayout::logoutForm() ?>
   </div>
 </header>
 

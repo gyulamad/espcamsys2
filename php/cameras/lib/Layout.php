@@ -83,24 +83,29 @@ CSS;
     }
 
     // The pages the navigation bar leads to: key (what a page passes as its own), address, label, hint.
+    // The dashboard has two entries: its grid and its list layout (the page honours ?layout=, see
+    // CamLogic::dashboardLayout()). The bar's links are the only ones to these pages.
     private const NAV_PAGES = [
-        ['dashboard', './', '⊞ DASHBOARD', 'All cameras with their controls'],
+        ['dashboard-grid', './?layout=grid', '⊞ DASHBOARD GRID', 'All cameras as a grid, with their controls'],
+        ['dashboard-list', './?layout=list', '☰ DASHBOARD LIST', 'All cameras as a list, with their controls'],
         ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen'],
         ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large'],
+        ['all-files', 'all-recordings.php', '📼 ALL FILES', 'Every saved recording of every camera in one list, newest first; delete all footage from there'],
     ];
 
-    // The navigation bar at the top of every page after the login: one place to go to the dashboard, the simple
-    // view and the simple list (and the only place that has these links). $active: the key of the page that
-    // shows it, or null on a page that is none of them (the settings, the file list): no link is marked then.
+    // The navigation bar at the top of every page after the login: one place to go to the dashboard (grid or
+    // list), the simple view, the simple list and the file list (and the only place that has these links), and
+    // LOG OUT at its right end. $active: the key of the page that shows it, or null on a page that is none of
+    // them (the settings): no link is marked then.
     public static function navBar(?string $active): string
     {
         $links = '';
         foreach (self::NAV_PAGES as [$key, $href, $label, $hint]) {
             $current = $key === $active;
-            $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '"'
+            $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '" data-nav="' . self::esc($key) . '"'
                 . ($current ? ' aria-current="page"' : '') . ' title="' . self::esc($hint) . '">' . self::esc($label) . '</a>';
         }
-        return '<nav class="site-nav" aria-label="Pages">' . $links . "</nav>\n";
+        return '<nav class="site-nav" aria-label="Pages">' . $links . self::logoutForm('nav-link nav-logout') . "</nav>\n";
     }
 
     // Its style. It stays at the top of the window while the page scrolls (below a full-screen player, which
@@ -117,6 +122,8 @@ CSS;
               border: 1px solid var(--border-light); border-radius: 6px; white-space: nowrap; }
   .nav-link:hover, .nav-link:focus-visible { border-color: var(--accent); color: var(--accent); }
   .nav-link.current { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,.08); }
+  .site-nav .logout-form { margin-left: auto; flex: 0 0 auto; }
+  .nav-logout { font-family: var(--mono); background: transparent; cursor: pointer; }
 CSS . "\n";
     }
 
@@ -173,21 +180,13 @@ CSS . "\n";
         return "<script>\n" . $js . "\nCamRecordingsList.SAFE_FILENAME = new RegExp(" . $rule . ");\n</script>";
     }
 
-    // The ALL FILES button of the dashboard header: a plain link to the page that lists the footage of
-    // every camera (works without JavaScript).
-    public static function allFilesLink(string $btnClass): string
-    {
-        return '<a class="' . htmlspecialchars($btnClass, ENT_QUOTES) . '" id="btn-all-files" href="all-recordings.php"'
-            . ' title="Every saved recording of every camera in one list, newest first">📼 ALL FILES</a>';
-    }
-
     // The LOG OUT button. A real <form> POST to logout.php — not a link (a link can be triggered by
     // another website or a prefetch) and not JavaScript (so it works with scripts blocked). The
     // browser's own same-origin headers are what logout.php checks, see CamLogic::logoutRefusalStatus().
-    public static function logoutForm(): string
+    public static function logoutForm(string $btnClass = 'btn'): string
     {
         return '<form class="logout-form" method="post" action="logout.php">'
-            . '<button class="btn" type="submit" title="Log out: this browser forgets the dashboard login">⏻ LOG OUT</button>'
+            . '<button class="' . self::esc($btnClass) . '" type="submit" title="Log out: this browser forgets the dashboard login">⏻ LOG OUT</button>'
             . '</form>';
     }
 

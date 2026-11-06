@@ -57,7 +57,7 @@ $cameraLabelsJson = json_encode(
 </style>
 </head>
 <body>
-<?= CamLayout::navBar(null) ?>
+<?= CamLayout::navBar('all-files') ?>
 <header>
   <div>
     <h1>📼 ALL FILES</h1>
@@ -65,7 +65,6 @@ $cameraLabelsJson = json_encode(
   </div>
   <div class="header-actions">
     <button class="btn" id="btn-refresh" type="button" title="Load the list again">↺ REFRESH</button>
-    <?= CamLayout::logoutForm() ?>
   </div>
 </header>
 

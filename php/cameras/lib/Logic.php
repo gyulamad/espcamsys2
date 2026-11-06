@@ -321,6 +321,13 @@ class CamLogic
         }, array_values($cameras));
     }
 
+    // The dashboard's layout asked for with ?layout=: 'grid' or 'list'; anything else (missing, another word,
+    // an array) is null, and the page then keeps the layout the browser remembered.
+    public static function dashboardLayout($raw): ?string
+    {
+        return $raw === 'grid' || $raw === 'list' ? $raw : null;
+    }
+
     // Grid column count for the dashboard: 1 camera -> 1 column, up to 4 ->
     // 2 columns, more than that -> 3 columns. Pure presentation logic, but
     // easy to get subtly wrong at the boundaries, so worth pinning down.

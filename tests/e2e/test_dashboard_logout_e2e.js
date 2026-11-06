@@ -132,10 +132,10 @@ async function main() {
     // ── the button is on every page that has a header ───────────────
     for (const page of PAGES) {
       const r = await req('GET', page);
-      const header = (r.text.match(/<header[\s\S]*?<\/header>/) || [''])[0];
-      const forms = header.match(/<form class="logout-form" method="post" action="logout\.php">[\s\S]*?<\/form>/g) || [];
-      check(`${page}: loads (200) and its header has exactly one LOG OUT form (a POST, no script)`,
-        r.status === 200 && forms.length === 1 && /type="submit"/.test(forms[0]) && /LOG OUT/.test(forms[0]) && !/onclick|onsubmit|<script/.test(forms[0]), `status=${r.status} forms=${forms.length}`);
+      const bar = (r.text.match(/<nav class="site-nav"[\s\S]*?<\/nav>/) || [''])[0];
+      const forms = bar.match(/<form class="logout-form" method="post" action="logout\.php">[\s\S]*?<\/form>/g) || [];
+      check(`${page}: loads (200) and its navigation bar has exactly one LOG OUT form (a POST, no script), the page's only one`,
+        r.status === 200 && forms.length === 1 && (r.text.match(/action="logout\.php"/g) || []).length === 1 && /type="submit"/.test(forms[0]) && /LOG OUT/.test(forms[0]) && !/onclick|onsubmit|<script/.test(forms[0]), `status=${r.status} forms=${forms.length}`);
       const action = (forms[0] || '').match(/action="([^"]+)"/);
       const followed = action ? await req('POST', action[1]) : null;
       check(`${page}: the form's own action leads to a working logout (401 + "logged out")`, !!followed && followed.status === 401 && /LOGGED OUT/.test(followed.text), followed ? detail(followed) : 'no action found');
