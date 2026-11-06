@@ -457,4 +457,17 @@ camtest_test('the logged-out page has no navigation bar (its links would only as
     camtest_assert_true(strpos(CamLayout::loggedOutPage(), 'site-nav') === false);
 });
 
+camtest_test('iconPickerStyle: a bubble under the input that sits above the page, is hidden by the hidden attribute, has an arrow that can be moved, and scrolls its icons', function () {
+    $css = CamLayout::iconPickerStyle();
+    $rule = static function (string $selector) use ($css): string { return layout_css_rule('<style>' . $css . '</style>', $selector); };
+    foreach (['position: absolute', 'z-index: 40', 'top: calc(100% + 10px)', 'max-width: calc(100vw - 24px)'] as $needle) {
+        camtest_assert_true(strpos($rule('.icon-bubble'), $needle) !== false, $needle);
+    }
+    camtest_assert_true(strpos($rule('.icon-bubble[hidden]'), 'display: none') !== false, 'display must not undo hidden');
+    camtest_assert_true(strpos($css, 'left: var(--arrow-x, 28px)') !== false, 'the arrow follows the bubble when it is moved onto the screen');
+    camtest_assert_true(strpos($rule('.icon-results'), 'overflow-y: auto') !== false && strpos($rule('.icon-results'), 'max-height') !== false);
+    camtest_assert_true(strpos($rule('.icon-picker'), 'position: relative') !== false, 'the box the bubble is placed in');
+    camtest_assert_true(strpos($css, '.icon-choice.selected') !== false && strpos($css, '.icon-choice:focus-visible') !== false);
+});
+
 exit(camtest_summarize());

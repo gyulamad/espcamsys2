@@ -120,6 +120,33 @@ CSS;
 CSS . "\n";
     }
 
+    // The style of the icon chooser bubble (js/icon-picker.js) on the settings pages: the input in its box, the
+    // bubble under it with the search bar on top and the icons below, a little arrow pointing at the input. Needs the
+    // page's --surface --bg --border --border-light --text --muted --accent --mono --radius.
+    public static function iconPickerStyle(): string
+    {
+        return <<<'CSS'
+  .icon-picker { position: relative; display: block; flex: 0 0 90px; min-width: 70px; }
+  .icon-picker > input.icon { width: 100%; }
+  .icon-bubble { position: absolute; z-index: 40; top: calc(100% + 10px); left: 0; width: 336px; max-width: calc(100vw - 24px); padding: 10px;
+                 background: var(--surface); border: 1px solid var(--border-light); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.6); }
+  .icon-bubble[hidden] { display: none; }
+  .icon-bubble::before { content: ''; position: absolute; top: -7px; left: var(--arrow-x, 28px); width: 12px; height: 12px; transform: rotate(45deg);
+                         background: var(--surface); border-left: 1px solid var(--border-light); border-top: 1px solid var(--border-light); }
+  .icon-bubble input.icon-search { display: block; width: 100%; min-width: 0; flex: none; margin: 0 0 8px; padding: 8px 10px; text-align: left; font-family: var(--mono); font-size: .85rem;
+                                   background: var(--bg); color: var(--text); border: 1px solid var(--border-light); border-radius: 18px; }
+  .icon-bubble input.icon-search:focus { outline: none; border-color: var(--accent); }
+  .icon-results { max-height: 264px; overflow-y: auto; overscroll-behavior: contain; }
+  .icon-group { position: sticky; top: 0; padding: 4px 2px; font-family: var(--mono); font-size: .65rem; letter-spacing: .1em; text-transform: uppercase;
+                color: var(--muted); background: var(--surface); }
+  .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, 40px); gap: 2px; margin-bottom: 6px; }
+  .icon-choice { width: 40px; height: 40px; padding: 0; font-size: 1.4rem; line-height: 1; background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+  .icon-choice:hover, .icon-choice:focus-visible { background: rgba(0,229,255,.12); border-color: var(--accent); outline: none; }
+  .icon-choice.selected { border-color: var(--border-light); background: rgba(0,229,255,.06); }
+  .icon-empty { padding: 18px 4px; font-family: var(--mono); font-size: .8rem; color: var(--muted); text-align: center; }
+CSS . "\n";
+    }
+
     // The frame around a camera's picture, one copy for the dashboard, the simple view and the simple list.
     // It is always there, so nothing moves when it lights up, but transparent until the camera records: the
     // page then sets the class "recording" on the frame and it blinks red. Needs the page's --accent2.

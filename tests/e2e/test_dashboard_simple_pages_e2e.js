@@ -142,6 +142,12 @@ async function main() {
     check('the dashboard has the navigation bar (dashboard, simple view, simple list) as the first thing in its body, marked as the current page, and its old SIMPLE LIST / SIMPLE VIEW buttons are gone',
       r.status === 200 && /<body>\s*<nav class="site-nav"/.test(r.text) && NAV_LINKS.test(r.text) && r.text.includes('class="nav-link current" href="./" aria-current="page"')
       && !r.text.includes('id="btn-simple-list"') && !r.text.includes('id="btn-simple-view"') && r.text.includes('.site-nav { position: sticky; top: 0;'), detail(r));
+    for (const [page, input] of [['camera-settings-page.php?cam=cam-a', 'e-icon'], ['settings-page.php', 'c-icon']]) {
+      const n = await get(page);
+      check(`${page}: the icon input has the chooser bubble — its scripts (catalog first), its style, and the attach call`,
+        n.status === 200 && n.text.indexOf('src="js/icon-catalog.js"') > 0 && n.text.indexOf('src="js/icon-catalog.js"') < n.text.indexOf('src="js/icon-picker.js"')
+        && n.text.includes('.icon-bubble {') && n.text.includes(`attach($('${input}'), window.CamIconCatalog.GROUPS)`) && n.text.includes(`id="${input}"`), detail(n));
+    }
     for (const page of ['all-recordings.php', 'settings-page.php', 'camera-settings-page.php?cam=cam-a']) {
       const n = await get(page);
       check(`${page}: the navigation bar is on it, none of its links is marked, and the old "← DASHBOARD" button is gone`,
@@ -172,7 +178,7 @@ async function main() {
       r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
 
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js']) {
+    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'icon-catalog.js', 'icon-picker.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }

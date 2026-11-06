@@ -879,6 +879,7 @@ Every setting of the main system can be changed from the dashboard instead of ed
 
 Every camera card on the dashboard has a **⚙ SETTINGS** button. Its page has two parts:
 
+- **Choosing an icon:** a click on the icon field (here, and for a new camera on the main ⚙ SETTINGS page) opens a bubble with a search bar on top and the icons below, like the emoji pickers of chat apps: type a word (`door`, `garage`, `dog`) to narrow them, click one — or press Enter to take the first — and it is put in the field. Esc or a click outside closes it; the arrow keys move between the icons. Any other icon can still be typed into the field by hand.
 - **On the dashboard:** the camera's name and icon, and a button to remove it from the dashboard. The camera *id* can't be edited (it is what ties the entry to the board's `CAMERA_ID`): remove and add again. **Adding** a camera is on the main ⚙ SETTINGS page (Cameras section). Adding or removing only changes what the dashboard shows: no board is touched and no recording is deleted.
 - **Stored in the camera:** every setting in the board's flash (alarm input, push gap, remote log ...), as a form generated from the firmware's own settings table. Press **APPLY TO CAMERA** and the change is queued on the relay; within about 30 seconds the camera asks for it, checks it, stores it, **restarts by itself** and reports back, and the page shows *applied* (or the reason it refused). No cable, no ssh.
 

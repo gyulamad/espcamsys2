@@ -59,6 +59,7 @@ require_once __DIR__ . '/lib/Layout.php';
   #status.err { color: var(--accent2); } #status.ok { color: var(--ok); } #status.busy { color: var(--warn); }
   @media (max-width: 700px) { header, main, .savebar { padding-left: 16px; padding-right: 16px; } .row { grid-template-columns: 1fr; } .help { grid-column: 1; } }
 <?= CamLayout::navBarStyle() ?>
+<?= CamLayout::iconPickerStyle() ?>
 </style>
 </head>
 <body>
@@ -109,6 +110,8 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   <span id="status">Loading…</span>
 </div>
 
+<script src="js/icon-catalog.js"></script>
+<script src="js/icon-picker.js"></script>
 <script>
   const CAM = new URLSearchParams(location.search).get('cam') || '';
   const AJAX = { 'X-Requested-With': 'camdash' };
@@ -288,6 +291,9 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     const { res, data } = await post('camera-admin.php', { action: 'remove', id: CAM });
     if (res.ok) location.href = 'index.php'; else setStatus(data.error || ('Error ' + res.status), 'err');
   });
+
+  // The icon input gets a chooser bubble with a search bar (js/icon-picker.js). Without the scripts it stays a plain input.
+  if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('e-icon'), window.CamIconCatalog.GROUPS);
 
   load();
 </script>

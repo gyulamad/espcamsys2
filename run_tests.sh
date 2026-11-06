@@ -808,6 +808,16 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
+heading "Browser (the icon chooser bubble of the settings pages, in a real Chromium) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
+    run_node_e2e "$ROOT_DIR/tests/dom/test_icon_picker_browser.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 heading "End-to-end (relay logging) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"

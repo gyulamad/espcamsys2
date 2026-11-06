@@ -77,6 +77,8 @@ require_once __DIR__ . '/lib/Layout.php';
     .row { grid-template-columns: 1fr; } .help { grid-column: 1; }
   }
 <?= CamLayout::navBarStyle() ?>
+<?= CamLayout::iconPickerStyle() ?>
+  .cams .add .icon-picker { flex-basis: 80px; min-width: 60px; }
 </style>
 </head>
 <body>
@@ -113,6 +115,8 @@ require_once __DIR__ . '/lib/Layout.php';
   <span id="status">Loading…</span>
 </div>
 
+<script src="js/icon-catalog.js"></script>
+<script src="js/icon-picker.js"></script>
 <script>
   const GROUP_ORDER = ['Recording', 'Network', 'Keys', 'Log', 'Folders', 'Dashboard'];
   const BREAKING = ['camKey', 'pushPort'];
@@ -267,6 +271,9 @@ require_once __DIR__ . '/lib/Layout.php';
 
   saveBtn.addEventListener('click', save);
   revertBtn.addEventListener('click', () => { for (const f of fields) { const i = $('f-' + f.key); i.value = original[f.key]; i.classList.remove('changed'); } updateButtons(); setStatus('Reverted.', ''); });
+  // The new camera's icon input gets a chooser bubble with a search bar (js/icon-picker.js); without the scripts it stays a plain input.
+  if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('c-icon'), window.CamIconCatalog.GROUPS);
+
   load();
 </script>
 <?= CamLayout::storageWarningScript() ?>
