@@ -885,11 +885,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     setTimeout(release, DOWNLOAD_START_MS);
   }
 
-  // A clip being played holds the room until it is closed or has played to its end (and is also let go
-  // when the list is drawn again, which removes the player).
+  // A clip being played holds the room until its window is closed or the clip has played to its end.
   let playerRelease = null;
   function updatePlayerHold() {
-    const playing = Array.from(document.querySelectorAll('.files-player video')).some(video => !video.ended);
+    const playing = Array.from(document.querySelectorAll('.files-video-modal video')).some(video => !video.ended);
     if (playing && !playerRelease) {
       playerRelease = streamPauser.acquire();
       return;

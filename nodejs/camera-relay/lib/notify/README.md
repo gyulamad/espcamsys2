@@ -89,10 +89,11 @@ to the address of the dashboard **as your phone reaches it** (the Pi's name or L
 reachable from your home network, or through your VPN/Tor setup, which is the point).
 
 The link opens the dashboard's **ALL FILES page** (after the dashboard login), not the bare video: the full
-list of recordings loads with its navigation bar, and that clip is already playing in it, large, with the
-list around it. Closing the player or the tab never costs you the other recordings; they are one tap away,
-and the player's own full-screen button is there when you want the whole screen. If the clip has been
-deleted or sorted away by then, you simply get the list. Without `footageBaseUrl` the message has no link.
+list of recordings loads with its navigation bar, and that clip opens in the video window, exactly as if you
+had pressed its PLAY button. The window fills the screen (so it is usable on a phone), the list stays behind
+it, and ✕ CLOSE (or Escape) brings you back to every other recording. The player's own full-screen button is
+there when you want it. If the clip has been deleted or sorted away by then, you simply get the list.
+Without `footageBaseUrl` the message has no link.
 
 - At most one message per camera per `cooldownSeconds` (default 60); the next message says how many
   detections were held back. `0` announces every detection.

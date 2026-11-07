@@ -20,6 +20,7 @@ class FakeElement {
     this.clicks = 0;
     this.classList = {
       contains: (c) => this.classes().includes(c),
+      add: (c) => { if (!this.classes().includes(c)) this.className = [...this.classes(), c].join(' '); },
       remove: (c) => { this.className = this.classes().filter((x) => x !== c).join(' '); },
       toggle: (c) => {
         const had = this.classes().includes(c);

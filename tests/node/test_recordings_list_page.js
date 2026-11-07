@@ -302,11 +302,12 @@ async function main() {
     // playing
     const play = inArchive(panel, '.files-row')[0].querySelectorAll('.cam-btn')[0];
     play.click();
-    const player = byId(doc, `archived-player-cam3-${X2}`);
-    check('PLAY opens a player on the archive URL', player.dataset.open === '1' && player.children[0].src === `recordings.php?cam=cam3&archivePlay=${encodeURIComponent(X2)}`, player.children[0] && player.children[0].src);
+    const archiveModal = () => doc.body.querySelector('.files-video-modal');
+    const archiveVideo = archiveModal() && archiveModal().descendants().find((e) => e.tagName === 'VIDEO');
+    check('PLAY opens the video window on the archive URL', !!archiveVideo && archiveVideo.src === `recordings.php?cam=cam3&archivePlay=${encodeURIComponent(X2)}`, archiveVideo && archiveVideo.src);
     check('…and changes nothing on the server', server.posts().length === 0);
-    play.click();
-    check('…pressing it again closes the player', player.dataset.open === '0' && player.children.length === 0);
+    archiveModal().querySelector('.files-video-close').click();
+    check('…CLOSE closes the window', archiveModal() === null);
 
     // restoring
     const restoreBtn = inArchive(panel, '.files-row')[0].querySelectorAll('.cam-btn')[2];
@@ -398,46 +399,75 @@ async function main() {
     const server = fakeServer(fleet());
     const { doc, panel, view, events } = build(server);
     await view.refresh();
+    const modalOf = () => doc.body.querySelector('.files-video-modal');
+    const videoOf = (m) => m.descendants().find((e) => e.tagName === 'VIDEO');
     const row = byId(doc, `row-cam2-${B}`);
     check('B starts unseen', row.classes().includes('unseen'));
+    check('the rows have no player squeezed in under them, and no window is open before a click', byId(doc, `player-cam2-${B}`) === null && modalOf() === null);
     row.querySelectorAll('.cam-btn')[0].click();   // PLAY
-    const player = byId(doc, `player-cam2-${B}`);
-    const video = player.children[0];
-    check('PLAY opens a <video> for that camera and clip', video && video.tagName === 'VIDEO' && video.src === `recordings.php?cam=cam2&play=${B}` && video.controls === true);
+    const modal = modalOf();
+    check('PLAY opens the clip in a modal window over the page (not inside the list)', !!modal && modal.parent === doc.body && !panel.descendants().includes(modal));
+    check('the window is a dialog named after the clip, with the clip name as its title', modal.role === 'dialog' && modal.ariaModal === 'true' && modal.ariaLabel === B && modal.querySelector('.files-video-title').text() === B);
+    const video = videoOf(modal);
+    check('it holds a <video> for that camera and clip with controls, autoplay and inline playback (phones)', video.src === `recordings.php?cam=cam2&play=${B}` && video.controls === true && video.autoplay === true && video.playsInline === true);
+    check('the page behind is locked from scrolling while it is open', doc.body.classes().includes('files-modal-open'));
     check('PLAY marks the clip seen at once', !row.classes().includes('unseen') && row.querySelector('.files-select').dataset.seen === '1');
     check('PLAY tells recordings.php (POST seen, with the anti-forgery header, for that camera)',
       server.posts().some((r) => r.cam === 'cam2' && r.query === `?cam=cam2&seen=${B}` && r.headers['X-Requested-With'] === 'camdash'));
-    check('the page is told a player opened', events.players > 0);
+    check('the page is told the window opened', events.players > 0);
+
+    // every other clip behaves the same way: the same large window, never a small inline player
+    byId(doc, `row-cam1-${A}`).querySelectorAll('.cam-btn')[0].click();
+    check('another clip\'s PLAY replaces the window with its own (never a second one, never a small player)', doc.body.querySelectorAll('.files-video-modal').length === 1 && videoOf(modalOf()).src === `recordings.php?cam=cam1&play=${A}` && modalOf().querySelector('.files-video-title').text() === A);
+    check('…and does not change anything on the server for an already seen clip beyond marking it', server.posts().filter((r) => r.query.includes(`seen=${A}`)).length === 1);
+
+    videoOf(modalOf()).click();
+    check('a tap on the video (play / pause) leaves the window open', modalOf() !== null);
+    const before = events.players;
+    await view.refresh();
+    check('the list reloading underneath leaves the window alone', modalOf() !== null && videoOf(modalOf()).src === `recordings.php?cam=cam1&play=${A}`);
+
+    const closeBtn = modalOf().querySelector('.files-video-close');
+    check('CLOSE is a real labelled button (its size is the stylesheet\'s: 44px, tested in test_layout.php)', closeBtn.tagName === 'BUTTON' && closeBtn.type === 'button' && closeBtn.text() === '✕ CLOSE' && closeBtn.ariaLabel === `Close the video ${A}`);
+    closeBtn.click();
+    check('CLOSE removes the window (which stops the video), unlocks the page, stops listening for keys and tells the page', modalOf() === null && !doc.body.classes().includes('files-modal-open') && (doc.listeners.keydown || []).length === 0 && events.players > before);
+
     row.querySelectorAll('.cam-btn')[0].click();
-    check('PLAY again closes the player', player.children.length === 0 && player.dataset.open === '0');
+    check('PLAY again opens it again', modalOf() !== null);
+    check('another key leaves it open', (doc.key('a'), modalOf() !== null));
+    doc.key('Escape');
+    check('Escape closes it', modalOf() === null && !doc.body.classes().includes('files-modal-open') && (doc.listeners.keydown || []).length === 0);
+    row.querySelectorAll('.cam-btn')[0].click();
+    modalOf().click();
+    check('a tap beside the video (on the backdrop) closes it too', modalOf() === null && (doc.listeners.keydown || []).length === 0);
+
     const get = row.querySelectorAll('.cam-btn')[1];
     check('GET is a download link for that camera and clip', get.tagName === 'A' && get.href === `recordings.php?cam=cam2&download=${B}`);
     get.click();
     check('GET asks the page to make room for the download', events.downloads === 1);
   }
 
-  // ── opened from a link: playClip ──
+  // ── opened from a link: playClip (the person notification) ──
   {
     const server = fakeServer(fleet());
     const { doc, panel, view } = build(server);
     await view.refresh();
+    const modalOf = () => doc.body.querySelector('.files-video-modal');
     const row = byId(doc, `row-cam2-${B}`);
     let scrolled = null;
     row.scrollIntoView = (o) => { scrolled = o; };
     check('playClip finds the clip', view.playClip('cam2', B) === true);
-    const player = byId(doc, `player-cam2-${B}`);
-    const video = player.children[0];
-    check('playClip opens the clip in its player, in the list', video && video.tagName === 'VIDEO' && video.src === `recordings.php?cam=cam2&play=${B}` && player.dataset.open === '1');
-    check('playClip makes the player large', player.dataset.large === '1');
-    check('playClip scrolls the row to the top', same(scrolled, { block: 'start' }));
+    const video = modalOf().descendants().find((e) => e.tagName === 'VIDEO');
+    check('playClip opens the clip in the same modal window as the PLAY button', !!modalOf() && video.src === `recordings.php?cam=cam2&play=${B}` && modalOf().parent === doc.body);
     check('playClip marks the clip seen, like PLAY', !row.classes().includes('unseen') && server.posts().some((r) => r.query === `?cam=cam2&seen=${B}`));
-    check('the rest of the list is still there, every other clip one click away', rows(panel).length === Object.values(fleet()).flat().length && rows(panel).length > 1);
+    check('playClip scrolls the row to the top, behind the window', same(scrolled, { block: 'start' }));
+    check('the rest of the list is still there, every other clip behind the window', rows(panel).length === Object.values(fleet()).flat().length && rows(panel).length > 1);
     const posts = server.posts().length;
-    check('playClip again keeps it open (never toggles shut) and does not report it seen twice', view.playClip('cam2', B) === true && player.dataset.open === '1' && player.children.length === 1 && server.posts().length === posts);
-    row.querySelectorAll('.cam-btn')[0].click();   // PLAY closes it
-    check('closing the player drops the large size', player.dataset.open === '0' && player.dataset.large === '0');
-    check('a clip that is not in the list: false, nothing opened, nothing sent', view.playClip('cam2', 'cam2_1999-01-01T00-00-00-000Z.mp4') === false && view.playClip('nocam', B) === false && server.posts().length === posts + 1);
-    check('a row without scrollIntoView (an old browser) still plays', (() => { const r2 = byId(doc, `row-cam1-${A}`); r2.scrollIntoView = undefined; return view.playClip('cam1', A) === true; })());
+    check('playClip again does not restart the clip or report it seen twice', view.playClip('cam2', B) === true && doc.body.querySelectorAll('.files-video-modal').length === 1 && server.posts().length === posts);
+    modalOf().querySelector('.files-video-close').click();
+    check('closing it leaves the list as it was', modalOf() === null && rows(panel).length > 1);
+    check('a clip that is not in the list: false, nothing opened, nothing sent', view.playClip('cam2', 'cam2_1999-01-01T00-00-00-000Z.mp4') === false && view.playClip('nocam', B) === false && modalOf() === null && server.posts().length === posts);
+    check('a row without scrollIntoView (an old browser) still plays', (() => { const r2 = byId(doc, `row-cam1-${A}`); r2.scrollIntoView = undefined; return view.playClip('cam1', A) === true && modalOf() !== null; })());
   }
 
   // ── deleting ──

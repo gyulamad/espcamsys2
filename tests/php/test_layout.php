@@ -128,7 +128,7 @@ camtest_test('loggedOutPage is self-contained: no script, no outside resource', 
 
 camtest_test('recordingsListStyle holds the footage list and its small buttons, and is only CSS', function () {
     $css = CamLayout::recordingsListStyle();
-    foreach (['.cam-btn {', '.files-panel {', '.files-panel.open', '.files-row', '.files-cam', '.files-row.unseen', '.files-panel-footer', '.files-player video'] as $needle) {
+    foreach (['.cam-btn {', '.files-panel {', '.files-panel.open', '.files-row', '.files-cam', '.files-row.unseen', '.files-panel-footer', '.files-video-modal video', '.files-video-close'] as $needle) {
         camtest_assert_true(strpos($css, $needle) !== false, $needle . ' is styled');
     }
     camtest_assert_true(!preg_match('/<|@import|url\(|expression\(/i', $css), 'no markup, no import, no external file');
