@@ -66,10 +66,19 @@ function camdash_throttle_locked(callable $fn)
 {
     $file = camdash_throttle_file();
     $dir = dirname($file);
+    // (review PHP-002) the throttle file used to fall back to a temp-dir path
+    // derived from sha1(__DIR__) when data/ did not exist (a fresh install
+    // before deploy.sh had been run). That reintroduced the original PHP-L4
+    // weakness on every host where deploy.sh had not run yet: another local
+    // user could pre-create the predictable temp file with mode 0666, then
+    // read the failure counter or write a "locked for 32 years" entry. The
+    // dashboard's safe-by-default behaviour (503 until config.php is set up)
+    // means the throttle is not even reached on a fresh install, so refusing
+    // to run it here costs nothing on the happy path and removes the weakness
+    // entirely.
     if (!is_dir($dir)) {
-        // data/ does not exist yet (deploy.sh has not run). Fall back to the
-        // old temp-dir behaviour so a fresh install still works.
-        $file = sys_get_temp_dir() . '/camdash-login-' . sha1(__DIR__) . '.json';
+        error_log('camdash: the data/ folder (' . $dir . ') does not exist — run deploy.sh. The login throttle is disabled until then, so failed logins are not being slowed down.');
+        return null;
     }
     $old = umask(0077);
     $h = @fopen($file, 'c+');
