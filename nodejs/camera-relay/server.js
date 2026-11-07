@@ -1994,8 +1994,34 @@ function triggerAlarmAll(source = 'HTTP') {
 // disk-filling DoS where anyone on the LAN could POST /alarm/all in a loop.
 const ALLOW_KEYLESS_ALARM = process.env.ALLOW_KEYLESS_ALARM === '1';
 
+// (review NODE-002) when ALLOW_KEYLESS_ALARM is set, POST /alarm/:id and
+// /alarm/all accept requests with no key. Anyone who can reach the relay's
+// HTTP port could otherwise loop /alarm/all and fill the disk: although
+// MAX_ALARM_RECORDINGS caps concurrent recordings at 16 (default), an attacker
+// can simply wait for one to finish and start another, sustaining the load
+// indefinitely. A per-source throttle (one accepted alarm per minute per IP,
+// env-tunable) is the cheapest mitigation that keeps the legacy opt-in usable
+// for genuine old firmware without leaving the door wide open.
+const KEYLESS_ALARM_GAP_MS = parseInt(process.env.KEYLESS_ALARM_GAP_MS, 10) || 60 * 1000;
+const keylessAlarmThrottle = new Throttle(KEYLESS_ALARM_GAP_MS);
+
 function requireCameraKeyForAlarm(req, res, next) {
-  if (ALLOW_KEYLESS_ALARM) return next();
+  if (ALLOW_KEYLESS_ALARM) {
+    // Even keyless, refuse to let one source spray /alarm/all in a loop. A
+    // genuine alarm source (an old firmware board) sends at most one alarm per
+    // motion event, which is many seconds apart at the fastest; 60s/IP is well
+    // above that and matches the longest recording we would start. Cameras
+    // behind a NAT share an address, so the limit is per source IP, not per
+    // camera id — that is the correct granularity for "is this an attacker".
+    const ip = logfile.normalizeIp(req.socket.remoteAddress) || 'unknown';
+    const t = keylessAlarmThrottle.check(`alarm:${ip}`, Date.now());
+    if (!t.allow) {
+      res.set('Retry-After', String(Math.ceil(KEYLESS_ALARM_GAP_MS / 1000)));
+      res.set('Connection', 'close');
+      return res.status(429).json({ error: `ALLOW_KEYLESS_ALARM is on but you are sending /alarm requests too fast: try again in ${Math.ceil((KEYLESS_ALARM_GAP_MS - (Date.now() % KEYLESS_ALARM_GAP_MS)) / 1000)}s${suppressedNote(t.suppressed)}` });
+    }
+    return next();
+  }
   const keyState = checkKey('camera', req, res, auth.extractKey(req), API_KEY);
   if (keyState === 'ok') return next();
   if (keyState === 'locked') return undefined;
