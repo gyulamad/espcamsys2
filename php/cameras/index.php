@@ -603,6 +603,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
 <?= CamLayout::recordingsListScript() ?>
 <script src="js/dashboard-layout.js"></script>
+<script src="js/screen-keeper.js"></script>
+<script>if (window.CamScreenKeeper) CamScreenKeeper.create().keepAwake();   // live pictures: the device screen must not go dark</script>
 <?php if ($muxEnabled): ?>
 <script src="js/mux-codec.js"></script>
 <script src="js/mux-client.js"></script>

@@ -413,7 +413,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser

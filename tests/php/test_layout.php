@@ -255,7 +255,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 5);   // simple-logic.js, fullscreen.js, simple-view.js and the storage warning
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 6);   // simple-logic.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);

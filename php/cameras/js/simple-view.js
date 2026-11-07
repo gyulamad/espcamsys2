@@ -153,6 +153,9 @@
     else if (e.key === 'ArrowRight') step(1);
   });
 
+  // A phone or tablet must not switch its screen off while the pictures run (the page works without the helper).
+  if (window.CamScreenKeeper) window.CamScreenKeeper.create().keepAwake();
+
   setSlideshow(true);   // the slideshow runs from the moment the page opens; the button stops it
   tick();
   setInterval(tick, TICK_MS);

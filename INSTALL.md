@@ -861,6 +861,8 @@ Two plain pages for a wall screen or a quick look, behind the same login as the 
 
   A person detector that **sees a person** counts above plain motion (recording > person > motion). A detector rests while nobody watches (see the WATCH button), so while the slideshow runs it switches the live view on for **all** detectors and renews it every 20 s; it takes up to ~30 s until a resting detector answers the first time. The views lapse by themselves after the slideshow ends.
 
+  **Screen stays on:** the simple view and the dashboard keep a phone or tablet screen from going dark while the pictures run (`js/screen-keeper.js`). Over **HTTPS** (or localhost) the browser's Screen Wake Lock is used. On plain `http://` (a Pi on the home network) that API does not exist, so a tiny silent video plays out of sight instead — some browsers start it only after the first touch on the page. Only the page that is open and visible holds the screen; the device's own battery-saver may still override it.
+
   Motion needs a person detector paired with the camera (see the detector section): a camera without one can only take part by recording.
 
 The pages' scripts are the files in `js/` (copied by `deploy.sh`); they are plain files with no secrets, everything they show comes from the dashboard's own pages behind the login.
