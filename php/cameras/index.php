@@ -1433,9 +1433,28 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     return Number.isFinite(sc.motionLimit) ? sc.motionLimit : eff.MOTION_THRESH;
   }
 
-  function motionScale(id, sc, eff, limit) {
-    if (detDrag[id] && detDrag[id].scale) return detDrag[id].scale;
-    return Math.max(eff.MOTION_THRESH > 0 ? eff.MOTION_THRESH * 2 : 0, limit * 1.5, sc.motion * 1.1, 100);
+  // <motion-scale>
+  // What the motion bar's full width stands for. It has to stay STILL: the stick is placed (and dragged) on this
+  // scale, so a scale that moved would carry the stick away from the pointer. It therefore depends on ONE
+  // thing only — the MOTION_THRESH the detector reports (the setting the stick sets, which does not move; NOT the
+  // threshold in force, which the auto-calibration raises and lowers with the scene) — and not on the value being dragged (the stick would
+  // jump on release: drag it to 10 % and the scale shrank to fit, throwing it back to the middle) and not
+  // on the live motion readings (a spike stretched the scale to the spike: the stick was squeezed against
+  // the left edge and one pixel was hundreds of units). Motion above the scale simply fills the bar.
+  // The bar is MOTION_SCALE_HEADROOM times the reported threshold wide: room to raise it, and the live
+  // reading still shows up to that many times the threshold. It changes only when the reported threshold does
+  // (after APPLY, or a change made elsewhere); `previous` is what this returned last time ({ reported, scale }).
+  const MOTION_SCALE_HEADROOM = 4;
+  const MOTION_SCALE_MIN = 100;
+  function nextMotionScale(previous, reported) {
+    if (previous && previous.reported === reported) return previous;
+    return { reported, scale: Math.max(reported * MOTION_SCALE_HEADROOM, MOTION_SCALE_MIN) };
+  }
+  // </motion-scale>
+  const detScale = {};     // cam id -> { reported, scale } (nextMotionScale)
+  function motionScale(id, sc) {
+    detScale[id] = nextMotionScale(detScale[id], sc.motionAtLeast);
+    return detScale[id].scale;
   }
 
   // The detector's reported value of a setting, in the same unit as the pending one.
@@ -1511,8 +1530,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const tied = key === 'CLEAR_THRESH' && Math.abs(
       (pd.DETECT_THRESH !== undefined ? pd.DETECT_THRESH : r.person.detectAt) -
       (pd.CLEAR_THRESH  !== undefined ? pd.CLEAR_THRESH  : r.person.clearAt)) < 0.005;
-    const eff = { MOTION_THRESH: pd.MOTION_THRESH !== undefined ? pd.MOTION_THRESH : r.scene.motionAtLeast };
-    detDrag[id] = { key, scale: key === 'MOTION_THRESH' ? motionScale(id, r.scene, eff) : 0 };
+    detDrag[id] = { key, scale: key === 'MOTION_THRESH' ? motionScale(id, r.scene) : 0 };
     const startX = ev.clientX;
     let decided = !tied;
     try { mark.setPointerCapture(ev.pointerId); } catch (e) { /* older browser: window listeners below still work */ }
@@ -1679,11 +1697,11 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     detEl('brightbar', id).className = 'fill' + (darkOn && sc.brightness < eff.DARK_THRESH ? ' warn' : '');
     detEl('brightsub', id).textContent = darkOn ? 'dark below ' + eff.DARK_THRESH + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)';
 
-    // Motion; the bar's scale follows the threshold so the mark stays in a readable place
+    // Motion; the bar's scale is a fixed multiple of the REPORTED threshold (see nextMotionScale), so the stick
+    // stays where it was put whatever the live readings do.
     const mOn = eff.MOTION_THRESH > 0;
-    // While the stick is being dragged the scale stays as it was when the drag began, so it follows the mouse.
     const limit = mOn ? motionLimitOf(sc, eff, pd) : 0;   // the number the reading is compared with
-    const mScale = motionScale(id, sc, eff, limit);
+    const mScale = motionScale(id, sc);
     detEl('motion', id).textContent = mOn ? sc.motion + '/' + limit : sc.motion;
     setW(detEl('motionbar', id), sc.motion / mScale);
     if (!isDragging(id, 'MOTION_THRESH')) placeMark(detEl('motionmark', id), mOn ? eff.MOTION_THRESH / mScale : null);
