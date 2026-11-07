@@ -30,9 +30,13 @@ if (!CamLogic::isDashboardMutationAllowed($_SERVER)) {
     json_fail(403, 'This request must come from the dashboard page itself');
 }
 
-$input = camdash_read_json_input(8192, $inputError, $inputStatus);   // 8 KB cap (review PHP-H1)
-if (!is_array($input) || !isset($input['action']) || !is_string($input['action'])) {
-    json_fail($inputStatus, $inputError ?: 'send { "action": "add" | "update" | "detector" | "remove", "id": ..., "name": ..., "icon": ... }');
+$parsed = camdash_read_json_input(8192);   // 8 KB cap (review PHP-H1)
+if (isset($parsed['error'])) {
+    json_fail($parsed['status'], $parsed['error']);
+}
+$input = $parsed['input'];
+if (!isset($input['action']) || !is_string($input['action'])) {
+    json_fail(400, 'send { "action": "add" | "update" | "detector" | "remove", "id": ..., "name": ..., "icon": ... }');
 }
 $id   = isset($input['id']) && is_string($input['id']) ? trim($input['id']) : '';
 $name = isset($input['name']) && is_string($input['name']) ? $input['name'] : '';

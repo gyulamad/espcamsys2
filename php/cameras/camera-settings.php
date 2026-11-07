@@ -96,9 +96,13 @@ if ($method === 'GET') {
 }
 
 // ── POST ──
-$input = camdash_read_json_input(16384, $inputError, $inputStatus);   // 16 KB cap (review PHP-H1)
+$parsed = camdash_read_json_input(16384);   // 16 KB cap (review PHP-H1)
+if (isset($parsed['error'])) {
+    json_fail($parsed['status'], $parsed['error']);
+}
+$input = $parsed['input'];
 if (!is_array($input)) {
-    json_fail($inputStatus, $inputError ?: 'send { "values": { "SETTING": value } } or { "cancel": true }');
+    json_fail(400, 'send { "values": { "SETTING": value } } or { "cancel": true }');
 }
 
 function queue_on_relay(string $base, string $headers, string $line): array

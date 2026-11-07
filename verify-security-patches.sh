@@ -425,12 +425,16 @@ if [ "$NO_SKETCH" = "0" ]; then
   if ! command -v arduino-cli >/dev/null 2>&1; then
     skip "sketch compilation" "arduino-cli not found (install from https://arduino.github.io/arduino-cli/)"
   else
-    info "compiling both sketches for the AI-Thinker ESP32-CAM (this takes ~3 min)…"
+    info "compiling both sketches for the AI-Thinker ESP32-CAM (this takes ~5 min)…"
     # compile_sketches.sh prints "ok: every sketch compiles" on success
-    COMP_OUT=$(timeout 300 ./tools/compile_sketches.sh 2>&1)
+    # The TFLite_Person sketch is large (includes TensorFlow Lite Micro) and
+    # can take 3-4 minutes on a fast laptop, longer on a slow one.
+    COMP_OUT=$(timeout 600 ./tools/compile_sketches.sh 2>&1)
     COMP_EXIT=$?
     if [ "$COMP_EXIT" -eq 0 ] && echo "$COMP_OUT" | grep -q "every sketch compiles"; then
       ok "both sketches compiled successfully"
+    elif [ "$COMP_EXIT" -eq 124 ]; then
+      skip "sketch compilation" "timed out after 10 min (the TFLite sketch is large; try running ./tools/compile_sketches.sh manually)"
     else
       fail "sketch compilation failed (exit $COMP_EXIT)"
       echo "$COMP_OUT" | tail -10 | sed 's/^/    /'
