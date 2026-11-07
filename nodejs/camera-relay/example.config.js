@@ -84,6 +84,7 @@ module.exports = {
   //   telegram: {
   //     botToken: '123456789:AA...',   // from @BotFather
   //     chatId: '123456789',           // your chat (a group's is negative), or '@channelname'
+  //     // several people / groups: chatId: ['123456789', '987654321', '-1001234567890'],
   //   },
   //   // A person found in a NEW recording (needs personScan above) is announced with its thumbnail:
   //   footageBaseUrl: 'http://raspberrypi.local/camdash',  // the dashboard as your phone reaches it; the message

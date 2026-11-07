@@ -44,9 +44,21 @@ notifications: {
 },
 ```
 
-or, better, keep the token out of any file and give it to the relay's environment (for a systemd service:
+**Several people?** Give `chatId` an array; everybody in it gets every message (and thumbnail):
+
+```js
+chatId: ['123456789', '987654321', '-1001234567890'],   // two people and a group
+```
+
+Each person has to open a chat with the bot and press **Start** once (step 2 above), and their id is found
+the same way (their own `getUpdates` entry). Delivery is independent: if one person has blocked the bot, the
+others still get the message, and the relay log names the chat that failed and why. A chat listed twice is
+messaged once; an id that is not valid is left out with a `[config]` warning (the others keep working).
+
+Or, better, keep the token out of any file and give it to the relay's environment (for a systemd service:
 `Environment=TELEGRAM_BOT_TOKEN=...` and `Environment=TELEGRAM_CHAT_ID=...` in the unit, or an
-`EnvironmentFile=` that only root can read). The environment wins over `config.js`.
+`EnvironmentFile=` that only root can read; several chats are comma-separated:
+`TELEGRAM_CHAT_ID=123456789,987654321`). The environment wins over `config.js`.
 
 Restart the relay. Its log says `notifications: telegram` when the channel is on, or a
 `[config] ...` warning saying what is wrong with the settings (the token itself is never printed).
@@ -60,7 +72,8 @@ curl -X POST -H "X-Control-Key: YOUR_CONTROL_KEY" http://localhost:8080/notifica
 You should receive a message with a picture within a few seconds, and the answer lists every channel:
 `{"results":[{"name":"telegram","ok":true}]}`. A failure says why, for example
 `Telegram sendMessage was refused: Forbidden: bot was blocked by the user` (press **Start** in the chat) or
-`... chat not found` (wrong chat id — did you press Start?).
+`... chat not found` (wrong chat id — did you press Start?). With several chats the entry looks like
+`delivered to 2 of 3 chats; chat 987654321: Telegram sendMessage was refused: Forbidden: bot was blocked by the user`.
 
 ### Safety notes
 
