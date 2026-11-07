@@ -409,6 +409,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
             . '<span id="clock">--:--:--</span>'
             . '<span class="cam-title">' . self::iconSpan($summary['icon'], 'cam-icon') . '<span id="cam-name">' . self::esc($summary['name']) . '</span></span>'
             . '<span id="rec" class="rec-off">RECORDING: –</span>'
+            . '<span class="countdown" id="screen-state" title="Whether this page keeps the device screen on" hidden></span>'
             . '<span class="countdown" id="countdown" title="Time left before the slideshow shows the next camera" hidden></span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'

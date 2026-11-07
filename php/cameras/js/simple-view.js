@@ -154,7 +154,18 @@
   });
 
   // A phone or tablet must not switch its screen off while the pictures run (the page works without the helper).
-  if (window.CamScreenKeeper) window.CamScreenKeeper.create().keepAwake();
+  if (window.CamScreenKeeper) {
+    const keeper = window.CamScreenKeeper.create();
+    keeper.keepAwake();
+    const state = el('screen-state');
+    // Says what holds the screen, so a device that still goes dark can be told apart from one that is not held.
+    setInterval(() => {
+      if (!state) return;
+      const how = keeper.method();
+      state.hidden = false;
+      state.textContent = how === 'wake-lock' ? 'SCREEN: KEPT ON' : how === 'video' ? 'SCREEN: KEPT ON (VIDEO)' : 'SCREEN: NOT HELD – TOUCH THE PAGE';
+    }, 2000);
+  }
 
   setSlideshow(true);   // the slideshow runs from the moment the page opens; the button stops it
   tick();
