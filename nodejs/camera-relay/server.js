@@ -271,10 +271,34 @@ function getCamera(id) {
       recording: null,          // in-progress recording, if any — see startRecording()
       preRoll: new preroll.PreRollBuffer({ seconds: preRollCfg.seconds, maxBytes: preRollCfg.maxBytes }),
       lastRecordedUntil: null,  // timestamp of the last frame the previous recording contained — see startRecording()
+      streamViewers: 0,         // (review NODE-005) count of live MJPEG viewers on /stream/:id, capped at MAX_STREAM_VIEWERS
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
   return cameras[id];
+}
+
+// (review NODE-005) per-camera MJPEG viewer cap. /mux and /detectors/events are
+// already capped (muxfeed.MAX_VIEWERS, detectorevents.MAX_VIEWERS) but the
+// single-camera /stream/:id and /detector/:id/stream endpoints were not, so a
+// holder of the read key could open hundreds of connections and exhaust the
+// process's file-descriptor table (default 1024). Each viewer occupies one FD
+// for the socket plus an EventEmitter listener; the cap below keeps a single
+// camera from dragging the whole relay down.
+const MAX_STREAM_VIEWERS = parseInt(process.env.MAX_STREAM_VIEWERS, 10) || 32;
+function startStreamViewer(cam, res, onFrame, onClose) {
+  if (cam.streamViewers >= MAX_STREAM_VIEWERS) {
+    return false; // caller answers 503
+  }
+  cam.streamViewers++;
+  if (cam.frame) onFrame(cam.frame);
+  cam.emitter.on('frame', onFrame);
+  res.on('close', () => {
+    cam.streamViewers = Math.max(0, cam.streamViewers - 1);
+    cam.emitter.off('frame', onFrame);
+    if (onClose) onClose();
+  });
+  return true;
 }
 
 // Every frame from every transport (the raw TCP push connection and the
@@ -631,6 +655,9 @@ app.post('/upload/:id', requireCameraKeyForUpload, express.raw({ type: '*/*', li
 // Browser opens this to watch the live stream (works as an <img src="...">)
 app.get('/stream/:id', requireReadKey, (req, res) => {
   const cam = getCamera(req.params.id);
+  if (cam.streamViewers >= MAX_STREAM_VIEWERS) {
+    return res.status(503).set('Cache-Control', 'no-store').json({ error: `already ${MAX_STREAM_VIEWERS} viewers of this camera's live stream` });
+  }
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
     'Cache-Control': 'no-cache',
@@ -650,10 +677,9 @@ app.get('/stream/:id', requireReadKey, (req, res) => {
     ready = res.write('\r\n') && ready;
   };
 
-  if (cam.frame) onFrame(cam.frame); // show last known frame immediately on connect
-  cam.emitter.on('frame', onFrame);
-
-  req.on('close', () => cam.emitter.off('frame', onFrame));
+  // (review NODE-005) bounded viewer count via startStreamViewer; on close the
+  // counter is decremented and the listener removed in one place.
+  startStreamViewer(cam, res, onFrame);
 });
 
 // The pictures of several cameras on ONE connection (see lib/muxcodec.js for the format): a browser allows only
@@ -734,6 +760,7 @@ function getDetector(id) {
       connections: 0, pictures: 0, pictureLogged: false, noPictureWarned: false, badInARow: 0,
       ...detectorview.newRecord(),           // the live view switch: who wants to look, when the board last asked
       lastAnswer: '',                        // what the board was last told (logged when it changes)
+      streamViewers: 0,                      // (review NODE-005) live MJPEG viewers, capped at MAX_STREAM_VIEWERS
     };
     detectors[id].emitter.setMaxListeners(50);
   }
@@ -994,19 +1021,33 @@ app.get('/detector/:id/stream', requireReadKey, (req, res) => {
   const id = req.params.id;
   if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid detector id' });
   const now = Date.now();
-  const det = detectors[id];
+  const det = getDetector(id);
   const view = detectorstate.buildView(det, now);
   if (view.state !== 'online') {
-    const known = Object.keys(detectors).sort();
+    // (review NODE-012) the list of known detector ids is operational metadata
+    // that an attacker on the LAN should not be handed freely; expose it only
+    // to loopback callers (the dashboard's PHP proxy runs from 127.0.0.1).
+    const showKnown = isLoopback(req.socket.remoteAddress);
+    const known = showKnown ? Object.keys(detectors).sort() : [];
     const error = view.state === 'never'
-      ? `no detector called '${id}' has connected to the relay since it started${known.length ? ` (detectors seen: ${known.join(', ')})` : ' (no detector has connected at all)'}`
+      ? showKnown && known.length
+        ? `no detector called '${id}' has connected to the relay since it started (detectors seen: ${known.join(', ')})`
+        : `no detector called '${id}' has connected to the relay since it started`
       : `detector '${id}' has no picture to show: ${view.message}`;
     const t = detectorViewThrottle.check(`${id}:${view.state}`, now);
     if (t.allow) {
       detLog('WARN', id, `the dashboard asked for the picture of detector '${id}' but there is none: ${error}${view.state === 'never' ? ' — check that DETECTOR_ID on the board equals the detector paired with the camera in the dashboard\'s config.php' : ''}${suppressedNote(t.suppressed)}`);
     }
-    return res.status(view.state === 'never' ? 404 : 503).set('Cache-Control', 'no-store').json({ error, state: view.state, known });
+    const body = { error, state: view.state };
+    if (showKnown) body.known = known;
+    return res.status(view.state === 'never' ? 404 : 503).set('Cache-Control', 'no-store').json(body);
   }
+
+  // (review NODE-005) per-detector viewer cap, mirroring /stream/:id.
+  if (det.streamViewers >= MAX_STREAM_VIEWERS) {
+    return res.status(503).set('Cache-Control', 'no-store').json({ error: `already ${MAX_STREAM_VIEWERS} viewers of this detector's live stream` });
+  }
+  det.streamViewers++;
 
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
@@ -1024,7 +1065,10 @@ app.get('/detector/:id/stream', requireReadKey, (req, res) => {
   };
   if (det.frame) onFrame(det.frame);
   det.emitter.on('frame', onFrame);
-  req.on('close', () => det.emitter.off('frame', onFrame));
+  req.on('close', () => {
+    det.streamViewers = Math.max(0, det.streamViewers - 1);
+    det.emitter.off('frame', onFrame);
+  });
   return undefined;
 });
 
