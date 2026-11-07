@@ -185,6 +185,20 @@ camtest_test('simpleListPage: one thumbnail per camera, a live picture that link
     camtest_assert_true(strpos($html, '2 CAMERAS') !== false);
 });
 
+camtest_test('simpleListPage: every thumbnail has its own hidden loading cover (shown by the script for a camera that is not connected)', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleListPage($SIMPLE_CAMS);
+    camtest_assert_equal(substr_count($html, '<div class="cam-loading" role="status" hidden>'), 2);
+    camtest_assert_equal(preg_match_all('/<a class="thumb rec-frame"[^>]*><img [^>]*><div class="cam-loading"/', $html), 2, 'inside each thumbnail, over its picture');
+    camtest_assert_true(strpos($html, '.cam-loading[hidden] { display: none; }') !== false, 'hidden stays hidden although the cover has its own display');
+    camtest_assert_true(strpos($html, 'pointer-events: none') !== false, 'a click goes through the cover');
+});
+
+camtest_test('simpleViewPage: the loading cover is inside the picture box (so it goes full screen with it), hidden at first', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[1], 15);
+    camtest_assert_equal(preg_match('/<div class="picture rec-frame" id="picture-box"><img [^>]*><div class="cam-loading" id="loading" role="status" hidden>.*?<\/div><\/div>/', $html), 1);
+    camtest_assert_equal(substr_count($html, 'id="loading"'), 1);
+});
+
 camtest_test('simpleListPage: loads the logic and the list script, links the storage warning, leaks no relay address', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleListPage($SIMPLE_CAMS);
     camtest_assert_true(strpos($html, '<script src="js/simple-logic.js">') !== false);

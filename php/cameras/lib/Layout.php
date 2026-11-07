@@ -276,6 +276,15 @@ HTML;
 
     // The frame both simple pages share: the dashboard's look, a title, $body, and the scripts (file names in js/).
     // $bodyClass is also the page's key in the navigation bar (NAV_PAGES): 'simple-list' or 'simple-view'.
+    // The "waiting for the camera" cover of a picture: a spinner and a line, laid over the (stale) last picture of a
+    // camera that is not connected. Hidden until the page's script finds the camera offline (js/simple-view.js,
+    // js/simple-list.js); it lets clicks through, so a click on the picture still works.
+    private static function loadingOverlay(string $id = ''): string
+    {
+        return '<div class="cam-loading"' . ($id === '' ? '' : ' id="' . self::esc($id) . '"') . ' role="status" hidden>'
+            . '<span class="spinner" aria-hidden="true"></span><span class="cam-loading-text">Waiting for the camera…</span></div>';
+    }
+
     private static function simplePage(string $title, string $bodyClass, string $body, array $scripts): string
     {
         $tags = '';
@@ -313,6 +322,15 @@ HTML;
   .thumb:hover, .thumb:focus-visible { border-color: var(--accent); }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .cam-icon { margin-right: .4em; }
+  /* a camera that is not connected: its last picture is covered, with a spinner, until it sends again */
+  .cam-loading { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center;
+    background: #000; color: var(--muted); font-family: var(--mono); pointer-events: none; text-align: center; padding: 8px; }
+  .cam-loading[hidden] { display: none; }
+  .cam-loading .spinner { width: 36px; height: 36px; border: 3px solid var(--border-light); border-top-color: var(--accent); border-radius: 50%; animation: cam-spin 1s linear infinite; }
+  .thumb .cam-loading .spinner { width: 22px; height: 22px; border-width: 2px; }
+  .thumb .cam-loading { gap: 6px; font-size: .75rem; }
+  @keyframes cam-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .cam-loading .spinner { animation-duration: 3s; } }
   .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* the large view: the picture takes everything the status line leaves */
@@ -355,6 +373,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
         foreach (CamLogic::cameraSummaries($cameras) as $cam) {
             $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '" title="' . self::esc($cam['name']) . '">'
                 . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
+                . self::loadingOverlay()
                 . '<span class="cap">' . self::iconSpan($cam['icon']) . self::esc($cam['name']) . '</span></a>';
         }
         $body = '<div class="bar"><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
@@ -374,7 +393,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
             . ' data-current="' . self::esc($summary['id']) . '"'
             . ' data-slideshow-seconds="' . $slideshowSeconds . '"';
         $body = '<div class="simple-view-root" id="view"' . $data . '>'
-            . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen"></div>'
+            . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen">' . self::loadingOverlay('loading') . '</div>'
             . '<div class="countdown-bar" id="countdown-bar" aria-hidden="true" hidden><div class="countdown-fill" id="countdown-fill"></div></div>'
             . '<div class="status" role="status">'
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'

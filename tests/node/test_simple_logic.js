@@ -127,6 +127,37 @@ test('priorities: only a real true counts as recording', () => {
   assertEqual(S.priorities(['a'], { a: null }, null), { a: IDLE });
 });
 
+test('isOffline: only a plain online: false counts (no answer, no camera, an older relay: not known to be offline)', () => {
+  assertEqual(S.isOffline({ a: { online: false } }, 'a'), true);
+  assertEqual(S.isOffline({ a: { online: true } }, 'a'), false);
+  for (const status of [null, undefined, {}, { a: null }, { a: {} }, { a: { online: 0 } }, { a: { online: 'false' } }, { a: { online: null } }]) {
+    assertEqual(S.isOffline(status, 'a'), false, JSON.stringify(status));
+  }
+});
+
+test('priorities: a camera that is not connected is below idle, even when it is "recording"', () => {
+  const status = { a: { online: false, recording: true }, b: { online: true }, c: {}, d: { online: false } };
+  assertEqual(S.priorities(IDS, status, null), { a: S.PRIORITY.OFFLINE, b: IDLE, c: IDLE, d: S.PRIORITY.OFFLINE });
+});
+
+test('nextByPriority: cameras that are not connected are skipped; when all are, they take turns', () => {
+  const OFFLINE = S.PRIORITY.OFFLINE;
+  assertEqual(S.nextByPriority(IDS, 'a', prio({ b: OFFLINE, c: OFFLINE })), 'd');
+  assertEqual(S.nextByPriority(IDS, 'b', prio({ b: OFFLINE, c: OFFLINE })), 'd', 'standing on an offline camera: on to an online one');
+  assertEqual(S.nextByPriority(IDS, 'a', prio({ b: OFFLINE, c: OFFLINE, d: OFFLINE })), 'a', 'the only one online stays');
+  const all = { a: OFFLINE, b: OFFLINE, c: OFFLINE, d: OFFLINE };
+  assertEqual(S.nextByPriority(IDS, 'a', all), 'b');
+});
+
+test('createSlideshow: shows no countdown when the other cameras are not connected, and never jumps to one', () => {
+  const OFFLINE = S.PRIORITY.OFFLINE;
+  const show = S.createSlideshow(['a', 'b'], 'a', 5000, 0);
+  const gone = { a: IDLE, b: OFFLINE };
+  assertEqual(show.remainingMs(1000, gone), null);
+  assertEqual(show.tick(0, gone), null);
+  assertEqual(show.tick(9000, gone), null, 'it stays on the one camera that is there');
+});
+
 // ── nextByPriority ───────────────────────────────────────────────────
 
 test('nextByPriority: with nothing going on every camera takes its turn, in order', () => {

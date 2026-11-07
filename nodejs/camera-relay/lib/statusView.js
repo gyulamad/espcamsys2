@@ -10,9 +10,21 @@
 // dashboard shows it on the FILES button so you can see it without opening the list.
 // `recordingOff` says whether the camera is switched OFF (see lib/recswitch.js): null when it may record.
 
-function buildCameraStatusView(cam, recordingCount = null, recordingOff = null) {
+// `online`: the camera sent a frame within the last ONLINE_WINDOW_MS (a camera that is switched off, out of Wi-Fi range or
+// not yet connected stops sending; its last frame stays in the relay, which is why a viewer must not trust the picture
+// alone). Worked out here, with the relay's clock, so a viewer's own clock can not make a camera look online or offline.
+const ONLINE_WINDOW_MS = 5000;
+
+function isOnline(lastSeen, now) {
+  if (!lastSeen) return false;
+  const age = now - new Date(lastSeen).getTime();
+  return Number.isFinite(age) && age <= ONLINE_WINDOW_MS;
+}
+
+function buildCameraStatusView(cam, recordingCount = null, recordingOff = null, now = Date.now()) {
   return {
     lastSeen: cam.lastSeen,
+    online: isOnline(cam.lastSeen, now),
     recording: !!cam.recording,
     recordingStartedAt: cam.recording ? cam.recording.startedAt : null,
     recordingEndAt: cam.recording ? cam.recording.endAt : null,
@@ -22,4 +34,4 @@ function buildCameraStatusView(cam, recordingCount = null, recordingOff = null) 
   };
 }
 
-module.exports = { buildCameraStatusView };
+module.exports = { buildCameraStatusView, isOnline, ONLINE_WINDOW_MS };

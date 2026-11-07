@@ -1,7 +1,7 @@
 'use strict';
 
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
-const { buildCameraStatusView } = require('../../nodejs/camera-relay/lib/statusView');
+const { buildCameraStatusView, isOnline, ONLINE_WINDOW_MS } = require('../../nodejs/camera-relay/lib/statusView');
 const { PreRollBuffer } = require('../../nodejs/camera-relay/lib/preroll');
 
 const EMPTY_PREROLL = { frames: 0, bytes: 0, bufferedSeconds: 0, windowSeconds: 0 };
@@ -10,6 +10,7 @@ test('buildCameraStatusView: idle camera that has never recorded', () => {
   const cam = { lastSeen: null, recording: null };
   assertEqual(buildCameraStatusView(cam), {
     lastSeen: null,
+    online: false,        // never seen: not online
     recording: false,
     recordingStartedAt: null,
     recordingEndAt: null,
@@ -17,6 +18,22 @@ test('buildCameraStatusView: idle camera that has never recorded', () => {
     recordingCount: null, // not known unless the caller says
     recordingOff: null,   // may record, unless the caller says it is switched OFF
   });
+});
+
+test('isOnline: a frame within the window counts, an older one or none does not', () => {
+  const now = 1000000;
+  assertEqual(isOnline(new Date(now), now), true);
+  assertEqual(isOnline(new Date(now - ONLINE_WINDOW_MS), now), true, 'exactly at the edge is still online');
+  assertEqual(isOnline(new Date(now - ONLINE_WINDOW_MS - 1), now), false);
+  assertEqual(isOnline(null, now), false);
+  assertEqual(isOnline(undefined, now), false);
+  assertEqual(isOnline('not a date', now), false);
+});
+
+test('buildCameraStatusView: online follows the age of the last frame (with the clock it is given)', () => {
+  const cam = { lastSeen: new Date(10000), recording: null };
+  assertEqual(buildCameraStatusView(cam, null, null, 12000).online, true);
+  assertEqual(buildCameraStatusView(cam, null, null, 10000 + ONLINE_WINDOW_MS + 1).online, false);
 });
 
 test('buildCameraStatusView: currently recording', () => {

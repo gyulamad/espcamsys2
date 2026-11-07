@@ -40,8 +40,18 @@
     }
   }
 
+  // A camera that is not connected keeps its last picture in the stream: cover it with the loading indicator.
+  function markOffline(status) {
+    for (const thumb of Array.from(grid.children)) {
+      const loading = thumb.querySelector('.cam-loading');
+      if (loading) loading.hidden = !window.CamSimple.isOffline(status, thumb.dataset.cam);
+    }
+  }
+
   async function poll() {
-    markRecording(await window.CamRelayJson.get('status.php'));
+    const status = await window.CamRelayJson.get('status.php');
+    markRecording(status);
+    markOffline(status);
   }
 
   layout();

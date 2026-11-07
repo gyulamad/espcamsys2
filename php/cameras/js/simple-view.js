@@ -2,8 +2,10 @@
 // simple-view.js — simple-view.php: shows one camera, the pager, the status line and the slideshow. The
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
 // them to the page, status.php (recording: the status line and the red frame around the picture) and
-// detector-status.php (motion). A click on the picture toggles full screen (js/fullscreen.js). While the
-// slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar under the picture show the time left before the next camera.
+// detector-status.php (motion). A camera that is not connected is skipped by the slideshow and, when picked
+// by hand, shows a loading indicator instead of its stale last picture. A click on the picture toggles full
+// screen (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
+// under the picture show the time left before the next camera.
 
 (function () {
   const S = window.CamSimple;
@@ -50,6 +52,13 @@
     if (pictureBox) pictureBox.classList.toggle('recording', on);
   }
 
+  // A camera that is not connected sends nothing, and the picture would stay on its last frame: cover it with the
+  // loading indicator until the camera is back. (Also the status line says so.)
+  function renderLoading() {
+    const loading = el('loading');
+    if (loading) loading.hidden = !S.isOffline(status, current);
+  }
+
   // The stream is a never-ending picture: switching the camera replaces it, which closes the old connection.
   function show(id) {
     current = id;
@@ -60,6 +69,7 @@
     document.title = nameOf(id) + ' — ESP32-CAM Dashboard';
     try { history.replaceState(null, '', 'simple-view.php?cam=' + encodeURIComponent(id)); } catch (e) { /* not allowed here: the address just stays */ }
     renderRecording();
+    renderLoading();
   }
 
   function step(direction) {
@@ -124,6 +134,7 @@
   async function poll() {
     [status, detectors] = await Promise.all([window.CamRelayJson.get('status.php'), window.CamRelayJson.get('detector-status.php')]);
     renderRecording();
+    renderLoading();
     keepViews();
     tick();   // a camera that has just started recording is shown now, not at the next second
   }

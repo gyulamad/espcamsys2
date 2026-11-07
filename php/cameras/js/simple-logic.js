@@ -6,6 +6,7 @@
 //   fitThumbnails   how big the thumbnails of the list page are, and in how many columns
 //   neighbor        the previous / next camera of the pager (wraps around)
 //   isRecording     is a camera recording, from status.php's answer (the red frame of both pages)
+//   isOffline       is a camera known not to be connected (its picture is covered, the slideshow skips it)
 //   countdown       what the slideshow's "time left" indicator shows (whole seconds and the part of the time left)
 //   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
@@ -18,8 +19,9 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.CamSimple = api;
 })(typeof self !== 'undefined' ? self : this, function () {
-  // Higher wins. Recording beats a person, a person beats motion, motion beats everything else.
-  const PRIORITY = Object.freeze({ IDLE: 0, MOTION: 1, PERSON: 2, RECORDING: 3 });
+  // Higher wins. Recording beats a person, a person beats motion, motion beats everything else. A camera that is
+  // not connected is below all of them: the slideshow only shows it when every camera is offline.
+  const PRIORITY = Object.freeze({ OFFLINE: -1, IDLE: 0, MOTION: 1, PERSON: 2, RECORDING: 3 });
 
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -64,6 +66,13 @@
     return !!(status && status[id] && status[id].recording === true);
   }
 
+  // Is the camera `id` known NOT to be connected, going by status.php's answer (`online` is the relay's word)?
+  // Only a plain false counts: no answer, an unknown camera or an older relay without the field is "not known
+  // to be offline", so nothing is hidden or skipped on a guess.
+  function isOffline(status, id) {
+    return !!(status && status[id] && status[id].online === false);
+  }
+
   // Is the person detector of a camera reporting motion at or above its threshold? (A threshold of 0
   // means the motion check is off; an offline detector's last numbers are old news.)
   function inMotion(detector) {
@@ -99,7 +108,8 @@
   function priorities(ids, status, detectors) {
     const out = {};
     for (const id of ids) {
-      if (isRecording(status, id)) out[id] = PRIORITY.RECORDING;
+      if (isOffline(status, id)) out[id] = PRIORITY.OFFLINE;
+      else if (isRecording(status, id)) out[id] = PRIORITY.RECORDING;
       else if (detectors && personSeen(detectors[id])) out[id] = PRIORITY.PERSON;
       else if (detectors && inMotion(detectors[id])) out[id] = PRIORITY.MOTION;
       else out[id] = PRIORITY.IDLE;
@@ -186,5 +196,5 @@
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, fitThumbnails, neighbor, isRecording, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, countdown, formatClock };
+  return { PRIORITY, fitThumbnails, neighbor, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, countdown, formatClock };
 });

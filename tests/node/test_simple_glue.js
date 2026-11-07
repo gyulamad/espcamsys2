@@ -52,8 +52,8 @@ function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, ful
   env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
   env.relayJson = relayJson;   // false: the helper script is not on the page
   const els = {};
-  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill']) els[id] = makeEl();
-  for (const id of ['countdown', 'countdown-bar']) els[id].hidden = true;   // as the page is delivered
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'loading']) els[id] = makeEl();
+  for (const id of ['countdown', 'countdown-bar', 'loading']) els[id].hidden = true;   // as the page is delivered
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -462,13 +462,52 @@ test('view: the slideshow time falls back to 10 s when the page does not give a 
   assertEqual(env.els.picture.src, 'stream.php?cam=b');
 });
 
+// ── cameras that are not connected ───────────────────────────────────
+
+test('view: the loading indicator covers the picture of a camera that is not connected, and goes when it is back', async () => {
+  const env = await started({ current: 'a' });
+  assertTrue(env.els.loading.hidden, 'nothing is covered before the relay says so');
+  env.relay.status = { a: { online: false }, b: { online: true } };
+  await env.poll();
+  assertTrue(!env.els.loading.hidden, 'a is offline');
+  env.els.next.fire('click');   // the pager still goes to b: the viewer picks by hand
+  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertTrue(env.els.loading.hidden, 'b is online');
+  env.els.prev.fire('click');   // a again: offline, covered AT ONCE (no wait for the next poll)
+  assertTrue(!env.els.loading.hidden);
+  env.relay.status = { a: { online: true } };
+  await env.poll();
+  assertTrue(env.els.loading.hidden, 'a is back');
+  env.relay.status = { a: { online: false } };
+  await env.poll();
+  env.relay.status = null;   // no answer: not known to be offline
+  await env.poll();
+  assertTrue(env.els.loading.hidden);
+});
+
+test('view: the slideshow skips the cameras that are not connected, and the pager does not', async () => {
+  const env = await started({ current: 'a', seconds: 5 });
+  env.relay.status = { a: { online: true }, b: { online: false }, c: { online: true } };
+  await env.poll();
+  env.els.slideshow.fire('click');
+  await env.advance(1000, 5);
+  assertEqual(env.els.picture.src, 'stream.php?cam=c', 'b is skipped');
+  env.relay.status = { a: { online: true }, b: { online: true }, c: { online: true } };
+  await env.poll();
+  await env.advance(1000, 5);
+  assertEqual(env.els.picture.src, 'stream.php?cam=a');
+});
+
 // ── simple-list.js ───────────────────────────────────────────────────
 
 const THUMB_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
 function listEnv(count, { width = 1024, height = 768, relayJson = true, navHeight = 44 } = {}) {
   const env = makeEnv({ relayJson });
   // one thumbnail per camera, as the page has them: an element that carries its camera id in data-cam
-  env.thumbs = Array.from({ length: count }, (_, i) => makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i } }));
+  env.thumbs = Array.from({ length: count }, (_, i) => {
+    const loading = makeEl(); loading.hidden = true;   // the cover inside the thumbnail, as the page delivers it
+    return makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i }, loading, querySelector: (sel) => (sel === '.cam-loading' ? loading : null) });
+  });
   const grid = makeEl({ dataset: { count: String(count) }, children: env.thumbs });
   env.document.getElementById = (id) => (id === 'thumbs' ? grid : null);
   env.document.querySelector = (sel) => ({ '.bar': { offsetHeight: 48 }, '.site-nav': navHeight === null ? null : { offsetHeight: navHeight } }[sel] || null);
@@ -537,6 +576,21 @@ test('list: a thumbnail whose camera records gets the red frame class, the other
   await env.poll();
   assertEqual(framed(), [true, false, false]);
   assertTrue(env.urls.length >= 5 && env.urls.every((u) => u === 'status.php'), 'only status.php is asked: ' + env.urls.join());
+});
+
+test('list: the loading cover is on the thumbnail of a camera that is not connected, and only on that one', async () => {
+  const env = listEnv(3);
+  env.relay.status = { a: { online: true }, b: { online: false }, c: {} };   // c: an older relay says nothing
+  load(env, 'simple-list.js');
+  await env.run(async () => {});
+  const covered = () => env.thumbs.map((t) => !t.loading.hidden);
+  assertEqual(covered(), [false, true, false]);
+  env.relay.status = { a: { online: false }, b: { online: true } };
+  await env.poll();
+  assertEqual(covered(), [true, false, false], 'it follows the camera');
+  env.relay.status = null;   // no answer is not "offline"
+  await env.poll();
+  assertEqual(covered(), [false, false, false]);
 });
 
 test('list: the relay is asked once at once and then every 2 seconds, by one timer', async () => {

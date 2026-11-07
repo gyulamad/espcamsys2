@@ -1076,7 +1076,7 @@ async function buildStatusMap() {
   refreshSwitch();
   const now = Date.now();
   const views = await Promise.all(ids.map(async (id) =>
-    statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id), describeOff(recSwitch.offState(id, now), now))));
+    statusView.buildCameraStatusView(cameras[id] || NEVER_SEEN, await countRecordings(id), describeOff(recSwitch.offState(id, now), now), now)));
   const out = {};
   ids.forEach((id, i) => { out[id] = views[i]; });
   return out;
