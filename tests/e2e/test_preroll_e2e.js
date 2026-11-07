@@ -181,9 +181,9 @@ function stopRelay(relay) {
   });
 }
 
-function http(method, pathAndQuery) {
+function http(method, pathAndQuery, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = nodeHttp.request(BASE + pathAndQuery, { method, headers: { 'Content-Length': 0, 'X-Control-Key': CONTROL_KEY } }, (res) => {
+    const req = nodeHttp.request(BASE + pathAndQuery, { method, headers: Object.assign({ 'Content-Length': 0, 'X-Control-Key': CONTROL_KEY }, headers) }, (res) => {
       let data = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { data += c; });
@@ -200,6 +200,9 @@ function http(method, pathAndQuery) {
 }
 const get = (p) => http('GET', p);
 const post = (p) => http('POST', p);
+// POST with the CAMERA key — what the firmware's alarm HTTP fallback now sends
+// (review NODE-H1 / COMBINED-H3).
+const postCamKey = (p) => http('POST', p, { 'X-Api-Key': CAM_KEY, 'X-Control-Key': '' });
 
 // A fake camera: connects to the raw push port, authenticates, and sends
 // the same JPEG every FRAME_INTERVAL_MS using the real wire format
@@ -358,7 +361,7 @@ async function main() {
       cam.firstBytes.length >= 2 && cam.firstBytes[0] === 1 && cam.firstBytes[1] === 2, JSON.stringify(cam.firstBytes));
 
     // ── 2. Alarm: the new recording must START with the pre-roll ────
-    r = await post(`/alarm/${CAM}`);
+    r = await postCamKey(`/alarm/${CAM}`);
     const pushedAtAlarm = cam.pushed;
     const preFrames = r.body && r.body.preRollFrames;
     check('POST /alarm/:id starts a recording that includes the pre-roll',
@@ -372,7 +375,7 @@ async function main() {
     await sleep(1500);
 
     // ── 3. A repeat alarm extends; it must NOT add a second pre-roll ─
-    r = await post(`/alarm/${CAM}`);
+    r = await postCamKey(`/alarm/${CAM}`);
     check('a repeat alarm extends the running recording and adds no extra pre-roll',
       r.status === 200 && r.body.extended === true && r.body.preRollFrames === 0, JSON.stringify(r));
 
@@ -384,7 +387,7 @@ async function main() {
     // ── 5. A recording right after must not repeat the previous clip's footage ─
     await sleep(500); // ~5 frames arrive between the clips
     const pushedBeforeSecond = cam.pushed;
-    r = await post(`/alarm/${CAM}`);
+    r = await postCamKey(`/alarm/${CAM}`);
     const gapFrames = pushedBeforeSecond - pushedAtStop;
     check('a recording right after another gets only the NEW footage as pre-roll (no overlap with the previous clip)',
       r.status === 200 && between(r.body.preRollFrames, Math.max(0, gapFrames - 3), gapFrames + 3),
@@ -566,7 +569,7 @@ async function main() {
     r = await get('/status');
     check('with preRollSeconds=0 nothing is buffered',
       r.body[CAM_OFF] && r.body[CAM_OFF].preRoll.frames === 0, JSON.stringify(r.body[CAM_OFF]));
-    r = await post(`/alarm/${CAM_OFF}`);
+    r = await postCamKey(`/alarm/${CAM_OFF}`);
     check('with preRollSeconds=0 a recording starts live, with no pre-roll',
       r.status === 200 && r.body.recording === true && r.body.preRollFrames === 0, JSON.stringify(r));
     await post(`/record/${CAM_OFF}/stop`);

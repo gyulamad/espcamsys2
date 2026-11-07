@@ -35,6 +35,7 @@ const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
 const PORT = Number(process.env.E2E_PUSHCONN_PORT || 19340);
 const PUSH_PORT = Number(process.env.E2E_PUSHCONN_PUSH_PORT || 19341);
 const KEY = 'e2e-pushconn-key';
+const CONTROL_KEY = 'e2e-pushconn-control-key';   // (review NODE-H2): reads need the control key now
 const JPEG = fs.readFileSync(path.join(RELAY_DIR, 'testimage.jpg'));
 
 let passCount = 0;
@@ -72,7 +73,7 @@ function startRelay(env) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
-      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, SWITCH_FILE: path.join(os.tmpdir(), `e2e-pushconn-switch-${process.pid}.json`) }, env),
+      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, CONTROL_KEY, SWITCH_FILE: path.join(os.tmpdir(), `e2e-pushconn-switch-${process.pid}.json`) }, env),
     });
     let out = '';
     let settled = false;
@@ -98,7 +99,7 @@ function stopRelay(relay) {
 
 function getJson(urlPath) {
   return new Promise((resolve, reject) => {
-    nodeHttp.get(`http://127.0.0.1:${PORT}${urlPath}`, (res) => {
+    nodeHttp.get(`http://127.0.0.1:${PORT}${urlPath}`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
       let data = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { data += c; });

@@ -49,9 +49,28 @@ $config = camdash_load_config(__DIR__);   // config.php with the settings saved 
 // Runs $fn on the stored throttle state while holding a lock, and stores what it returns, so
 // parallel guesses cannot all slip past the counter. Null if the state file cannot be used
 // (then logins still work, just unthrottled).
+//
+// (review PHP-L4): the throttle file used to live in sys_get_temp_dir() under a
+// predictable name (sha1 of __DIR__). On a multi-user Pi another user could
+// pre-create the file with mode 0666 and the umask-based protection became
+// ineffective — they could read the failure counter, or write a "locked until
+// year 9999" entry to lock the owner out indefinitely. The file now lives in
+// the dashboard's own data/ folder (which Apache never serves), created with
+// mode 0600 and protected by the same folder permissions deploy.sh sets up.
+function camdash_throttle_file(): string
+{
+    return __DIR__ . '/data/login-throttle.json';
+}
+
 function camdash_throttle_locked(callable $fn)
 {
-    $file = sys_get_temp_dir() . '/camdash-login-' . sha1(__DIR__) . '.json';
+    $file = camdash_throttle_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) {
+        // data/ does not exist yet (deploy.sh has not run). Fall back to the
+        // old temp-dir behaviour so a fresh install still works.
+        $file = sys_get_temp_dir() . '/camdash-login-' . sha1(__DIR__) . '.json';
+    }
     $old = umask(0077);
     $h = @fopen($file, 'c+');
     umask($old);

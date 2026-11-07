@@ -96,7 +96,11 @@ if ($method === 'GET') {
 }
 
 // ── POST ──
-$input = json_decode((string) file_get_contents('php://input'), true);
+$parsed = camdash_read_json_input(16384);   // 16 KB cap (review PHP-H1)
+if (isset($parsed['error'])) {
+    json_fail($parsed['status'], $parsed['error']);
+}
+$input = $parsed['input'];
 if (!is_array($input)) {
     json_fail(400, 'send { "values": { "SETTING": value } } or { "cancel": true }');
 }

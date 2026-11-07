@@ -75,6 +75,39 @@ function relay_pipe_stream($stream, ?callable $filter = null): void
     }
 }
 
+// Reads a JSON object from php://input, capped at $maxBytes (default 16 KB,
+// generous for every JSON body the dashboard's settings pages accept today).
+// Returns ['input' => decoded_array] on success, or
+// ['error' => message, 'status' => http_status] on failure (413 for too
+// large, 400 for missing/invalid). Without this, file_get_contents(
+// 'php://input') reads the whole body into memory before json_decode runs,
+// which lets an attacker who can reach the dashboard POST a multi-GB body and
+// exhaust Apache's MaxRequestWorkers pool (review PHP-H1).
+function camdash_read_json_input(int $maxBytes = 16384): array
+{
+    // Check Content-Length first — refuse before reading if the header says it's too big.
+    $contentLength = isset($_SERVER['CONTENT_LENGTH']) ? (int)$_SERVER['CONTENT_LENGTH'] : 0;
+    if ($contentLength > 0 && $contentLength > $maxBytes) {
+        return ['error' => 'request body too large (limit ' . $maxBytes . ' bytes)', 'status' => 413];
+    }
+    // file_get_contents('php://input') is the standard way to read the POST
+    // body in PHP. It works with both Apache+mod_php and php -S (the built-in
+    // server). We read the body, then check its actual size (Content-Length
+    // can be missing or wrong).
+    $raw = file_get_contents('php://input');
+    if ($raw === false || $raw === '') {
+        return ['error' => 'send { "values": { ... } }', 'status' => 400];
+    }
+    if (strlen($raw) > $maxBytes) {
+        return ['error' => 'request body too large (limit ' . $maxBytes . ' bytes)', 'status' => 413];
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        return ['error' => 'body is not valid JSON', 'status' => 400];
+    }
+    return ['input' => $decoded];
+}
+
 // Answers with a JSON error and stops.
 function json_fail(int $status, string $message): void
 {

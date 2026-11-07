@@ -181,6 +181,7 @@ async function main() {
     await new Promise((r) => relay.close(r));
     for (const f of fs.readdirSync(phpTmp)) if (f.startsWith('camdash-log-')) fs.rmSync(path.join(phpTmp, f), { force: true });
     s = await open();
+    if (s.done) await s.done;   // wait for the body to arrive (review: pre-existing race, exposed by the throttle-file delay)
     check('relay down: a quick 502 without the relay\'s address', s.status === 502 && !s.raw.includes(`${RELAY_PORT}`) && /cannot reach the relay/.test(s.raw), `${s.status} ${s.raw.slice(0, 160)}`);
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));

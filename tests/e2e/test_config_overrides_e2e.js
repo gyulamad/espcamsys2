@@ -127,7 +127,7 @@ async function main() {
     fs.chmodSync(cfgPath, 0o444);   // read-only: saving must never need it
     php = await startPhp(dir);
     const settings = () => JSON.parse(fs.readFileSync(setPath, 'utf8'));
-    const leftovers = () => fs.readdirSync(path.join(dir, 'data')).filter((f) => !['settings.json', 'settings.lock'].includes(f));
+    const leftovers = () => fs.readdirSync(path.join(dir, 'data')).filter((f) => !['settings.json', 'settings.lock', 'login-throttle.json'].includes(f));
 
     let r = await dash('GET', 'index.php');
     check('the dashboard runs on config.php alone', r.status === 200 && r.text.includes('Front door'), `status=${r.status}`);

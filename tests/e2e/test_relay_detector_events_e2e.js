@@ -22,6 +22,7 @@ const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
 const PORT = Number(process.env.E2E_DETEVENTS_PORT || 19450);
 const PUSH_PORT = PORT + 1;
 const KEY = 'e2e-detector-events-key';
+const CONTROL_KEY = 'e2e-detector-events-control-key';   // (review NODE-H2): reads need the control key now
 const ID = 'e2e-events-1';
 
 let pass = 0, fail = 0, finished = false;
@@ -51,7 +52,7 @@ function startRelay() {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
-      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY,
+      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, CONTROL_KEY,
         SETTINGS_FILE: path.join(tmp, 'settings.json'), LOG_FILE: logFile, SWITCH_FILE: path.join(tmp, 'switch.json') }),
     });
     let out = '', done = false;
@@ -66,7 +67,7 @@ function startRelay() {
 function view() {
   return new Promise((resolve, reject) => {
     const v = { status: 0, headers: {}, body: '', messages: [], times: [], pause: () => {}, resume: () => {}, close: () => {} };
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detectors/events`, (res) => {
+    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detectors/events`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
       v.status = res.statusCode; v.headers = res.headers;
       res.setEncoding('utf8');
       res.on('data', (c) => {

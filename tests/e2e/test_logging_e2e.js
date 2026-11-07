@@ -42,6 +42,7 @@ const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
 const PORT = Number(process.env.E2E_LOG_PORT || 19310);
 const PUSH_PORT = Number(process.env.E2E_LOG_PUSH_PORT || 19311);
 const KEY = 'e2e-log-key';
+const CONTROL_KEY = 'e2e-log-control-key';   // (review NODE-H2): reads need the control key now
 
 let passCount = 0;
 let failCount = 0;
@@ -72,7 +73,7 @@ function startRelay(env) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
       cwd: RELAY_DIR,
-      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, SWITCH_FILE: path.join(os.tmpdir(), `e2e-logging-switch-${process.pid}.json`) }, env),
+      env: Object.assign({}, process.env, { PORT: String(PORT), PUSH_PORT: String(PUSH_PORT), CAM_KEY: KEY, CONTROL_KEY, SWITCH_FILE: path.join(os.tmpdir(), `e2e-logging-switch-${process.pid}.json`) }, env),
     });
     let out = '';
     let settled = false;
@@ -99,10 +100,12 @@ function stopRelay(relay) {
 }
 
 // An HTTP request with optional headers and a JSON (or raw string) body.
+// (review NODE-H2): reads need the control key — added by default unless the
+// caller overrides (e.g. /log sends the camera key instead).
 function request(method, urlPath, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : (typeof body === 'string' ? body : JSON.stringify(body));
-    const h = Object.assign({}, headers);
+    const h = Object.assign({ 'X-Control-Key': CONTROL_KEY }, headers);
     if (payload !== null) {
       if (!h['Content-Type']) h['Content-Type'] = 'application/json';
       h['Content-Length'] = Buffer.byteLength(payload);

@@ -133,6 +133,9 @@ function request(method, urlPath, { headers = {}, body, noKey = false } = {}) {
 const post = (p, opts) => request('POST', p, opts);
 const get = (p, opts) => request('GET', p, opts);
 const del = (p, opts) => request('DELETE', p, opts);
+// POST with the CAMERA key — what the firmware's alarm HTTP fallback now sends
+// (review NODE-H1 / COMBINED-H3).
+const postCamKey = (p) => request('POST', p, { headers: { 'X-Api-Key': CAM_KEY } });
 
 // A camera on the raw push port: "<id>\t<key>\n" then optionally frames (4-byte big-endian length + payload).
 function pushConnect(id, key, preamble) {
@@ -232,7 +235,7 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
     check('marking it seen works', r.status === 200, `got ${r.status}`);
     r = await del(`/recordings/${OK_CAM}/clip.mp4`);
     check('deleting it works, and the file is gone', r.status === 200 && !fs.existsSync(path.join(RECORDINGS_DIR, OK_CAM, 'clip.mp4')), `got ${r.status}`);
-    r = await post(`/alarm/${OK_CAM}`);
+    r = await postCamKey(`/alarm/${OK_CAM}`);
     check('an alarm for an ordinary camera id is accepted (200)', r.status === 200, `got ${r.status} ${r.text}`);
     r = await post(`/record/${OK_CAM}/stop`);
     check('...and the recording it started can be stopped', r.status === 200, `got ${r.status} ${r.text}`);
@@ -270,7 +273,7 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
     check(`only as many new ids as fit under the cap are accepted (${MAX_CAMERAS - known})`, accepted === MAX_CAMERAS - known, `accepted ${accepted}, refused ${refused}`);
     check('...and every one beyond it is refused with 503', refused === 3 && accepted + refused === statuses.length, JSON.stringify(statuses));
     check(`/status shows exactly ${MAX_CAMERAS} cameras, not one per request`, (await ourIds()).length === MAX_CAMERAS, String((await ourIds()).length));
-    r = await post('/alarm/e2e-camid-one-too-many');
+    r = await postCamKey('/alarm/e2e-camid-one-too-many');
     check('an alarm for a NEW id is refused with 503 once the cap is reached', r.status === 503, `got ${r.status}`);
     check('...and it created no recordings folder', !fs.existsSync(path.join(RECORDINGS_DIR, 'e2e-camid-one-too-many')));
     r = await post('/record/e2e-camid-one-too-many?seconds=5');
@@ -281,7 +284,7 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
     socks.push(extra);
     check('a push connection for a NEW id is disconnected', await waitClosed(extra, 3000));
     check('...and the relay logs the refusal', await waitFor(() => /already knows 64 cameras/.test(readFile(logFile)), 3000) !== null);
-    r = await post(`/alarm/${OK_CAM}`);
+    r = await postCamKey(`/alarm/${OK_CAM}`);
     check('a camera the relay already knows still works at the cap (alarm 200)', r.status === 200, `got ${r.status}`);
     check('...and can still stream', (await openStream(OK_CAM)) === 200);
     const again = await pushConnect(OK_CAM, CAM_KEY);
