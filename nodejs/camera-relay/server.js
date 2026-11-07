@@ -68,6 +68,23 @@ const PORT = process.env.PORT || config.port;
 const PUSH_PORT = process.env.PUSH_PORT || config.pushPort; // raw TCP, continuous frame push
 const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in each camera's sketch
 
+// (review NODE-006) baseline security headers on every response. The relay
+// mostly serves non-HTML (JPEG/MJPEG/JSON/firmware binaries), so CSP and
+// X-Frame-Options are less critical than for a browser app, but MIME-sniffing
+// a firmware download as HTML and rendering it is still a real risk on old
+// browsers. nosniff must be universal. HSTS is set only when the operator
+// explicitly opts in (RELAY_HSTS=1) AND the relay is reachable over TLS — the
+// default plain-HTTP deployment must NOT advertise HSTS, otherwise a later
+// move to plain HTTP would break every cached client.
+const RELAY_HSTS = process.env.RELAY_HSTS === '1';
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('X-Frame-Options', 'DENY');
+  if (RELAY_HSTS) res.set('Strict-Transport-Security', 'max-age=31536000');
+  next();
+});
+
 const RECORDINGS_DIR = path.join(__dirname, 'recordings');
 fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 // ── Sorting out footage without a person (see lib/personscan.js, INSTALL.md) ──
