@@ -234,6 +234,17 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env }, values) {
   const port = effective(BY_KEY.port, base, nextOverrides, env).value;
   const pushPort = effective(BY_KEY.pushPort, base, nextOverrides, env).value;
   if (String(port) === String(pushPort)) return { error: 'port and pushPort must be different' };
+
+  // (review NODE-013) camKey is flashed into every camera board, so allowing it to equal
+  // controlKey hands the dashboard's full power (recording switch, settings, firmware
+  // publish, restart) to anyone holding a single physical board. Refuse it at save time,
+  // not just at startup, so an operator cannot paint themselves into this corner.
+  const camKey = effective(BY_KEY.camKey, base, nextOverrides, env).value;
+  const controlKey = effective(BY_KEY.controlKey, base, nextOverrides, env).value;
+  if (camKey !== undefined && controlKey !== undefined && camKey !== '' && controlKey !== '' && String(camKey) === String(controlKey)) {
+    return { error: 'camKey and controlKey must be different (camKey is flashed into every camera board: equality would hand the dashboard full power to anyone holding a single board)' };
+  }
+
   return { overrides: nextOverrides, alarmRecordSeconds: nextAlarm, changed, restartRequired };
 }
 

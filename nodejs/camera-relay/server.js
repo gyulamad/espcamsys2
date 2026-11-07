@@ -39,6 +39,7 @@ const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = r
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 const sysconfig = require('./lib/sysconfig');
 const diskspace = require('./lib/diskspace');
+const keypolicy = require('./lib/keypolicy');
 const personscan = require('./lib/personscan');
 const { createSorter } = require('./lib/sorter');
 const { createArchive } = require('./lib/archive');
@@ -2256,6 +2257,21 @@ app.use((err, req, res, next) => {
 // restricting the bind. Operators who genuinely want loopback-only (e.g.
 // everything on one machine) can still opt in with RELAY_BIND=127.0.0.1.
 const RELAY_BIND = process.env.RELAY_BIND || '0.0.0.0';
+
+// Known-weak / template values for camKey and controlKey that must never reach
+// production. Reported by the relay at startup so a copied example.config.js
+// does not silently expose every camera-keyed route. (review NODE-001)
+const camKeyProblem = keypolicy.keyStrengthProblem('camKey', API_KEY);
+if (camKeyProblem) {
+  relayLog('ERROR', `${camKeyProblem}: every camera-keyed route (/upload, /log, /alarm, OTA, device-settings, discovery) is exposed. Generate one with: openssl rand -hex 24`);
+}
+const controlKeyProblem = CONTROL_KEY ? keypolicy.keyStrengthProblem('controlKey', CONTROL_KEY) : null;
+if (controlKeyProblem) {
+  relayLog('ERROR', `${controlKeyProblem}: every dashboard-keyed route (recording switch, settings, firmware publish, restart) is exposed. Generate one with: openssl rand -hex 24`);
+}
+if (keypolicy.keysAreEqualAndNonEmpty(API_KEY, CONTROL_KEY)) {
+  relayLog('ERROR', 'camKey and controlKey are the SAME value: every camera board (which has camKey in its flash) would gain full dashboard power (recording switch, settings, firmware publish, restart). Use two different keys.');
+}
 
 const httpServer = app.listen(PORT, RELAY_BIND, () => {
   console.log(`Camera relay (HTTP) listening on ${RELAY_BIND}:${PORT}`);

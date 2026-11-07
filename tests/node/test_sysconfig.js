@@ -281,4 +281,34 @@ test('every path setting is marked with what kind it is (so none is missed by th
   for (const f of sc.FIELDS.filter((x) => x.type === 'string')) assertTrue(f.path, `${f.key} is a text setting that is not confined`);
 });
 
+// ── camKey vs controlKey (review NODE-013) ──
+
+test('applyUpdate: setting camKey equal to controlKey is refused (a board with camKey must not gain dashboard power)', () => {
+  const r = sc.applyUpdate(state(), { camKey: 'control-secret-1' });
+  assertTrue(r.error, 'should error');
+  assertTrue(/must be different/.test(r.error), `message: ${r.error}`);
+  assertEqual(r.overrides, undefined);
+});
+
+test('applyUpdate: setting controlKey equal to camKey is also refused', () => {
+  const r = sc.applyUpdate(state(), { controlKey: 'cam-secret-1' });
+  assertTrue(r.error);
+  assertTrue(/must be different/.test(r.error));
+});
+
+test('applyUpdate: two distinct valid keys are accepted', () => {
+  const r = sc.applyUpdate(state(), { camKey: 'newcamkey1234567', controlKey: 'newcontrolkey123' });
+  assertEqual(r.error, undefined);
+  assertEqual(r.overrides.camKey, 'newcamkey1234567');
+  assertEqual(r.overrides.controlKey, 'newcontrolkey123');
+});
+
+test('applyUpdate: equal keys in config.js are also caught when only one is being changed', () => {
+  // config.js has both set to the same value; the page only sends one
+  const sameBase = Object.assign({}, BASE, { camKey: 'same-key-1234567', controlKey: 'same-key-1234567' });
+  const r = sc.applyUpdate(state({ base: sameBase }), { camKey: 'different-key-123' });
+  assertEqual(r.error, undefined);
+  assertEqual(r.overrides.camKey, 'different-key-123');
+});
+
 summarize();
