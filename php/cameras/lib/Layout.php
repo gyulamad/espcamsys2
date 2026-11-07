@@ -79,6 +79,8 @@ class CamLayout
     width: 100%; max-height: 220px; border-radius: 4px;
     margin: 2px 0 6px; display: block; background: #000;
   }
+  /* a clip opened from a link (a notification): as large as the screen allows, the list stays around it */
+  .files-player[data-large="1"] video { max-height: 80vh; }
 CSS;
     }
 

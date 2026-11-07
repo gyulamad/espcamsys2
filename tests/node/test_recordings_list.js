@@ -182,4 +182,20 @@ test('thumbUrl names the camera and the clip, encoded', () => {
   assertEqual(list.thumbUrl('cam 1', 'a b.mp4'), 'recordings.php?cam=cam%201&thumb=a%20b.mp4');
 });
 
+// ── parsePlayRequest (a link that opens the page on a clip) ──
+
+test('parsePlayRequest reads cam and play from the address', () => {
+  const good = clip('cam1', '2026-10-23T09:35:22.123Z');
+  assertEqual(list.parsePlayRequest(`?cam=cam1&play=${good}`, ['cam1', 'cam2']), { cam: 'cam1', filename: good });
+  assertEqual(list.parsePlayRequest(`?play=${good}&cam=cam2&x=1`, ['cam1', 'cam2']), { cam: 'cam2', filename: good });
+});
+
+test('parsePlayRequest ignores everything that is not a known camera and a plain recording name', () => {
+  const good = clip('cam1', '2026-10-23T09:35:22.123Z');
+  for (const search of ['', undefined, null, '?cam=cam1', `?play=${good}`, `?cam=other&play=${good}`, '?cam=cam1&play=../../etc/passwd',
+    '?cam=cam1&play=a.mp4%00.txt', '?cam=cam1&play=x.mp3', '?cam=cam1&play=%3Cscript%3E.mp4', '?cam=cam1&play=a/b.mp4']) {
+    assertEqual(list.parsePlayRequest(search, ['cam1', 'cam2']), null, String(search));
+  }
+});
+
 summarize();

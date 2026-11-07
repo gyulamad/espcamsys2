@@ -44,6 +44,9 @@ const { createSorter } = require('./lib/sorter');
 const { createArchive } = require('./lib/archive');
 const { ScanQueue } = require('./lib/scanqueue');
 const { runProcess } = require('./lib/runprocess');
+const { createNotifier } = require('./lib/notify');
+const { postRequest } = require('./lib/notify/httpspost');
+const detectionnotice = require('./lib/detectionnotice');
 
 // What the dashboard's settings page saved (ports, keys, pre-roll, log, folders) is laid
 // over config.js, so config.js itself never has to be rewritten. See lib/sysconfig.js.
@@ -69,6 +72,12 @@ fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 // ── Sorting out footage without a person (see lib/personscan.js, INSTALL.md) ──
 const scanCfg = personscan.resolveScanConfig(config.personScan, __dirname);
 for (const w of scanCfg.warnings) console.warn(`[config] ${w}`);
+
+// ── Notifications (see lib/notify/README.md): one strategy per configured channel behind one interface ──
+const { notifier, warnings: notifyWarnings } = createNotifier(config.notifications, process.env, { post: postRequest });
+for (const w of notifyWarnings) console.warn(`[config] ${w}`);
+const noticeCfg = detectionnotice.resolveNoticeConfig(config.notifications);
+for (const w of noticeCfg.warnings) console.warn(`[config] ${w}`);
 const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
 const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
@@ -590,7 +599,7 @@ function encodeRecording(rec) {
     }
     camLog('INFO', rec.id, `recording saved as ${path.basename(outputPath)}`);
     removeTempDir(rec);
-    if (scanCfg.enabled && scanCfg.auto) queueScan(rec.id, path.basename(outputPath));
+    if (scanCfg.enabled && scanCfg.auto) queueScan(rec.id, path.basename(outputPath), { notify: true });   // a fresh clip: a person in it is announced
   });
 }
 
@@ -2029,9 +2038,22 @@ const sorter = createSorter({
   },
   runDetector: (args) => runProcess(scanCfg.python, args, { env: personscan.scanEnv(process.env), timeoutMs: scanCfg.timeoutMs }),
 });
+// A person found in a fresh recording is announced through the notification channels (lib/detectionnotice.js).
+const detectionNotifier = detectionnotice.createDetectionNotifier({
+  notifier,
+  config: noticeCfg,
+  throttle: new Throttle(noticeCfg.cooldownMs),
+  now: Date.now,
+  files: {
+    readThumbnail: (clipPath) => fs.readFileSync(personscan.thumbnailPath(clipPath)),
+    sizeOf: (clipPath) => fs.statSync(clipPath).size,
+  },
+  log: relayLog,
+});
 const scanQueue = new ScanQueue({
   work: (job) => sorter.sort(job.payload.clipPath),
   onFinished: (job, outcome) => {
+    detectionNotifier.onScanFinished(job, outcome);   // never throws, never rejects
     const name = path.basename(job.payload.clipPath);
     const detail = { state: outcome.state, ...(outcome.reason ? { reason: outcome.reason } : {}) };
     relayLog(outcome.state === 'error' ? 'WARN' : 'INFO', `person check of ${name}: ${detail.state}${detail.reason ? ` (${detail.reason})` : ''}`, { sender: job.payload.camId });
@@ -2043,11 +2065,12 @@ const scanKey = (camId, filename) => `${camId}/${filename}`;
 const archive = createArchive({ fs });
 
 // Queues one clip. A clip that already has its person picture was checked before and is skipped.
+// notify: a person found in it is announced (only for a clip the relay has just saved, not for a re-check).
 // -> 'queued' | 'duplicate' | 'done'
-function queueScan(camId, filename) {
+function queueScan(camId, filename, { notify = false } = {}) {
   const clipPath = path.join(cameraDir(camId), filename);
   if (fs.existsSync(personscan.thumbnailPath(clipPath))) return 'done';
-  return scanQueue.enqueue(scanKey(camId, filename), { camId, clipPath });
+  return scanQueue.enqueue(scanKey(camId, filename), { camId, clipPath, notify });
 }
 
 // Resolves /recordings/:id/:filename to req.recordingPath, or answers 400 (not a
@@ -2194,6 +2217,16 @@ app.post('/recordings/:id/scan', requireDashboardKey, requireScanEnabled, (req, 
   const queued = results.filter((r) => r === 'queued').length;
   relayLog('INFO', `person check of ${queued} recording(s) of ${req.params.id} requested by ${actorOf(req)}`);
   res.status(202).json({ queued });
+});
+
+// Sends a test notification (with the relay's test picture) through every configured channel, so a new setup
+// can be checked without waiting for a person: 409 when no channel is configured, else 200 with one entry per
+// channel ({ name, ok, error? } — an error never contains a secret, see lib/notify/telegram.js).
+app.post('/notifications/test', requireDashboardKey, async (req, res) => {
+  if (notifier.isEmpty()) return res.status(409).json({ error: 'no notification channel is configured (notifications in config.js — see lib/notify/README.md)' });
+  const results = await notifier.send({ text: `Test notification from the camera relay, requested by ${actorOf(req)}`, image: fs.readFileSync(path.join(__dirname, 'testimage.jpg')) });
+  for (const r of results.filter((x) => !x.ok)) relayLog('WARN', `test notification through ${r.name} failed: ${r.error}`);
+  return res.json({ results });
 });
 
 // Any error a route doesn't handle itself ends up here: recorded with its stack
@@ -2502,6 +2535,7 @@ startDiscoveryResponder();
 // A relay that restarted is the first thing to rule in or out when a camera
 // "dropped", and a crash is useless without its stack trace — so both leave a
 // line (written synchronously: the process may be about to die).
+relayLog('INFO', notifier.isEmpty() ? 'notifications: no channel configured' : `notifications: ${notifier.names().join(', ')}`);
 relayLog('INFO', `relay started (pid ${process.pid}, node ${process.version}; HTTP :${PORT}, push :${PUSH_PORT}; pre-roll ${preRollCfg.seconds}s; log file ${logCfg.file}; recording on/off switch ${CONTROL_KEY ? 'enabled' : 'DISABLED (no controlKey in config.js)'})`);
 
 if (ALLOW_KEYLESS_ALARM) {
