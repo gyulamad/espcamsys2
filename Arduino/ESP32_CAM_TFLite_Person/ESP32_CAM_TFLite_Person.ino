@@ -73,7 +73,7 @@
 #ifndef FW_GIT
 #define FW_GIT "dev"
 #endif
-#define FW_BUILD FW_GIT " " __DATE__ " " __TIME__   // which firmware build wrote a log line
+#define FW_BUILD FW_GIT   // which firmware build wrote a log line (review ARD-019: __DATE__ __TIME__ dropped — leaks the build moment and breaks reproducible builds)
 
 // ── Developer switches (not per-camera settings: edit here and re-flash) ──
 // Print person/no-person scores for every inference.

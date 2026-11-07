@@ -143,7 +143,7 @@ void IRAM_ATTR onAlarmEdge() {
 #ifndef FW_GIT
 #define FW_GIT "dev"
 #endif
-#define FW_BUILD FW_GIT " " __DATE__ " " __TIME__   // identifies which firmware build wrote a log line
+#define FW_BUILD FW_GIT   // identifies which firmware build wrote a log line (review ARD-019: __DATE__ __TIME__ dropped — leaks the build moment and breaks reproducible builds)
 
 void logEcho(void*, LogLevel, const char* line) {
   Serial.println(line);
