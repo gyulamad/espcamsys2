@@ -238,12 +238,26 @@ async function main() {
     box.checked = true;
     box.dispatchEvent(new w.Event('change', { bubbles: true }));
     check('ticking a row updates DELETE SELECTED (1)', /DELETE SELECTED \(1\)/.test(d.getElementById('files-del-selected-cam1').textContent) && !d.getElementById('files-del-selected-cam1').disabled);
+
+    // (master 8b94085 follow-up) PLAY no longer inserts a <video> inside an inline container
+    // with id="player-cam1-<filename>" — it opens a modal video window appended to document.body.
+    // The inline container ids are gone, and PLAY again does NOT close the window: closing is via
+    // the .files-video-close button (✕ CLOSE), the Escape key, or a tap on the backdrop. Mirror the
+    // patterns used by tests/node/test_recordings_list_page.js (which 8b94085 updated in lockstep).
+    const modalOf = () => d.querySelector('.files-video-modal');
+    const videoOf = (m) => m && m.querySelector('video');
+    check('no video window is open before PLAY', modalOf() === null);
     panel.querySelector('.files-row .cam-btn').click();   // PLAY
     await sleep(100);
-    const video = d.getElementById(`player-cam1-${GOOD_FILE}`).querySelector('video');
-    check('PLAY inserts a <video> for that file', !!video && video.getAttribute('src') === `recordings.php?cam=cam1&play=${GOOD_FILE}` && video.hasAttribute('controls'), video && video.outerHTML);
-    panel.querySelector('.files-row .cam-btn').click();   // PLAY again = close
-    check('PLAY again closes the player', !d.getElementById(`player-cam1-${GOOD_FILE}`).querySelector('video'));
+    const modal = modalOf();
+    check('PLAY opens the clip in a modal window over the page (not inside the list)', !!modal && modal.parentNode === d.body && !panel.contains(modal), modal && modal.outerHTML.slice(0, 200));
+    const video = videoOf(modal);
+    check('the window holds a <video> for that file with controls', !!video && video.getAttribute('src') === `recordings.php?cam=cam1&play=${GOOD_FILE}` && video.hasAttribute('controls'), video && video.outerHTML.slice(0, 200));
+    const closeBtn = modal.querySelector('.files-video-close');
+    check('CLOSE is a labelled button', !!closeBtn && closeBtn.tagName === 'BUTTON' && closeBtn.getAttribute('type') === 'button' && /CLOSE/.test(closeBtn.textContent), closeBtn && closeBtn.outerHTML);
+    closeBtn.click();   // CLOSE (the new way to close — PLAY again no longer closes)
+    await sleep(50);
+    check('CLOSE removes the window (which stops the video)', modalOf() === null);
     check('the GET link points at the download', panel.querySelector('a.cam-btn').getAttribute('href') === `recordings.php?cam=cam1&download=${GOOD_FILE}`);
 
     // ── press every control of the list, the way a user would: injected handlers would run now ──
