@@ -109,9 +109,25 @@ inline std::vector<std::string> recorderRemotePrerequisites() {
 // The settings the dashboard's settings page may NOT change on a running board
 // (applyChangeLine in settings_logic.h): everything this board needs to reach the relay,
 // plus the push port. A wrong value there would leave a board nobody can reach without a
-// USB cable, so these stay serial-only. Keep in sync with the schema above.
+// USB cable, so these stay serial-only.
+//
+// (review ARD-009) the alarm GPIOs, the alarm-level, the all-cams flag and the
+// remote-log enable switch are ALSO serial-only. Over plain HTTP a MITM could
+// otherwise set ALARM_GPIO_PIN=-1 (silently disable the alarm feature), flip
+// ALARM_ACTIVE (invert the alarm so line noise fires constantly), set
+// ALARM_ALL_CAMS=1 (every alarm from this camera triggers recording on every
+// camera, exhausting relay disk), or set LOG_ENABLED=0 (silence the remote
+// log so the operator never sees the manipulation). All of these change the
+// safety/operational posture of the board, not just its tuning, so they
+// belong next to the network-and-identity locked set.
+// Keep in sync with the schema above.
 inline std::vector<std::string> recorderLockedKeys() {
-    static const char* const keys[] = { "WIFI", "SERVER_HOST", "PUSH_PORT", "HTTP_PORT", "CAMERA_ID", "API_KEY" };
+    static const char* const keys[] = {
+        "WIFI", "SERVER_HOST", "PUSH_PORT", "HTTP_PORT", "CAMERA_ID", "API_KEY",
+        // Operational safety: see comment above (review ARD-009)
+        "ALARM_GPIO_PIN", "ALARM_ACTIVE", "ALARM_ALL_CAMS",
+        "LOG_ENABLED",
+    };
     return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
 }
 

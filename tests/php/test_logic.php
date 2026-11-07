@@ -568,7 +568,12 @@ camtest_test('the generated schema is complete and the connection settings are t
         if ($k['locked']) { $locked[] = $k['name']; }
     }
     sort($locked);
-    camtest_assert_equal($locked, ['API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'PUSH_PORT', 'SERVER_HOST', 'WIFI']);
+    // (review ARD-009) the alarm GPIOs, alarm level, all-cams flag and the
+    // remote-log enable switch are now serial-only locks too: a MITM on the
+    // plain-HTTP control plane could otherwise disable the alarm feature,
+    // invert its level, force all-cameras recording on every alarm, or
+    // silence the remote log so the operator never sees the manipulation.
+    camtest_assert_equal($locked, ['ALARM_ACTIVE', 'ALARM_ALL_CAMS', 'ALARM_GPIO_PIN', 'API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'LOG_ENABLED', 'PUSH_PORT', 'SERVER_HOST', 'WIFI']);
 });
 
 function camtest_detector_reported(): array {
@@ -737,7 +742,7 @@ camtest_test('buildDeviceChange: a valid change becomes a line naming only what 
 });
 
 camtest_test('buildDeviceChange: nothing different means an empty line, not an error', function () {
-    $r = camtest_change(camtest_reported(), ['LOG_HEARTBEAT' => '600', 'ALARM_ACTIVE' => 'low']);
+    $r = camtest_change(camtest_reported(), ['LOG_HEARTBEAT' => '600']);
     camtest_assert_equal([$r['ok'], $r['line'], $r['changed']], [true, '', []]);
 });
 
@@ -749,9 +754,23 @@ camtest_test('buildDeviceChange: the settings that reach the relay are refused, 
     }
 });
 
+// (review ARD-009) the alarm GPIOs, alarm level, all-cams flag and the
+// remote-log enable switch are now serial-only locks: buildDeviceChange must
+// refuse them with the same "serial port only" message every other locked key
+// gets, so a MITM on the plain-HTTP control plane cannot disable the alarm,
+// invert its level, force all-cameras recording on every alarm, or silence
+// the remote log so the operator never sees the manipulation.
+camtest_test('buildDeviceChange: the alarm and remote-log safety settings are refused (review ARD-009)', function () {
+    foreach (['ALARM_GPIO_PIN' => '14', 'ALARM_ACTIVE' => 'high', 'ALARM_ALL_CAMS' => '1', 'LOG_ENABLED' => '0'] as $k => $v) {
+        $r = camtest_change(camtest_reported(), [$k => $v]);
+        camtest_assert_equal($r['ok'], false, "$k=$v");
+        camtest_assert_true(strpos($r['error'], 'serial port') !== false, "$k=$v");
+    }
+});
+
 camtest_test('buildDeviceChange: unknown settings and bad values are refused, and the error never echoes the value', function () {
     foreach ([['NOPE' => '1'], ['LOG_HEARTBEAT' => '0'], ['LOG_HEARTBEAT' => 'abc'], ['LOG_HEARTBEAT' => '1.5'], ['LOG_ECHO' => 'maybe'],
-              ['ALARM_ACTIVE' => 'SIDEWAYS'], ['ALARM_GPIO_PIN' => '7'], ['PUSH_GAP_MUL' => '99'], ['LOG_LOW_HEAP' => "5\n6"]] as $bad) {
+              ['PUSH_GAP_MUL' => '99'], ['LOG_LOW_HEAP' => "5\n6"]] as $bad) {
         $r = camtest_change(camtest_reported(), $bad);
         camtest_assert_equal($r['ok'], false, json_encode($bad));
     }
@@ -760,27 +779,31 @@ camtest_test('buildDeviceChange: unknown settings and bad values are refused, an
 });
 
 camtest_test('buildDeviceChange: values are normalised like the board does (bool words, level case, ints)', function () {
-    $r = camtest_change(camtest_reported(), ['LOG_ECHO' => 'No', 'ALARM_ACTIVE' => 'high', 'LOG_RETRY_MAX' => '007', 'ALARM_GPIO_PIN' => '14']);
-    camtest_assert_equal($r['line'], 'LOG_ECHO=0;ALARM_ACTIVE=HIGH;LOG_RETRY_MAX=7;ALARM_GPIO_PIN=14');
+    // (review ARD-009) ALARM_ACTIVE / ALARM_GPIO_PIN are now locked and removed
+    // from this test; LOG_ECHO and LOG_RETRY_MAX still exercise the normalisation.
+    $r = camtest_change(camtest_reported(), ['LOG_ECHO' => 'No', 'LOG_RETRY_MAX' => '007']);
+    camtest_assert_equal($r['line'], 'LOG_ECHO=0;LOG_RETRY_MAX=7');
 });
 
-camtest_test('buildDeviceChange: switching a feature on needs the settings it requires', function () {
+camtest_test('buildDeviceChange: switching a feature on is refused when the feature is locked (review ARD-009)', function () {
     $rep = camtest_reported();
     $rep['ALARM_GPIO_PIN'] = '-1';
     unset($rep['ALARM_ACTIVE'], $rep['ALARM_ALL_CAMS']);
     $r = camtest_change($rep, ['ALARM_GPIO_PIN' => '14']);
     camtest_assert_equal($r['ok'], false);
-    camtest_assert_true(strpos($r['error'], 'ALARM_ACTIVE') !== false);
+    camtest_assert_true(strpos($r['error'], 'serial port') !== false);
     $r = camtest_change($rep, ['ALARM_GPIO_PIN' => '14', 'ALARM_ACTIVE' => 'HIGH', 'ALARM_ALL_CAMS' => '1']);
-    camtest_assert_equal($r['ok'], true);
-    camtest_assert_equal($r['changed'], ['ALARM_GPIO_PIN', 'ALARM_ACTIVE', 'ALARM_ALL_CAMS']);
+    camtest_assert_equal($r['ok'], false);
+    camtest_assert_true(strpos($r['error'], 'serial port') !== false);
 });
 
-camtest_test('buildDeviceChange: switching a feature OFF does not demand its settings', function () {
+camtest_test('buildDeviceChange: switching a feature OFF is also refused when the feature is locked (review ARD-009)', function () {
     $r = camtest_change(camtest_reported(), ['LOG_ENABLED' => '0']);
-    camtest_assert_equal([$r['ok'], $r['line']], [true, 'LOG_ENABLED=0']);
+    camtest_assert_equal($r['ok'], false);
+    camtest_assert_true(strpos($r['error'], 'serial port') !== false);
     $r = camtest_change(camtest_reported(), ['ALARM_GPIO_PIN' => '-1']);
-    camtest_assert_equal($r['ok'], true);
+    camtest_assert_equal($r['ok'], false);
+    camtest_assert_true(strpos($r['error'], 'serial port') !== false);
 });
 
 camtest_test('escapeSettingValue: ; and \\ are escaped so a value can not become a second setting', function () {

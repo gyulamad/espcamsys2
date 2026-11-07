@@ -192,11 +192,23 @@ async function main() {
     check('a queued change can be withdrawn', cancel.status === 200 && (await board.ask()).status === 404 && (await dash('GET', api)).json.state.pending === null, cancel.text);
 
     // ── requirements between settings ──
+    // (review ARD-009) ALARM_GPIO_PIN, ALARM_ACTIVE, ALARM_ALL_CAMS and
+    // LOG_ENABLED are now serial-only locks: a MITM could otherwise disable
+    // the alarm feature, invert its level, force all-cameras recording on
+    // every alarm, or silence the remote log so the operator never sees the
+    // manipulation. The dashboard no longer accepts them through the staging
+    // endpoint at all; they must be set at provisioning time over the serial
+    // console. The original test staged ALARM_GPIO_PIN=14 + ALARM_ACTIVE=HIGH
+    // + ALARM_ALL_CAMS=1 over the relay and verified the board applied it —
+    // that path is now expected to refuse with the same 'serial port only'
+    // message every other locked key gets.
     await board.report('0', 'boot', '', REPORT.replace('ALARM_GPIO_PIN=13', 'ALARM_GPIO_PIN=-1').replace(';ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0', ''));
     const need = await dash('POST', api, { body: { values: { ALARM_GPIO_PIN: '14' } } });
-    check('switching a feature on without the settings it needs is refused, naming them', need.status === 400 && /ALARM_ACTIVE/.test(need.json.error), need.text);
+    check('ALARM_GPIO_PIN is locked: cannot be staged over the relay', need.status === 400 && /serial port/.test(need.json.error), need.text);
     const okAlarm = await dash('POST', api, { body: { values: { ALARM_GPIO_PIN: '14', ALARM_ACTIVE: 'HIGH', ALARM_ALL_CAMS: '1' } } });
-    check('…and accepted together with them', okAlarm.status === 200 && okAlarm.json.queued === true, okAlarm.text);
+    check('…still refused even with the sibling alarm settings', okAlarm.status === 400 && /serial port/.test(okAlarm.json.error), okAlarm.text);
+    const silenceLog = await dash('POST', api, { body: { values: { LOG_ENABLED: '0' } } });
+    check('LOG_ENABLED is locked: cannot be staged over the relay (would let a MITM silence the log)', silenceLog.status === 400 && /serial port/.test(silenceLog.json.error), silenceLog.text);
     await dash('POST', api, { body: { cancel: true } });
 
     // ── the log: names, never values ──

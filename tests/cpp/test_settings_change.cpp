@@ -93,22 +93,46 @@ TEST(garbage_and_unknown_settings_are_refused) {
 }
 
 TEST(switching_a_feature_on_needs_the_settings_it_requires) {
+    // (review ARD-009) ALARM_GPIO_PIN, ALARM_ACTIVE and ALARM_ALL_CAMS are now
+    // serial-only locks, so they cannot be turned on or off over the relay
+    // at all. This test used to verify that switching the alarm feature ON
+    // over the relay required its sibling settings; the alarm wiring is now
+    // considered operational (not tuning), so it is set at provisioning time.
     MemoryStore st; fill(st);
-    TEST_ASSERT(changeLine(st, "ALARM_GPIO_PIN=-1").ok(), "alarm off is fine");
-    st.m.erase("ALARM_ACTIVE"); st.m.erase("ALARM_ALL_CAMS");   // what a board that never had an alarm holds
     std::map<std::string, std::string> before = st.m;
-    ChangeResult r = changeLine(st, "ALARM_GPIO_PIN=14");
-    TEST_ASSERT(!r.ok(), "refused: it would leave the board incomplete");
-    TEST_ASSERT(mentions(r, "ALARM_ACTIVE") && mentions(r, "ALARM_ALL_CAMS"), "names what is needed");
+    ChangeResult r = changeLine(st, "ALARM_GPIO_PIN=-1");
+    TEST_ASSERT(!r.ok(), "alarm pin is locked: refused over the relay");
+    TEST_ASSERT(mentions(r, "serial port"), "says why");
     TEST_ASSERT(st.m == before, "nothing stored");
-    TEST_ASSERT(changeLine(st, "ALARM_GPIO_PIN=14;ALARM_ACTIVE=HIGH;ALARM_ALL_CAMS=1").ok(), "all together is fine");
-    TEST_ASSERT_EQ(st.m["ALARM_ACTIVE"], std::string("HIGH"), "stored");
+    r = changeLine(st, "ALARM_GPIO_PIN=14;ALARM_ACTIVE=HIGH;ALARM_ALL_CAMS=1");
+    TEST_ASSERT(!r.ok(), "alarm wiring as a whole is locked");
+    TEST_ASSERT(st.m == before, "nothing stored");
 }
 
 TEST(switching_a_feature_off_does_not_require_its_settings) {
+    // (review ARD-009) LOG_ENABLED is now a serial-only lock: a MITM could
+    // otherwise set LOG_ENABLED=0 to silence the remote log so the operator
+    // never sees the manipulation. LOG_ENABLED=1 stays the boot value.
     MemoryStore st; fill(st);
-    TEST_ASSERT(changeLine(st, "LOG_ENABLED=0").ok(), "remote log off; its other settings stay stored but unused");
-    TEST_ASSERT_EQ(st.m["LOG_ENABLED"], std::string("0"), "stored");
+    std::map<std::string, std::string> before = st.m;
+    ChangeResult r = changeLine(st, "LOG_ENABLED=0");
+    TEST_ASSERT(!r.ok(), "LOG_ENABLED is locked: refused over the relay");
+    TEST_ASSERT(mentions(r, "serial port"), "says why");
+    TEST_ASSERT(st.m == before, "nothing stored");
+    TEST_ASSERT_EQ(st.m["LOG_ENABLED"], std::string("1"), "untouched");
+}
+
+TEST(the_alarm_and_log_locks_are_part_of_the_locked_set_review_ARD_009) {
+    // The locks are exposed through recorderLockedKeys(); document them so a
+    // future rename or removal shows up as a failing test rather than a silent
+    // security regression.
+    std::vector<std::string> locked = recorderLockedKeys();
+    for (const char* k : { "WIFI", "SERVER_HOST", "PUSH_PORT", "HTTP_PORT", "CAMERA_ID", "API_KEY",
+                            "ALARM_GPIO_PIN", "ALARM_ACTIVE", "ALARM_ALL_CAMS", "LOG_ENABLED" }) {
+        bool found = false;
+        for (size_t i = 0; i < locked.size(); ++i) if (locked[i] == k) { found = true; break; }
+        TEST_ASSERT(found, std::string("locked: ") + k);
+    }
 }
 
 TEST(a_failing_flash_write_puts_the_earlier_ones_back) {
