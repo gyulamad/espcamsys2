@@ -47,6 +47,7 @@ const { runProcess } = require('./lib/runprocess');
 const { createNotifier } = require('./lib/notify');
 const { postRequest } = require('./lib/notify/httpspost');
 const detectionnotice = require('./lib/detectionnotice');
+const storagenotice = require('./lib/storagenotice');
 
 // What the dashboard's settings page saved (ports, keys, pre-roll, log, folders) is laid
 // over config.js, so config.js itself never has to be rewritten. See lib/sysconfig.js.
@@ -78,6 +79,8 @@ const { notifier, warnings: notifyWarnings } = createNotifier(config.notificatio
 for (const w of notifyWarnings) console.warn(`[config] ${w}`);
 const noticeCfg = detectionnotice.resolveNoticeConfig(config.notifications);
 for (const w of noticeCfg.warnings) console.warn(`[config] ${w}`);
+const storageNoticeCfg = storagenotice.resolveStorageNoticeConfig(config.notifications);
+for (const w of storageNoticeCfg.warnings) console.warn(`[config] ${w}`);
 const MAX_RECORD_SECONDS = 3600; // 1 hour cap per recording, sanity limit
 const DEFAULT_FPS = 5; // fallback if we somehow can't measure real capture timing
 
@@ -1115,11 +1118,28 @@ const diskDeps = {
   }),
 };
 
-app.get('/storage', requireReadKey, async (req, res) => {
+async function readStorageView() {
   const minFreeMB = sysconfig.currentInt('minFreeStorageMB', systemSettingsState());
   const freeBytes = await diskspace.readFreeBytes(RECORDINGS_DIR, diskDeps);
-  return res.json(diskspace.buildStorageView(freeBytes, minFreeMB));
+  return diskspace.buildStorageView(freeBytes, minFreeMB);
+}
+
+app.get('/storage', requireReadKey, async (req, res) => res.json(await readStorageView()));
+
+// The same check, for a user who does not open the dashboard: while the disk is below the minimum, the notification
+// channels get a message when it becomes low and a reminder every notifications.storageReminderHours (default 24;
+// 0 = no reminders) — see lib/storagenotice.js. The first look is one interval after the start, so a relay that is
+// restarted in quick succession does not repeat itself. unref(): this timer never keeps the process alive.
+const STORAGE_CHECK_MS = 60 * 1000;
+const storageNotifier = storagenotice.createStorageNotifier({
+  notifier,
+  readView: readStorageView,
+  config: storageNoticeCfg,
+  baseUrl: noticeCfg.footageBaseUrl,
+  now: Date.now,
+  log: relayLog,
 });
+setInterval(() => storageNotifier.check(), STORAGE_CHECK_MS).unref();
 
 // ── Settings ──
 // GET  /settings                         -> { alarmRecordSeconds, preRollSeconds }

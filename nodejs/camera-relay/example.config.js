@@ -91,5 +91,8 @@ module.exports = {
   //                                                        // links to its ALL FILES list with the clip playing
   //                                                        // (omit: no link)
   //   cooldownSeconds: 60,           // at most one message per camera in this time (0 = every detection)
+  //   // When the recording storage falls below "Minimum free recording storage (MB)" (the dashboard's settings
+  //   // page; the same limit as its alert) you get a message, then a reminder this often while it stays low:
+  //   storageReminderHours: 24,      // whole hours; 0 = no reminders
   // },
 };
