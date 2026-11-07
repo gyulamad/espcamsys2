@@ -29,7 +29,7 @@ const FIELDS = [
   { key: 'alarmRecordSeconds', type: 'int', min: 1, max: 3600, default: 60, env: null, group: 'Recording', restart: false,
     label: 'Alarm recording length (seconds)', help: 'How long a recording started by a camera\'s alarm input runs. Applies to the next alarm — no restart.' },
   { key: 'minFreeStorageMB', type: 'int', min: 0, max: 1024 * 1024, default: 1024, env: 'MIN_FREE_STORAGE_MB', group: 'Recording', restart: false,
-    label: 'Minimum free recording storage (MB)', help: 'When the free space on the disk holding the recordings falls below this, every dashboard page warns you to delete old recordings. 0 switches the warning off. Applies at once — no restart.' },
+    label: 'Minimum free recording storage (MB)', help: 'When the free space on the disk holding the recordings falls below this, every dashboard page warns you to delete old recordings, and a notification channel, if one is set up, sends you a message too. 0 switches the warning and the message off. Applies at once — no restart.' },
   { key: 'preRollSeconds', type: 'int', min: 0, max: 60, default: 5, env: 'PREROLL_SECONDS', group: 'Recording', restart: true,
     label: 'Pre-roll (seconds)', help: 'Footage from BEFORE the trigger that every recording starts with. 0 switches it off.' },
   { key: 'preRollMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 8 * MIB, env: 'PREROLL_MAX_BYTES', group: 'Recording', restart: true,

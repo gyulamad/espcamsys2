@@ -44,9 +44,21 @@ notifications: {
 },
 ```
 
-or, better, keep the token out of any file and give it to the relay's environment (for a systemd service:
+**Several people?** Give `chatId` an array; everybody in it gets every message (and thumbnail):
+
+```js
+chatId: ['123456789', '987654321', '-1001234567890'],   // two people and a group
+```
+
+Each person has to open a chat with the bot and press **Start** once (step 2 above), and their id is found
+the same way (their own `getUpdates` entry). Delivery is independent: if one person has blocked the bot, the
+others still get the message, and the relay log names the chat that failed and why. A chat listed twice is
+messaged once; an id that is not valid is left out with a `[config]` warning (the others keep working).
+
+Or, better, keep the token out of any file and give it to the relay's environment (for a systemd service:
 `Environment=TELEGRAM_BOT_TOKEN=...` and `Environment=TELEGRAM_CHAT_ID=...` in the unit, or an
-`EnvironmentFile=` that only root can read). The environment wins over `config.js`.
+`EnvironmentFile=` that only root can read; several chats are comma-separated:
+`TELEGRAM_CHAT_ID=123456789,987654321`). The environment wins over `config.js`.
 
 Restart the relay. Its log says `notifications: telegram` when the channel is on, or a
 `[config] ...` warning saying what is wrong with the settings (the token itself is never printed).
@@ -60,7 +72,8 @@ curl -X POST -H "X-Control-Key: YOUR_CONTROL_KEY" http://localhost:8080/notifica
 You should receive a message with a picture within a few seconds, and the answer lists every channel:
 `{"results":[{"name":"telegram","ok":true}]}`. A failure says why, for example
 `Telegram sendMessage was refused: Forbidden: bot was blocked by the user` (press **Start** in the chat) or
-`... chat not found` (wrong chat id — did you press Start?).
+`... chat not found` (wrong chat id — did you press Start?). With several chats the entry looks like
+`delivered to 2 of 3 chats; chat 987654321: Telegram sendMessage was refused: Forbidden: bot was blocked by the user`.
 
 ### Safety notes
 
@@ -89,10 +102,11 @@ to the address of the dashboard **as your phone reaches it** (the Pi's name or L
 reachable from your home network, or through your VPN/Tor setup, which is the point).
 
 The link opens the dashboard's **ALL FILES page** (after the dashboard login), not the bare video: the full
-list of recordings loads with its navigation bar, and that clip is already playing in it, large, with the
-list around it. Closing the player or the tab never costs you the other recordings; they are one tap away,
-and the player's own full-screen button is there when you want the whole screen. If the clip has been
-deleted or sorted away by then, you simply get the list. Without `footageBaseUrl` the message has no link.
+list of recordings loads with its navigation bar, and that clip opens in the video window, exactly as if you
+had pressed its PLAY button. The window fills the screen (so it is usable on a phone), the list stays behind
+it, and ✕ CLOSE (or Escape) brings you back to every other recording. The player's own full-screen button is
+there when you want it. If the clip has been deleted or sorted away by then, you simply get the list.
+Without `footageBaseUrl` the message has no link.
 
 - At most one message per camera per `cooldownSeconds` (default 60); the next message says how many
   detections were held back. `0` announces every detection.
@@ -100,6 +114,32 @@ deleted or sorted away by then, you simply get the list. Without `footageBaseUrl
 - A missing thumbnail never blocks the message (it is sent as text); a channel that fails is logged as a
   `WARN` and the other channels still deliver.
 - A clip with nobody in it is never announced (and is filed or deleted as before).
+
+## When you are notified: the recording storage is almost full
+
+The dashboard shows an alert when the free space on the disk that holds the recordings falls below the setting
+**Minimum free recording storage (MB)** (default 1024, `0` = off), but only when a page is loaded. With a channel
+configured you get the same warning as a message, so it reaches you even if you have not opened the dashboard for
+days. There is nothing more to switch on: the minimum is the one the dashboard uses, and a change on the settings
+page applies at once.
+
+```
+The recording storage is almost empty.
+Free: 312 MB (the minimum is 1024 MB). Please delete old files.
+Time: 2026-11-07 17:52:00 UTC
+Recordings: http://raspberrypi.local/camdash/all-recordings.php
+```
+
+- The disk is looked at every minute. You get one message when it falls below the minimum, then a reminder
+  every `notifications.storageReminderHours` hours (default 24; `0` = no reminders) while it stays below.
+- It is quiet again once the free space is 10 % above the minimum, so a disk hovering around the limit does not
+  send a message each time it crosses it. After that, falling below the minimum is announced again.
+- `Recordings:` is the dashboard's ALL FILES list, where old recordings can be deleted. It appears when
+  `notifications.footageBaseUrl` is set (see above) and is left out otherwise.
+- A message that no channel delivered is tried again after 15 minutes, and the relay log says which channel
+  failed and why. A disk the system will not report on gives no message.
+- The relay does not remember between runs that it has already written: after a restart while the disk is still
+  low, you get the message again.
 
 ## Adding another channel
 

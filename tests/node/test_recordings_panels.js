@@ -73,13 +73,22 @@ async function main() {
   check('…and draws the clip without a camera name (it is one camera)', panel1.querySelectorAll('.files-name').map((e) => e.text()).join() === clip && panel1.querySelectorAll('.files-cam').length === 0);
   check('…with this camera\'s own button ids', !!doc.getElementById('files-sel-all-cam1') && !!doc.getElementById('files-del-selected-cam1'));
   check('…and updates the FILES button to what the list shows', btn.textContent === '📼 FILES (1)');
-  check('…and tells the player-hold check the list was redrawn', playerChecks > 0);
 
   // refresh of an open panel, same list object (ticks etc. survive)
   doc.getElementById('files-sel-all-cam1').click();
   await api.refreshRecordingsList('cam1');
   check('refreshing an open panel redraws it and keeps what was ticked', panel1.querySelectorAll('.files-select:checked').length === 1);
   check('one list object per camera', api.recordingsListOf('cam1') === api.recordingsListOf('cam1') && api.recordingsListOf('cam1') !== api.recordingsListOf('cam2'));
+
+  // the video window and the dashboard's "make room" hold
+  const checksBefore = playerChecks;
+  panel1.querySelectorAll('.files-row')[0].querySelectorAll('.cam-btn')[0].click();   // PLAY
+  check('PLAY opens the video window and tells the player-hold check, so the live view makes room', doc.body.querySelector('.files-video-modal') !== null && playerChecks > checksBefore);
+  const checksOpen = playerChecks;
+  await api.refreshRecordingsList('cam1');
+  check('a redraw of the list leaves the window alone (nothing to re-check)', doc.body.querySelector('.files-video-modal') !== null && playerChecks === checksOpen);
+  doc.body.querySelector('.files-video-close').click();
+  check('closing the window tells the player-hold check again, so the live view comes back', doc.body.querySelector('.files-video-modal') === null && playerChecks > checksOpen);
 
   // a list that could not be read must not change the count
   unreadable = true;

@@ -222,8 +222,7 @@
   }
 
   // What differs between a row of the recordings and a row of the archive: the element ids and the URLs.
-  const RECORDING_ROW = { rowId: 'row', playerId: 'player', playUrl, downloadUrl };
-  const ARCHIVE_ROW = { rowId: 'archived', playerId: 'archived-player', playUrl: archivePlayUrl, downloadUrl: archiveDownloadUrl };
+  const ARCHIVE_ROW_ID = 'archived';
 
   // ── The list on a page ───────────────────────────────────────────────────
 
@@ -238,7 +237,7 @@
   //   hooks      what the page adds around a request, all optional:
   //     withPaused(fn)        runs a request that needs room (the dashboard closes its live pictures meanwhile)
   //     holdForDownload()     a download was handed to the browser
-  //     playersChanged()      a player was opened, closed or removed
+  //     playersChanged()      the video window was opened, closed, or its clip ended
   //     loaded(files, failed) the list was (re)loaded
   //     confirm / alert       default to the window's
   function create(options) {
@@ -290,8 +289,7 @@
     }
 
     function setContent(...nodes) {
-      panel.replaceChildren(...nodes);
-      hooks.playersChanged();   // the list was redrawn, which removed any player in it
+      panel.replaceChildren(...nodes);   // the video window lives outside the list: a redraw leaves it alone
     }
 
     // Playing or downloading a clip counts as seeing it: the row stops being bold right away, and the
@@ -307,36 +305,55 @@
       post(cam, `seen=${encodeURIComponent(filename)}`, fetchFn).catch(() => null);
     }
 
-    // A plain HTML5 <video> under the clicked row; the browser's own player does the rest. ?play= streams
-    // the same bytes as ?download= with Range forwarding, so seeking works.
-    // `kind` says which list's row it is: the recordings' (default) or the archive's.
-    function togglePlay(cam, filename, kind = RECORDING_ROW) {
-      const container = document.getElementById(`${kind.playerId}-${cam}-${filename}`);
-      if (!container) return;
-      if (container.dataset.open === '1') {
-        container.replaceChildren();   // removing the <video> stops playback
-        container.dataset.open = '0';
-        container.dataset.large = '0';
+    // ── The video window ──
+    // A clip plays in a MODAL over the page — as large as the screen allows, which is what makes it usable on
+    // a phone — and the list stays behind it, one tap (CLOSE, Escape, a tap beside the video) away. Every PLAY
+    // button, the archive's too, and a link that opens the page on a clip (the person notification) go through
+    // here, so they all look and behave the same. A plain HTML5 <video>: the browser's own controls do the rest
+    // (full screen too). ?play= streams the same bytes as ?download= with Range forwarding, so seeking works.
+    // Only one window is ever open; closing it removes the <video>, which stops playback.
+    let openClip = null;   // { key, close } of the window that is open, or null
+    function openVideo(key, src, caption) {
+      if (openClip && openClip.key === key) return;   // that clip is showing already: do not restart it
+      if (openClip) openClip.close();
+      function close() {
+        overlay.remove();
+        document.body.classList.remove('files-modal-open');
+        document.removeEventListener('keydown', onKey);
+        openClip = null;
         hooks.playersChanged();
-        return;
       }
-      container.replaceChildren(h('video', { controls: true, autoplay: true, src: kind.playUrl(cam, filename), onended: hooks.playersChanged }));
-      container.dataset.open = '1';
+      function onKey(e) {
+        if (e.key === 'Escape') close();
+      }
+      const closeButton = h('button', { className: 'cam-btn files-video-close', type: 'button', textContent: '✕ CLOSE', ariaLabel: `Close the video ${caption}`, onclick: close });
+      const overlay = h('div', { className: 'files-video-modal', role: 'dialog', ariaModal: 'true', ariaLabel: caption, onclick: (e) => { if (e.target === overlay) close(); } },
+        h('div', { className: 'files-video-bar' },
+          h('span', { className: 'files-video-title', title: caption, textContent: caption }),
+          closeButton),
+        h('div', { className: 'files-video-stage' },
+          h('video', { controls: true, autoplay: true, playsInline: true, src, onended: hooks.playersChanged })));
+      document.addEventListener('keydown', onKey);
+      document.body.classList.add('files-modal-open');
+      document.body.appendChild(overlay);
+      openClip = { key, close };
+      if (typeof closeButton.focus === 'function') closeButton.focus();
       hooks.playersChanged();
     }
 
-    // Opens a clip's player (never closes one that is open), large, and scrolls to the row, so the list
-    // stays around it: the visitor lands in the web app, not on a bare video. -> false when the clip is not
-    // in the list (deleted, or sorted into the archive since): the list is simply shown as it is.
+    // What a row's PLAY does: playing counts as seeing it.
+    function playRecording(cam, filename) {
+      markSeen(cam, filename);
+      openVideo(`${cam}/${filename}`, playUrl(cam, filename), filename);
+    }
+
+    // Plays a clip of the list as if its PLAY button had been pressed, and scrolls its row into view behind the
+    // window. -> false when the clip is not in the list (deleted, or sorted into the archive since): the list is
+    // simply shown as it is.
     function playClip(cam, filename) {
       const clipRow = document.getElementById(`row-${cam}-${filename}`);
       if (!clipRow) return false;
-      const container = document.getElementById(`${RECORDING_ROW.playerId}-${cam}-${filename}`);
-      if (container.dataset.open !== '1') {
-        markSeen(cam, filename);
-        togglePlay(cam, filename);
-      }
-      container.dataset.large = '1';
+      if (!(openClip && openClip.key === `${cam}/${filename}`)) playRecording(cam, filename);
       if (typeof clipRow.scrollIntoView === 'function') clipRow.scrollIntoView({ block: 'start' });
       return true;
     }
@@ -435,7 +452,7 @@
     }
 
     let pollTimer = null;
-    const playerOpen = () => panel.querySelector('.files-player[data-open="1"]') !== null;
+    const playerOpen = () => openClip !== null;
     // Reload while clips are being checked — but never while a clip is playing (a reload would close the player).
     function schedulePoll(files) {
       clearTimeout(pollTimer);
@@ -457,10 +474,9 @@
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
           ...(f.scan ? [h('span', { className: 'files-scan' + (f.scan.state === 'error' ? ' error' : ''), textContent: scanLabel(f.scan) })] : []),
-          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => { markSeen(f.cam, f.filename); togglePlay(f.cam, f.filename); } }),
+          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => playRecording(f.cam, f.filename) }),
           h('a', { className: 'cam-btn', textContent: '⬇ GET', href: downloadUrl(f.cam, f.filename), onclick: () => { hooks.holdForDownload(); markSeen(f.cam, f.filename); } }),
           h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteOne(f.cam, f.filename) })),
-        h('div', { className: 'files-player', id: `player-${f.cam}-${f.filename}` }),
       ];
     }
 
@@ -468,14 +484,13 @@
     function archiveRow(f) {
       const label = options.camLabel ? options.camLabel(f.cam) : null;
       return [
-        h('div', { className: 'files-row', id: `${ARCHIVE_ROW.rowId}-${f.cam}-${f.filename}` },
+        h('div', { className: 'files-row', id: `${ARCHIVE_ROW_ID}-${f.cam}-${f.filename}` },
           ...(label === null ? [] : [h('span', { className: 'files-cam', textContent: label })]),
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
-          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => togglePlay(f.cam, f.filename, ARCHIVE_ROW) }),
+          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => openVideo(`${ARCHIVE_ROW_ID}/${f.cam}/${f.filename}`, archivePlayUrl(f.cam, f.filename), f.filename) }),
           h('a', { className: 'cam-btn', textContent: '⬇ GET', href: archiveDownloadUrl(f.cam, f.filename), onclick: () => hooks.holdForDownload() }),
           h('button', { className: 'cam-btn', textContent: '♻ RESTORE', title: 'Put this recording back into the list', onclick: () => restoreOne(f.cam, f.filename) })),
-        h('div', { className: 'files-player', id: `${ARCHIVE_ROW.playerId}-${f.cam}-${f.filename}` }),
       ];
     }
 

@@ -84,11 +84,15 @@ module.exports = {
   //   telegram: {
   //     botToken: '123456789:AA...',   // from @BotFather
   //     chatId: '123456789',           // your chat (a group's is negative), or '@channelname'
+  //     // several people / groups: chatId: ['123456789', '987654321', '-1001234567890'],
   //   },
   //   // A person found in a NEW recording (needs personScan above) is announced with its thumbnail:
   //   footageBaseUrl: 'http://raspberrypi.local/camdash',  // the dashboard as your phone reaches it; the message
   //                                                        // links to its ALL FILES list with the clip playing
   //                                                        // (omit: no link)
   //   cooldownSeconds: 60,           // at most one message per camera in this time (0 = every detection)
+  //   // When the recording storage falls below "Minimum free recording storage (MB)" (the dashboard's settings
+  //   // page; the same limit as its alert) you get a message, then a reminder this often while it stays low:
+  //   storageReminderHours: 24,      // whole hours; 0 = no reminders
   // },
 };

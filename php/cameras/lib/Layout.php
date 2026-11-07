@@ -75,12 +75,20 @@ class CamLayout
     padding-top: 6px; margin-top: 2px; border-top: 1px solid var(--border);
   }
   .files-empty { color: var(--muted); padding: 4px 0; }
-  .files-player video {
-    width: 100%; max-height: 220px; border-radius: 4px;
-    margin: 2px 0 6px; display: block; background: #000;
+  /* The video window: a clip plays in a modal over the page, as large as the screen allows (a phone's screen
+     is too small for a player squeezed in under a row). 100dvh follows the phone's address bar; the safe-area
+     padding keeps the controls clear of a notch. The page behind does not scroll while it is open. */
+  body.files-modal-open { overflow: hidden; }
+  .files-video-modal {
+    position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column;
+    height: 100vh; height: 100dvh; box-sizing: border-box; background: #000;   /* opaque: the list behind must not ghost through */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
-  /* a clip opened from a link (a notification): as large as the screen allows, the list stays around it */
-  .files-player[data-large="1"] video { max-height: 80vh; }
+  .files-video-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+  .files-video-title { flex: 1; min-width: 0; color: #ddd; font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .files-video-close { flex: 0 0 auto; min-width: 44px; min-height: 44px; font-size: 0.85em; }   /* a finger-sized target */
+  .files-video-stage { flex: 1 1 auto; min-height: 0; display: flex; }
+  .files-video-modal video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 CSS;
     }
 
@@ -401,11 +409,12 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
             . '<span id="clock">--:--:--</span>'
             . '<span class="cam-title">' . self::iconSpan($summary['icon'], 'cam-icon') . '<span id="cam-name">' . self::esc($summary['name']) . '</span></span>'
             . '<span id="rec" class="rec-off">RECORDING: –</span>'
+            . '<span class="countdown" id="screen-state" title="Whether this page keeps the device screen on" hidden></span>'
             . '<span class="countdown" id="countdown" title="Time left before the slideshow shows the next camera" hidden></span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser
