@@ -50,7 +50,10 @@ function makeDashboard(user, pass) {
     `<?php return ['auth_user' => ${JSON.stringify(user)}, 'auth_pass' => ${JSON.stringify(pass)}, 'relay_url' => 'http://127.0.0.1:1', 'cameras' => [['id' => 'cam-a', 'name' => 'A', 'icon' => '📷']]];\n`);
   return dir;
 }
-const stateFile = (dir) => path.join(os.tmpdir(), 'camdash-login-' + crypto.createHash('sha1').update(dir).digest('hex') + '.json');
+// The throttle state file lives next to the dashboard's auth.php (in data/),
+// ever since patch 0008 (PHP-002) removed the predictable temp-dir fallback.
+// The path matches camdash_throttle_file() in auth.php: __DIR__ . '/data/login-throttle.json'.
+const stateFile = (dir) => path.join(dir, 'data', 'login-throttle.json');
 const readState = (dir) => { try { return JSON.parse(fs.readFileSync(stateFile(dir), 'utf8')); } catch (e) { return null; } };
 
 let phpLog = '';
@@ -103,6 +106,7 @@ const wrong = (n) => ({ user: GOOD.user, pass: 'wrong-guess-' + n });
 // Runs one dashboard instance, then stops it and removes its files.
 async function withDashboard(user, pass, fn) {
   const dir = makeDashboard(user, pass);
+  fs.mkdirSync(path.join(dir, 'data'), { recursive: true });   // (PHP-002) throttle file lives here now
   fs.rmSync(stateFile(dir), { force: true });
   phpLog = '';
   let php;

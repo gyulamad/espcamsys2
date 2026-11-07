@@ -28,7 +28,7 @@ const RELAY_PORT = Number(process.env.E2E_DDET_RELAY_PORT || 19311);
 const PUSH_PORT = Number(process.env.E2E_DDET_PUSH_PORT || 19312);
 const OLD_RELAY_PORT = Number(process.env.E2E_DDET_OLD_RELAY_PORT || 19313);
 const PHP2_PORT = Number(process.env.E2E_DDET_PHP2_PORT || 19314);
-const AUTH = { user: 'e2e-user', pass: 'e2e-pass' };
+const AUTH = { user: 'e2e-user', pass: 'e2e-pass-long' };
 const KEY = 'e2e-key';
 const CONTROL_KEY = 'e2e-control-key';   // (review NODE-H2): reads need the control key now
 

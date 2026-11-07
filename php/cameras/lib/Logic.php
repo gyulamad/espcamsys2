@@ -1634,7 +1634,36 @@ class CamLogic
                 return ['ok' => false, 'error' => 'unknown setting ' . $name];
             }
             $def = $byName[$name];
+            // A locked key (or a secret/wifi) is refused as a CHANGE. But the
+            // dashboard's settings page echoes back the board's reported state on
+            // every form submit, including the values of locked settings, so a
+            // value that matches what the board already has must be a no-op, not
+            // an error — otherwise submitting any change would 400 as soon as the
+            // page shows a locked field. This mirrors the camera side's
+            // applyChangeLine() behaviour (review ARD-009 / test
+            // a_locked_setting_given_with_its_current_value_is_just_ignored).
+            //
+            // secret and wifi are special: their normalizeDeviceValue() ALWAYS
+            // returns ok:false (they cannot be normalised as values — the dashboard
+            // sends '' to mean "keep the current one", never the masked display
+            // form like 'net:********'). For these two kinds, fall back to the
+            // strict unconditional reject (the original behaviour), so a wifi or
+            // secret value the dashboard sent by mistake is still refused.
             if ($def['locked'] || in_array($def['kind'], ['secret', 'wifi'], true)) {
+                if (in_array($def['kind'], ['secret', 'wifi'], true)) {
+                    return ['ok' => false, 'error' => $name . ' can only be changed over the serial port (a wrong value would cut the camera off from the relay)'];
+                }
+                $n = self::normalizeDeviceValue($def, $gpios, (string) $raw);
+                if (!$n['ok']) {
+                    // A malformed value for a locked key still returns the "serial
+                    // port" error, never the per-kind validation message — the latter
+                    // would mislead the operator into thinking a valid value would
+                    // be accepted, when in fact the key is locked regardless.
+                    return ['ok' => false, 'error' => $name . ' can only be changed over the serial port (a wrong value would cut the camera off from the relay)'];
+                }
+                if (isset($reported[$name]) && $reported[$name] === $n['value']) {
+                    continue;   // unchanged: silently ignore, like the camera does
+                }
                 return ['ok' => false, 'error' => $name . ' can only be changed over the serial port (a wrong value would cut the camera off from the relay)'];
             }
             $n = self::normalizeDeviceValue($def, $gpios, (string) $raw);

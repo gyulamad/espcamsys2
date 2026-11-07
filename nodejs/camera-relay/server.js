@@ -1042,18 +1042,27 @@ app.get('/detector/:id/stream', requireReadKey, (req, res) => {
   const id = req.params.id;
   if (!logentry.CAMERA_ID_RE.test(id)) return res.status(400).json({ error: 'invalid detector id' });
   const now = Date.now();
-  const det = getDetector(id);
+  // (review NODE-005 follow-up / regression fix) read the record WITHOUT
+  // creating one. getDetector(id) creates a new (empty) record on first sight,
+  // which makes buildView() return state:'offline' instead of state:'never'
+  // for a detector that has never connected — breaking the 404 path the
+  // dashboard's "no such detector" UI depends on. The original code used
+  // detectors[id] directly for the same reason. Only call getDetector(id)
+  // once we know we are going to stream (which needs the emitter).
+  const det = detectors[id];
   const view = detectorstate.buildView(det, now);
   if (view.state !== 'online') {
     // (review NODE-012) the list of known detector ids is operational metadata
     // that an attacker on the LAN should not be handed freely; expose it only
     // to loopback callers (the dashboard's PHP proxy runs from 127.0.0.1).
+    // The error MESSAGE format is preserved as-is for loopback callers so the
+    // dashboard's detector-stream.php parser and the e2e test's exact-text
+    // check keep working; non-loopback callers get the same shape without the
+    // 'known' list.
     const showKnown = isLoopback(req.socket.remoteAddress);
     const known = showKnown ? Object.keys(detectors).sort() : [];
     const error = view.state === 'never'
-      ? showKnown && known.length
-        ? `no detector called '${id}' has connected to the relay since it started (detectors seen: ${known.join(', ')})`
-        : `no detector called '${id}' has connected to the relay since it started`
+      ? `no detector called '${id}' has connected to the relay since it started${showKnown ? (known.length ? ` (detectors seen: ${known.join(', ')})` : ' (no detector has connected at all)') : ''}`
       : `detector '${id}' has no picture to show: ${view.message}`;
     const t = detectorViewThrottle.check(`${id}:${view.state}`, now);
     if (t.allow) {
@@ -1064,11 +1073,15 @@ app.get('/detector/:id/stream', requireReadKey, (req, res) => {
     return res.status(view.state === 'never' ? 404 : 503).set('Cache-Control', 'no-store').json(body);
   }
 
-  // (review NODE-005) per-detector viewer cap, mirroring /stream/:id.
-  if (det.streamViewers >= MAX_STREAM_VIEWERS) {
+  // (review NODE-005) per-detector viewer cap, mirroring /stream/:id. Now that
+  // we know we will stream, getDetector(id) is safe (it returns the existing
+  // record without creating a new one, since view.state === 'online' implies
+  // the detector has connected at least once).
+  const online = getDetector(id);
+  if (online.streamViewers >= MAX_STREAM_VIEWERS) {
     return res.status(503).set('Cache-Control', 'no-store').json({ error: `already ${MAX_STREAM_VIEWERS} viewers of this detector's live stream` });
   }
-  det.streamViewers++;
+  online.streamViewers++;
 
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
@@ -1084,11 +1097,11 @@ app.get('/detector/:id/stream', requireReadKey, (req, res) => {
     ready = res.write(frame) && ready;
     ready = res.write('\r\n') && ready;
   };
-  if (det.frame) onFrame(det.frame);
-  det.emitter.on('frame', onFrame);
+  if (online.frame) onFrame(online.frame);
+  online.emitter.on('frame', onFrame);
   req.on('close', () => {
-    det.streamViewers = Math.max(0, det.streamViewers - 1);
-    det.emitter.off('frame', onFrame);
+    online.streamViewers = Math.max(0, online.streamViewers - 1);
+    online.emitter.off('frame', onFrame);
   });
   return undefined;
 });

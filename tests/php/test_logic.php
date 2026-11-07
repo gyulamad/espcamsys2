@@ -746,12 +746,48 @@ camtest_test('buildDeviceChange: nothing different means an empty line, not an e
     camtest_assert_equal([$r['ok'], $r['line'], $r['changed']], [true, '', []]);
 });
 
-camtest_test('buildDeviceChange: the settings that reach the relay are refused, even with their current value', function () {
+camtest_test('buildDeviceChange: the settings that reach the relay are refused as a CHANGE — but echo-back of the current value is a no-op', function () {
+    // (review ARD-009 follow-up) buildDeviceChange used to reject a locked key
+    // unconditionally, even when the value matched what the board already had.
+    // That broke the dashboard's settings page, which echoes back the board's
+    // reported state on every form submit — including locked fields — so any
+    // change would 400 as soon as the page showed a locked field. Now a locked
+    // key (whose kind is normalisable: int / host / id / level / bool / pin) with
+    // its current value is a no-op (mirrors the camera side's applyChangeLine);
+    // a locked key with a different value is still refused.
+    //
+    // secret and wifi are intentionally NOT normalisable (the dashboard sends
+    // '' to mean "keep the current one", never the masked display form), so
+    // they keep the strict unconditional reject.
     foreach (['WIFI', 'SERVER_HOST', 'PUSH_PORT', 'HTTP_PORT', 'CAMERA_ID', 'API_KEY'] as $k) {
+        // A different value: refused.
         $r = camtest_change(camtest_reported(), [$k => 'anything1']);
         camtest_assert_equal($r['ok'], false, $k);
         camtest_assert_true(strpos($r['error'], 'serial port') !== false, $k);
     }
+    // Echo-back of the current value: a no-op for the normalisable locked keys.
+    $reported = camtest_reported();
+    $echo = ['SERVER_HOST' => $reported['SERVER_HOST'],
+             'PUSH_PORT' => $reported['PUSH_PORT'],
+             'HTTP_PORT' => $reported['HTTP_PORT'],
+             'CAMERA_ID' => $reported['CAMERA_ID']];
+    $r = camtest_change($reported, $echo);
+    camtest_assert_equal($r['ok'], true, 'echo-back of locked normalisable values should be ok');
+    camtest_assert_equal($r['line'], '', 'and produce no change line');
+    camtest_assert_equal($r['changed'], [], 'and name no changed keys');
+    // secret/wifi are NEVER silently ignored: any value (even the masked display
+    // form like 'net:********') is refused — the dashboard must send '' to keep
+    // the current one, never the masked form.
+    $r = camtest_change($reported, ['WIFI' => $reported['WIFI']]);
+    camtest_assert_equal($r['ok'], false, 'WIFI echo-back is still refused (cannot be normalised)');
+    camtest_assert_true(strpos($r['error'], 'serial port') !== false, 'WIFI error');
+    $r = camtest_change($reported, ['API_KEY' => $reported['API_KEY']]);
+    camtest_assert_equal($r['ok'], false, 'API_KEY echo-back is still refused');
+    camtest_assert_true(strpos($r['error'], 'serial port') !== false, 'API_KEY error');
+    // A malformed locked normalisable value is still rejected, even if it is the
+    // only thing being changed.
+    $r = camtest_change($reported, ['PUSH_PORT' => 'not-a-port']);
+    camtest_assert_equal($r['ok'], false, 'malformed locked value refused');
 });
 
 // (review ARD-009) the alarm GPIOs, alarm level, all-cams flag and the
