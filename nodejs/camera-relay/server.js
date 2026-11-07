@@ -1159,6 +1159,12 @@ function systemSettingsState() {
   return { base: baseConfig, overrides: systemOverrides, alarmRecordSeconds: settings.alarmRecordSeconds, env: process.env };
 }
 
+// (review NODE-004) the last time POST /restart was accepted, used to enforce a
+// minimum gap (default 30s) between two accepted restart requests. A captured
+// control key, or a runaway dashboard tab, could otherwise loop the endpoint
+// and turn the relay's supervisor into a DoS amplifier.
+let lastRestartRequestAt = 0;
+
 app.get('/system-settings', requireControlKey, (req, res) => {
   res.json({ ...sysconfig.buildView(systemSettingsState()), supervised: sysconfig.isSupervised(process.env) });
 });
@@ -1185,6 +1191,24 @@ app.post('/restart', requireControlKey, (req, res) => {
   if (!sysconfig.isSupervised(process.env)) {
     return res.status(409).json({ error: 'the relay was not started by systemd or pm2, so it would not come back on its own — restart it by hand (or set RELAY_SUPERVISED=1 if something else restarts it)' });
   }
+  // (review NODE-004) refuse a restart that follows another too closely: a
+  // captured control key, or a runaway dashboard tab, could otherwise loop
+  // POST /restart and the supervisor would bring the relay back just in time
+  // for the next call to drop it again — a quiet DoS that looks like flapping.
+  // RESTART_COOLDOWN_MS (default 30s) is the floor between two accepted calls;
+  // a request inside the window is answered 429 with Retry-After.
+  const cooldownMs = parseInt(process.env.RESTART_COOLDOWN_MS, 10) || 30 * 1000;
+  const now = Date.now();
+  const sinceLast = now - lastRestartRequestAt;
+  if (sinceLast < cooldownMs) {
+    const retryAfter = Math.ceil((cooldownMs - sinceLast) / 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.set('Connection', 'close');
+    const ip = logfile.normalizeIp(req.socket.remoteAddress);
+    relayLog('WARN', `POST /restart from ${ip || 'unknown address'} refused: ${retryAfter}s of the ${Math.round(cooldownMs / 1000)}s cooldown remains`);
+    return res.status(429).json({ error: `restart requested too soon: try again in ${retryAfter}s` });
+  }
+  lastRestartRequestAt = now;
   relayLog('INFO', `restart requested by ${actorOf(req)}`);
   res.status(202).json({ ok: true });
   res.on('finish', () => {
