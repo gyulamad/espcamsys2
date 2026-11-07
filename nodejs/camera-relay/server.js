@@ -35,7 +35,7 @@ const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const { Lockout } = require('./lib/lockout');
 const connection = require('./lib/connection');
-const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic } = require('./lib/util');
+const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 const sysconfig = require('./lib/sysconfig');
 const diskspace = require('./lib/diskspace');
@@ -665,6 +665,10 @@ function requireCameraKeyForUpload(req, res, next) {
 app.post('/upload/:id', requireCameraKeyForUpload, express.raw({ type: '*/*', limit: '2mb' }), (req, res) => {
   // No body (or no usable one) is not a picture: refuse it rather than store `undefined` as the camera's frame.
   if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'the request body must be the JPEG frame' });
+  // (review NODE-011) the magic bytes (FF D8 FF) are the cheapest possible MIME
+  // check: anything that is not a JPEG (HTML, SVG, an MP4 chunk, a misrouted
+  // JSON body) is refused before it reaches the pre-roll buffer or any viewer.
+  if (!isJpeg(req.body)) return res.status(400).json({ error: 'the request body must be a JPEG (start with FF D8 FF)' });
   ingestFrame(getCamera(req.params.id), req.body); // pre-roll buffer, latest frame, live viewers and any active recording
   res.sendStatus(200);
 });
@@ -2458,6 +2462,15 @@ function handlePushPayload(camId, payload) {
     const msg = protocol.classifyPayload(payload);
     kind = msg.kind;
     if (msg.kind === 'frame') {
+      // (review NODE-011) defense in depth: the camera is authenticated and the
+      // push port is plain TCP, so anyone who has sniffed the API key (or a MITM
+      // that substituted the frame in transit) could push a non-JPEG payload
+      // that the relay would later serve to viewers as image/jpeg. classifyPayload()
+      // only distinguishes CONTROL_MARKER (0x00) from "everything else"; refuse
+      // everything that is not a real JPEG here too, mirroring the /upload check.
+      if (!isJpeg(payload)) {
+        throw new Error('rejected a payload that does not start with the JPEG magic (FF D8 FF)');
+      }
       ingestFrame(getCamera(camId), payload); // pre-roll buffer, latest frame, live viewers and any active recording
     } else if (msg.kind === 'alarm') {
       // Handled right here, in order with the frames: every frame the camera

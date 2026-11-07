@@ -39,4 +39,16 @@ function writeFileAtomic(file, data) {
   fs.renameSync(tmp, file);
 }
 
-module.exports = { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic };
+// (review NODE-011) JPEG magic bytes: every JPEG file starts with FF D8 FF.
+// POST /upload accepts any body up to 2MB and stores it as the camera's "frame",
+// which is later served back to viewers with Content-Type: image/jpeg. A
+// compromised camera (or anyone with the camKey) could push a non-JPEG body —
+// HTML with script, SVG with embedded JS — that a non-browser client or an
+// older browser that MIME-sniffs may render. Reject anything that does not
+// start with the JPEG magic.
+const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
+function isJpeg(buf) {
+  return Buffer.isBuffer(buf) && buf.length > 3 && buf.subarray(0, 3).equals(JPEG_MAGIC);
+}
+
+module.exports = { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg };
