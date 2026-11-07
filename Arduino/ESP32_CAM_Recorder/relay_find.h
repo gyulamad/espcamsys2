@@ -29,6 +29,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_system.h>   // esp_random() — the documented hardware RNG (review ARD-015)
 
 #include <string>
 
@@ -72,11 +73,17 @@ class WifiFindEnv : public esp32cam_relayfind::IFindEnv {
   uint32_t nowMs() override { return millis(); }
   void pauseMs(uint32_t ms) override { delay(ms); }
 
-  // Arduino's random() is the chip's hardware random number generator.
+  // The discovery nonce must be unpredictable: an attacker who can guess it
+  // before the legitimate relay answers can race a fake reply (review ARD-013).
+  // Arduino's `random()` is a PRNG in the API contract — it currently routes
+  // through `esp_random()` on Arduino-ESP32, but that is an implementation
+  // detail a future core version or third-party library could change. Call
+  // the documented hardware RNG directly so the security property is explicit
+  // (review ARD-015).
   std::string newNonce() override {
     static const char digits[] = "0123456789abcdef";
     std::string s;
-    for (int i = 0; i < 16; ++i) s += digits[random(0, 16)];
+    for (int i = 0; i < 16; ++i) s += digits[esp_random() & 0x0f];
     return s;
   }
 
