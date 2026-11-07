@@ -400,6 +400,7 @@ int main() {
     RUN_TEST(garbage_and_unknown_settings_are_refused);
     RUN_TEST(switching_a_feature_on_needs_the_settings_it_requires);
     RUN_TEST(switching_a_feature_off_does_not_require_its_settings);
+    RUN_TEST(the_alarm_and_log_locks_are_part_of_the_locked_set_review_ARD_009);
     RUN_TEST(a_failing_flash_write_puts_the_earlier_ones_back);
     RUN_TEST(only_existing_keys_are_read_from_flash);
     RUN_TEST(the_report_lists_stored_settings_with_secrets_masked);
