@@ -35,7 +35,13 @@ class CamLogic
 
     // What the template ships with; never acceptable as a real login.
     const PLACEHOLDER_CREDENTIAL = 'change-me';
-    const MIN_PASSWORD_LENGTH = 8;
+    // (review PHP-007) raised from 8 to 12. NIST SP 800-63B §5.1.1.2 sets 8 as
+    // the floor for memorized secrets that are paired with rate limiting AND
+    // MFA; the dashboard has no MFA, and over Tor the per-IP throttle that
+    // normally protects an 8-char password is moot (every visitor shares
+    // 127.0.0.1, so the throttle is global). 12 chars × the global exponential
+    // back-off (15s → 30s → ... → 15min) makes online brute force uneconomic.
+    const MIN_PASSWORD_LENGTH = 12;
 
     // Why the configured login is not safe to run with, or null if it is fine. (The dashboard answers
     // 503 instead of showing anything until config.php is fixed.)
@@ -803,8 +809,8 @@ class CamLogic
         return [
             ['key' => 'auth_user', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
              'label' => 'Dashboard username', 'help' => 'The HTTP login of this dashboard. After saving, the browser asks you to log in again.'],
-            ['key' => 'auth_pass', 'type' => 'secret', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard', 'min' => 8, 'max' => 200,
-             'label' => 'Dashboard password', 'help' => 'At least 8 characters. Leave empty to keep the current one.'],
+            ['key' => 'auth_pass', 'type' => 'secret', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard', 'min' => self::MIN_PASSWORD_LENGTH, 'max' => 200,
+             'label' => 'Dashboard password', 'help' => 'At least ' . self::MIN_PASSWORD_LENGTH . ' characters (use `openssl rand -base64 24` for a strong one). Leave empty to keep the current one.'],
             ['key' => 'relay_url', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
              'label' => 'Relay address', 'help' => 'Where this dashboard reaches the relay, e.g. http://127.0.0.1:8080. A new address is tested before it is saved.'],
             self::intField('record_seconds', 'Recording',
@@ -1086,8 +1092,8 @@ class CamLogic
                 if ($value === '') {
                     continue;
                 }
-                if (strlen($value) < 8 || strlen($value) > 200 || preg_match('/[\x00-\x1f\x7f]/', $value)) {
-                    return ['ok' => false, 'error' => 'auth_pass must be 8-200 characters, without line breaks'];
+                if (strlen($value) < self::MIN_PASSWORD_LENGTH || strlen($value) > 200 || preg_match('/[\x00-\x1f\x7f]/', $value)) {
+                    return ['ok' => false, 'error' => 'auth_pass must be ' . self::MIN_PASSWORD_LENGTH . '-200 characters, without line breaks'];
                 }
                 if (strtolower($value) === self::PLACEHOLDER_CREDENTIAL) {
                     return ['ok' => false, 'error' => 'auth_pass must not be the template value "' . self::PLACEHOLDER_CREDENTIAL . '"'];
