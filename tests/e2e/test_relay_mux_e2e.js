@@ -64,8 +64,9 @@ function startRelay(port, env = {}) {
   });
 }
 
-// A camera pushing one picture over the relay's HTTP upload; the picture says which one it is (its 3rd and 4th byte).
-const picture = (n, size = 8) => Buffer.concat([Buffer.from([0xff, 0xd8, n >> 8, n & 255]), Buffer.alloc(size - 6, 1), Buffer.from([0xff, 0xd9])]);
+// A camera pushing one picture over the relay's HTTP upload; the picture says which one it is (encoded
+// in bytes 4 and 5, after the 3-byte JPEG magic FF D8 FF that NODE-011's isJpeg() check requires).
+const picture = (n, size = 8) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, n >> 8, n & 255]), Buffer.alloc(size - 7, 1), Buffer.from([0xff, 0xd9])]);
 function upload(port, cam, jpeg) {
   return new Promise((resolve, reject) => {
     const req = nodeHttp.request({ host: '127.0.0.1', port, method: 'POST', path: `/upload/${cam}?key=${CAM_KEY}`, headers: { 'Content-Type': 'image/jpeg', 'Content-Length': jpeg.length } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
@@ -93,7 +94,7 @@ function view(port, query, headers = {}) {
   });
 }
 const framesOf = (v, id) => v.messages.filter((m) => m.type === codec.TYPE_FRAME && m.source === `cam:${id}`);
-const numberOf = (m) => (m.payload[2] << 8) | m.payload[3];
+const numberOf = (m) => (m.payload[3] << 8) | m.payload[4];
 const detFrames = (v, id) => v.messages.filter((m) => m.type === codec.TYPE_FRAME && m.source === `det:${id}`);
 const states = (v) => v.messages.filter((m) => m.type === codec.TYPE_STATE && m.source === codec.STATE_DETECTORS);
 const readings = (m) => JSON.parse(Buffer.from(m.payload).toString('utf8'));
