@@ -861,7 +861,14 @@ Two plain pages for a wall screen or a quick look, behind the same login as the 
 
   A person detector that **sees a person** counts above plain motion (recording > person > motion). A detector rests while nobody watches (see the WATCH button), so while the slideshow runs it switches the live view on for **all** detectors and renews it every 20 s; it takes up to ~30 s until a resting detector answers the first time. The views lapse by themselves after the slideshow ends.
 
-  **Screen stays on:** the simple view and the dashboard keep a phone or tablet screen from going dark while the pictures run (`js/screen-keeper.js`). Over **HTTPS** (or localhost) the browser's Screen Wake Lock is used. On plain `http://` (a Pi on the home network) that API does not exist, so a tiny silent video plays out of sight instead — some browsers start it only after the first touch on the page. Only the page that is open and visible holds the screen; the device's own battery-saver may still override it.
+  **Screen stays on:** the simple view and the dashboard keep a phone or tablet screen from going dark while the pictures run (`js/screen-keeper.js`). The simple view's status line says what holds the screen: **SCREEN: KEPT ON** (the browser's Screen Wake Lock), **SCREEN: KEPT ON (VIDEO)** (the fallback below) or **SCREEN: NOT HELD – TOUCH THE PAGE** (the browser wants a touch before it starts the fallback). Only the page that is open and visible holds the screen; the device's own battery-saver may still override it.
+
+  - The Wake Lock works only on **HTTPS** (or `localhost`). On plain `http://` (a Pi on the home network, e.g. `http://raspberrypi.local`) a tiny silent video plays out of sight instead; some browsers start it only after the first touch on the page, and on some tablets it is not enough to keep the screen on.
+  - **Android Chrome, plain http:** make Chrome treat the Pi's address as secure so the real Wake Lock works (only on that device):
+    1. Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure` on the tablet.
+    2. Enter the exact address you open the dashboard with, e.g. `http://raspberrypi.local`, and set the flag to **Enabled**.
+    3. Tap **Relaunch**. The status line then shows **SCREEN: KEPT ON**.
+  - **iPhone / iPad** have no such flag: serve the dashboard over HTTPS instead.
 
   Motion needs a person detector paired with the camera (see the detector section): a camera without one can only take part by recording.
 
