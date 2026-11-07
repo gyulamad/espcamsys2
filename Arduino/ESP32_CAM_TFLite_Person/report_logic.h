@@ -104,6 +104,7 @@ struct Snapshot {
     uint32_t seq = 0;          // changes with every frame
     int brightness = 0;
     uint32_t motion = 0;
+    uint32_t motionLimit = 0;  // the motion threshold this frame was judged against (MOTION_THRESH, or more with the EMA); 0 = check off
     Gate gate = Gate::Off;
     bool hasScore = false;     // the model has produced a score at least once
     float score = 0.0f;        // the LAST person score, 0..1
@@ -156,7 +157,7 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
     out += ",\"fw\":";
     appendJsonString(out, cfg.fw);
 
-    char buf[160];
+    char buf[256];   // the longest line below, with every number at its largest, is about 190 characters
     snprintf(buf, sizeof(buf), ",\"uptimeMs\":%u,\"rssi\":%d", (unsigned)uptimeMs, rssi);
     out += buf;
     if (link.viewLeftS >= 0) {
@@ -168,8 +169,9 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
     out += buf;
 
     snprintf(buf, sizeof(buf),
-             ",\"scene\":{\"state\":\"%s\",\"brightness\":%d,\"motion\":%u,\"darkBelow\":%d,\"motionAtLeast\":%u,\"holdS\":%u",
-             gateName(s.gate), s.brightness, (unsigned)s.motion, cfg.darkBelow, (unsigned)cfg.motionAtLeast, (unsigned)cfg.holdSec);
+             ",\"scene\":{\"state\":\"%s\",\"brightness\":%d,\"motion\":%u,\"darkBelow\":%d,\"motionAtLeast\":%u,\"motionLimit\":%u,\"holdS\":%u",
+             gateName(s.gate), s.brightness, (unsigned)s.motion, cfg.darkBelow, (unsigned)cfg.motionAtLeast,
+             (unsigned)(s.valid ? s.motionLimit : cfg.motionAtLeast), (unsigned)cfg.holdSec);
     out += buf;
     // The motion area, so the dashboard can draw it over the picture (left/top inside, right/bottom outside).
     snprintf(buf, sizeof(buf), ",\"area\":{\"x0\":%d,\"y0\":%d,\"x1\":%d,\"y1\":%d}}",

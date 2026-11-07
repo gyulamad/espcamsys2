@@ -73,12 +73,15 @@
     return !!(status && status[id] && status[id].online === false);
   }
 
-  // Is the person detector of a camera reporting motion at or above its threshold? (A threshold of 0
-  // means the motion check is off; an offline detector's last numbers are old news.)
+  // Is the person detector of a camera reporting motion at or above its threshold? The threshold is the one in
+  // force (`motionLimit`: MOTION_THRESH, or more while the auto-calibration follows a noisy scene), else the
+  // set one (older relay or firmware). A threshold of 0 means the motion check is off; an offline detector's
+  // last numbers are old news.
   function inMotion(detector) {
     if (!detector || detector.online !== true || !detector.report || !detector.report.scene) return false;
     const scene = detector.report.scene;
-    return isNum(scene.motion) && isNum(scene.motionAtLeast) && scene.motionAtLeast > 0 && scene.motion >= scene.motionAtLeast;
+    const limit = isNum(scene.motionLimit) ? scene.motionLimit : scene.motionAtLeast;
+    return isNum(scene.motion) && isNum(limit) && limit > 0 && scene.motion >= limit;
   }
 
   // Does the person detector of a camera see a person right now? (Offline: old news.)

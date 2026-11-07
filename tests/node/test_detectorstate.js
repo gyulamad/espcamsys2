@@ -24,6 +24,31 @@ test('parseStatus: complete readings are accepted', () => {
   assertEqual(r.report.link, { frames: 42, jpegFails: 1, reconnects: 2, heap: 91000 });
 });
 
+test('parseStatus: the motion threshold in force (motionLimit) is carried next to the one that was set', () => {
+  const b = good(); b.scene.motionLimit = 650;
+  const r = ds.parseStatus(b);
+  assertTrue(r.ok, r.error);
+  assertEqual([r.report.scene.motionAtLeast, r.report.scene.motionLimit], [300, 650], 'MOTION_THRESH 300, raised to 650 by the auto-calibration');
+  b.scene.motionLimit = 0;
+  assertEqual(ds.parseStatus(b).report.scene.motionLimit, 0, '0 = the motion check is off');
+});
+
+test('parseStatus: firmware from before motionLimit sends none: the set threshold is the limit', () => {
+  const r = ds.parseStatus(good());
+  assertEqual(r.report.scene.motionLimit, 300);
+  const b = good(); b.scene.motionLimit = null;
+  assertEqual(ds.parseStatus(b).report.scene.motionLimit, 300, 'null is "not sent"');
+});
+
+test('parseStatus: a motionLimit that is not a number in range is ignored, never a reason to refuse the readings', () => {
+  for (const bad of ['650', -1, 1000001, NaN, Infinity, {}, [], true]) {
+    const b = good(); b.scene.motionLimit = bad;
+    const r = ds.parseStatus(b);
+    assertTrue(r.ok, JSON.stringify(bad) + ': ' + r.error);
+    assertEqual(r.report.scene.motionLimit, 300, JSON.stringify(bad));
+  }
+});
+
 test('parseStatus: the motion area is carried to the dashboard as reported', () => {
   const r = ds.parseStatus(good());
   assertTrue(r.ok, r.error);

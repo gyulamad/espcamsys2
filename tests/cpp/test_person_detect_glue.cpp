@@ -119,12 +119,12 @@ static bool logged(char level, const char* part) {
 
 // -- dashboard report: the sketch hands its readings to three small hooks (their real versions
 //    keep a snapshot for a Wi-Fi task and cannot run here); these record the calls.
-struct SceneCall { int brightness; uint32_t motion; person_scene::SceneState state; std::vector<uint8_t> frame; };
+struct SceneCall { int brightness; uint32_t motion; uint32_t motionLimit; person_scene::SceneState state; std::vector<uint8_t> frame; };
 static std::vector<SceneCall> g_sceneCalls;
 static std::vector<float> g_scoreCalls;
 static std::vector<bool> g_pinCalls;
-static void reportSceneFrame(const uint8_t* gray, int brightness, uint32_t motion, person_scene::SceneState state) {
-    g_sceneCalls.push_back({brightness, motion, state, std::vector<uint8_t>(gray, gray + 96 * 96)});
+static void reportSceneFrame(const uint8_t* gray, int brightness, uint32_t motion, uint32_t motionLimit, person_scene::SceneState state) {
+    g_sceneCalls.push_back({brightness, motion, motionLimit, state, std::vector<uint8_t>(gray, gray + 96 * 96)});
 }
 static void reportScore(float score) { g_scoreCalls.push_back(score); }
 static void reportPersonState(bool detected) { g_pinCalls.push_back(detected); }
@@ -477,6 +477,18 @@ TEST(every_good_frame_is_reported_with_its_readings_and_gate_state) {
     TEST_ASSERT_EQ((int)g_sceneCalls[1].motion, 100 * 120, "motion = 100 samples x 120 change");
 }
 
+TEST(the_motion_threshold_in_force_is_reported_with_the_frame) {
+    reset();
+    sceneGate(40, 300, 10);
+    fillFrame(120);
+    float p, n;
+    detectPerson(p, n);
+    fillFrame(121);
+    detectPerson(p, n);
+    TEST_ASSERT_EQ((int)g_sceneCalls[0].motionLimit, 300, "the threshold the frame was judged against (MOTION_THRESH while the EMA is off)");
+    TEST_ASSERT_EQ((int)g_sceneCalls[1].motionLimit, 300, "also on the next one");
+}
+
 TEST(frames_paused_by_the_gate_are_still_reported) {
     reset();
     sceneGate(40, 300, 10);
@@ -660,26 +672,40 @@ TEST(without_the_ema_the_threshold_printed_with_every_frame_stays_the_fixed_one)
     }
 }
 
+// Frames that differ by 10 grey levels from each other, forever: a motion reading of 1000 on every frame
+// (100 sample pixels x 10). `n` frames after the one in place; the last frame's output stays in g_serial.
+static int g_noiseFlip = 0;                           // the picture alternates between calls too; a test starts it at 0 after its frame of 120
+static bool constantNoise(int n) {
+    float p, n2;
+    bool ran = false;
+    for (int i = 0; i < n; ++i) {
+        fillFrame(g_noiseFlip++ % 2 == 0 ? 130 : 120);
+        g_millis += 100;                              // frames are never in the same millisecond on the real board
+        g_serial.clear();
+        ran = detectPerson(p, n2);
+    }
+    return ran;
+}
+
 TEST(with_the_ema_on_the_settings_reach_the_gate_and_a_constant_noise_stops_waking_the_model) {
     reset();
     sceneGateEma(40, 300, 0, 9, 30);
     float p, n;
     fillFrame(120);
     detectPerson(p, n);                               // the first frame has nothing to compare to
-    fillFrame(130);
-    g_millis += 100;                                  // frames are never in the same millisecond on the real board
-    g_serial.clear();
-    TEST_ASSERT(detectPerson(p, n), "the first real change runs the model");
+    g_noiseFlip = 0;
+    TEST_ASSERT(constantNoise(1), "the first real change runs the model");
     TEST_ASSERT(has(g_serial, "Motion:  1000   Limit:   300"), "it is judged against MOTION_THRESH");
     TEST_ASSERT(has(g_serial, "Scene: active"), "and wakes the model");
 
-    fillFrame(120);
-    g_millis += 100;
-    g_serial.clear();
-    TEST_ASSERT(!detectPerson(p, n), "the same change again: the model is not run");
-    TEST_ASSERT(has(g_serial, "Motion:  1000   Limit:  1300"), "the threshold has become 1000 + 30%");
-    TEST_ASSERT(has(g_serial, "Scene: still (motion 1000 < 1300)"), "and the serial line shows the limit that was applied");
-    TEST_ASSERT_EQ(g_interp.invokes, 1, "the model ran only for the first one");
+    // The noise does not stop: the average follows it and the threshold climbs to 1000 + 30%.
+    bool saidStill = false;
+    for (int i = 0; i < 80; ++i) { constantNoise(1); saidStill = saidStill || has(g_serial, "Scene: still (motion 1000 < "); }
+    TEST_ASSERT(has(g_serial, "Limit:  1300"), "the threshold has become 1000 + 30%");
+    TEST_ASSERT(saidStill, "and the gate said so on the serial line when the noise stopped counting as motion");
+    TEST_ASSERT(!constantNoise(1), "the same change again: the model is not run");
+    TEST_ASSERT(has(g_serial, "Motion:  1000   Limit:  1300"), "and the serial line shows the limit that was applied");
+    TEST_ASSERT(g_interp.invokes < 40, "the model ran only while the threshold was still catching up");
 }
 
 TEST(the_ema_percentage_from_the_settings_is_the_one_the_gate_uses) {
@@ -688,13 +714,8 @@ TEST(the_ema_percentage_from_the_settings_is_the_one_the_gate_uses) {
     float p, n;
     fillFrame(120);
     detectPerson(p, n);
-    fillFrame(130);
-    g_millis += 100;
-    detectPerson(p, n);
-    fillFrame(120);
-    g_millis += 100;
-    g_serial.clear();
-    detectPerson(p, n);
+    g_noiseFlip = 0;
+    constantNoise(120);
     TEST_ASSERT(has(g_serial, "Limit:  2000"), "1000 + 100%");
 }
 
@@ -709,6 +730,7 @@ TEST(a_bad_frame_never_reaches_the_scene_gate) {
 
 int main() {
     RUN_TEST(every_good_frame_is_reported_with_its_readings_and_gate_state);
+    RUN_TEST(the_motion_threshold_in_force_is_reported_with_the_frame);
     RUN_TEST(frames_paused_by_the_gate_are_still_reported);
     RUN_TEST(nothing_is_reported_for_a_frame_that_cannot_be_used);
     RUN_TEST(the_person_score_is_reported_after_every_inference);

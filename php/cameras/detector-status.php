@@ -4,7 +4,8 @@
 //
 // GET detector-status.php
 //   -> { camId: { detector, state, online, hasPicture, connected, ageMs, pictureAgeMs, ip, message,
-//                 report: { scene: {state, brightness, motion, darkBelow, motionAtLeast, holdS},
+//                 report: { scene: {state, brightness, motion, darkBelow, motionAtLeast, motionLimit, holdS},
+//                           (motionAtLeast: MOTION_THRESH as set; motionLimit: the threshold in force, higher with the auto-calibration),
 //                           person: {score, detectAt, clearAt, detected}, gpio: {pin, high}, ip, fw,
 //                           uptimeMs, rssi, link: {...} } } }
 // Only cameras with a 'detector' in config.php appear. `state` is online / no-picture / offline /

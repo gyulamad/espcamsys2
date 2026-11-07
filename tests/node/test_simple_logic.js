@@ -87,6 +87,15 @@ test('neighbor: a lone camera is its own neighbour; an unknown id starts at the 
 
 const det = (over) => Object.assign({ online: true, report: { scene: { motion: 500, motionAtLeast: 300 } } }, over);
 
+test('inMotion: the threshold in force (motionLimit, raised by the auto-calibration) counts, not the one that was set', () => {
+  const scene = (o) => det({ report: { scene: Object.assign({ motion: 500, motionAtLeast: 300 }, o) } });
+  assertEqual(S.inMotion(scene({ motionLimit: 650 })), false, '500 is above MOTION_THRESH but under the limit in force: the detector does not call it motion either');
+  assertEqual(S.inMotion(scene({ motionLimit: 500 })), true);
+  assertEqual(S.inMotion(scene({ motionLimit: 0 })), false, 'a limit of 0: the motion check is off');
+  assertEqual(S.inMotion(scene({})), true, 'no motionLimit (older relay): the set threshold');
+  assertEqual(S.inMotion(scene({ motionLimit: 'x' })), true, 'not a number: the set threshold');
+});
+
 test('inMotion: at or above the threshold of an online detector', () => {
   assertEqual(S.inMotion(det()), true);
   assertEqual(S.inMotion(det({ report: { scene: { motion: 300, motionAtLeast: 300 } } })), true);

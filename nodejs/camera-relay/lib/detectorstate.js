@@ -53,7 +53,7 @@ function parseArea(a) {
 // Shape (all numbers; thresholds are the detector's own settings):
 //   { ip, fw, uptimeMs, rssi, viewLeftS (optional),
 //     gpio:   { pin, high },
-//     scene:  { state, brightness, motion, darkBelow, motionAtLeast, holdS,
+//     scene:  { state, brightness, motion, darkBelow, motionAtLeast, motionLimit (optional), holdS,
 //               area: { x0, y0, x1, y1 }                       <- optional: the part of the picture watched for motion },
 //     person: { score|null, detectAt, clearAt, detected },
 //     link:   { frames, jpegFails, reconnects, heap }          <- optional, diagnostics only }
@@ -68,6 +68,10 @@ function parseStatus(body) {
   const motion = num(s.motion, 0, 1000000);
   const darkBelow = num(s.darkBelow, 0, 255);
   const motionAtLeast = num(s.motionAtLeast, 0, 1000000);
+  // The threshold the readings are really judged against (MOTION_THRESH, or more with the auto-calibration on). Older
+  // firmware does not send it: its MOTION_THRESH is then the limit. A value that is not a number in range is left out too.
+  const sentLimit = s.motionLimit === undefined || s.motionLimit === null ? null : num(s.motionLimit, 0, 1000000);
+  const motionLimit = sentLimit === null ? motionAtLeast : sentLimit;
   const holdS = num(s.holdS, 0, 3600);
   const detectAt = num(p.detectAt, 0, 1);
   const clearAt = num(p.clearAt, 0, 1);
@@ -93,7 +97,7 @@ function parseStatus(body) {
       rssi: num(body.rssi, -200, 0),
       viewLeftS: num(body.viewLeftS, 0, 86400),     // optional: seconds of live view left on the board's own timer
       gpio: { pin, high: g.high },
-      scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, holdS, area: area.area },
+      scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, motionLimit, holdS, area: area.area },
       person: { score, detectAt, clearAt, detected: p.detected },
       link: { frames: num(l.frames, 0, 4294967295), jpegFails: num(l.jpegFails, 0, 4294967295), reconnects: num(l.reconnects, 0, 4294967295), heap: num(l.heap, 0, 16777216) },
     },

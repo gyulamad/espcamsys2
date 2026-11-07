@@ -458,11 +458,11 @@ TEST(a_frame_is_judged_before_it_is_learnt_so_a_spike_cannot_raise_its_own_bar) 
     g.configure(cfgEma(0, 100, 0, 3, 30));
     uint32_t t = 0;
     g.update(t, reading(120, 0, false), false);
-    feedGate(g, &t, 100, 1);   // seeds the average with 100
+    feedGate(g, &t, 100, 1);   // seeds the average (at most the floor / 1.3 = 76.9)
     SceneVerdict v = feedGate(g, &t, 1000, 1);
-    TEST_ASSERT_EQ((int)v.motionLimit, 130, "the spike met the threshold of the average before it (100 + 30%)");
+    TEST_ASSERT_EQ((int)v.motionLimit, 100, "the spike met the threshold in force before it (the floor: the seed is at most 100 / 1.3 = 76.9)");
     TEST_ASSERT(v.state == SceneState::Active, "so it counts as motion");
-    TEST_ASSERT_EQ((int)g.motionThreshold(), 715, "and only then raised the average to 550 -> 715 for the next frame");
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 180, "and only then was learnt: as 2 * 100, so the average 76.9 -> 138.5 and the next threshold 180 (not 715)");
 }
 
 TEST(the_first_frame_has_no_reading_so_the_average_does_not_learn_from_it) {
@@ -472,7 +472,33 @@ TEST(the_first_frame_has_no_reading_so_the_average_does_not_learn_from_it) {
     TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "nothing learnt from a frame that was compared with nothing");
     TEST_ASSERT(v.state == SceneState::Idle && !v.run, "and it is no motion either");
     g.update(100, reading(120, 400), false);
-    TEST_ASSERT_EQ((int)g.motionThreshold(), 520, "the first real reading (400) seeds it");
+    TEST_ASSERT_EQ((int)g.motionThreshold(), 300, "the first real reading (400) seeds it, but only up to what the floor allows (300 / 1.3): the threshold stays 300");
+}
+
+TEST(a_camera_warm_up_spike_does_not_blind_the_gate_for_minutes) {
+    // The first frames after power-up differ a lot while the exposure settles. Learnt as they were, they
+    // lifted the threshold to thousands and the first person walking by (800) was not noticed for 5 minutes.
+    SceneGate g(cfgEma(0, 300, 0, 3000, 30));
+    g.configure(cfgEma(0, 300, 0, 3000, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    feedGate(g, &t, 4000, 30);
+    feedGate(g, &t, 40, 60);
+    SceneVerdict v = feedGate(g, &t, 800, 1);
+    TEST_ASSERT(g.motionThreshold() < 500, "the threshold is near the floor");
+    TEST_ASSERT(v.state == SceneState::Active && v.run, "a person walking by is noticed");
+}
+
+TEST(a_long_busy_spell_does_not_make_the_gate_deaf_to_the_next_person) {
+    SceneGate g(cfgEma(0, 300, 0, 3000, 30));
+    g.configure(cfgEma(0, 300, 0, 3000, 30));
+    uint32_t t = 0;
+    g.update(t, reading(120, 0, false), false);
+    feedGate(g, &t, 40, 6000);
+    feedGate(g, &t, 1500, 900);   // 90 s of somebody working in the picture
+    SceneVerdict v = feedGate(g, &t, 800, 1);
+    TEST_ASSERT(v.state == SceneState::Active && v.run, "the next person's walk (800) still switches the model on");
+    TEST_ASSERT(v.motionLimit < 500, "against a threshold that stayed low");
 }
 
 TEST(with_the_motion_check_off_the_ema_changes_nothing) {
@@ -581,6 +607,8 @@ int main() {
     RUN_TEST(the_threshold_comes_back_down_after_the_storm);
     RUN_TEST(a_frame_is_judged_before_it_is_learnt_so_a_spike_cannot_raise_its_own_bar);
     RUN_TEST(the_first_frame_has_no_reading_so_the_average_does_not_learn_from_it);
+    RUN_TEST(a_camera_warm_up_spike_does_not_blind_the_gate_for_minutes);
+    RUN_TEST(a_long_busy_spell_does_not_make_the_gate_deaf_to_the_next_person);
     RUN_TEST(with_the_motion_check_off_the_ema_changes_nothing);
     RUN_TEST(the_hold_time_and_the_person_rule_work_as_before_with_the_ema_on);
     RUN_TEST(darkness_works_as_before_with_the_ema_on);

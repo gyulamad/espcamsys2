@@ -1426,9 +1426,17 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   const isDragging = (id, key) => !!(detDrag[id] && detDrag[id].key === key);
   const detKind = k => (DET_STICKS[k] || [0, 0, 'int'])[2];   // how a value is written: int or pct (the area's edges are ints)
 
-  function motionScale(id, sc, eff) {
+  // The motion threshold the readings are judged against: a value dragged but not applied yet, else the one the
+  // detector reports as in force (MOTION_THRESH, or more while the auto-calibration follows a noisy scene), else -
+  // a detector from before that report - the set one.
+  function motionLimitOf(sc, eff, pd) {
+    if (pd.MOTION_THRESH !== undefined) return eff.MOTION_THRESH;
+    return Number.isFinite(sc.motionLimit) ? sc.motionLimit : eff.MOTION_THRESH;
+  }
+
+  function motionScale(id, sc, eff, limit) {
     if (detDrag[id] && detDrag[id].scale) return detDrag[id].scale;
-    return Math.max(eff.MOTION_THRESH > 0 ? eff.MOTION_THRESH * 2 : 0, sc.motion * 1.1, 100);
+    return Math.max(eff.MOTION_THRESH > 0 ? eff.MOTION_THRESH * 2 : 0, limit * 1.5, sc.motion * 1.1, 100);
   }
 
   // The detector's reported value of a setting, in the same unit as the pending one.
@@ -1675,14 +1683,15 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     // Motion; the bar's scale follows the threshold so the mark stays in a readable place
     const mOn = eff.MOTION_THRESH > 0;
     // While the stick is being dragged the scale stays as it was when the drag began, so it follows the mouse.
-    const mScale = motionScale(id, sc, eff);
-    detEl('motion', id).textContent = mOn ? sc.motion + '/' + eff.MOTION_THRESH : sc.motion;
+    const limit = mOn ? motionLimitOf(sc, eff, pd) : 0;   // the number the reading is compared with
+    const mScale = motionScale(id, sc, eff, limit);
+    detEl('motion', id).textContent = mOn ? sc.motion + '/' + limit : sc.motion;
     setW(detEl('motionbar', id), sc.motion / mScale);
     if (!isDragging(id, 'MOTION_THRESH')) placeMark(detEl('motionmark', id), mOn ? eff.MOTION_THRESH / mScale : null);
-    detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= eff.MOTION_THRESH ? ' hit' : '');
+    detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= limit ? ' hit' : '');
     const area = sc.area ? effectiveArea(sc.area, pd) : null;   // null: a detector from before the motion area
     detEl('motionsub', id).textContent = (mOn
-      ? 'moving at ≥ ' + eff.MOTION_THRESH + ' (MOTION_THRESH), detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
+      ? 'moving at ≥ ' + limit + (limit > eff.MOTION_THRESH ? ' (raised by the auto-calibration; MOTION_THRESH ' + eff.MOTION_THRESH + ' is the lowest)' : ' (MOTION_THRESH)') + ', detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
       : 'motion check off (MOTION_THRESH=0)') +
       (area ? (isWholePicture(area) ? '; whole picture counts' : '; only inside the dashed area ' + fmtArea(area)) : '');
     const box = detEl('area', id);

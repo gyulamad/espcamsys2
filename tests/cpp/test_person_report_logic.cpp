@@ -31,7 +31,7 @@ static Config cfg() {
 
 static Snapshot snap() {
     Snapshot s;
-    s.valid = true; s.seq = 7; s.brightness = 120; s.motion = 812; s.gate = Gate::Active;
+    s.valid = true; s.seq = 7; s.brightness = 120; s.motion = 812; s.motionLimit = 300; s.gate = Gate::Active;
     s.hasScore = true; s.score = 0.74f; s.scoreAtMs = 1000; s.detected = true;
     return s;
 }
@@ -81,7 +81,7 @@ TEST(status_json_carries_everything_the_dashboard_shows) {
     TEST_ASSERT(has(j, "\"fw\":\"abc 1\""), "firmware build");
     TEST_ASSERT(has(j, "\"uptimeMs\":123456,\"rssi\":-61"), "uptime and signal");
     TEST_ASSERT(has(j, "\"gpio\":{\"pin\":13,\"high\":true}"), "alarm pin and its level");
-    TEST_ASSERT(has(j, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"holdS\":10,\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the gate's readings, thresholds and the motion area");
+    TEST_ASSERT(has(j, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"motionLimit\":300,\"holdS\":10,\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the gate's readings, thresholds and the motion area");
     TEST_ASSERT(has(j, "\"person\":{\"score\":0.740,\"detectAt\":0.600,\"clearAt\":0.500,\"detected\":true}"), "score, thresholds and verdict");
     TEST_ASSERT(has(j, "\"link\":{\"frames\":5,\"jpegFails\":1,\"reconnects\":2,\"heap\":91000}"), "how the link is doing");
     TEST_ASSERT(j.front() == '{' && j.back() == '}', "one object");
@@ -103,6 +103,23 @@ TEST(status_json_carries_the_motion_area_in_the_scene_object_whatever_its_size) 
     j = buildStatusJson(c, s, 1500, "x", 0, 0, link());
     TEST_ASSERT(has(j, "\"holdS\":3600,\"area\":{\"x0\":0,\"y0\":0,\"x1\":96,\"y1\":96}}"), "the largest numbers are printed whole");
     TEST_ASSERT(j.size() < MAX_STATUS_BYTES, "and the status is far below the relay's limit");
+}
+
+TEST(status_json_carries_both_the_set_motion_threshold_and_the_one_in_force) {
+    // MOTION_THRESH is what the person set (the dashboard's stick edits it); the limit is what the frame was
+    // judged against: higher with the auto-calibration on. The dashboard compares the reading with the limit.
+    Config c = cfg(); c.motionAtLeast = 300;
+    Snapshot s = snap(); s.motionLimit = 650;
+    std::string j = buildStatusJson(c, s, 1000, "x", 0, 0, link());
+    TEST_ASSERT(has(j, "\"motionAtLeast\":300,\"motionLimit\":650,\"holdS\""), "both, in that order");
+    s.motionLimit = 0;
+    TEST_ASSERT(has(buildStatusJson(c, s, 1000, "x", 0, 0, link()), "\"motionLimit\":0,"), "0 = the motion check is off");
+    s = Snapshot();   // no frame yet: nothing was judged, the set threshold is the honest answer
+    TEST_ASSERT(has(buildStatusJson(c, s, 1000, "x", 0, 0, link()), "\"motionAtLeast\":300,\"motionLimit\":300,"), "before the first frame");
+    // the longest status line (every number at its largest) still fits the formatting buffer
+    c.darkBelow = 255; c.motionAtLeast = 1000000; c.holdSec = 3600;
+    s = snap(); s.brightness = 255; s.motion = 1000000; s.motionLimit = 1000000;
+    TEST_ASSERT(has(buildStatusJson(c, s, 1000, "x", 0, 0, link()), "\"motionLimit\":1000000,\"holdS\":3600,\"area\""), "nothing cut off");
 }
 
 TEST(status_json_scores) {
@@ -585,7 +602,7 @@ TEST(session_sends_a_frame_message_with_readings_and_picture) {
     TEST_ASSERT_EQ(wireAt(m, 0).type, 1, "a frame message");
     TEST_ASSERT_EQ(wireAt(m, 0).jpeg, env.jpeg, "carrying the encoded picture, byte for byte");
     TEST_ASSERT(has(wireAt(m, 0).status, "\"ip\":\"192.168.4.37\"") && has(wireAt(m, 0).status, "\"rssi\":-58"), "the board's address and signal come from the environment");
-    TEST_ASSERT(has(wireAt(m, 0).status, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"holdS\":10,\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the gate's readings, thresholds and the motion area");
+    TEST_ASSERT(has(wireAt(m, 0).status, "\"scene\":{\"state\":\"active\",\"brightness\":120,\"motion\":812,\"darkBelow\":40,\"motionAtLeast\":300,\"motionLimit\":300,\"holdS\":10,\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the gate's readings, thresholds and the motion area");
     TEST_ASSERT(has(wireAt(m, 0).status, "\"gpio\":{\"pin\":13,\"high\":true}"), "the alarm pin level");
     TEST_ASSERT(has(wireAt(m, 0).status, "\"link\":{\"frames\":0,\"jpegFails\":0,\"reconnects\":0,\"heap\":88000}"), "link statistics, with the live heap");
     TEST_ASSERT(env.logged(Level::Info, "first picture sent to the relay (18 bytes of JPEG)"), "the first picture is logged, once the relay actually has it");
@@ -1070,6 +1087,7 @@ int main() {
     RUN_TEST(gate_names_and_mapping);
     RUN_TEST(status_json_carries_everything_the_dashboard_shows);
     RUN_TEST(status_json_carries_the_motion_area_in_the_scene_object_whatever_its_size);
+    RUN_TEST(status_json_carries_both_the_set_motion_threshold_and_the_one_in_force);
     RUN_TEST(status_json_scores);
     RUN_TEST(status_json_other_states);
     RUN_TEST(frame_message_layout_is_what_the_relay_reads);

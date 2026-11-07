@@ -172,7 +172,7 @@ async function main() {
     r = await dash('/detector-status.php');
     j = JSON.parse(r.text);
     check('detector-status.php shows its numbers under the CAMERA id', j.camA.state === 'online' && j.camA.online === true && j.camA.hasPicture === true && j.camA.message === '' &&
-      j.camA.report.scene.brightness === 111 && j.camA.report.scene.motionAtLeast === 300 && j.camA.report.person.score === 0.9 && j.camA.report.gpio.high === true && j.camA.report.gpio.pin === 13, r.text);
+      j.camA.report.scene.brightness === 111 && j.camA.report.scene.motionAtLeast === 300 && j.camA.report.scene.motionLimit === 300 && j.camA.report.person.score === 0.9 && j.camA.report.gpio.high === true && j.camA.report.gpio.pin === 13, r.text);
     check('...with where the board is and how it is doing', j.camA.ip === '127.0.0.1' && j.camA.report.rssi === -55 && j.camA.report.link.heap === 90000 && j.camA.report.fw === 'e2e', JSON.stringify(j.camA));
     check('the other paired camera is still "never"', j.camC.state === 'never' && j.camC.online === false);
 

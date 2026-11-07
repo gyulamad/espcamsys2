@@ -239,7 +239,7 @@ private:
                 motionSeen_ = true;
                 lastMotionMs_ = nowMs;
             }
-            baseline_.observe(r.motion);   // the first frame has no reading to learn from
+            baseline_.observe(r.motion, cfg_.motionAtLeast);   // the first frame has no reading to learn from
         }
         // Unsigned subtraction: correct across the 49-day millis() wrap.
         return motionSeen_ && static_cast<uint32_t>(nowMs - lastMotionMs_) <= cfg_.holdMs;

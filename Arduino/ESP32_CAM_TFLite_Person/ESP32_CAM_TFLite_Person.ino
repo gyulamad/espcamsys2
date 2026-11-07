@@ -884,7 +884,7 @@ uint8_t *reportFrame = nullptr;               // the frame that belongs to repor
 SemaphoreHandle_t reportMutex = nullptr;
 
 // Called by the detection loop for every good frame.
-void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, person_scene::SceneState state)
+void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, uint32_t motionLimit, person_scene::SceneState state)
 {
     if (!reportMutex || !reportFrame || xSemaphoreTake(reportMutex, pdMS_TO_TICKS(2)) != pdTRUE)
     {
@@ -896,6 +896,7 @@ void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, pers
     reportSnap.seq++;
     reportSnap.brightness = brightness;
     reportSnap.motion = motion;
+    reportSnap.motionLimit = motionLimit;
     reportSnap.gate = person_report::gateFor(state, g_cfg.darkThreshold, g_cfg.motionThreshold);
     reportSnap.detected = personDetected;
     xSemaphoreGive(reportMutex);
@@ -1559,7 +1560,7 @@ bool captureFrameIntoInput(bool &run)
     // Hand the frame to the uplink (the dashboard's picture) together with the numbers the gate just
     // worked out. It sees every frame, also while detection is paused, so the picture never freezes;
     // never waits (see reportSceneFrame()).
-    reportSceneFrame((const uint8_t *)fb->buf, reading.brightness, reading.motion, verdict.state);
+    reportSceneFrame((const uint8_t *)fb->buf, reading.brightness, reading.motion, verdict.motionLimit, verdict.state);
 
     esp_camera_fb_return(fb);
 
