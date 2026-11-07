@@ -42,6 +42,25 @@
 #define OTA_RETRY_SECONDS 300
 #endif
 
+// (review ARD-008) maximum bytes the OTA logic will buffer for the version
+// reply before parsing it. The valid shape is "<version>\n<md5>\n" (~80 bytes
+// typical, ~120 worst case) — anything bigger is either a relay bug or a
+// malicious response, and unbounded getString() would let a hostile relay
+// exhaust the camera's ~300 KB heap.
+#ifndef OTA_VERSION_REPLY_MAX_BYTES
+#define OTA_VERSION_REPLY_MAX_BYTES 256
+#endif
+// (review ARD-016) sanity bounds on the firmware size. The Update library
+// already refuses anything bigger than the OTA partition, but a 1-byte body
+// would otherwise proceed to writeStream and fail confusingly; bounding the
+// size at the application level also produces a clearer error token.
+#ifndef OTA_FIRMWARE_MIN_BYTES
+#define OTA_FIRMWARE_MIN_BYTES 100 * 1024
+#endif
+#ifndef OTA_FIRMWARE_MAX_BYTES
+#define OTA_FIRMWARE_MAX_BYTES 2 * 1024 * 1024
+#endif
+
 // Where this reports to. The recorder maps these to its remote log (so the relay's log file
 // shows them); the default is the serial port.
 #ifndef OTA_INFO
@@ -50,6 +69,33 @@
 #ifndef OTA_WARN
 #define OTA_WARN(...) Serial.printf("[ota] WARN " __VA_ARGS__), Serial.println()
 #endif
+
+// Reads at most maxBytes bytes from http into out. Returns true on success
+// (the body was fully read AND within the bound); false if the body grew past
+// the bound (a hostile or buggy relay response) or the read failed.
+//
+// (review ARD-008) HTTPClient::getString() calls WiFiClient::readString(),
+// which appends to a String until either the connection closes or setTimeout()
+// elapses — it is NOT bounded by Content-Length and does NOT cap the
+// allocation. A relay (or MITM) returning Content-Length: 50000000 and a few
+// MB of payload would OOM the camera. Reading through the stream pointer with
+// an explicit cap is the fix.
+static bool readBounded(HTTPClient& http, std::string& out, size_t maxBytes) {
+  WiFiClient* stream = http.getStreamPtr();
+  if (!stream) return false;
+  out.clear();
+  out.reserve(64);
+  uint8_t buf[256];
+  while (http.connected() && out.size() < maxBytes) {
+    int n = stream->read(buf, sizeof(buf));
+    if (n <= 0) {
+      if (!http.connected()) break;
+      continue;
+    }
+    out.append(reinterpret_cast<const char*>(buf), static_cast<size_t>(n));
+  }
+  return out.size() < maxBytes;   // false = was truncated = refuse
+}
 
 class OtaUpdater {
  public:
@@ -72,7 +118,18 @@ class OtaUpdater {
     http.addHeader("X-Api-Key", apiKey.c_str());
     int code = http.GET();
     std::string body;
-    if (code == 200) body = http.getString().c_str();
+    if (code == 200) {
+      // (review ARD-008) bounded read: a hostile relay (or a MITM, since the
+      // OTA URL is plain HTTP — see ARD-001) returning a huge body would
+      // otherwise exhaust the camera's heap. parseVersionReply only looks at
+      // the first ~120 bytes anyway.
+      if (!readBounded(http, body, OTA_VERSION_REPLY_MAX_BYTES)) {
+        OTA_WARN("the relay's firmware answer was too large (>%d bytes) - ignoring it", (int)OTA_VERSION_REPLY_MAX_BYTES);
+        http.end();
+        policy_.onResult(millis(), true, "", jitter);
+        return;
+      }
+    }
     http.end();
 
     if (code != 200 && code != 404) {
@@ -134,6 +191,14 @@ class OtaUpdater {
     if (len <= 0) {           // chunked or empty: the update needs the size up front
       http.end();
       return "no_length";
+    }
+    // (review ARD-016) application-level size bounds. Update.begin() will
+    // refuse anything bigger than the OTA partition, but a 1-byte body would
+    // otherwise proceed to writeStream and fail with a confusing
+    // "short_write". Bounds also produce clearer error tokens.
+    if (len < (int)OTA_FIRMWARE_MIN_BYTES || len > (int)OTA_FIRMWARE_MAX_BYTES) {
+      http.end();
+      return "bad_size";
     }
     if (!Update.begin((size_t)len)) {
       std::string err = Update.getError() == UPDATE_ERROR_NO_PARTITION

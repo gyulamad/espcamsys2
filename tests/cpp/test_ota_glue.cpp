@@ -11,7 +11,11 @@
 #include "ota.h"
 
 static const std::string MD5 = "900150983cd24fb0d6963f7d28e17f72";
-static const std::string IMAGE(2000, 'x');
+// (review ARD-016) the firmware size bound (OTA_FIRMWARE_MIN_BYTES, 100 KB by
+// default) refuses anything below it, so the test image has to be at least
+// that big or every existing test would fail with bad_size. 200 KB is well
+// above the minimum and well below the 2 MB maximum.
+static const std::string IMAGE(200 * 1024, 'x');
 
 static void resetWorld() {
   fake::g() = fake::State();
@@ -188,6 +192,59 @@ TEST(each_failure_has_its_token) {
   TEST_ASSERT(fake::g().serial.back().find("no_length") != std::string::npos, "no Content-Length -> no_length");
 }
 
+// (review ARD-008) a version reply bigger than the cap is refused, not loaded
+// into memory and then parsed. parseVersionReply only looks at ~120 bytes, so
+// 256 is generous; a hostile relay returning a megabyte body would otherwise
+// exhaust the camera's ~300 KB heap. The test route's body is 1000 'A's — well
+// above the 256-byte cap.
+TEST(an_oversized_version_reply_is_ignored_review_ARD_008) {
+  resetWorld();
+  std::string huge(1000, 'A');
+  route("/version", 200, huge);
+  OtaUpdater ota("recorder");
+  runUntil(ota, 100000);
+  TEST_ASSERT_EQ(countRequests("firmware.bin"), (size_t)0, "no download from an oversized version reply");
+  TEST_ASSERT(!fake::g().restarted, "no restart");
+  // The cap is enforced even on the same-version path: the relay must not be
+  // able to OOM the camera just by sending a huge body for the version it
+  // already runs.
+  TEST_ASSERT(countRequests("/version") >= 1, "it did ask the relay at least once");
+}
+
+// (review ARD-016) an absurd firmware size (1 byte, or 50 MB) is refused with
+// the new bad_size token, not attempted. The 1-byte case used to fail with
+// the confusing 'short_write'; the 50 MB case relied on Update.begin() to
+// refuse it (which works but produces a less clear error).
+TEST(a_firmware_below_the_minimum_size_is_refused_review_ARD_016) {
+  resetWorld();
+  route("/version", 200, "new456\n" + MD5 + "\n");
+  route("firmware.bin", 200, "", std::string(1, 'x'));   // 1 byte
+  OtaUpdater ota("recorder");
+  runUntil(ota, 25000);
+  TEST_ASSERT(!fake::g().restarted, "no restart for a too-small image");
+  TEST_ASSERT(fake::g().serial.back().find("bad_size") != std::string::npos, "1-byte image -> bad_size");
+  TEST_ASSERT(!fake::g().aborted, "Update was not even started (no abort)");
+}
+
+TEST(a_firmware_above_the_maximum_size_is_refused_review_ARD_016) {
+  resetWorld();
+  route("/version", 200, "new456\n" + MD5 + "\n");
+  // 3 MB > OTA_FIRMWARE_MAX_BYTES (2 MB). The fake does not actually allocate
+  // 3 MB — getSize() reports stream_.bytes.size(), which is the size of the
+  // string we pass. We use a small string but pretend it is large by counting
+  // on the bound to fire on len, not on the body actually being huge.
+  // (readBounded is for the version reply, not the firmware; the firmware
+  // goes through Update.writeStream which streams directly.)
+  // The fake's getSize() returns the actual byte count of the image string,
+  // so to exercise the > MAX branch we DO need a large string.
+  std::string big(3 * 1024 * 1024, 'x');
+  route("firmware.bin", 200, "", big);
+  OtaUpdater ota("recorder");
+  runUntil(ota, 25000);
+  TEST_ASSERT(!fake::g().restarted, "no restart for a too-large image");
+  TEST_ASSERT(fake::g().serial.back().find("bad_size") != std::string::npos, "3 MB image -> bad_size");
+}
+
 int main() {
   RUN_TEST(no_wifi_no_request);
   RUN_TEST(first_check_comes_20s_after_wifi);
@@ -200,5 +257,8 @@ int main() {
   RUN_TEST(md5_mismatch_is_reported_next_poll_and_retried_after_5_minutes);
   RUN_TEST(the_error_is_reported_once);
   RUN_TEST(each_failure_has_its_token);
+  RUN_TEST(an_oversized_version_reply_is_ignored_review_ARD_008);
+  RUN_TEST(a_firmware_below_the_minimum_size_is_refused_review_ARD_016);
+  RUN_TEST(a_firmware_above_the_maximum_size_is_refused_review_ARD_016);
   return test::summarize();
 }

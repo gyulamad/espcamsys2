@@ -154,6 +154,20 @@ class Stream {
   std::string bytes;
 };
 
+// (review ARD-008) WiFiClient fake for ota.h's readBounded(). Real WiFiClient
+// is what http.getStreamPtr() returns; on the desktop the fake HTTPClient
+// returns a Stream*, and readBounded() needs the same shape so the code under
+// test compiles unchanged. We model only the two methods readBounded() uses.
+class WiFiClient : public Stream {
+ public:
+  int read(uint8_t* buf, size_t len) {
+    size_t n = bytes.size() < len ? bytes.size() : len;
+    for (size_t i = 0; i < n; ++i) buf[i] = (uint8_t)bytes[i];
+    bytes.erase(0, n);
+    return (int)n;
+  }
+};
+
 class HTTPClient {
  public:
   void begin(const String& url) {
@@ -170,7 +184,17 @@ class HTTPClient {
       const fake::Route& r = fake::g().routes[i];
       if (url_.find(r.part) != std::string::npos) {
         body_ = r.body;
-        stream_.bytes = r.image;
+        // (review ARD-008) on real hardware http.getString() and
+        // http.getStreamPtr() both expose the SAME response body — they are
+        // not separate channels. The fake used to put the text body in body_
+        // and a separate "image" buffer in stream_.bytes, which worked while
+        // the production code only called getString() for the version reply
+        // and only called getStreamPtr() for the firmware image. Now that
+        // readBounded() reads the version reply through getStreamPtr() too,
+        // the fake must mirror the real behaviour: stream_.bytes holds the
+        // body when no image is provided (the version reply case), and the
+        // image when one is provided (the firmware download case).
+        stream_.bytes = r.image.empty() ? r.body : r.image;
         return r.code;
       }
     }
@@ -183,11 +207,16 @@ class HTTPClient {
   }
   String getString() { return String(body_.c_str()); }
   int getSize() { return (int)stream_.bytes.size(); }
-  Stream* getStreamPtr() { return &stream_; }
+  // (review ARD-008) readBounded() uses connected() to decide whether to
+  // keep reading after a 0-byte read. The fake returns true while the
+  // stream still has bytes (so the loop drains it) and false after, which
+  // matches the real WiFiClient behaviour closely enough for the tests.
+  bool connected() { return !stream_.bytes.empty(); }
+  WiFiClient* getStreamPtr() { return &stream_; }
   void end() {}
  private:
   std::string url_, body_;
-  Stream stream_;
+  WiFiClient stream_;
 };
 
 class UpdateClass {
