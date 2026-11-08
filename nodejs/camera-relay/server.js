@@ -29,6 +29,7 @@ const detectorlink = require('./lib/detectorlink');
 const detectorevents = require('./lib/detectorevents');
 const detectorview = require('./lib/detectorview');
 const muxfeed = require('./lib/muxfeed');
+const { createFrameWriter } = require('./lib/framequeue');
 const sharedsnapshot = require('./lib/sharedsnapshot');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
@@ -432,22 +433,30 @@ function startRecording(cam, id, seconds) {
     frameCount: preFrames.length, // live frames are numbered after the pre-roll ones
     firstFrameAt: preFrames.length ? preFrames[0].ts : null,
     lastFrameAt: preFrames.length ? preFrames[preFrames.length - 1].ts : null,
+    frameWriter: null,
     onFrame: null,
     timer: null,
   };
 
   rec.preRollWritten = writePreRollFrames(rec, preFrames);
 
+  // The live frames are written the same way as the pre-roll ones (see lib/framequeue.js): one
+  // write in flight at a time, never a synchronous one. fs.writeFileSync here meant one event-
+  // loop stall per frame — on a Pi's SD card tens of milliseconds each — and while the relay
+  // wrote one camera's frames, every camera's stream, /status answer and detector reading
+  // waited. A failed or dropped frame is logged; the clip is truncated where it was, like a
+  // disk-full write always was.
+  rec.frameWriter = createFrameWriter({
+    writeFile: (p, data) => fsp.writeFile(p, data),
+    onError: (err) => logRecordingWriteError(id, 'recording frame', err),
+    onDrop: (dropped, waiting) => logRecordingWriteError(id, 'recording frame', new Error(`the disk fell ${dropped} frame(s) behind (still ${waiting} waiting) — dropping the oldest ones so the relay keeps up; the clip is truncated where the first one was dropped`)),
+  });
+
   rec.onFrame = (frame, ts = Date.now()) => {
     rec.frameCount += 1;
     if (!rec.firstFrameAt) rec.firstFrameAt = ts;
     rec.lastFrameAt = ts;
-    const framePath = path.join(tempDir, frameFileName(rec.frameCount));
-    try {
-      fs.writeFileSync(framePath, frame);
-    } catch (err) {
-      logRecordingWriteError(id, 'recording frame', err);
-    }
+    rec.frameWriter.write(path.join(tempDir, frameFileName(rec.frameCount)), frame);
   };
   cam.emitter.on('frame', rec.onFrame);
 
@@ -601,8 +610,10 @@ function stopRecording(cam) {
 
 // Runs ffmpeg over the captured frames using their real measured frame
 // rate, writes `<dir>/<id>_<stamp>.mp4`, and cleans up the temp frames.
-// Waits for the (asynchronous) pre-roll files to finish landing on disk
-// first, so a recording stopped immediately still encodes its full lead-in.
+// Waits for the (asynchronous) pre-roll files AND the live frames to finish landing on
+// disk first, so a recording stopped immediately still encodes its full lead-in and every
+// frame it captured (the listener is off by now, so nothing new can arrive behind the
+// writer's back).
 function finalizeRecording(rec) {
   if (rec.frameCount === 0) {
     // Camera was offline for this whole recording and had nothing buffered — nothing to encode.
@@ -610,7 +621,7 @@ function finalizeRecording(rec) {
     removeTempDir(rec);
     return;
   }
-  rec.preRollWritten.then(() => encodeRecording(rec));
+  Promise.all([rec.preRollWritten, rec.frameWriter.idle()]).then(() => encodeRecording(rec));
 }
 
 function removeTempDir(rec) {
