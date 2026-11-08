@@ -488,6 +488,18 @@ fi
 #     bad input never forwarded; the relay and host targets with a fake relay and a fake power helper.
 #     Skips itself if php is missing. Override the ports with
 #     E2E_REBOOT_PORT / E2E_REBOOT_RELAY_PORT / E2E_REBOOT_DEAD_PORT.
+#   - tests/e2e/test_wifi_info_e2e.js: the Wi-Fi network and signal of cameras and detectors through a real relay —
+#     the greeting byte that announces the in-band Wi-Fi report, a camera's report in GET /status, refused reports
+#     (control characters, too long, not connected, too short) changing nothing, a resting detector's live-view poll
+#     (?ssid=&rssi=) in GET /detectors, hostile query values ignored, the log naming a new network but never a
+#     refused one. Override the ports with E2E_WIFI_PORT / E2E_WIFI_PUSH_PORT.
+#   - tests/e2e/test_dashboard_wifi_e2e.js: status.php and detector-status.php in front of a fake relay — the
+#     network and signal passed on checked again, a reading the relay got wrong dropped, the detector's own
+#     rssi/ssid readings moved into `wifi`, no network name written into the page. Skips itself if php is missing.
+#     Override the ports with E2E_DWIFI_PORT (and the next one up).
+#   - tests/dom/test_wifi_dom.js: the Wi-Fi chips on the real dashboard page in jsdom — a chip per camera and a
+#     line per detector (a resting one too), a hostile network name shown as text only, chips following the data.
+#     Needs php and jsdom. Override the port with E2E_WIFIDOM_PORT (and the next one up).
 #   - tests/e2e/test_logging_e2e.js: the relay's log file and POST /log — key
 #     authentication, entries filed under the time they HAPPENED with the
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
@@ -635,6 +647,24 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_detector_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (Wi-Fi network and signal of cameras and detectors, relay) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_wifi_info_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (Wi-Fi network and signal on the dashboard) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_wifi_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -868,6 +898,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
     run_node_e2e "$ROOT_DIR/tests/dom/test_files_list_layout_browser.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the Wi-Fi network and signal chips on the dashboard page) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_wifi_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
