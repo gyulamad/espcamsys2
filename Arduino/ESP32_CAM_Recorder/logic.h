@@ -174,6 +174,49 @@ inline void applyRelayByte(int b, bool &relaySupportsInBandAlarm) {
     if (b == RELAY_CAP_INBAND_ALARM) relaySupportsInBandAlarm = true;
 }
 
+// ── In-band Wi-Fi report ─────────────────────────────────────────────
+// Every few seconds the camera tells the relay which Wi-Fi network it is on and how strong the signal is, so the
+// dashboard can show it next to the camera. Same framing as the alarm message — [4-byte length][CONTROL_MARKER]
+// [MSG_WIFI][rssi: signed byte][ssid bytes] — written on the push connection between two frames, and only to a
+// relay that announced (RELAY_CAP_WIFI_INFO) that it understands it. These values must match
+// nodejs/camera-relay/lib/protocol.js (MSG_WIFI, RELAY_CAP_WIFI_INFO); tests/cpp/test_alarm_logic.cpp and
+// tests/node/test_protocol.js pin the same bytes on both sides.
+const uint8_t MSG_WIFI = 0x03;
+const uint8_t RELAY_CAP_WIFI_INFO = 0x03;
+const size_t  WIFI_SSID_MAX_LEN = 32;                                // an 802.11 network name is at most 32 bytes
+const size_t  WIFI_MESSAGE_MAX_LEN = 4 + 3 + WIFI_SSID_MAX_LEN;     // length prefix + marker + type + rssi + name
+const unsigned long WIFI_REPORT_INTERVAL_MS = 10000;
+
+// Applies one byte read from the relay to the "does this relay understand Wi-Fi reports" flag. Like
+// applyRelayByte(): per connection (reset it to false on every new one), every other byte is ignored.
+inline void applyRelayWifiByte(int b, bool &relaySupportsWifiInfo) {
+    if (b == RELAY_CAP_WIFI_INFO) relaySupportsWifiInfo = true;
+}
+
+// Writes the Wi-Fi report for `ssid` / `rssi` (dBm) into `out`. Returns the number of bytes to send, or 0 when there
+// is nothing true to report: no network name, one longer than 32 bytes, or a signal that is not a connected one
+// (the board gives 0 when it is not connected; real values are -127..-1). Nothing is sent then, never a guess.
+inline size_t encodeWifiMessage(const std::string &ssid, int rssi, uint8_t out[WIFI_MESSAGE_MAX_LEN]) {
+    if (ssid.empty() || ssid.size() > WIFI_SSID_MAX_LEN) return 0;
+    if (rssi < -127 || rssi > -1) return 0;
+    const uint32_t payloadLen = (uint32_t)(3 + ssid.size());
+    encodeFrameLengthPrefix(payloadLen, out);
+    out[4] = CONTROL_MARKER;
+    out[5] = MSG_WIFI;
+    out[6] = (uint8_t)(int8_t)rssi;
+    for (size_t i = 0; i < ssid.size(); i++) out[7 + i] = (uint8_t)ssid[i];
+    return 4 + (size_t)payloadLen;
+}
+
+// Is it time to send the next Wi-Fi report? The first one goes out as soon as the relay has announced support (the
+// dashboard should not wait 10 s for it after a reconnect), then one per `intervalMs`. Wrap-safe: millis() overflows
+// after ~49 days, and the unsigned difference still comes out right.
+inline bool wifiReportDue(unsigned long nowMs, unsigned long lastReportMs, bool reportedOnThisConnection,
+                          unsigned long intervalMs = WIFI_REPORT_INTERVAL_MS) {
+    if (!reportedOnThisConnection) return true;
+    return (unsigned long)(nowMs - lastReportMs) >= intervalMs;
+}
+
 // How to report an alarm right now:
 //   InBand — the push connection is up AND the relay has announced it
 //            understands in-band alarms: write the 6-byte message on it.

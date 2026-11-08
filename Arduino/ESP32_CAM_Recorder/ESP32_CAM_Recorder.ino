@@ -49,6 +49,12 @@ uint32_t pushConnectedAt = 0;             // millis() when the current push conn
 // for a video frame (corrupt stream, lost alarm).
 bool relaySupportsInBandAlarm = false;
 
+// Same for the Wi-Fi report (network name and signal strength, shown on the dashboard): only sent to a relay that
+// announced it understands it, per connection. g_wifiReported*: when the last report of this connection went out.
+bool relaySupportsWifiInfo = false;
+bool g_wifiReported = false;
+unsigned long g_wifiReportedAt = 0;
+
 // There is deliberately no pause/resume switch: this camera captures and
 // pushes continuously, always. The relay keeps a rolling pre-roll buffer of
 // the last few seconds of every camera's frames and starts each recording
@@ -395,6 +401,8 @@ bool ensurePushConnection() {
 
   pushAuthed = false;
   relaySupportsInBandAlarm = false; // capability is per connection: wait for this relay to announce it
+  relaySupportsWifiInfo = false;
+  g_wifiReported = false;
   pushClient.stop();
   if (!pushClient.connect(g_cfg.serverHost.c_str(), g_cfg.pushPort)) {
     return false;
@@ -987,7 +995,29 @@ void retryCameraInit() {
 // switches alarms over to the in-band message. Everything is consumed so
 // the receive buffer can't slowly fill up; unknown bytes are ignored.
 void readRelayBytes() {
-  while (pushClient.available()) applyRelayByte(pushClient.read(), relaySupportsInBandAlarm);
+  while (pushClient.available()) {
+    int b = pushClient.read();
+    applyRelayByte(b, relaySupportsInBandAlarm);
+    applyRelayWifiByte(b, relaySupportsWifiInfo);
+  }
+}
+
+// Tells the relay which Wi-Fi network we are on and how strong the signal is (WIFI_REPORT_INTERVAL_MS apart), written
+// on the push connection between two frames, so it never waits for the relay. Nothing is sent to a relay that has not
+// announced it understands it, or while there is nothing true to say (see encodeWifiMessage()).
+void reportWifiIfDue() {
+  if (!relaySupportsWifiInfo || !pushClient.connected() || WiFi.status() != WL_CONNECTED) return;
+  unsigned long now = millis();
+  if (!wifiReportDue(now, g_wifiReportedAt, g_wifiReported)) return;
+  uint8_t msg[WIFI_MESSAGE_MAX_LEN];
+  size_t len = encodeWifiMessage(std::string(WiFi.SSID().c_str()), WiFi.RSSI(), msg);
+  g_wifiReported = true;   // whether or not there was something to say: the next look is one interval away
+  g_wifiReportedAt = now;
+  if (len == 0) return;
+  if (writePushBytes(msg, len) == len) return;
+  // A partial write leaves the stream stopped halfway through a message: drop the connection (loop() reconnects).
+  RLOG_WARN("Wi-Fi report send failed — dropping the push connection");
+  pushClient.stop();
 }
 
 // At most once per 30 s: a weak link is slow on every frame.
@@ -1077,6 +1107,7 @@ void loop() {
   }
 
   readRelayBytes();
+  reportWifiIfDue();
 
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {

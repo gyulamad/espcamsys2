@@ -8,6 +8,7 @@
 // a backtrace instead of just "Aborted" — on a clean run gdb behaves just
 // like running the binary directly.
 
+#include <cstring>
 #include "framework.h"
 #include "../../Arduino/ESP32_CAM_Recorder/logic.h"
 
@@ -311,6 +312,97 @@ TEST(relay_greeting_sequence_resume_then_capability) {
     TEST_ASSERT(supports, "greeting enables in-band alarms");
 }
 
+// ── Wi-Fi report ─────────────────────────────────────────────────────
+// The bytes are pinned here and in tests/node/test_protocol.js (the relay's decoder reads exactly these).
+
+TEST(wifi_message_layout_is_prefix_marker_type_rssi_name) {
+    uint8_t m[WIFI_MESSAGE_MAX_LEN];
+    size_t n = encodeWifiMessage("Home", -61, m);
+    TEST_ASSERT_EQ(n, (size_t)11, "4 prefix + marker + type + rssi + 4 name bytes");
+    const uint8_t expected[] = {0x00, 0x00, 0x00, 0x07, 0x00, 0x03, 0xC3, 'H', 'o', 'm', 'e'};  // -61 = 0xC3
+    TEST_ASSERT(std::memcmp(m, expected, sizeof(expected)) == 0, "exact bytes");
+}
+
+TEST(wifi_message_length_prefix_counts_the_payload_only) {
+    uint8_t m[WIFI_MESSAGE_MAX_LEN];
+    size_t n = encodeWifiMessage("abcdefghij", -50, m);
+    uint32_t prefix = ((uint32_t)m[0] << 24) | ((uint32_t)m[1] << 16) | ((uint32_t)m[2] << 8) | m[3];
+    TEST_ASSERT_EQ((size_t)prefix, n - 4, "prefix = bytes after the prefix");
+}
+
+TEST(wifi_message_signal_is_a_signed_byte_over_the_whole_range) {
+    uint8_t m[WIFI_MESSAGE_MAX_LEN];
+    encodeWifiMessage("a", -1, m);
+    TEST_ASSERT_EQ((int)m[6], 0xFF, "-1");
+    encodeWifiMessage("a", -127, m);
+    TEST_ASSERT_EQ((int)m[6], 0x81, "-127");
+}
+
+TEST(wifi_message_carries_the_longest_name_and_multibyte_names_unchanged) {
+    uint8_t m[WIFI_MESSAGE_MAX_LEN];
+    std::string longest(32, 'x');
+    TEST_ASSERT_EQ(encodeWifiMessage(longest, -60, m), WIFI_MESSAGE_MAX_LEN, "32 bytes fit exactly");
+    std::string cafe = "Caf\xC3\xA9";   // UTF-8, 5 bytes
+    size_t n = encodeWifiMessage(cafe, -60, m);
+    TEST_ASSERT_EQ(n, (size_t)(7 + 5), "bytes, not characters");
+    TEST_ASSERT(std::memcmp(m + 7, cafe.data(), 5) == 0, "name bytes unchanged");
+}
+
+TEST(wifi_message_is_never_made_without_something_true_to_say) {
+    uint8_t m[WIFI_MESSAGE_MAX_LEN];
+    TEST_ASSERT_EQ(encodeWifiMessage("", -60, m), (size_t)0, "no network name");
+    TEST_ASSERT_EQ(encodeWifiMessage(std::string(33, 'x'), -60, m), (size_t)0, "name longer than 32 bytes");
+    TEST_ASSERT_EQ(encodeWifiMessage("Home", 0, m), (size_t)0, "0 dBm = not connected");
+    TEST_ASSERT_EQ(encodeWifiMessage("Home", 31, m), (size_t)0, "positive signal");
+    TEST_ASSERT_EQ(encodeWifiMessage("Home", -128, m), (size_t)0, "below the range");
+}
+
+TEST(wifi_message_never_writes_past_the_buffer) {
+    uint8_t buf[WIFI_MESSAGE_MAX_LEN + 8];
+    std::memset(buf, 0xAB, sizeof(buf));
+    encodeWifiMessage(std::string(32, 'x'), -60, buf);
+    bool intact = true;
+    for (size_t i = WIFI_MESSAGE_MAX_LEN; i < sizeof(buf); i++) intact = intact && buf[i] == 0xAB;
+    TEST_ASSERT(intact, "bytes after the maximum length are untouched");
+}
+
+TEST(relay_wifi_capability_byte_sets_its_flag_only) {
+    bool wifi = false;
+    applyRelayWifiByte(RELAY_CAP_WIFI_INFO, wifi);
+    TEST_ASSERT(wifi, "capability byte 0x03");
+    bool wifi2 = false;
+    applyRelayWifiByte(0, wifi2); applyRelayWifiByte(1, wifi2); applyRelayWifiByte(RELAY_CAP_INBAND_ALARM, wifi2);
+    applyRelayWifiByte(42, wifi2); applyRelayWifiByte(-1, wifi2);
+    TEST_ASSERT(!wifi2, "resume, the alarm capability, unknown bytes and 'nothing to read' leave it off");
+}
+
+TEST(relay_greeting_with_both_capabilities_sets_both_flags_independently) {
+    bool alarm = false, wifi = false;
+    const int greeting[] = {0x01, 0x02, 0x03};   // nodejs/camera-relay encodeRelayGreeting()
+    for (int b : greeting) { applyRelayByte(b, alarm); applyRelayWifiByte(b, wifi); }
+    TEST_ASSERT(alarm && wifi, "both announced");
+    bool alarmOnly = false, wifiOnly = false;
+    const int older[] = {0x01, 0x02};            // a relay from before the Wi-Fi report
+    for (int b : older) { applyRelayByte(b, alarmOnly); applyRelayWifiByte(b, wifiOnly); }
+    TEST_ASSERT(alarmOnly && !wifiOnly, "an older relay never gets a Wi-Fi report");
+}
+
+TEST(wifi_report_is_due_at_once_on_a_new_connection_then_every_interval) {
+    TEST_ASSERT(wifiReportDue(5, 0, /*reported=*/false), "first report of a connection: right away");
+    TEST_ASSERT(!wifiReportDue(5000, 1000, true), "4 s later: not yet");
+    TEST_ASSERT(!wifiReportDue(10999, 1000, true), "1 ms before the interval");
+    TEST_ASSERT(wifiReportDue(11000, 1000, true), "exactly one interval");
+    TEST_ASSERT(wifiReportDue(30000, 1000, true), "overdue");
+    TEST_ASSERT(wifiReportDue(1500, 1000, true, 500), "a custom interval");
+}
+
+TEST(wifi_report_schedule_survives_the_millis_counter_wrapping) {
+    // Unsigned subtraction: on the board a report just before the 32-bit wrap is still seen as old after it.
+    const unsigned long nearWrap = 0xFFFFFFFFUL - 2000;
+    TEST_ASSERT(!wifiReportDue(nearWrap + 7000, nearWrap, true), "7 s after the report, across the wrap: not yet");
+    TEST_ASSERT(wifiReportDue(nearWrap + 11000, nearWrap, true), "11 s after the report, across the wrap: due");
+}
+
 TEST(log_url_points_at_the_relays_log_endpoint) {
     TEST_ASSERT(buildLogUrl("192.168.4.9", 8080) == "http://192.168.4.9:8080/log", "host, port and /log");
 }
@@ -438,6 +530,16 @@ int main() {
     RUN_TEST(relay_capability_byte_sets_the_flag);
     RUN_TEST(old_relay_bytes_and_unknown_bytes_leave_the_flag_off);
     RUN_TEST(relay_greeting_sequence_resume_then_capability);
+    RUN_TEST(wifi_message_layout_is_prefix_marker_type_rssi_name);
+    RUN_TEST(wifi_message_length_prefix_counts_the_payload_only);
+    RUN_TEST(wifi_message_signal_is_a_signed_byte_over_the_whole_range);
+    RUN_TEST(wifi_message_carries_the_longest_name_and_multibyte_names_unchanged);
+    RUN_TEST(wifi_message_is_never_made_without_something_true_to_say);
+    RUN_TEST(wifi_message_never_writes_past_the_buffer);
+    RUN_TEST(relay_wifi_capability_byte_sets_its_flag_only);
+    RUN_TEST(relay_greeting_with_both_capabilities_sets_both_flags_independently);
+    RUN_TEST(wifi_report_is_due_at_once_on_a_new_connection_then_every_interval);
+    RUN_TEST(wifi_report_schedule_survives_the_millis_counter_wrapping);
     RUN_TEST(log_url_points_at_the_relays_log_endpoint);
     RUN_TEST(hold_edge_sends_the_alarm_immediately);
     RUN_TEST(hold_resends_every_refresh_interval_while_the_line_stays_active);
