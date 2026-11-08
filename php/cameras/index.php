@@ -1760,7 +1760,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // <detector-watch>
   const WATCH_KEEP_MS = 20000;               // while somebody watches, the page tells the relay "still looking" this often
   const WATCH_ACTIVE_MS = 10 * 60 * 1000;    // ... as long as the person touched the page within this time
-  const fmtLeft = (s) => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
   const isStreaming = (d) => !!d && (d.state === 'online' || d.state === 'no-picture');
   // What the button of one detector shows and does, from its status (the detector-status.php shape).
   //   -> { hidden, label, title, action: 'on' | 'off' }
@@ -1768,8 +1767,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const view = d && d.view;
     if (!view || !view.supported) return { hidden: true, label: '', title: '', action: 'on' };   // an older firmware streams all the time
     if (isStreaming(d)) {
-      const left = d.report && typeof d.report.viewLeftS === 'number' ? d.report.viewLeftS : null;
-      return { hidden: false, label: '■ STOP' + (left === null ? '' : ' (' + fmtLeft(left) + ')'), title: 'Stop the live view now, so the detector can rest', action: 'off' };
+      return { hidden: false, label: '■ STOP', title: 'Stop the live view now, so the detector can rest', action: 'off' };
     }
     if (view.wanted) return { hidden: false, label: '… STARTING', title: 'Asked: the detector checks in about every 30 s while it rests. Click to cancel.', action: 'off' };
     return { hidden: false, label: '▶ WATCH', title: 'Show the sensor values and the small picture (the detector rests when nobody watches)', action: 'on' };

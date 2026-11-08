@@ -837,7 +837,7 @@ In every file list (a camera's **📼 FILES** and **📼 ALL FILES**): **🧑 SO
 
 A person detector no longer streams all the time. The sensor values and the small grey picture are sent only while somebody wants to see them; otherwise the detector drops the link, the Wi-Fi radio rests, and the board asks the relay about every 30 s.
 
-- On the dashboard each detector row has a **▶ WATCH** button (shown only for detectors with the new firmware). It switches the live view on for **10 minutes** by default; **■ STOP (m:ss)** ends it. While the dashboard is open and you are active, the view is renewed automatically.
+- On the dashboard each detector row has a **▶ WATCH** button (shown only for detectors with the new firmware). It switches the live view on for **10 minutes** by default; **■ STOP** ends it (the time left is no longer shown on the button). While the dashboard is open and you are active, the view is renewed automatically.
 - The duration is the relay setting `detectorViewMinutes` (`config.js`, or the env `DETECTOR_VIEW_MINUTES`; 1-1440, default 10).
 - Latency: ON takes up to ~30 s (the board's next ask), OFF about 3 s. A detector with older firmware, or a relay without the switch, simply streams all the time as before.
 - The simple view's SLIDESHOW switches the live view on for all detectors by itself.

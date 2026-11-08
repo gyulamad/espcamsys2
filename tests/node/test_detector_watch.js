@@ -3,6 +3,9 @@
 // Tests the WATCH button logic of the dashboard page (php/cameras/index.php) by running exactly the block
 // between its <detector-watch> markers: what the button shows and does in each state of a detector, and
 // when an open page tells the relay "still looking".
+//
+// The button no longer shows the time left of the running live view (the relay still reports viewLeftS,
+// the dashboard just does not put it on the button), so the streaming state is a plain '■ STOP'.
 
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +14,7 @@ const { test, assertEqual, assertTrue, summarize } = require('./framework');
 const page = fs.readFileSync(path.join(__dirname, '../../php/cameras/index.php'), 'utf8');
 const m = /\/\/ <detector-watch>\n([\s\S]*?)\/\/ <\/detector-watch>/.exec(page);
 assertTrue(!!m, 'the page has a <detector-watch> block');
-const w = new Function(`${m[1]}\nreturn { WATCH_KEEP_MS, WATCH_ACTIVE_MS, fmtLeft, isStreaming, watchButton, keepAliveDue };`)();
+const w = new Function(`${m[1]}\nreturn { WATCH_KEEP_MS, WATCH_ACTIVE_MS, isStreaming, watchButton, keepAliveDue };`)();
 
 const view = (over = {}) => Object.assign({ supported: true, wanted: false }, over);
 const idle = (v) => ({ state: 'idle', online: false, report: null, view: view(v) });
@@ -34,10 +37,10 @@ test('asked but not started yet: STARTING, a click cancels', () => {
   assertEqual([b.label, b.action], ['… STARTING', 'off']);
 });
 
-test('streaming: STOP with the time left, a click stops it', () => {
+test('streaming: STOP (no countdown), a click stops it', () => {
   const b = w.watchButton(live(541, { wanted: true }));
-  assertEqual([b.label, b.action], ['■ STOP (9:01)', 'off']);
-  assertEqual(w.watchButton(live(5)).label, '■ STOP (0:05)');
+  assertEqual([b.label, b.action], ['■ STOP', 'off']);
+  assertEqual(w.watchButton(live(5)).label, '■ STOP');
   assertEqual(w.watchButton({ state: 'online', report: {}, view: view() }).label, '■ STOP', 'no time left reported (older firmware build)');
   assertEqual(w.watchButton({ state: 'no-picture', report: { viewLeftS: 60 }, view: view() }).action, 'off');
 });
@@ -45,12 +48,6 @@ test('streaming: STOP with the time left, a click stops it', () => {
 test('an offline detector that supports the view can still be asked', () => {
   const b = w.watchButton({ state: 'offline', report: null, view: view() });
   assertEqual([b.hidden, b.action], [false, 'on']);
-});
-
-test('fmtLeft', () => {
-  assertEqual(w.fmtLeft(600), '10:00');
-  assertEqual(w.fmtLeft(61), '1:01');
-  assertEqual(w.fmtLeft(0), '0:00');
 });
 
 const NOW = 1e9;
