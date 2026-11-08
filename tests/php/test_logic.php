@@ -1071,10 +1071,9 @@ camtest_test('credentialProblem: empty, template and short logins are refused, a
     camtest_assert_true(CamLogic::credentialProblem('admin', 'change-me') !== null);
     camtest_assert_true(CamLogic::credentialProblem('Change-Me', 'a-long-password') !== null);
     camtest_assert_true(CamLogic::credentialProblem('admin', 'short') !== null);
-    // (review PHP-007) 8 chars used to pass; the minimum is now 12.
-    camtest_assert_true(CamLogic::credentialProblem('admin', '12345678') !== null, '8 chars is below the new minimum');
-    camtest_assert_true(CamLogic::credentialProblem('admin', 'elevenchars') !== null, '11 chars is below the new minimum');
-    camtest_assert_equal(CamLogic::credentialProblem('admin', 'twelvechars!'), null);
+    // (review PHP-007 reverted) the minimum is back to 8. 7 chars fails, 8 passes.
+    camtest_assert_true(CamLogic::credentialProblem('admin', 'sevench') !== null, '7 chars is below the minimum');
+    camtest_assert_equal(CamLogic::credentialProblem('admin', '12345678'), null, '8 chars is the minimum');
     camtest_assert_true(CamLogic::credentialProblem(null, 'a-long-password') !== null, 'missing key');
     camtest_assert_true(CamLogic::credentialProblem('admin', ['x']) !== null, 'wrong type');
 });

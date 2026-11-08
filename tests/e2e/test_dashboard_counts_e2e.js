@@ -47,7 +47,7 @@ const PUSH_PORT = Number(process.env.E2E_DASH_PUSH_PORT || 19302);
 const FAKE_PORT = Number(process.env.E2E_DASH_FAKE_PORT || 19303);
 const DEAD_PORT = Number(process.env.E2E_DASH_DEAD_PORT || 19304); // nothing listens here
 
-const AUTH = { user: 'e2e-user', pass: 'e2e-pass-long' };
+const AUTH = { user: 'e2e-user', pass: 'e2e-pass' };
 const CAMS = ['e2e-dash-a', 'e2e-dash-b', 'e2e-dash-c'];
 const FILES_ON_DISK = { 'e2e-dash-a': 3, 'e2e-dash-b': 0, 'e2e-dash-c': 1 };
 

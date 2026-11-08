@@ -42,7 +42,7 @@ const DASH_SRC = path.join(__dirname, '../../php/cameras');
 const PHP_PORT = Number(process.env.E2E_SWDASH_PORT || 19330);
 const RELAY_PORT = Number(process.env.E2E_SWDASH_RELAY_PORT || 19331);
 const DEAD_PORT = Number(process.env.E2E_SWDASH_DEAD_PORT || 19332);
-const AUTH = { user: 'e2e-user', pass: 'e2e-pass-long' };
+const AUTH = { user: 'e2e-user', pass: 'e2e-pass' };
 const KEY = 'a-long-secret-control-key-0123456789';
 const CAMS = ['e2e-cam-a', 'e2e-cam-b'];
 

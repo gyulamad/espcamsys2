@@ -26,7 +26,7 @@ const { spawn, spawnSync } = require('child_process');
 
 const DASH_SRC = path.join(__dirname, '../../php/cameras');
 const PHP_PORT = Number(process.env.E2E_LOGOUT_PORT || 19430);
-const AUTH = { user: 'e2e-user', pass: 'e2e-pass-long' };
+const AUTH = { user: 'e2e-user', pass: 'e2e-pass' };
 const HOST = `127.0.0.1:${PHP_PORT}`;
 const PAGES = ['index.php', 'settings-page.php', 'camera-settings-page.php?cam=cam-a', 'all-recordings.php'];
 
