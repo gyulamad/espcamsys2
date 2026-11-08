@@ -30,6 +30,7 @@ const detectorevents = require('./lib/detectorevents');
 const detectorview = require('./lib/detectorview');
 const muxfeed = require('./lib/muxfeed');
 const { createFrameWriter } = require('./lib/framequeue');
+const { createLoopWatch } = require('./lib/loopwatch');
 const sharedsnapshot = require('./lib/sharedsnapshot');
 const discovery = require('./lib/discovery');
 const { LogWriter } = require('./lib/logwriter');
@@ -2714,6 +2715,33 @@ function startDiscoveryResponder() {
   socket.bind(discoveryCfg.port, () => console.log(`Camera relay (discovery) listening on UDP :${discoveryCfg.port}`));
 }
 startDiscoveryResponder();
+
+// ── Event-loop watchdog (the hanging-dashboard investigation) ──
+// The relay is one process with one event loop: when something in it blocks
+// synchronously, every camera's stream, every /status answer and every
+// detector's uplink stalls at once, boards reboot on their "the relay stopped
+// accepting data" watchdog, and the dashboard looks dead. From the browser that
+// is indistinguishable from the web server being the problem — and the two need
+// the opposite fix, so the first fact to establish is which side it is (see
+// lib/loopwatch.js and the debug runbook it points to).
+//
+// One INFO line a minute (worst stall, memory, fds, who is connected) and a
+// WARN the moment the loop is blocked for a second or more. Heartbeat lines
+// keep coming → the relay is alive and the stall is in Apache/PHP; they stop →
+// the relay itself is stuck, and the WARN after the gap says since when.
+// LOOPWATCH=0 turns it off; its timers are unref'd, so it never holds the
+// process open by itself.
+function viewerSummary() {
+  const cams = Object.values(cameras);
+  const dets = Object.values(detectors);
+  const singleViewers = cams.reduce((n, c) => n + c.streamViewers, 0) + dets.reduce((n, d) => n + d.streamViewers, 0);
+  return `${cams.filter((c) => c.socket).length}/${cams.length} cameras connected, `
+    + `${dets.filter((d) => d.connected).length}/${dets.length} detectors connected, `
+    + `${muxViewers} mux and ${singleViewers} single-camera viewers`;
+}
+if (fromEnv('LOOPWATCH', '1') !== '0') {
+  createLoopWatch({ log: relayLog, snapshot: viewerSummary }).start();
+}
 
 // ── Process lifecycle, for the log ──
 // A relay that restarted is the first thing to rule in or out when a camera
