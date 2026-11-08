@@ -1376,6 +1376,7 @@ class CamLogic
                     'ageMs' => null, 'pictureAgeMs' => null, 'ip' => null,
                     'message' => self::detectorNeverHeardMessage($d, $unpaired),
                     'report' => null,
+                    'wifi' => null,
                     'view' => self::detectorViewSummary(null),
                 ];
                 continue;
@@ -1392,7 +1393,8 @@ class CamLogic
                 'pictureAgeMs' => isset($v['pictureAgeMs']) ? $v['pictureAgeMs'] : null,
                 'ip' => isset($v['ip']) && is_string($v['ip']) ? $v['ip'] : null,
                 'message' => isset($v['message']) && is_string($v['message']) ? $v['message'] : '',
-                'report' => isset($v['report']) ? $v['report'] : null,
+                'report' => isset($v['report']) ? self::withoutWifiReadings($v['report']) : null,
+                'wifi' => self::sanitizeWifi($v['wifi'] ?? null),
                 'view' => self::detectorViewSummary($v['view'] ?? null),
             ];
         }
@@ -1406,6 +1408,68 @@ class CamLogic
     {
         $view = is_array($view) ? $view : [];
         return ['supported' => !empty($view['supported']), 'wanted' => !empty($view['wanted'])];
+    }
+
+    // ── The Wi-Fi network and signal strength on the dashboard ──
+    // The relay knows which Wi-Fi network each camera and each detector is on and how strong the signal is
+    // (lib/wifiinfo.js there). The dashboard shows it next to every camera and detector. It is checked here once more,
+    // so the browser only ever gets a strictly shaped { ssid, rssi, ageMs } or null.
+
+    // Longest network name (bytes) and the range of a signal strength (dBm) that are believed: the relay checks the
+    // same, and this is checked again because what is handed to the browser must not depend on a neighbour's care.
+    public const WIFI_MAX_SSID_BYTES = 32;
+    public const WIFI_MIN_RSSI = -127;
+    public const WIFI_MAX_RSSI = -1;
+
+    // What the browser may be told about a device's Wi-Fi: { ssid, rssi, ageMs } with the values checked again, or
+    // null when the relay sent none or anything that is not one (a name with control characters, a signal outside
+    // the range, a missing age). Nothing but those three keys ever passes.
+    public static function sanitizeWifi($raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+        $ssid = $raw['ssid'] ?? null;
+        $rssi = $raw['rssi'] ?? null;
+        $ageMs = $raw['ageMs'] ?? null;
+        if (!is_string($ssid) || $ssid === '' || strlen($ssid) > self::WIFI_MAX_SSID_BYTES || preg_match('/[\x00-\x1f\x7f]/', $ssid) || !mb_check_encoding($ssid, 'UTF-8')) {
+            return null;
+        }
+        if (!is_int($rssi) || $rssi < self::WIFI_MIN_RSSI || $rssi > self::WIFI_MAX_RSSI) {
+            return null;
+        }
+        if (!is_int($ageMs) || $ageMs < 0) {
+            return null;
+        }
+        return ['ssid' => $ssid, 'rssi' => $rssi, 'ageMs' => $ageMs];
+    }
+
+    // The relay's GET /status answer (JSON text) made fit for the browser: every camera's `wifi` is checked (a reading
+    // that is not one becomes null). Everything else is passed on as it is. Text that is not a JSON object is returned
+    // unchanged.
+    public static function shapeCameraStatuses(string $json): string
+    {
+        $statuses = json_decode($json, true);
+        if (!is_array($statuses) || $statuses === []) {
+            return $json;
+        }
+        foreach ($statuses as $id => $status) {
+            if (is_array($status)) {
+                $statuses[$id]['wifi'] = self::sanitizeWifi($status['wifi'] ?? null);
+            }
+        }
+        return (string) json_encode((object) $statuses);
+    }
+
+    // A detector's readings without the Wi-Fi numbers: they are shown as `wifi` (checked), not as part of the readings,
+    // so the network and the signal have one place on the page.
+    public static function withoutWifiReadings($report)
+    {
+        if (!is_array($report)) {
+            return $report;
+        }
+        unset($report['rssi'], $report['ssid']);
+        return $report;
     }
 
     // Why a paired detector the relay has never heard from is not showing. $unpaired: the ids of the

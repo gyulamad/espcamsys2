@@ -15,4 +15,19 @@ function closeWindow(dom) {
   dom.window.close();
 }
 
-module.exports = { closeWindow };
+// pageScriptLoader(jsdom, names) — a resource loader for `new JSDOM(html, { resources })` that loads the named
+// scripts of the page (js/<name>, from the PHP server the page came from) and nothing else: no other script, no
+// fonts, no pictures, no network beyond the dashboard. Without it jsdom runs only the inline scripts of a page.
+// The names are listed on purpose: a script the test does not name is not run (screen-keeper.js, for one, plays a
+// video, which jsdom does not implement).
+function pageScriptLoader(jsdom, names) {
+  const allowed = new Set(names.map((n) => '/js/' + n));
+  class PageScriptLoader extends jsdom.ResourceLoader {
+    fetch(url, options) {
+      return allowed.has(new URL(url).pathname) ? super.fetch(url, options) : null;
+    }
+  }
+  return new PageScriptLoader();
+}
+
+module.exports = { closeWindow, pageScriptLoader };

@@ -26,11 +26,12 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { closeWindow } = require('./dom_helpers');
+const { closeWindow, pageScriptLoader } = require('./dom_helpers');
 
 let JSDOM;
 let VirtualConsole;
-try { ({ JSDOM, VirtualConsole } = require('jsdom')); } catch (e) { JSDOM = null; }
+let jsdomModule;
+try { jsdomModule = require('jsdom'); ({ JSDOM, VirtualConsole } = jsdomModule); } catch (e) { JSDOM = null; }
 
 const DASH_SRC = path.join(__dirname, '../../php/cameras');
 const PHP_PORT = Number(process.env.E2E_RESUME_DOM_PORT || 19440);
@@ -136,7 +137,7 @@ async function main() {
     const virtualConsole = new VirtualConsole();
     virtualConsole.on('jsdomError', (e) => pageErrors.push(String(e && e.message || e)));
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js']), pretendToBeVisual: true, virtualConsole,
       beforeParse(window) {
         window.confirm = () => false;
         window.alert = () => {};

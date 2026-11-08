@@ -172,14 +172,16 @@ function relay_fetch(string $url, string $method = 'GET', int $timeout = 5, stri
 
 // Passes the relay's JSON answer straight through to the browser: 502 if the
 // relay is unreachable, otherwise its body — and, when $forwardStatus is set,
-// its status code too (so a 400 or 409 reaches the dashboard as such).
+// its status code too (so a 400 or 409 reaches the dashboard as such). $shape, when given, turns the body
+// into what the browser gets (string => string).
 function relay_proxy_json(
     string $url,
     string $method = 'GET',
     int $timeout = 5,
     string $headers = '',
     string $unreachableMessage = 'Could not reach relay',
-    bool $forwardStatus = true
+    bool $forwardStatus = true,
+    ?callable $shape = null
 ): void {
     [$body, $responseHeaders] = relay_fetch($url, $method, $timeout, $headers);
     if ($body === false) {
@@ -192,7 +194,7 @@ function relay_proxy_json(
         }
         http_response_code($status);
     }
-    echo $body;
+    echo $shape !== null ? $shape($body) : $body;
 }
 
 // Writes to the web server's error log, but not more than once per $everySec seconds for the same $key:

@@ -8,7 +8,8 @@
 // another user, or a camera's own alarm trigger — still show up here
 // without needing a page reload.
 //
-// GET status.php -> relay's { camId: { recording, recordingEndAt, preRoll, recordingCount, ... } } JSON
+// GET status.php -> relay's { camId: { recording, recordingEndAt, preRoll, recordingCount, wifi, ... } } JSON
+//   `wifi` is { ssid, rssi, ageMs } or null (not reported, or stale)
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
@@ -23,4 +24,6 @@ if (empty($cameras)) {
 
 // Every camera in config.php shares the same relay, so one request covers
 // all of them — no need to loop per camera the way record.php does.
-relay_proxy_json(rtrim($cameras[0]['url'], '/') . '/status', 'GET', 5, relay_read_headers($config), 'Could not reach relay', false);
+relay_proxy_json(rtrim($cameras[0]['url'], '/') . '/status', 'GET', 5, relay_read_headers($config), 'Could not reach relay', false, function (string $body): string {
+    return CamLogic::shapeCameraStatuses($body);
+});

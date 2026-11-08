@@ -391,6 +391,22 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .det-chip.high   { color: var(--accent2); border-color: var(--accent2); box-shadow: 0 0 6px rgba(255,79,94,.35); }
   .det-chip.low    { color: #2dd67b; border-color: #1a4d3a; }
 
+  /* The Wi-Fi chip of a camera and of a detector (js/wifi-info.js): signal bars, network, strength. */
+  .wifi-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; font-family: var(--mono); font-size: .65rem; letter-spacing: 0; text-transform: none; color: var(--muted); }
+  .wifi-chip[hidden] { display: none; }
+  .cam-wifi { display: flex; padding: 5px 14px; border-bottom: 1px solid var(--border); }
+  .wifi-chip .wifi-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wifi-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; flex: none; }
+  .wifi-bars i { display: block; width: 3px; background: var(--border-light); opacity: .45; border-radius: 1px; }
+  .wifi-bars i:nth-child(1) { height: 25%; } .wifi-bars i:nth-child(2) { height: 50%; }
+  .wifi-bars i:nth-child(3) { height: 75%; } .wifi-bars i:nth-child(4) { height: 100%; }
+  .wifi-chip[data-level="4"], .wifi-chip[data-level="3"] { color: #2dd67b; }
+  .wifi-chip[data-level="2"] { color: #f0a500; }
+  .wifi-chip[data-level="1"], .wifi-chip[data-level="0"] { color: var(--accent2); }
+  .wifi-chip[data-level="4"] .wifi-bars i, .wifi-chip[data-level="3"] .wifi-bars i:nth-child(-n+3),
+  .wifi-chip[data-level="2"] .wifi-bars i:nth-child(-n+2), .wifi-chip[data-level="1"] .wifi-bars i:nth-child(1),
+  .wifi-chip[data-level="0"] .wifi-bars i:nth-child(1) { background: currentColor; opacity: 1; }
+
   .cam-footer {
     padding: 7px 14px; border-top: 1px solid var(--border);
     background: rgba(0,0,0,.15);
@@ -497,6 +513,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         </div>
       </div>
 
+      <!-- The Wi-Fi network this camera is on and its signal strength (js/wifi-info.js); hidden until the relay has a reading. -->
+      <span class="wifi-chip cam-wifi" id="wifi-<?= $camId ?>" hidden></span>
+
       <!-- Recording + its file list live together: start/stop a recording,
            browse and download what's already been saved, all in one place. -->
       <div class="cam-record-row">
@@ -564,6 +583,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         </div>
         <div class="det-vals">
           <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><button type="button" class="cam-btn" id="detwatch-<?= $camId ?>" data-cam="<?= $camId ?>" hidden onclick="toggleDetectorWatch(this.dataset.cam)"></button><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
+          <div class="det-line" id="detwifirow-<?= $camId ?>" hidden><span class="k">WI-FI</span><span class="wifi-chip" id="detwifi-<?= $camId ?>" hidden></span></div>
           <div>
             <div class="det-line"><span class="k">BRIGHTNESS</span><span class="v" id="detbright-<?= $camId ?>">–</span></div>
             <div class="det-bar"><div class="fill" id="detbrightbar-<?= $camId ?>"></div><div class="mark" id="detbrightmark-<?= $camId ?>" style="display:none"></div></div>
@@ -610,6 +630,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <script src="js/mux-client.js"></script>
 <script src="js/mux-pictures.js"></script>
 <?php endif; ?>
+<script src="js/wifi-info.js"></script>
 <script>
   // ── Clock ──
   function tick() {
@@ -1313,6 +1334,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function applyCameraStatuses(data) {
     for (const id of getAllCameraIds()) {
       const s = data[id];
+      CamWifi.render(document.getElementById('wifi-' + id), s && s.wifi);   // the network and signal the camera reported (or nothing)
       if (!s) {
         // Neither connected to the relay yet nor any footage on disk for it.
         setFilesCount(id, 0);
@@ -1649,12 +1671,22 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     setDetectorOverlay(id, title, why);
   }
 
+  // The detector's Wi-Fi line: shown only while the server sends the network (it does not when the setting of this
+  // detector hides it, or the detector has not reported one).
+  function renderDetectorWifi(id, d) {
+    const chip = detEl('wifi', id);
+    const line = detEl('wifirow', id);
+    CamWifi.render(chip, d && d.wifi);
+    if (line && chip) line.hidden = chip.hidden;   // the line (its label too) follows the chip
+  }
+
   function renderDetector(id, d) {
     const row = document.getElementById('det-' + id);
     if (!row) return;
     detLastD[id] = d;
     detIdle[id] = !!d && d.state === 'idle';
     renderWatchButton(id, d);
+    renderDetectorWifi(id, d);   // before the early returns below: a resting detector has no readings but is on a network
     const r = d && d.report;
     const online = !!(d && d.online && r);
     const showing = online && !!d.hasPicture;
@@ -1740,11 +1772,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     pin.textContent = r.gpio.high ? 'HIGH' : 'LOW';
     pin.className = 'det-chip ' + (r.gpio.high ? 'high' : 'low');
 
-    // The board itself, for tracking down trouble: where it is, how strong its Wi-Fi, how long it has run,
+    // The board itself, for tracking down trouble: where it is, how long it has run (its Wi-Fi has a line of its own),
     // its memory, which firmware it runs (did the update reach it?), and the trouble it counted.
     const info = [];
     if (r.ip) info.push(r.ip);
-    if (r.rssi !== null && r.rssi !== undefined) info.push(r.rssi + ' dBm');
     if (r.uptimeMs !== null && r.uptimeMs !== undefined) info.push('up ' + fmtUptime(r.uptimeMs));
     const lk = r.link || {};
     if (lk.heap !== null && lk.heap !== undefined) info.push(Math.round(lk.heap / 1024) + ' KB free');

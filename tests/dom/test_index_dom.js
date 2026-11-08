@@ -21,10 +21,10 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { closeWindow } = require('./dom_helpers');
+const { closeWindow, pageScriptLoader } = require('./dom_helpers');
 
-let JSDOM;
-try { ({ JSDOM } = require('jsdom')); } catch (e) { JSDOM = null; }
+let JSDOM, jsdomModule;
+try { jsdomModule = require('jsdom'); ({ JSDOM } = jsdomModule); } catch (e) { JSDOM = null; }
 
 const DASH_SRC = path.join(__dirname, '../../php/cameras');
 const PHP_PORT = Number(process.env.E2E_DOM_PORT || 19390);
@@ -160,7 +160,7 @@ async function main() {
     // The browser side: scripts run, fetch goes to the real PHP; raw=true skips PHP's list filter on purpose.
     let bypassFilter = false;
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', pretendToBeVisual: true,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
         window.confirm = () => false;

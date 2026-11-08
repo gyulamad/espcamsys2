@@ -168,23 +168,36 @@ camtest_test('wantedStates: the detectors\' readings and the cameras\' recording
     camtest_assert_equal(CamMuxStream::wantedStates(true, true), ['state:detectors', 'state:cameras']);
 });
 
-camtest_test('cameraStatusJson: a JSON object (or list) passes as it is, anything else is null', function () {
-    camtest_assert_equal(CamMuxStream::cameraStatusJson('{"cam1":{"recording":true}}'), '{"cam1":{"recording":true}}');
+camtest_test('cameraStatusJson: a JSON object is shaped like status.php\'s answer, anything else is null', function () {
+    $shaped = json_decode((string) CamMuxStream::cameraStatusJson('{"cam1":{"recording":true}}'), true);
+    camtest_assert_equal($shaped, ['cam1' => ['recording' => true, 'wifi' => null]]);
     camtest_assert_equal(CamMuxStream::cameraStatusJson('{}'), '{}');
     foreach (['not json', '5', 'null', '"x"', ''] as $bad) {
         camtest_assert_equal(CamMuxStream::cameraStatusJson($bad), null, var_export($bad, true));
     }
 });
 
-camtest_test('forward: the cameras\' recording state goes through untouched when asked for, and only then', function () use ($allowed, $cams) {
+camtest_test('forward: the cameras\' recording state goes through when asked for (only the Wi-Fi is checked), and only then', function () use ($allowed, $cams) {
     $json = '{"cam1":{"recording":true,"recordingEndAt":123,"recordingCount":4}}';
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
     $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_CAMERAS], $cams));
-    camtest_assert_equal($read, [[CamMuxStream::TYPE_STATE, 'state:cameras', $json]]);
+    camtest_assert_equal(count($read), 1);
+    camtest_assert_equal([$read[0][0], $read[0][1]], [CamMuxStream::TYPE_STATE, 'state:cameras']);
+    camtest_assert_equal(json_decode($read[0][2], true), ['cam1' => ['recording' => true, 'recordingEndAt' => 123, 'recordingCount' => 4, 'wifi' => null]]);
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
     camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams), '', 'only the detectors\' readings were asked for');
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
     camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [], $cams), '');
+});
+
+camtest_test('forward: a camera\'s Wi-Fi reaches the browser (checked)', function () use ($allowed, $cams) {
+    $wifiOf = function (string $wifi) use ($allowed, $cams) {
+        $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, '{"cam1":{"recording":false,"wifi":' . $wifi . '}}');
+        $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_CAMERAS], $cams));
+        return json_decode($read[0][2], true)['cam1']['wifi'];
+    };
+    camtest_assert_equal($wifiOf('{"ssid":"HomeNet","rssi":-61,"ageMs":900}'), ['ssid' => 'HomeNet', 'rssi' => -61, 'ageMs' => 900]);
+    camtest_assert_equal($wifiOf('{"ssid":"a\\nb","rssi":-61,"ageMs":900}'), null);
 });
 
 camtest_test('forward: both kinds of readings, each its newest only, each under its own source', function () use ($allowed, $cams) {
@@ -193,7 +206,7 @@ camtest_test('forward: both kinds of readings, each its newest only, each under 
         . CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, '{"cam1":{"recording":true}}');
     $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS, CamMuxStream::STATE_CAMERAS], $cams));
     camtest_assert_equal(array_map(function ($m) { return $m[1]; }, $read), ['state:cameras', 'state:detectors']);
-    camtest_assert_equal($read[0][2], '{"cam1":{"recording":true}}');
+    camtest_assert_equal(json_decode($read[0][2], true)['cam1']['recording'], true);
 });
 
 camtest_test('forward: recording state that is not a JSON object is skipped, the rest of the read still goes through', function () use ($allowed, $cams) {

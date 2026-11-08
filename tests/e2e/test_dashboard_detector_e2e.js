@@ -173,7 +173,8 @@ async function main() {
     j = JSON.parse(r.text);
     check('detector-status.php shows its numbers under the CAMERA id', j.camA.state === 'online' && j.camA.online === true && j.camA.hasPicture === true && j.camA.message === '' &&
       j.camA.report.scene.brightness === 111 && j.camA.report.scene.motionAtLeast === 300 && j.camA.report.scene.motionLimit === 300 && j.camA.report.person.score === 0.9 && j.camA.report.gpio.high === true && j.camA.report.gpio.pin === 13, r.text);
-    check('...with where the board is and how it is doing', j.camA.ip === '127.0.0.1' && j.camA.report.rssi === -55 && j.camA.report.link.heap === 90000 && j.camA.report.fw === 'e2e', JSON.stringify(j.camA));
+    check('...with where the board is and how it is doing', j.camA.ip === '127.0.0.1' && j.camA.report.link.heap === 90000 && j.camA.report.fw === 'e2e', JSON.stringify(j.camA));
+    check('...and the Wi-Fi network and signal it reported, as `wifi` (not twice in its readings)', j.camA.wifi && j.camA.wifi.ssid === 'e2e-net' && j.camA.wifi.rssi === -55 && typeof j.camA.wifi.ageMs === 'number' && !('rssi' in j.camA.report) && !('ssid' in j.camA.report), JSON.stringify(j.camA));
     check('the other paired camera is still "never"', j.camC.state === 'never' && j.camC.online === false);
 
     const picture = dash('/detector-stream.php?cam=camA', { until: (b) => b.includes(JPEG) && b.includes(JPEG2) });

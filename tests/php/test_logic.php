@@ -913,6 +913,7 @@ camtest_test('buildDetectorStatus: only paired cameras; carries the relay\'s sta
     camtest_assert_equal($s['cam1'], [
         'detector' => 'det-1', 'state' => 'online', 'online' => true, 'hasPicture' => true, 'connected' => true,
         'ageMs' => 120, 'pictureAgeMs' => 130, 'ip' => '192.168.4.37', 'message' => '', 'report' => ['scene' => ['brightness' => 90]],
+        'wifi' => null,   // the relay view above carries no reading
         'view' => ['supported' => false, 'wanted' => false],
     ]);
     camtest_assert_equal($s['cam3']['state'], 'offline');
@@ -1816,6 +1817,89 @@ camtest_test('muxUrl: detector pictures and readings are added only when asked f
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080/', ['a'], ['d1'], true), 'http://r:8080/mux?cams=a&dets=d1&status=1');
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a'], [], false, true), 'http://r:8080/mux?cams=a&rec=1');
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a', 'b'], ['d1'], true, true), 'http://r:8080/mux?cams=a%2Cb&dets=d1&status=1&rec=1');
+});
+
+// ── Wi-Fi network and signal on the dashboard ────────────────────────
+
+$wifiGood = ['ssid' => 'HomeNet', 'rssi' => -61, 'ageMs' => 900];
+
+camtest_test('sanitizeWifi: a good reading passes, with exactly its three keys', function () use ($wifiGood) {
+    camtest_assert_equal(CamLogic::sanitizeWifi($wifiGood), $wifiGood);
+    camtest_assert_equal(CamLogic::sanitizeWifi($wifiGood + ['extra' => '<script>', 'password' => 'x']), $wifiGood);
+    camtest_assert_equal(CamLogic::sanitizeWifi(['ssid' => 'é' . str_repeat('a', 30), 'rssi' => -127, 'ageMs' => 0])['ssid'], 'é' . str_repeat('a', 30));
+});
+
+camtest_test('sanitizeWifi: anything that is not a reading is null', function () use ($wifiGood) {
+    $bad = [null, 'x', 5, [], ['ssid' => 'a'],
+        array_merge($wifiGood, ['ssid' => '']), array_merge($wifiGood, ['ssid' => 5]),
+        array_merge($wifiGood, ['ssid' => str_repeat('a', 33)]), array_merge($wifiGood, ['ssid' => "a\nb"]),
+        array_merge($wifiGood, ['ssid' => "a\0b"]), array_merge($wifiGood, ['ssid' => "a\x7fb"]), array_merge($wifiGood, ['ssid' => "\xff\xfe"]),
+        array_merge($wifiGood, ['rssi' => 0]), array_merge($wifiGood, ['rssi' => 5]), array_merge($wifiGood, ['rssi' => -128]),
+        array_merge($wifiGood, ['rssi' => '-61']), array_merge($wifiGood, ['rssi' => -61.5]), array_merge($wifiGood, ['rssi' => null]),
+        array_merge($wifiGood, ['ageMs' => -1]), array_merge($wifiGood, ['ageMs' => '5']), array_merge($wifiGood, ['ageMs' => null])];
+    foreach ($bad as $i => $raw) {
+        camtest_assert_equal(CamLogic::sanitizeWifi($raw), null, 'case ' . $i . ': ' . json_encode($raw));
+    }
+});
+
+camtest_test('sanitizeWifi: markup stays plain text for the page to show with textContent', function () use ($wifiGood) {
+    camtest_assert_equal(CamLogic::sanitizeWifi(array_merge($wifiGood, ['ssid' => '<img src=x>']))['ssid'], '<img src=x>');
+});
+
+camtest_test('shapeCameraStatuses: the Wi-Fi of a camera passes, checked; everything else is untouched', function () use ($wifiGood) {
+    $in = json_encode(['cam1' => ['lastSeen' => '2026-11-07T10:00:00.000Z', 'recording' => true, 'preRoll' => ['frames' => 3], 'wifi' => $wifiGood]]);
+    $out = json_decode(CamLogic::shapeCameraStatuses($in), true);
+    camtest_assert_equal($out['cam1']['wifi'], $wifiGood);
+    camtest_assert_equal($out['cam1']['preRoll'], ['frames' => 3]);
+    camtest_assert_equal($out['cam1']['recording'], true);
+    camtest_assert_equal($out['cam1']['lastSeen'], '2026-11-07T10:00:00.000Z');
+});
+
+camtest_test('shapeCameraStatuses: a camera without a reading (an older firmware) gets null', function () {
+    $out = json_decode(CamLogic::shapeCameraStatuses('{"cam1":{"recording":false}}'), true);
+    camtest_assert_equal($out['cam1'], ['recording' => false, 'wifi' => null]);
+});
+
+camtest_test('shapeCameraStatuses: a reading the relay got wrong never reaches the browser', function () {
+    $in = json_encode(['cam1' => ['wifi' => ['ssid' => "evil\nname", 'rssi' => -50, 'ageMs' => 1]], 'cam2' => ['wifi' => 'HomeNet']]);
+    $out = json_decode(CamLogic::shapeCameraStatuses($in), true);
+    camtest_assert_equal([$out['cam1']['wifi'], $out['cam2']['wifi']], [null, null]);
+});
+
+camtest_test('shapeCameraStatuses: an answer that is not a status map (an error, empty, garbage) is returned unchanged', function () {
+    foreach (['{}', '[]', 'not json', '', '5', '{"error":"unauthorized"}'] as $text) {
+        $out = CamLogic::shapeCameraStatuses($text);
+        camtest_assert_equal(json_decode($out, true), json_decode($text, true), $text);
+    }
+});
+
+camtest_test('shapeCameraStatuses: camera ids that look like numbers still make a JSON object', function () {
+    $out = CamLogic::shapeCameraStatuses('{"0":{"recording":false},"1":{"recording":true}}');
+    camtest_assert_true(substr($out, 0, 1) === '{', $out);
+    camtest_assert_equal(array_keys(json_decode($out, true)), [0, 1]);
+});
+
+camtest_test('withoutWifiReadings: the signal and the network name leave a detector\'s readings, the rest stays', function () {
+    camtest_assert_equal(CamLogic::withoutWifiReadings(['ip' => '10.0.0.5', 'fw' => 'abc', 'rssi' => -60, 'ssid' => 'HomeNet', 'scene' => ['state' => 'active']]),
+        ['ip' => '10.0.0.5', 'fw' => 'abc', 'scene' => ['state' => 'active']]);
+    camtest_assert_equal(CamLogic::withoutWifiReadings(null), null);
+});
+
+camtest_test('buildDetectorStatus: the detector\'s Wi-Fi is carried, checked, and kept out of its readings', function () use ($wifiGood) {
+    $out = CamLogic::buildDetectorStatus([['id' => 'cam1', 'detector' => 'det-1']], ['det-1' => ['online' => true, 'state' => 'online', 'report' => ['rssi' => -60, 'ssid' => 'HomeNet', 'fw' => 'abc'], 'wifi' => $wifiGood]]);
+    camtest_assert_equal($out['cam1']['wifi'], $wifiGood);
+    camtest_assert_equal($out['cam1']['report'], ['fw' => 'abc']);
+});
+
+camtest_test('buildDetectorStatus: a detector the relay never heard of, or one without a reading, has wifi null', function () {
+    $cams = [['id' => 'cam1', 'detector' => 'det-1'], ['id' => 'cam2', 'detector' => 'det-2']];
+    $out = CamLogic::buildDetectorStatus($cams, ['det-2' => ['online' => false, 'state' => 'idle']]);
+    camtest_assert_equal([$out['cam1']['wifi'], $out['cam2']['wifi']], [null, null]);
+});
+
+camtest_test('buildDetectorStatus: a resting detector\'s Wi-Fi is still shown (its readings are not)', function () use ($wifiGood) {
+    $out = CamLogic::buildDetectorStatus([['id' => 'cam1', 'detector' => 'det-1']], ['det-1' => ['online' => false, 'state' => 'idle', 'report' => null, 'wifi' => $wifiGood]]);
+    camtest_assert_equal([$out['cam1']['report'], $out['cam1']['wifi']], [null, $wifiGood]);
 });
 
 exit(camtest_summarize());

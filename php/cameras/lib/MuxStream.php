@@ -98,11 +98,12 @@ final class CamMuxStream
         return array_merge($detectors ? [self::STATE_DETECTORS] : [], $cameras ? [self::STATE_CAMERAS] : []);
     }
 
-    // The recording state of the cameras as the relay sends it, if it is a JSON object: passed on as it is (it is the
-    // map GET /status answers, which status.php passes on untouched too). Null otherwise.
+    // The recording state of the cameras as the relay sends it, if it is a JSON object: the map GET /status answers,
+    // shaped like status.php's answer (CamLogic::shapeCameraStatuses: the Wi-Fi readings are checked).
+    // Null otherwise.
     public static function cameraStatusJson(string $relayData): ?string
     {
-        return is_array(json_decode($relayData, true)) ? $relayData : null;
+        return is_array(json_decode($relayData, true)) ? CamLogic::shapeCameraStatuses($relayData) : null;
     }
 
     // What the browser gets for the messages of one read: heartbeats, and pictures from the $allowed sources (renamed);

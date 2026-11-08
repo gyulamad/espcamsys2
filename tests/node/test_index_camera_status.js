@@ -30,7 +30,10 @@ function run({ answers = [] } = {}) {
   const log = [];
   const clock = { now: 1000000 };
   const fetches = [];
+  const chips = [];   // what each camera's Wi-Fi chip was told: [element id, the reading]
   const env = {
+    document: { getElementById: (id) => ({ id }) },
+    CamWifi: { render: (el, wifi) => chips.push([el && el.id, wifi]) },
     Date: { now: () => clock.now },
     isStatusMap: (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error,
     getAllCameraIds: () => ['a', 'b'],
@@ -46,7 +49,7 @@ function run({ answers = [] } = {}) {
   };
   const names = Object.keys(env);
   const api = new Function(...names, `${m[1]}\nreturn { pollAllStatuses, applyCameraStatuses, onLiveCameraStatus, cameraStatusIsLive, pollStatusesUnlessLive, CAMERA_STATUS_LIVE_MS };`)(...names.map((n) => env[n]));
-  return { api, log, clock, fetches };
+  return { api, log, clock, fetches, chips };
 }
 
 const MAP = { a: { recording: true, recordingEndAt: 99, recordingCount: 3, recordingOff: 'off until 8:00' } };
@@ -55,6 +58,19 @@ test('a pushed map is applied to every camera; one the relay does not know has n
   const t = run();
   t.api.onLiveCameraStatus(MAP);
   assertEqual(t.log, ['recording a true 99', 'files a 3', 'switch a off until 8:00', 'files b 0', 'switch b null']);
+});
+
+test('every camera\'s Wi-Fi chip is given that camera\'s reading; a camera the relay does not know gets none', () => {
+  const t = run();
+  const wifi = { ssid: 'HomeNet', rssi: -61, ageMs: 900 };
+  t.api.onLiveCameraStatus({ a: { recording: false, wifi } });
+  assertEqual(t.chips, [['wifi-a', wifi], ['wifi-b', undefined]]);
+});
+
+test('a camera whose answer has no Wi-Fi (an older relay or firmware) is given nothing to show', () => {
+  const t = run();
+  t.api.onLiveCameraStatus({ a: { recording: false }, b: { recording: false, wifi: null } });
+  assertEqual(t.chips, [['wifi-a', undefined], ['wifi-b', null]]);
 });
 
 test('a pushed answer that is not a genuine map (error, list, null) changes nothing and does not count as live', () => {
