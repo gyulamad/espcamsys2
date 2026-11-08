@@ -583,6 +583,16 @@ heading "Shell tests (the output levels, tools/test_output.sh, and --verbose)"
 "$ROOT_DIR/tests/shell/test_test_output.sh"
 [ $? -ne 0 ] && overall_status=1
 
+heading "Shell tests (the helpers that check what the sources contain, tests/shell/lib/source_checks.sh)"
+"$ROOT_DIR/tests/shell/test_source_checks.sh"
+[ $? -ne 0 ] && overall_status=1
+
+# Static check, no setup needed: the eight security patches are still in the relay, the dashboard, the sketches,
+# the Apache config and the tests. It is the quick check on its own too: tests/shell/test_security_patches.sh.
+heading "Shell tests (the security patches 0001-0008 are in the sources and not undone)"
+"$ROOT_DIR/tests/shell/test_security_patches.sh"
+[ $? -ne 0 ] && overall_status=1
+
 # The relay itself needs its packages (express ...) for every end-to-end test below: installed here from
 # the lockfile when missing or out of date (a normal run costs nothing). Needs node and npm on the PATH.
 ensure_npm_deps "$ROOT_DIR/nodejs/camera-relay" "the relay (end-to-end tests)"
