@@ -250,4 +250,43 @@ test('parseStatus: viewLeftS is optional and checked', () => {
   assertEqual(ds.parseStatus(Object.assign(good(), { viewLeftS: 'x' })).report.viewLeftS, null);
 });
 
+// ── the Wi-Fi network and signal ────────────────────────────────────────
+
+test('parseStatus: the Wi-Fi network name is carried, and is optional (older firmware has none)', () => {
+  const r = ds.parseStatus({ ...good(), ssid: 'HomeNet' });
+  assertTrue(r.ok, r.error);
+  assertEqual(r.report.ssid, 'HomeNet');
+  assertEqual(ds.parseStatus(good()).report.ssid, null);
+});
+
+test('parseStatus: an unusable network name (control characters, too long, not text) is dropped, never a reason to refuse', () => {
+  for (const ssid of ['a\nb', 'x'.repeat(40), 7, {}, '']) {
+    const r = ds.parseStatus({ ...good(), ssid });
+    assertTrue(r.ok, r.error);
+    assertEqual(r.report.ssid, null);
+  }
+});
+
+test('buildView: carries the Wi-Fi network and signal the detector reported, with the reading\'s age', () => {
+  const v = ds.buildView(rec({ wifi: { ssid: 'HomeNet', rssi: -61, at: 400 } }), 1000);
+  assertEqual(v.wifi, { ssid: 'HomeNet', rssi: -61, ageMs: 600 });
+});
+
+test('buildView: no reading yet -> wifi null', () => {
+  assertEqual(ds.buildView(rec(), 1000).wifi, null);
+  assertEqual(ds.buildView(undefined, 1000).wifi, null);
+});
+
+test('buildView: a resting detector keeps showing its Wi-Fi even though its numbers are hidden', () => {
+  const resting = rec({ connected: false, receivedAt: 1000, frameAt: 1000, lastDisconnectAt: 1200, polledAt: 60000, polls: 3, wifi: { ssid: 'HomeNet', rssi: -70, at: 60000 } });
+  const v = ds.buildView(resting, 70000);
+  assertEqual(v.state, 'idle');
+  assertEqual(v.report, null);
+  assertEqual(v.wifi, { ssid: 'HomeNet', rssi: -70, ageMs: 10000 });
+});
+
+test('buildView: a reading older than two minutes is no longer shown', () => {
+  assertEqual(ds.buildView(rec({ wifi: { ssid: 'HomeNet', rssi: -61, at: 0 } }), 200000).wifi, null);
+});
+
 summarize();

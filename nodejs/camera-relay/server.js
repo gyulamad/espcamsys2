@@ -28,6 +28,7 @@ const detectorstate = require('./lib/detectorstate');
 const detectorlink = require('./lib/detectorlink');
 const detectorevents = require('./lib/detectorevents');
 const detectorview = require('./lib/detectorview');
+const wifiinfo = require('./lib/wifiinfo');
 const muxfeed = require('./lib/muxfeed');
 const { createFrameWriter } = require('./lib/framequeue');
 const { createLoopWatch } = require('./lib/loopwatch');
@@ -183,6 +184,15 @@ function camLog(level, camId, message, opts = {}) {
   relayLog(level, message, Object.assign({ sender: camId, ip: cam && cam.ip, via: 'relay' }, opts));
 }
 
+// Keeps the Wi-Fi network a device (a camera or a detector record) reported. `reading` is already checked
+// (wifiinfo.parseReading), or null when the device sent nothing usable: then what was kept stays. Said in the log
+// when the device is on another network than before (and the first time), never for a mere change of signal.
+function noteWifi(device, reading, now, announce) {
+  const before = device.wifi;
+  device.wifi = wifiinfo.remember(before, reading, now);
+  if (reading && (!before || before.ssid !== reading.ssid)) announce(reading.ssid);
+}
+
 // Things that can repeat very fast get a window: at most one line per
 // window per camera/address, then a count of how many were skipped.
 const eventThrottle = new Throttle(10 * 1000);   // connect / disconnect of a camera
@@ -294,6 +304,7 @@ function getCamera(id) {
       preRoll: new preroll.PreRollBuffer({ seconds: preRollCfg.seconds, maxBytes: preRollCfg.maxBytes }),
       lastRecordedUntil: null,  // timestamp of the last frame the previous recording contained — see startRecording()
       streamViewers: 0,         // (review NODE-005) count of live MJPEG viewers on /stream/:id, capped at MAX_STREAM_VIEWERS
+      wifi: null,               // { ssid, rssi, at }: the Wi-Fi network the camera last reported (lib/wifiinfo.js)
     };
     cameras[id].emitter.setMaxListeners(50); // allow many simultaneous viewers
   }
@@ -809,6 +820,11 @@ function detLog(level, id, message, opts = {}) {
   relayLog(level, message, Object.assign({ sender: id, ip: det && det.ip, via: 'relay' }, opts));
 }
 
+// What noteWifi() says when a detector turns up on a Wi-Fi network (see there).
+function announceDetectorWifi(id) {
+  return (ssid) => detLog('INFO', id, `the detector is on the Wi-Fi network '${ssid}'`);
+}
+
 // Why a connection ended, in words (the OS only gives a code).
 function describeSocketEnd(code) {
   if (!code) return 'the board closed the connection';
@@ -859,6 +875,7 @@ function handleDetectorPayload(id, det, socket, payload) {
     const now = Date.now();
     det.report = parsed.report;
     det.receivedAt = now;
+    noteWifi(det, wifiinfo.parseReading(parsed.report.ssid, parsed.report.rssi), now, announceDetectorWifi(id));
     detectorBus.emit('change');
     if (m.jpeg) {
       det.frame = m.jpeg;
@@ -1723,6 +1740,8 @@ app.get('/detector/:id/view', requireCameraKeyForDevice, (req, res) => {
   const now = Date.now();
   const firstAsk = det.polls === 0;
   det.ip = logfile.normalizeIp(req.socket.remoteAddress) || det.ip;
+  // A resting detector has no uplink; its poll carries its Wi-Fi network and signal (?ssid=...&rssi=...).
+  noteWifi(det, wifiinfo.parseQueryReading(req.query.ssid, req.query.rssi), now, announceDetectorWifi(id));
   const answer = detectorview.answerPoll(det, now);
   const text = detectorview.encodeAnswer(answer, DETECTOR_VIEW_MINUTES);
   if (firstAsk || text !== det.lastAnswer) {
@@ -2553,11 +2572,14 @@ function handlePushPayload(camId, payload) {
       // are written by triggerAlarm() and the recording code.)
       if (msg.all) triggerAlarmAll('in-band, all cameras');
       else triggerAlarm(camId, 'in-band');
+    } else if (msg.kind === 'wifi') {
+      // The camera is authenticated, but what it says is still checked: it ends up on the dashboard.
+      noteWifi(getCamera(camId), wifiinfo.parseReading(msg.ssid, msg.rssi), Date.now(), (ssid) => camLog('INFO', camId, `the camera is on the Wi-Fi network '${ssid}'`));
     }
     // msg.kind === 'unknown': a control message from newer firmware than this
     // relay — ignore it rather than mistake it for a frame or drop the camera.
   } catch (err) {
-    logPushError(camId, kind === 'frame' ? 'video frame' : kind === 'alarm' ? 'alarm' : 'message', err);
+    logPushError(camId, kind === 'frame' ? 'video frame' : kind === 'alarm' ? 'alarm' : kind === 'wifi' ? 'Wi-Fi report' : 'message', err);
   }
 }
 

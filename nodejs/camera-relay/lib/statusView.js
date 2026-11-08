@@ -21,6 +21,10 @@ function isOnline(lastSeen, now) {
   return Number.isFinite(age) && age <= ONLINE_WINDOW_MS;
 }
 
+// `wifi` is the Wi-Fi network the camera reported and its signal ({ ssid, rssi, ageMs }, see lib/wifiinfo.js), null when
+// the camera has not reported one lately (an older firmware never does).
+const wifiinfo = require('./wifiinfo');
+
 function buildCameraStatusView(cam, recordingCount = null, recordingOff = null, now = Date.now()) {
   return {
     lastSeen: cam.lastSeen,
@@ -30,6 +34,7 @@ function buildCameraStatusView(cam, recordingCount = null, recordingOff = null, 
     recordingEndAt: cam.recording ? cam.recording.endAt : null,
     preRoll: cam.preRoll ? cam.preRoll.stats : { frames: 0, bytes: 0, bufferedSeconds: 0, windowSeconds: 0 },
     recordingCount,
+    wifi: wifiinfo.describe(cam.wifi, now),
     recordingOff, // null = this camera may record; otherwise { forever, until, remainingMs } — it is switched OFF
   };
 }

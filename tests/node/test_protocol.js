@@ -126,13 +126,56 @@ test('an alarm message survives the real framing: drainFrames then classifyPaylo
   assertEqual(rest.length, 0);
 });
 
-test('encodeRelayGreeting: legacy resume byte, then the in-band-alarm capability byte', () => {
-  assertEqual(Array.from(protocol.encodeRelayGreeting()), [0x01, 0x02]);
+test('encodeRelayGreeting: legacy resume byte, then the in-band-alarm and Wi-Fi-report capability bytes', () => {
+  assertEqual(Array.from(protocol.encodeRelayGreeting()), [0x01, 0x02, 0x03]);
   assertEqual(protocol.RELAY_CAP_INBAND_ALARM, 0x02);
 });
 
 test('the capability byte is not one old firmware acts on (it only understood 0x00 pause / 0x01 resume)', () => {
   assertTrue(protocol.RELAY_CAP_INBAND_ALARM !== 0x00 && protocol.RELAY_CAP_INBAND_ALARM !== 0x01);
+});
+
+// ── Wi-Fi report (MSG_WIFI) ───────────────────────────────────────────────
+
+function wifiPayload(rssi, ssidBytes) {
+  return Buffer.concat([Buffer.from([protocol.CONTROL_MARKER, protocol.MSG_WIFI, rssi & 0xff]), Buffer.from(ssidBytes)]);
+}
+
+test('classifyPayload: a Wi-Fi report carries the signal (signed) and the name', () => {
+  assertEqual(protocol.classifyPayload(wifiPayload(-61, 'HomeNet')), { kind: 'wifi', ssid: 'HomeNet', rssi: -61 });
+});
+
+test('classifyPayload: a Wi-Fi report with a multi-byte name', () => {
+  assertEqual(protocol.classifyPayload(wifiPayload(-70, 'Café')).ssid, 'Café');
+});
+
+test('classifyPayload: a Wi-Fi report whose name is not UTF-8 has ssid null (never replacement characters)', () => {
+  assertEqual(protocol.classifyPayload(wifiPayload(-61, [0xff, 0xfe, 0x41])), { kind: 'wifi', ssid: null, rssi: -61 });
+});
+
+test('classifyPayload: a Wi-Fi report with no name at all is an empty name, not a crash', () => {
+  assertEqual(protocol.classifyPayload(wifiPayload(-61, '')), { kind: 'wifi', ssid: '', rssi: -61 });
+});
+
+test('classifyPayload: a Wi-Fi report too short to hold the signal byte is unknown (ignored)', () => {
+  assertEqual(protocol.classifyPayload(Buffer.from([protocol.CONTROL_MARKER, protocol.MSG_WIFI])), { kind: 'unknown' });
+});
+
+test('encodeWifiMessage: length prefix + marker + type + signal + name, and it reads back', () => {
+  const bytes = protocol.encodeWifiMessage('HomeNet', -61);
+  assertEqual(bytes.readUInt32BE(0), bytes.length - 4);
+  assertEqual(protocol.classifyPayload(bytes.slice(4)), { kind: 'wifi', ssid: 'HomeNet', rssi: -61 });
+});
+
+test('encodeWifiMessage: the exact bytes the camera firmware pins in tests/cpp/test_alarm_logic.cpp', () => {
+  assertEqual(Array.from(protocol.encodeWifiMessage('Home', -61)), [0x00, 0x00, 0x00, 0x07, 0x00, 0x03, 0xc3, 0x48, 0x6f, 0x6d, 0x65]);
+});
+
+test('encodeWifiMessage: goes through the frame splitter like any other message', () => {
+  const { drainFrames } = protocol;
+  const out = drainFrames(protocol.encodeWifiMessage('HomeNet', -61));
+  assertEqual(out.frames.length, 1);
+  assertEqual(protocol.classifyPayload(out.frames[0]).kind, 'wifi');
 });
 
 summarize();

@@ -85,10 +85,13 @@ function drainFrames(buf, maxFrameLen = 5 * 1024 * 1024) {
 const CONTROL_MARKER = 0x00;
 const MSG_ALARM = 0x01;     // "start/extend a recording on THIS camera"
 const MSG_ALARM_ALL = 0x02; // "start/extend a recording on EVERY camera"
+const MSG_WIFI = 0x03;      // "this is the Wi-Fi network I am on and my signal strength": [rssi: int8][ssid bytes]
 
 // What a drained payload is:
 //   { kind: 'frame' }                  — a JPEG (or anything else not marked as control)
 //   { kind: 'alarm', all: boolean }    — the camera's alarm input fired
+//   { kind: 'wifi', ssid, rssi }       — the camera's Wi-Fi network and signal (raw, NOT yet checked: see
+//                                        lib/wifiinfo.js parseReading()); ssid is null if it is not valid UTF-8
 //   { kind: 'unknown' }                — a control message of a type this relay doesn't
 //                                        know; the caller should ignore it (so newer
 //                                        firmware can add message types without
@@ -98,8 +101,22 @@ function classifyPayload(payload) {
   switch (payload[1]) {
     case MSG_ALARM: return { kind: 'alarm', all: false };
     case MSG_ALARM_ALL: return { kind: 'alarm', all: true };
+    case MSG_WIFI: return decodeWifi(payload);
     default: return { kind: 'unknown' };
   }
+}
+
+// [CONTROL_MARKER][MSG_WIFI][rssi: signed byte][ssid: the rest]. A message too short to hold the signal byte is
+// unknown (ignored); the name is decoded strictly, so bytes that are not UTF-8 give ssid null, never U+FFFD noise.
+function decodeWifi(payload) {
+  if (payload.length < 3) return { kind: 'unknown' };
+  let ssid = null;
+  try {
+    ssid = new TextDecoder('utf-8', { fatal: true }).decode(payload.slice(3));
+  } catch (err) {
+    ssid = null;
+  }
+  return { kind: 'wifi', ssid, rssi: payload.readInt8(2) };
 }
 
 // The complete 6 bytes a camera writes for an alarm: 4-byte length prefix
@@ -111,6 +128,19 @@ function encodeAlarmMessage(all) {
   msg.writeUInt32BE(2, 0);
   msg[4] = CONTROL_MARKER;
   msg[5] = all ? MSG_ALARM_ALL : MSG_ALARM;
+  return msg;
+}
+
+// The complete bytes a camera writes for its Wi-Fi report: 4-byte length prefix + [CONTROL_MARKER][MSG_WIFI][rssi][ssid].
+// The firmware builds the same bytes in logic.h's encodeWifiMessage(); this copy is for tests and other clients.
+function encodeWifiMessage(ssid, rssi) {
+  const name = Buffer.from(ssid, 'utf8');
+  const msg = Buffer.alloc(4 + 3 + name.length);
+  msg.writeUInt32BE(3 + name.length, 0);
+  msg[4] = CONTROL_MARKER;
+  msg[5] = MSG_WIFI;
+  msg.writeInt8(rssi, 6);
+  name.copy(msg, 7);
   return msg;
 }
 
@@ -137,13 +167,16 @@ function encodeControlByte(enabled) {
 // capability byte, and an old relay simply never sends it.
 //   0x00 / 0x01  legacy pause / resume (see encodeControlByte)
 //   0x02         "I understand in-band alarm control messages"
+//   0x03         "I understand in-band Wi-Fi reports" (MSG_WIFI) — same rule: a camera sends one only after
+//                seeing this on the current connection
 const RELAY_CAP_INBAND_ALARM = 0x02;
+const RELAY_CAP_WIFI_INFO = 0x03;
 
 // Sent once per authenticated connection: the legacy "resume" byte (so an
 // old-firmware camera that was paused at upgrade time un-sticks), then the
-// capability byte.
+// capability bytes.
 function encodeRelayGreeting() {
-  return Buffer.concat([encodeControlByte(true), Buffer.from([RELAY_CAP_INBAND_ALARM])]);
+  return Buffer.concat([encodeControlByte(true), Buffer.from([RELAY_CAP_INBAND_ALARM, RELAY_CAP_WIFI_INFO])]);
 }
 
 module.exports = {
@@ -155,9 +188,12 @@ module.exports = {
   CONTROL_MARKER,
   MSG_ALARM,
   MSG_ALARM_ALL,
+  MSG_WIFI,
   classifyPayload,
   encodeAlarmMessage,
+  encodeWifiMessage,
   encodeControlByte,
   RELAY_CAP_INBAND_ALARM,
+  RELAY_CAP_WIFI_INFO,
   encodeRelayGreeting,
 };

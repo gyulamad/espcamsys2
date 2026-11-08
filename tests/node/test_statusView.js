@@ -16,6 +16,7 @@ test('buildCameraStatusView: idle camera that has never recorded', () => {
     recordingEndAt: null,
     preRoll: EMPTY_PREROLL,
     recordingCount: null, // not known unless the caller says
+    wifi: null,           // the camera has not reported its Wi-Fi network
     recordingOff: null,   // may record, unless the caller says it is switched OFF
   });
 });
@@ -79,6 +80,16 @@ test('buildCameraStatusView: reports whether the camera is switched OFF (for the
   const off = { forever: false, until: '2026-10-03T13:00:00.000Z', remainingMs: 1800000 };
   assertEqual(buildCameraStatusView(cam, 0, off).recordingOff, off);
   assertEqual(buildCameraStatusView(cam, 0, { forever: true, until: null, remainingMs: null }).recordingOff.forever, true);
+});
+
+test('buildCameraStatusView: the Wi-Fi network and signal the camera reported, with the reading\'s age', () => {
+  const cam = { lastSeen: null, recording: null, wifi: { ssid: 'HomeNet', rssi: -61, at: 1000 } };
+  assertEqual(buildCameraStatusView(cam, null, null, 4000).wifi, { ssid: 'HomeNet', rssi: -61, ageMs: 3000 });
+});
+
+test('buildCameraStatusView: a stale Wi-Fi reading (camera gone quiet) is not shown as current', () => {
+  const cam = { lastSeen: null, recording: null, wifi: { ssid: 'HomeNet', rssi: -61, at: 0 } };
+  assertEqual(buildCameraStatusView(cam, null, null, 10 * 60 * 1000).wifi, null);
 });
 
 summarize();

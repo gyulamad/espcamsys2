@@ -16,6 +16,7 @@
 // missing detector so hard to track down.
 
 const detectorview = require('./detectorview');
+const wifiinfo = require('./wifiinfo');
 
 const MAX_TEXT = 64;
 const STATES = ['dark', 'still', 'active', 'off'];
@@ -51,7 +52,7 @@ function parseArea(a) {
 
 // Checks the readings one message carries. Returns { ok: true, report } or { ok: false, error }.
 // Shape (all numbers; thresholds are the detector's own settings):
-//   { ip, fw, uptimeMs, rssi, viewLeftS (optional),
+//   { ip, fw, uptimeMs, rssi, ssid (optional: the Wi-Fi network it is on), viewLeftS (optional),
 //     gpio:   { pin, high },
 //     scene:  { state, brightness, motion, darkBelow, motionAtLeast, motionLimit (optional), holdS,
 //               area: { x0, y0, x1, y1 }                       <- optional: the part of the picture watched for motion },
@@ -95,6 +96,7 @@ function parseStatus(body) {
       fw: text(body.fw),
       uptimeMs: num(body.uptimeMs, 0, 4294967295 * 1000),
       rssi: num(body.rssi, -200, 0),
+      ssid: wifiinfo.cleanSsid(body.ssid),            // optional: older firmware does not send it (null)
       viewLeftS: num(body.viewLeftS, 0, 86400),     // optional: seconds of live view left on the board's own timer
       gpio: { pin, high: g.high },
       scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, motionLimit, holdS, area: area.area },
@@ -124,7 +126,8 @@ function describeAge(ms) {
 //   { report, receivedAt, frameAt, connected, ip, connectedAt, lastDisconnectAt, lastDisconnectWhy }
 // -> { state: 'online' | 'no-picture' | 'idle' | 'offline' | 'never',
 //      online, hasPicture, connected, ageMs, pictureAgeMs, connectedForMs, ip,
-//      lastDisconnect: { agoMs, why } | null, message, report, view }
+//      lastDisconnect: { agoMs, why } | null, message, report, view, wifi }
+// `wifi` is { ssid, rssi, ageMs } (lib/wifiinfo.js) or null; it is kept while the detector is idle (its report is not).
 // 'idle' = the board is there but its live view is OFF (it rests and asks the relay every ~30 s whether
 // somebody wants to look); `view` is detectorview.describe().
 // `message` is empty while everything is fine, otherwise says why the detector is not (fully) showing.
@@ -134,7 +137,7 @@ function buildView(det, now) {
       state: 'never', online: false, hasPicture: false, connected: false, ageMs: null, pictureAgeMs: null,
       connectedForMs: null, ip: null, lastDisconnect: null,
       message: 'the relay has not heard from this detector since it started', report: null,
-      view: detectorview.describe(null, now),
+      view: detectorview.describe(null, now), wifi: null,
     };
   }
   const ageMs = det.receivedAt ? Math.max(0, now - det.receivedAt) : null;
@@ -174,6 +177,7 @@ function buildView(det, now) {
     state, online, hasPicture, connected, ageMs, pictureAgeMs,
     connectedForMs: connected && det.connectedAt ? Math.max(0, now - det.connectedAt) : null,
     ip: det.ip || null, lastDisconnect, message, report: state === 'idle' ? null : (det.report || null), view,
+    wifi: wifiinfo.describe(det.wifi, now),
   };
 }
 
