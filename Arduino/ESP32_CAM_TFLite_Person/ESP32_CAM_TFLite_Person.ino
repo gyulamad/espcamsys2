@@ -1139,6 +1139,7 @@ public:
         person_report::Telemetry t;
 
         t.ip = WiFi.localIP().toString().c_str();
+        t.ssid = WiFi.SSID().c_str();
         t.rssi = WiFi.RSSI();
         t.heap = ESP.getFreeHeap();
 
@@ -1251,7 +1252,9 @@ void logHeartbeat(person_report::UplinkSession &session)
 // came back. 404 = an older relay without the switch: the gate then streams always (the old behaviour).
 void pollViewSwitch(person_report::ViewGate &gate) {
   HTTPClient http;
-  http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId).c_str()));
+  // The poll also tells the relay which Wi-Fi network this board is on and how strong the signal is (it rests, so
+  // it has no other connection to say it on).
+  http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId, std::string(WiFi.SSID().c_str()), WiFi.RSSI()).c_str()));
   http.setTimeout(5000);
   http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
   int code = http.GET();

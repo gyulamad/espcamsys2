@@ -771,9 +771,27 @@ static void runNetworkTask(int passes) {
 TEST(a_relay_without_the_view_switch_keeps_the_stream_on_all_the_time) {
     resetWorld(); typicalLiveViewSettings();
     runNetworkTask(3);
-    TEST_ASSERT(!g_viewAsked.empty() && g_viewAsked[0] == "http://192.168.4.9:8080/detector/det-1/view", "it asks the relay's switch, with the key");
+    TEST_ASSERT(!g_viewAsked.empty() && g_viewAsked[0] == "http://192.168.4.9:8080/detector/det-1/view?ssid=extender-1&rssi=-61", "it asks the relay's switch, with the key");
     TEST_ASSERT(WiFiClient::connects >= 1, "an older relay (404): the picture link is opened as before");
     for (const std::string& c : g_wifiCalls) TEST_ASSERT(c != "sleep:1", "and the radio never sleeps");
+}
+
+// While it rests the detector has no connection to the relay: its poll is how the dashboard learns the network.
+TEST(the_poll_tells_the_relay_which_wifi_network_the_board_is_on_and_how_strong_it_is) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = 200; g_viewBody = "view=0;stop=0;mins=10";
+    g_ssid = "Cafe & Co #1"; g_rssi = -72;
+    runNetworkTask(3);
+    TEST_ASSERT(!g_viewAsked.empty() && g_viewAsked[0] == "http://192.168.4.9:8080/detector/det-1/view?ssid=Cafe%20%26%20Co%20%231&rssi=-72",
+                "the name is percent-encoded: a space, '&' and '#' cannot end the query early");
+}
+
+TEST(the_poll_says_nothing_about_a_network_it_is_not_connected_to) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = 200; g_viewBody = "view=0;stop=0;mins=10";
+    g_rssi = 0;
+    runNetworkTask(3);
+    TEST_ASSERT(!g_viewAsked.empty() && g_viewAsked[0] == "http://192.168.4.9:8080/detector/det-1/view", "no signal, no query: nothing is invented");
 }
 
 TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio) {
@@ -1106,6 +1124,8 @@ int main() {
     RUN_TEST(a_mutex_that_cannot_be_created_is_the_same_failure);
     RUN_TEST(a_network_task_that_cannot_be_created_is_reported);
     RUN_TEST(a_relay_without_the_view_switch_keeps_the_stream_on_all_the_time);
+    RUN_TEST(the_poll_tells_the_relay_which_wifi_network_the_board_is_on_and_how_strong_it_is);
+    RUN_TEST(the_poll_says_nothing_about_a_network_it_is_not_connected_to);
     RUN_TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio);
     RUN_TEST(somebody_watching_opens_the_picture_link_and_wakes_the_radio);
     RUN_TEST(the_network_task_puts_wi_fi_in_station_mode_without_sleep_and_adds_every_network);

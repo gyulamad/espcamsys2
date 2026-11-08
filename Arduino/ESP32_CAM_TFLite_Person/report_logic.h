@@ -67,9 +67,38 @@ inline std::string buildLogUrl(const std::string& host, int httpPort) {
     return "http://" + host + ":" + std::to_string(httpPort) + "/log";
 }
 
+// A network name is at most 32 bytes (IEEE 802.11), and a signal strength is -127..-1 dBm (0 = not connected).
+// Anything else is not a Wi-Fi reading and is not reported (the relay refuses it too, lib/wifiinfo.js).
+constexpr size_t WIFI_SSID_MAX_LEN = 32;
+inline bool isWifiReading(const std::string& ssid, int rssi) {
+    return !ssid.empty() && ssid.size() <= WIFI_SSID_MAX_LEN && rssi >= -127 && rssi <= -1;
+}
+
+// `s` percent-encoded for a URL query: letters, digits and - . _ ~ stay, every other byte becomes %XX (a network name
+// may hold spaces, '&', '#', '=' or UTF-8, none of which may reach the URL as they are).
+inline std::string percentEncode(const std::string& s) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(s.size() * 3);
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char c = (unsigned char)s[i];
+        bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~';
+        if (plain) { out += (char)c; continue; }
+        out += '%';
+        out += hex[c >> 4];
+        out += hex[c & 0x0f];
+    }
+    return out;
+}
+
 // The relay's live-view switch (GET /detector/<id>/view): "view=1;stop=0;mins=10", see ViewGate.
-inline std::string buildViewUrl(const std::string& host, int httpPort, const std::string& detectorId) {
-    return "http://" + host + ":" + std::to_string(httpPort) + "/detector/" + detectorId + "/view";
+// While the detector rests it has no connection to the relay, so this poll is also how the relay learns which Wi-Fi
+// network it is on and how strong the signal is: "?ssid=<network>&rssi=<dBm>" when there is such a reading.
+inline std::string buildViewUrl(const std::string& host, int httpPort, const std::string& detectorId,
+                                const std::string& ssid = std::string(), int rssi = 0) {
+    std::string url = "http://" + host + ":" + std::to_string(httpPort) + "/detector/" + detectorId + "/view";
+    if (isWifiReading(ssid, rssi)) url += "?ssid=" + percentEncode(ssid) + "&rssi=" + std::to_string(rssi);
+    return url;
 }
 
 // ── What the detector sees ───────────────────────────────────────────────
@@ -141,8 +170,11 @@ struct LinkStats {
 
 // The JSON status of one message. One object, no line breaks. Numbers are printed
 // locale-independently (only snprintf of integers and a fixed "%d.%03d" for the scores).
+// `ssid` is the Wi-Fi network the board is on (with `rssi`, the signal strength, the dashboard's Wi-Fi line); it is
+// left out when it is not a reading (isWifiReading()).
 inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_t nowMs, const std::string& ip,
-                                   int rssi, uint32_t uptimeMs, const LinkStats& link) {
+                                   int rssi, uint32_t uptimeMs, const LinkStats& link,
+                                   const std::string& ssid = std::string()) {
     auto fixed3 = [](float v) {
         if (v < 0) v = 0;
         if (v > 1) v = 1;
@@ -160,6 +192,10 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
     char buf[256];   // the longest line below, with every number at its largest, is about 190 characters
     snprintf(buf, sizeof(buf), ",\"uptimeMs\":%u,\"rssi\":%d", (unsigned)uptimeMs, rssi);
     out += buf;
+    if (isWifiReading(ssid, rssi)) {
+        out += ",\"ssid\":";
+        appendJsonString(out, ssid);
+    }
     if (link.viewLeftS >= 0) {
         snprintf(buf, sizeof(buf), ",\"viewLeftS\":%d", (int)link.viewLeftS);
         out += buf;
@@ -541,6 +577,7 @@ enum class Level { Debug, Info, Warn, Error };
 // What the sketch knows about the board's network right now (for the readings and the log).
 struct Telemetry {
     std::string ip;
+    std::string ssid;   // the Wi-Fi network the board is on ("" = unknown)
     int rssi = 0;
     uint32_t heap = 0;
 };
@@ -904,7 +941,7 @@ private:
         Telemetry t = env_.telemetry();
         stats_.heap = t.heap;
         uint32_t sendAt = env_.nowMs();
-        std::string status = buildStatusJson(cfg_.report, snap, sendAt, t.ip, t.rssi, sendAt, stats_);
+        std::string status = buildStatusJson(cfg_.report, snap, sendAt, t.ip, t.rssi, sendAt, stats_, t.ssid);
         std::string msg = buildFrameMessage(status, picture ? (const uint8_t*)jpeg.data() : nullptr, picture ? jpeg.size() : 0);
         if (msg.empty()) {
             log(Level::Error, "the readings are too long to send (" + std::to_string((unsigned)status.size()) + " bytes) — this is a firmware bug");

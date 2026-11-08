@@ -664,6 +664,81 @@ TEST(session_sends_nothing_before_the_first_frame_exists) {
     TEST_ASSERT_EQ(messagesIn(env.sent).size(), (size_t)1, "the first frame goes out as soon as there is one");
 }
 
+// ── Wi-Fi network and signal (the dashboard's Wi-Fi line) ────────────────
+
+TEST(wifi_reading_needs_a_name_of_at_most_32_bytes_and_a_connected_signal) {
+    TEST_ASSERT(isWifiReading("Home", -61), "an ordinary reading");
+    TEST_ASSERT(isWifiReading(std::string(32, 'x'), -127), "the limits are inside");
+    TEST_ASSERT(isWifiReading("Home", -1), "the other limit");
+    TEST_ASSERT(!isWifiReading("", -61), "no name");
+    TEST_ASSERT(!isWifiReading(std::string(33, 'x'), -61), "a name over 32 bytes is not a Wi-Fi name");
+    TEST_ASSERT(!isWifiReading("Home", 0), "0 = not connected");
+    TEST_ASSERT(!isWifiReading("Home", -128), "below the range");
+    TEST_ASSERT(!isWifiReading("Home", 12), "positive");
+}
+
+TEST(percent_encode_keeps_unreserved_bytes_and_encodes_all_others) {
+    TEST_ASSERT_EQ(percentEncode("HomeNet-5G_v2.~"), std::string("HomeNet-5G_v2.~"), "unreserved bytes stay");
+    TEST_ASSERT_EQ(percentEncode("My Net"), std::string("My%20Net"), "a space");
+    TEST_ASSERT_EQ(percentEncode("a&b=c#d?e/f%g+h"), std::string("a%26b%3Dc%23d%3Fe%2Ff%25g%2Bh"), "characters that mean something in a URL");
+    TEST_ASSERT_EQ(percentEncode("Caf\xC3\xA9"), std::string("Caf%C3%A9"), "UTF-8 byte by byte, upper-case hex");
+    TEST_ASSERT_EQ(percentEncode(std::string("a\0b", 3)), std::string("a%00b"), "a zero byte does not end the text");
+    TEST_ASSERT_EQ(percentEncode("a\r\nb"), std::string("a%0D%0Ab"), "a line break cannot split the request");
+    TEST_ASSERT_EQ(percentEncode(""), std::string(""), "empty stays empty");
+}
+
+TEST(view_url_carries_the_network_and_the_signal_when_there_is_a_reading) {
+    TEST_ASSERT_EQ(buildViewUrl("192.168.4.9", 8080, "esp-1", "My Net", -61),
+                   std::string("http://192.168.4.9:8080/detector/esp-1/view?ssid=My%20Net&rssi=-61"), "network and signal in the query");
+}
+
+TEST(view_url_has_no_query_without_a_reading) {
+    const std::string plain = "http://192.168.4.9:8080/detector/esp-1/view";
+    TEST_ASSERT_EQ(buildViewUrl("192.168.4.9", 8080, "esp-1", "", -61), plain, "no name");
+    TEST_ASSERT_EQ(buildViewUrl("192.168.4.9", 8080, "esp-1", "Home", 0), plain, "not connected");
+    TEST_ASSERT_EQ(buildViewUrl("192.168.4.9", 8080, "esp-1", std::string(40, 'x'), -50), plain, "a name that is too long");
+}
+
+TEST(status_json_carries_the_network_next_to_the_signal) {
+    std::string j = buildStatusJson(cfg(), snap(), 1500, "192.168.4.37", -61, 123456, link(), "HomeNet");
+    TEST_ASSERT(has(j, "\"rssi\":-61,\"ssid\":\"HomeNet\""), "ssid follows rssi");
+}
+
+TEST(status_json_leaves_the_network_out_when_it_is_not_a_reading) {
+    TEST_ASSERT(!has(buildStatusJson(cfg(), snap(), 1500, "x", -61, 1, link()), "ssid"), "none given");
+    TEST_ASSERT(!has(buildStatusJson(cfg(), snap(), 1500, "x", -61, 1, link(), ""), "ssid"), "empty");
+    TEST_ASSERT(!has(buildStatusJson(cfg(), snap(), 1500, "x", 0, 1, link(), "Home"), "ssid"), "not connected (rssi 0)");
+    TEST_ASSERT(!has(buildStatusJson(cfg(), snap(), 1500, "x", -61, 1, link(), std::string(33, 'x')), "ssid"), "longer than 32 bytes");
+}
+
+TEST(status_json_escapes_the_network_name) {
+    std::string j = buildStatusJson(cfg(), snap(), 1500, "x", -61, 1, link(), "a\"b\\c\nd");
+    TEST_ASSERT(has(j, "\"ssid\":\"a\\\"b\\\\c\\nd\""), "quote, backslash and line break are escaped, the JSON stays valid");
+}
+
+TEST(status_json_with_the_longest_possible_network_still_fits_the_wire_limit) {
+    // The worst case: 32 bytes that each need a 6-character escape.
+    std::string j = buildStatusJson(cfg(), snap(), 1500, "192.168.255.255", -127, 4294967295u, link(), std::string(32, '\x01'));
+    TEST_ASSERT(has(j, "\"ssid\":"), "it is sent");
+    TEST_ASSERT(j.size() < MAX_STATUS_BYTES / 2, "far below what the relay refuses");
+}
+
+TEST(session_reports_the_network_it_is_on) {
+    FakeEnv env;
+    env.tele.ssid = "HomeNet";
+    UplinkSession s(ucfg(), env);
+    bringUp(s, env);
+    std::vector<Wire> m = messagesIn(env.sent);
+    TEST_ASSERT(has(wireAt(m, 0).status, "\"rssi\":-58,\"ssid\":\"HomeNet\""), "the network comes from the environment, like the signal");
+}
+
+TEST(session_without_a_known_network_sends_none) {
+    FakeEnv env;
+    UplinkSession s(ucfg(), env);
+    bringUp(s, env);
+    TEST_ASSERT(!has(wireAt(messagesIn(env.sent), 0).status, "ssid"), "nothing is invented");
+}
+
 // ── JPEG trouble ─────────────────────────────────────────────────────────
 
 TEST(session_without_a_jpeg_still_reports_the_numbers_and_says_why_there_is_no_picture) {
@@ -1120,6 +1195,16 @@ int main() {
     RUN_TEST(session_sends_a_frame_message_with_readings_and_picture);
     RUN_TEST(session_paces_frames_and_sends_heartbeats_without_pictures);
     RUN_TEST(session_status_carries_link_statistics);
+    RUN_TEST(wifi_reading_needs_a_name_of_at_most_32_bytes_and_a_connected_signal);
+    RUN_TEST(percent_encode_keeps_unreserved_bytes_and_encodes_all_others);
+    RUN_TEST(view_url_carries_the_network_and_the_signal_when_there_is_a_reading);
+    RUN_TEST(view_url_has_no_query_without_a_reading);
+    RUN_TEST(status_json_carries_the_network_next_to_the_signal);
+    RUN_TEST(status_json_leaves_the_network_out_when_it_is_not_a_reading);
+    RUN_TEST(status_json_escapes_the_network_name);
+    RUN_TEST(status_json_with_the_longest_possible_network_still_fits_the_wire_limit);
+    RUN_TEST(session_reports_the_network_it_is_on);
+    RUN_TEST(session_without_a_known_network_sends_none);
     RUN_TEST(session_sends_nothing_before_the_first_frame_exists);
     RUN_TEST(session_without_a_jpeg_still_reports_the_numbers_and_says_why_there_is_no_picture);
     RUN_TEST(session_treats_an_oversized_jpeg_as_a_failure);
