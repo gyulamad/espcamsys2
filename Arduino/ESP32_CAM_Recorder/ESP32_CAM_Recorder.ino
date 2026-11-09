@@ -362,9 +362,17 @@ size_t writePushBytes(const uint8_t *data, size_t len) {
       lastProgress = millis();
     } else if (writeStalled(lastProgress, millis(), PUSH_WRITE_TIMEOUT_MS)) {
       break; // truly stuck — give up rather than hang loop() indefinitely
-    } else {
-      delay(1); // brief yield before retrying, rather than busy-spinning
     }
+    // Yield on every iteration, not only when write() returned 0: a frame
+    // sent as many partial writes on a weak link (-48 dBm) can take 4+ s in
+    // total, and without this yield the loop task blocks for the whole frame
+    // and the ESP-IDF Task Watchdog reboots the board mid-push ("task watchdog
+    // (a task hung)"). That reboot drops the connection mid-frame — corrupting
+    // it — and, repeated across the reconnect storm a weak link produces, can
+    // wedge lwIP until power-cycle (the "cameras never dial TCP" outage this
+    // codebase already hit once). delay(1) also lets the WiFi stack service
+    // its own events, which is what lets the next write() make progress.
+    delay(1);
   }
   return total;
 }
