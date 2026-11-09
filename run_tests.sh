@@ -822,12 +822,20 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-# Auto-install playwright if missing, so the browser tests below run instead of SKIP.
-# Needs both the npm package (in tests/dom/) and the chromium browser binary.
-if command -v node >/dev/null 2>&1 && ! (cd "$ROOT_DIR/tests/dom" && node -e "require('playwright')" 2>/dev/null); then
-    echo "(playwright not found — installing for the browser tests: npm install + chromium download)"
-    (cd "$ROOT_DIR/tests/dom" && npm install playwright >/dev/null 2>&1 && ./node_modules/.bin/playwright install chromium >/dev/null 2>&1) \
-        || echo "(playwright install failed — the browser tests will SKIP)"
+# Auto-install playwright (package + browsers) so the browser tests below run
+# instead of SKIP. npx playwright install is idempotent: it downloads what is
+# missing and skips what is already there, so running it every time is safe.
+# (0018 only installed the chromium browser, but newer playwright also needs
+# chrome-headless-shell — npx playwright install with no browser argument
+# installs everything the installed playwright version expects.)
+if command -v node >/dev/null 2>&1; then
+    if ! (cd "$ROOT_DIR/tests/dom" && node -e "require('playwright')" 2>/dev/null); then
+        echo "(playwright package not found — installing...)"
+        (cd "$ROOT_DIR/tests/dom" && npm install playwright >/dev/null 2>&1) || true
+    fi
+    if (cd "$ROOT_DIR/tests/dom" && node -e "require('playwright')" 2>/dev/null); then
+        (cd "$ROOT_DIR/tests/dom" && npx playwright install >/dev/null 2>&1) || echo "(playwright browser install failed — the browser tests will SKIP)"
+    fi
 fi
 
 heading "Browser (the icon chooser bubble of the settings pages, in a real Chromium) test"
