@@ -154,4 +154,9 @@ test('the small-screen block comes after the base rules it overrides (the cascad
   assertTrue(at('@media (max-width: 700px) {') > Math.max(at('.files-row {'), at('.files-name {'), at('.files-size {'), at('.files-actions {'), at('.files-panel-header {')));
 });
 
+test('.cam-btn has an explicit line-height, so a glyph from a fallback font (the 🗑 of DEL) cannot make one button taller than its neighbours', () => {
+  const lineHeight = declaration(ruleBody('.cam-btn'), 'line-height');
+  assertTrue(lineHeight && lineHeight !== 'normal', `.cam-btn line-height is ${lineHeight === null ? 'not set' : '"' + lineHeight + '"'}; "normal" lets the emoji font set the button's height`);
+});
+
 summarize();

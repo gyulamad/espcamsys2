@@ -15,6 +15,11 @@ class CamLayout
         return <<<'CSS'
   .cam-btn {
     font-family: var(--mono); font-size: .65rem;
+    /* An explicit line height: with "normal" the font that draws a button's pictogram sets the button's height
+       (the 🗑 of DEL comes from an emoji font with taller metrics on some systems), so DEL stood taller than PLAY
+       and GET and, centred in the row, started higher. A fixed line height makes every button the same height
+       whichever font draws its glyphs. */
+    line-height: 1.2;
     padding: 3px 8px; border-radius: 3px;
     border: 1px solid var(--border-light);
     background: transparent; color: var(--text);

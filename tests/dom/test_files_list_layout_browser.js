@@ -79,10 +79,19 @@ const ARCHIVED = [
 ];
 const THUMB = '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="54"><rect width="96" height="54" fill="#456"/></svg>';
 
+// A system whose emoji font has taller metrics than the text font: the 🗑 of DEL (alone among the buttons' glyphs) is
+// drawn by a copy of the installed emoji font with a big ascent and descent. Without an explicit line height on the
+// buttons that made DEL taller than PLAY and GET on such a system (and, centred in the row, start higher); simulated here
+// so the test does not depend on which emoji font the machine running it happens to have.
+const TALL_EMOJI_STYLE = `
+@font-face { font-family: TestTallEmoji; unicode-range: U+1F5D1; ascent-override: 190%; descent-override: 70%; line-gap-override: 0%;
+  src: local('Noto Color Emoji'), local('Apple Color Emoji'), local('Segoe UI Emoji'), local('Twemoji Mozilla'); }
+.cam-btn { font-family: var(--mono), TestTallEmoji; }`;
+
 function pageHtml() {
   const script = fs.readFileSync(path.join(DASH_SRC, 'lib/recordings-list.js'), 'utf8');
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>${pageStyle()}</style></head><body><main>
+<style>${pageStyle()}${TALL_EMOJI_STYLE}</style></head><body><main>
   <div class="files-panel open" id="files-all"><div class="files-empty">Loading…</div></div>
 </main><script>${script}</script>
 <script>
@@ -111,7 +120,7 @@ const MEASURE = () => {
       name: Object.assign(box(name), { clipped: name.scrollWidth > name.clientWidth + 1, text: name.textContent }),
       size: box(row.querySelector('.files-size')),
       hasScan: row.querySelector('.files-scan') !== null,
-      buttons: [...row.querySelectorAll('.files-actions .cam-btn')].map(box),
+      buttons: [...row.querySelectorAll('.files-actions .cam-btn')].map((el) => Object.assign(box(el), { height: el.getBoundingClientRect().height })),
       allButtons: row.querySelectorAll('.cam-btn').length,
     };
   });
@@ -137,6 +146,7 @@ function checkSmall(width, m) {
     if (rows.length === 0) continue;
     if (!rows.every((r) => r.buttons.length === 3)) { check(`${label}: ${kind}: the buttons can be measured (three in each actions box)`, false); continue; }
     check(`${label}: ${kind}: the buttons are on one line`, rows.every((r) => r.buttons.every((b) => near(b.top, r.buttons[0].top))), rows.map(describe).join(' | '));
+    check(`${label}: ${kind}: the buttons are the same height, whichever font draws their pictograms`, rows.every((r) => r.buttons.every((b) => near(b.height, r.buttons[0].height))), rows.map((r) => `${r.buttons.map((b) => b.height.toFixed(1)).join('/')}`).join(' | '));
     check(`${label}: ${kind}: the buttons are floated right (their right end is the row's)`, rows.every((r) => near(r.buttons[2].right, r.row.right)), rows.map(describe).join(' | '));
     check(`${label}: ${kind}: the buttons start at the same place in every row`, rows.every((r) => r.buttons.every((b, i) => near(b.left, rows[0].buttons[i].left))), rows.map(describe).join(' | '));
     check(`${label}: ${kind}: the buttons are on a line of their own, below the name and the size`, rows.every((r) => r.buttons[0].top >= r.name.bottom - SUBPIXEL && r.buttons[0].top >= r.size.bottom - SUBPIXEL), rows.map(describe).join(' | '));
@@ -155,6 +165,7 @@ function checkWide(width, m) {
   check(`${label}: the buttons stay on the line of the name and size, to their right`,
     m.main.every((r) => r.buttons.length === 3 && r.buttons[0].left >= r.size.right && r.buttons[0].top < r.name.bottom && r.buttons[0].bottom > r.name.top), m.main.map(describe).join(' | '));
   check(`${label}: the buttons end at the row's right end`, m.main.every((r) => near(r.buttons[2].right, r.row.right)));
+  check(`${label}: the buttons are the same height, whichever font draws their pictograms`, m.main.every((r) => r.buttons.every((b) => near(b.height, r.buttons[0].height))), m.main.map((r) => `${r.buttons.map((b) => b.height.toFixed(1)).join('/')}`).join(' | '));
   check(`${label}: a row without a picture is one line high`, m.main.filter((r, i) => i !== 1).every((r) => r.row.bottom - r.row.top < 30), m.main.map((r) => Math.round(r.row.bottom - r.row.top)).join(' '));
   check(`${label}: the names are one line, cut with an ellipsis if need be, as before`, m.main.every((r) => r.name.bottom - r.name.top < 30));
 }
@@ -170,6 +181,7 @@ async function measureAt(browser, width, { openArchive }) {
   await page.evaluate(() => window.listed);
   await page.waitForSelector('.files-row');
   await page.waitForFunction(() => [...document.querySelectorAll('.files-thumb')].every((i) => i.complete));
+  await page.evaluate(() => document.fonts.load('1em TestTallEmoji', '\u{1F5D1}').then((faces) => document.fonts.ready.then(() => faces)));
   if (openArchive) {
     await page.click('#files-browse-archive-all');
     await page.waitForSelector('.files-archive .files-row');
