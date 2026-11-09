@@ -22,8 +22,9 @@ static void resetWorld() {
   fake::g().wifiUp = true;
 }
 
-static void route(const std::string& part, int code, const std::string& body = "", const std::string& image = "") {
-  fake::Route r; r.part = part; r.code = code; r.body = body; r.image = image;
+static void route(const std::string& part, int code, const std::string& body = "", const std::string& image = "",
+                  int declaredLength = -2) {
+  fake::Route r; r.part = part; r.code = code; r.body = body; r.image = image; r.declaredLength = declaredLength;
   fake::g().routes.push_back(r);
 }
 
@@ -245,6 +246,59 @@ TEST(a_firmware_above_the_maximum_size_is_refused_review_ARD_016) {
   TEST_ASSERT(fake::g().serial.back().find("bad_size") != std::string::npos, "3 MB image -> bad_size");
 }
 
+// The watchdog bug: the relay answers the version check with a short body and keeps the connection open
+// (HTTP keep-alive). The reader used to poll "connected() and nothing to read" in a tight loop without ever
+// yielding — on a board that starves the idle task and the task watchdog reboots it ~5 s later (every
+// ~50 s, for ever). Here that shows as `spun` (polls without a delay()), and the elapsed fake time.
+TEST(a_version_reply_on_a_keep_alive_connection_is_read_without_spinning) {
+  resetWorld();
+  route("/version", 200, "cur123\n" + MD5 + "\n");
+  OtaUpdater ota("recorder");
+  runUntil(ota, 25000);
+  TEST_ASSERT_EQ(fake::g().requests.size(), (size_t)1, "the check went out");
+  TEST_ASSERT(!fake::g().spun, "the body is read without polling in a loop that never yields");
+  TEST_ASSERT_EQ(countRequests("firmware.bin"), (size_t)0, "same version: no download");
+}
+
+TEST(a_new_version_on_a_keep_alive_connection_is_still_downloaded_without_spinning) {
+  resetWorld();
+  route("/version", 200, "new456\n" + MD5 + "\n");
+  route("firmware.bin", 200, "", IMAGE);
+  OtaUpdater ota("recorder");
+  runUntil(ota, 25000);
+  TEST_ASSERT(!fake::g().spun, "neither the version reply nor the image is read in a spin");
+  TEST_ASSERT_EQ(fake::g().bytesFlashed, IMAGE.size(), "the whole image is written");
+  TEST_ASSERT(fake::g().restarted, "and the board restarts");
+}
+
+TEST(a_version_reply_that_stops_short_is_given_up_on_after_the_idle_limit) {
+  resetWorld();
+  // announces 100 bytes, delivers 20, and keeps the connection open
+  route("/version", 200, "cur123\n" + MD5 + "\n", "", 100);
+  OtaUpdater ota("recorder");
+  runUntil(ota, 20000);
+  uint32_t before = fake::g().now;
+  runUntil(ota, 22000);
+  TEST_ASSERT(!fake::g().spun, "waiting for the rest of the body yields instead of spinning");
+  TEST_ASSERT(fake::g().now - before < 2000 + 6000, "it gives up after about the idle limit (5 s), not never");
+  TEST_ASSERT_EQ(countRequests("firmware.bin"), (size_t)0, "nothing is downloaded from half an answer");
+  TEST_ASSERT(!fake::g().restarted, "no restart");
+  TEST_ASSERT(fake::g().serial.size() > 0, "and it says so");
+}
+
+TEST(a_download_that_stalls_halfway_is_given_up_on_and_aborted) {
+  resetWorld();
+  route("/version", 200, "new456\n" + MD5 + "\n");
+  // announces 200 KB, delivers 150 KB, then goes quiet on an open connection
+  route("firmware.bin", 200, "", std::string(150 * 1024, 'x'), (int)IMAGE.size());
+  OtaUpdater ota("recorder");
+  runUntil(ota, 25000);
+  TEST_ASSERT(!fake::g().spun, "the wait for the missing bytes yields");
+  TEST_ASSERT(fake::g().aborted, "the half image is thrown away");
+  TEST_ASSERT(!fake::g().restarted, "no restart on a half image");
+  TEST_ASSERT(fake::g().serial.back().find("short_write") != std::string::npos, "reported as short_write");
+}
+
 int main() {
   RUN_TEST(no_wifi_no_request);
   RUN_TEST(first_check_comes_20s_after_wifi);
@@ -260,5 +314,9 @@ int main() {
   RUN_TEST(an_oversized_version_reply_is_ignored_review_ARD_008);
   RUN_TEST(a_firmware_below_the_minimum_size_is_refused_review_ARD_016);
   RUN_TEST(a_firmware_above_the_maximum_size_is_refused_review_ARD_016);
+  RUN_TEST(a_version_reply_on_a_keep_alive_connection_is_read_without_spinning);
+  RUN_TEST(a_new_version_on_a_keep_alive_connection_is_still_downloaded_without_spinning);
+  RUN_TEST(a_version_reply_that_stops_short_is_given_up_on_after_the_idle_limit);
+  RUN_TEST(a_download_that_stalls_halfway_is_given_up_on_and_aborted);
   return test::summarize();
 }

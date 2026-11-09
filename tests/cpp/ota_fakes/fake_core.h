@@ -23,6 +23,8 @@ struct Route {            // what the "relay" answers for a URL that contains `p
   int code;
   std::string body;       // for the version answer
   std::string image;      // for the firmware download
+  int declaredLength = -2;   // the Content-Length the relay announces: -2 = the real size of the body, -1 = unknown (chunked),
+                             // anything else = that number (a body that stops short of it never completes)
 };
 
 struct State {
@@ -54,6 +56,15 @@ struct State {
   int udpOpens = 0, udpCloses = 0;
   bool udpOpen = false;
 
+  // the HTTP connection: like the real one it stays OPEN after the last byte (keep-alive) unless a test says
+  // otherwise, so "connected() but nothing to read" is the normal state at the end of a body.
+  bool keepAlive = true;
+  // A loop that polls the connection over and over without ever calling delay() starves the idle task on a
+  // real board (the task watchdog then reboots it). pollsSinceDelay counts such polls; past the limit the
+  // fake flags `spun` and closes the connection, so the buggy loop ends instead of hanging the test.
+  uint32_t pollsSinceDelay = 0;
+  bool spun = false;
+
   // how the flash behaves
   bool beginOk = true;
   bool shortWrite = false;
@@ -73,7 +84,7 @@ inline State& g() { static State s; return s; }
 
 inline uint32_t millis() { return fake::g().now; }
 inline long random(long, long) { return fake::g().randomValue; }
-inline void delay(uint32_t ms) { fake::g().now += ms; }   // time passes, so a loop that waits with delay() ends
+inline void delay(uint32_t ms) { fake::g().now += ms; fake::g().pollsSinceDelay = 0; }   // time passes, so a loop that waits with delay() ends; and the idle task gets to run
 
 class String {
  public:
@@ -196,6 +207,8 @@ class HTTPClient {
         // body when no image is provided (the version reply case), and the
         // image when one is provided (the firmware download case).
         stream_.bytes = r.image.empty() ? r.body : r.image;
+        contentLength_ = r.declaredLength == -2 ? (int)stream_.bytes.size() : r.declaredLength;
+        open_ = true;
         return r.code;
       }
     }
@@ -207,17 +220,26 @@ class HTTPClient {
     return GET();
   }
   String getString() { return String(body_.c_str()); }
-  int getSize() { return (int)stream_.bytes.size(); }
-  // (review ARD-008) readBounded() uses connected() to decide whether to
-  // keep reading after a 0-byte read. The fake returns true while the
-  // stream still has bytes (so the loop drains it) and false after, which
-  // matches the real WiFiClient behaviour closely enough for the tests.
-  bool connected() { return !stream_.bytes.empty(); }
+  // The announced Content-Length (fixed at GET time, -1 when unknown), like the real client's.
+  int getSize() { return contentLength_; }
+  // Like the real one: true while the connection is up OR unread data is left. With keep-alive (the
+  // default) the connection stays up after the last byte, so this is true for ever; each call counts as a
+  // poll, and a loop that polls without delay() is flagged (see State::pollsSinceDelay).
+  bool connected() {
+    if (++fake::g().pollsSinceDelay > 10000) {
+      fake::g().spun = true;
+      open_ = false;
+    }
+    if (!stream_.bytes.empty()) return true;
+    return fake::g().keepAlive && open_;
+  }
   WiFiClient* getStreamPtr() { return &stream_; }
-  void end() {}
+  void end() { open_ = false; }
  private:
   std::string url_, body_;
   WiFiClient stream_;
+  int contentLength_ = 0;
+  bool open_ = false;
 };
 
 class UpdateClass {
@@ -233,7 +255,7 @@ class UpdateClass {
     fake::g().bytesFlashed = n;
     return n;
   }
-  size_t write(const uint8_t* buf, size_t len) { (void)buf;
+  size_t write(uint8_t* buf, size_t len) { (void)buf;   // non-const, like the real UpdateClass::write(uint8_t*, size_t)
     size_t n = fake::g().shortWrite ? len / 2 : len;
     if (fake::g().shortWrite) fake::g().shortWrite = false;   // only the first chunk is short
     fake::g().bytesFlashed += n;

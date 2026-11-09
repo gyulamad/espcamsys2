@@ -163,4 +163,31 @@ class OtaPolicy {
   std::string pendingErr_;
 };
 
+// ── reading a response body ─────────────────────────────────────────────
+
+// What to do next while a response body is being read from a connection that may stay open after the
+// last byte (HTTP keep-alive): asking `connected()` is NOT enough to know the body is over, because an
+// open connection with nothing left to read looks the same as one that is still waiting for data. That
+// confusion once made the reader spin without yielding until the task watchdog rebooted the board, so
+// "is it over?" is decided here, from the facts, and is unit-tested.
+enum class ReadStep {
+  Continue,     // keep reading
+  Done,         // the whole body has been read
+  TooLarge,     // the body is, or would grow, beyond the cap: refuse it
+  Incomplete    // the connection closed early, or nothing arrived for too long: give up
+};
+
+// have: bytes taken so far. expected: the announced Content-Length, or -1 when it is not known.
+// maxBytes: the cap (a body of that size or more is refused). open: the connection is still up (or has
+// unread data). idleMs: time since the last byte arrived; idleLimitMs: how long that may last.
+static inline ReadStep nextReadStep(size_t have, int expected, size_t maxBytes, bool open, uint32_t idleMs,
+                                    uint32_t idleLimitMs) {
+  if (have >= maxBytes) return ReadStep::TooLarge;
+  if (expected >= 0 && (size_t)expected >= maxBytes) return ReadStep::TooLarge;
+  if (expected >= 0 && have >= (size_t)expected) return ReadStep::Done;
+  if (!open) return expected < 0 ? ReadStep::Done : ReadStep::Incomplete;   // closed: the end of a body of unknown length
+  if (idleMs >= idleLimitMs) return ReadStep::Incomplete;
+  return ReadStep::Continue;
+}
+
 }  // namespace esp32cam_ota
