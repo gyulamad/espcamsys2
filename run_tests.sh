@@ -229,7 +229,8 @@ else
 
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
              ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h \
-             ESP32_CAM_Recorder/relay_find_logic.h; do
+             ESP32_CAM_Recorder/relay_find_logic.h \
+             ESP32_CAM_Recorder/relay_health.h; do
         group_text "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
@@ -265,7 +266,7 @@ else
     # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) and the remote
     # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
     # must be identical too.
-    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h; do
+    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h relay_health.h; do
         group_text "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
@@ -291,6 +292,7 @@ else
     run_cpp_test test_person_scene_logic
     run_cpp_test test_person_motion_baseline
     run_cpp_test test_person_report_logic
+    run_cpp_test test_relay_health
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change

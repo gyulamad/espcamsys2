@@ -10,7 +10,7 @@ const { test, assertTrue, summarize } = require('./framework');
 
 const sketch = fs.readFileSync(path.join(__dirname, '../../Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino'), 'utf8');
 
-for (const name of ['g_relayOkAt', 'g_cfg', 'g_find']) {
+for (const name of ['g_relayHealth', 'g_cfg', 'g_find']) {
   test(`${name} is declared before its first use`, () => {
     const declaration = new RegExp(`^(?:volatile |static )*\\w[\\w:<>*&]*[ *&]+${name}\\b.*[;=]`, 'm').exec(sketch);
     assertTrue(declaration !== null, `no declaration of ${name}`);

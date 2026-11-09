@@ -51,7 +51,7 @@ case "$name" in
     *)          kind=detector ;;
 esac
 case " ${FAKE_FAIL:-} " in
-    *" $kind "*) echo "$name.ino:42:7: error: 'g_relayOkAt' was not declared in this scope" >&2; exit 1 ;;
+    *" $kind "*) echo "$name.ino:42:7: error: 'g_relayHealth' was not declared in this scope" >&2; exit 1 ;;
 esac
 echo "Sketch uses 123 bytes"
 EOF
@@ -87,7 +87,7 @@ check "'all' compiles both" $([ $rc -eq 0 ] && [ "$(compiled)" = 2 ] && echo 0 |
 # ── a broken sketch ──────────────────────────────────────────────────────
 FAKE_FAIL=detector run_script
 check "a sketch that does not compile fails the run (exit 1)" $([ $rc -eq 1 ] && echo 0 || echo 1)
-check "...the compiler's own words are shown" $(has "$out" "'g_relayOkAt' was not declared in this scope" && echo 0 || echo 1)
+check "...the compiler's own words are shown" $(has "$out" "'g_relayHealth' was not declared in this scope" && echo 0 || echo 1)
 check "...and the failed sketch is named" $(has "$out" "FAIL: did not compile: ESP32_CAM_TFLite_Person" && echo 0 || echo 1)
 check "...the other sketch was still compiled (and is not blamed)" $([ "$(compiled)" = 2 ] && ! has "$out" "did not compile: ESP32_CAM_Recorder" && echo 0 || echo 1)
 FAKE_FAIL=recorder run_script

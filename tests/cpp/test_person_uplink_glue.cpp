@@ -35,6 +35,7 @@
 //   g++ -std=c++17 -Wall -Wextra -o build/test_person_uplink_glue test_person_uplink_glue.cpp
 
 #include "framework.h"
+#include "../../Arduino/ESP32_CAM_TFLite_Person/relay_health.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -183,7 +184,7 @@ static void settingsSyncTick() { g_settingsSyncTicks++; }
 
 // -- finding the relay again (relay_find.h in the sketch): the uplink says when it was last open --
 static int g_relayFindTicks = 0;
-static volatile uint32_t g_relayOkAt = 0;
+RelayHealth g_relayHealth;
 static void relayFindTick() { g_relayFindTicks++; }
 
 // -- the internal-RAM line the sketch logs (defined outside the extracted blocks) --
@@ -341,7 +342,7 @@ static void resetWorld() {
     g_rlog.clear(); g_reachableCalls = 0;
     g_mutexCreateFails = false; g_mutexesCreated = g_mutexesDeleted = 0; g_tasks.clear(); g_taskCreateFails = false;
     g_taskDelays.clear(); g_stopAfterDelays = -1; g_onTaskDelay = nullptr; g_mallocFails = false;
-    g_wifiCalls.clear(); g_wifiDriverOk = true; g_wifiMode = 0; g_settingsSyncTicks = 0; g_heapStages.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear(); g_relayFindTicks = 0; g_relayOkAt = 0;
+    g_wifiCalls.clear(); g_wifiDriverOk = true; g_wifiMode = 0; g_settingsSyncTicks = 0; g_heapStages.clear(); g_wifiRunScript.clear(); g_wifiRunCalls = 0; wifiMulti.aps.clear(); g_otaCalls.clear(); g_relayFindTicks = 0; g_relayHealth = RelayHealth();
     g_viewCode = 404; g_viewBody.clear(); g_viewAsked.clear();
     g_remoteLogStarts = 0; g_resetReason = 1; g_psram = true;
     reportFrame = nullptr; reportMutex = nullptr;
@@ -784,7 +785,7 @@ TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio) {
     for (const std::string& c : g_wifiCalls) slept = slept || c == "sleep:1";
     TEST_ASSERT(slept, "the Wi-Fi radio may rest");
     TEST_ASSERT_EQ((int)g_viewAsked.size(), 1, "and it does not ask again before its ~30 s are up");
-    TEST_ASSERT(g_relayOkAt != 0 || g_now == 0, "an answer counts as the relay being there");
+    TEST_ASSERT(!g_relayHealth.isDown(g_now, 100000) || g_now == 0, "an answer counts as the relay being there");
 }
 
 TEST(somebody_watching_opens_the_picture_link_and_wakes_the_radio) {
@@ -816,28 +817,37 @@ TEST(without_a_network_the_task_does_not_ask_for_settings_changes) {
     TEST_ASSERT_EQ(g_settingsSyncTicks, 0, "no relay to ask");
 }
 
-// ── g_relayOkAt: when the relay last answered, for "look for it again" ──────
+// ── g_relayHealth: when the relay was last CONFIRMED, for "look for it again" ──
 
-TEST(the_uplink_notes_the_time_it_was_last_known_open_for_the_relay_finder) {
+TEST(a_bare_tcp_connect_does_not_confirm_the_relay) {
+    // The bug this test exists for: a wrong host (a router's web admin) accepts
+    // TCP on the relay's port and returns 404. open() and isOpen() must NOT
+    // count that as "the relay is OK" — only relayReachable() (called by the
+    // uplink session after a 101) does. (Before this fix, g_relayOkAt was set
+    // on bare TCP connect and on isOpen(), so relayDown never went true and
+    // relay-find never ran: the "cameras never connect" trap.)
     resetWorld();
     WifiUplinkEnv env;
     std::string why;
-    TEST_ASSERT_EQ((int)g_relayOkAt, 0, "never, to begin with");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 0, "never confirmed, to begin with");
     g_now = 4000;
     env.open("h", 1, 1000, why);
-    TEST_ASSERT_EQ((int)g_relayOkAt, 4000, "a connection that was just made");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 0, "a bare TCP connect does NOT confirm the relay");
     g_now = 9000; g_recvResult = -1; g_recvErrno = EWOULDBLOCK;
     TEST_ASSERT(env.isOpen(), "still open");
-    TEST_ASSERT_EQ((int)g_relayOkAt, 9000, "and every look at it that finds it open moves the time on");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 0, "isOpen() does NOT confirm either: the uplink session calls it during the handshake, right after a 404");
     g_now = 9500; g_recvResult = 1;
     TEST_ASSERT(env.isOpen(), "data waiting");
-    TEST_ASSERT_EQ((int)g_relayOkAt, 9500, "likewise");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 0, "nor does data on the socket: a 404 body is not a confirmation");
     g_now = 20000; g_recvResult = 0;
     TEST_ASSERT(!env.isOpen(), "the relay closed it");
-    TEST_ASSERT_EQ((int)g_relayOkAt, 9500, "a closed connection does not count: the time stays where it was");
-    g_recvResult = -1; g_recvErrno = ECONNRESET;
-    TEST_ASSERT(!env.isOpen(), "broken");
-    TEST_ASSERT_EQ((int)g_relayOkAt, 9500, "nor does a broken one");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 0, "a closed connection does not confirm");
+    // relayReachable() is what confirms the relay (the uplink session calls it
+    // after a 101 Switching Protocols):
+    g_now = 21000;
+    env.relayReachable();
+    TEST_ASSERT(!g_relayHealth.isDown(g_now, 30000), "relayReachable() confirms the relay: not down");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 21000, "and remembers when");
 }
 
 TEST(a_failed_open_does_not_count_as_the_relay_being_there) {
@@ -849,7 +859,7 @@ TEST(a_failed_open_does_not_count_as_the_relay_being_there) {
     TEST_ASSERT(!env.open("192.168.4.9", 8080, 4000, why), "fails");
     g_dnsWorks = false;
     TEST_ASSERT(!env.open("relay.local", 8080, 4000, why), "fails");
-    TEST_ASSERT_EQ((int)g_relayOkAt, 0, "neither a refused connection nor a name that does not resolve");
+    TEST_ASSERT_EQ((int)g_relayHealth.lastConfirmedMs(), 0, "neither a refused connection nor a name that does not resolve");
 }
 
 TEST(once_wi_fi_is_up_the_task_also_looks_for_a_moved_relay_every_pass_and_never_without_a_network) {
@@ -1066,7 +1076,7 @@ int main() {
     RUN_TEST(open_resolves_the_host_connects_to_the_resolved_address_and_turns_nagle_off);
     RUN_TEST(a_dns_failure_is_told_apart_from_a_connect_failure);
     RUN_TEST(a_connect_failure_names_the_likely_causes_and_the_wifi_signal);
-    RUN_TEST(the_uplink_notes_the_time_it_was_last_known_open_for_the_relay_finder);
+    RUN_TEST(a_bare_tcp_connect_does_not_confirm_the_relay);
     RUN_TEST(a_failed_open_does_not_count_as_the_relay_being_there);
     RUN_TEST(once_wi_fi_is_up_the_task_also_looks_for_a_moved_relay_every_pass_and_never_without_a_network);
     RUN_TEST(is_open_is_false_when_the_client_says_it_is_not_connected);

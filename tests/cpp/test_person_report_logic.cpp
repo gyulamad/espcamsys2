@@ -775,6 +775,7 @@ TEST(session_explains_a_wrong_key) {
     TEST_ASSERT(s.state() == UplinkSession::State::Backoff && env.closeCalls == 1, "refused: closed, backing off");
     TEST_ASSERT(env.logged(Level::Warn, "refused the uplink (HTTP 401)") && env.logged(Level::Warn, "wrong key") && env.logged(Level::Warn, "camKey in the relay's config.js"), "a WARN with the relay's own reason and the fix");
     TEST_ASSERT(!env.logged(Level::Warn, "s3cret"), "the key itself is never logged");
+    TEST_ASSERT_EQ(env.reachable, 0, "a 401 refusal does NOT call relayReachable: the relay is not confirmed, so relay-find can still run if the address is wrong");
 }
 
 TEST(session_recognises_a_relay_that_predates_the_uplink) {
@@ -785,6 +786,7 @@ TEST(session_recognises_a_relay_that_predates_the_uplink) {
     env.peerClosed = true;
     s.step(true);
     TEST_ASSERT(env.logged(Level::Warn, "HTTP 404") && env.logged(Level::Warn, "older than this firmware") && env.logged(Level::Warn, "update and restart nodejs/camera-relay"), "an HTML 404 is explained as a too-old relay");
+    TEST_ASSERT_EQ(env.reachable, 0, "a 404 from a wrong host does NOT call relayReachable: the relay is not confirmed, so relay-find runs and discovers the real relay");
 }
 
 TEST(session_recognises_a_relay_that_just_hangs_up) {

@@ -789,9 +789,10 @@ void settingsSyncTick() {
 #define RELAY_FIND_INFO(...) RLOG_INFO(__VA_ARGS__)
 #define RELAY_FIND_WARN(...) RLOG_WARN(__VA_ARGS__)
 #include "relay_find.h"
+#include "relay_health.h"
 
 static const uint32_t RELAY_DOWN_MS = 90000;   // a resting detector asks only every ~30 s
-volatile uint32_t g_relayOkAt = 0;   // millis() when the uplink was last open (set by WifiUplinkEnv)
+RelayHealth g_relayHealth;   // when the relay was last CONFIRMED alive (set by WifiUplinkEnv, read by relayFindTick)
 static PreferencesStore* g_findStore = nullptr;
 static RelayFind* g_find = nullptr;
 
@@ -800,7 +801,7 @@ void relayFindTick() {
     g_findStore = new PreferencesStore();
     g_find = new RelayFind(*g_findStore);
   }
-  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, (uint32_t)(millis() - g_relayOkAt) > RELAY_DOWN_MS)) restartBoard();
+  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), RELAY_DOWN_MS))) restartBoard();
 }
 // ── end of finding the relay again ──────────────────────────────────────
 
@@ -981,7 +982,10 @@ public:
         }
 
         client_.setNoDelay(true);   // small messages, several a second: don't hold them back to fill a packet
-        g_relayOkAt = millis();
+        // g_relayHealth is NOT confirmed here: a bare TCP connect is no proof the peer is the relay.
+        // relayReachable() (called by the uplink session after a 101) and the poll (HTTP 200) confirm
+        // the relay. Setting it on connect alone meant a wrong host that accepted TCP on :8080 (a
+        // router returning 404) kept relayDown from ever going true, so relay-find never ran.
 
         return true;
     }
@@ -1009,7 +1013,6 @@ public:
 
         if (n > 0)
         {
-            g_relayOkAt = millis();
             return true;    // something is waiting to be read: still open (as connected() counts it)
         }
 
@@ -1022,7 +1025,9 @@ public:
 
         if (open)
         {
-            g_relayOkAt = millis();
+            // not confirmed here either: the uplink session calls isOpen() during the
+            // handshake (right after receiving a 404), and a wrong host that keeps the
+            // connection open must not reset the relay-down timer.
         }
 
         return open;
@@ -1164,6 +1169,7 @@ public:
 
     void relayReachable() override
     {
+        g_relayHealth.confirm(millis());   // the uplink handshake succeeded (101): the relay is confirmed
         remoteLogRelayReachable();
     }
 
@@ -1260,7 +1266,7 @@ void pollViewSwitch(person_report::ViewGate &gate) {
     gate.onPollFailed(now);
     return;
   }
-  g_relayOkAt = now;   // the relay answered: it is there, even though no picture stream is open
+  g_relayHealth.confirm(now);   // the relay answered: it is there, even though no picture stream is open
 }
 
 void networkTask(void *)

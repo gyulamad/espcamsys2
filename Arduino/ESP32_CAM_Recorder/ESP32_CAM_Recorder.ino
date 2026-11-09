@@ -23,6 +23,7 @@
 // only reads the hardware and calls into it.
 #include "logic.h"
 #include "remote_log.h"   // what the camera reports to the relay's log (see the glue block below)
+#include "relay_health.h"   // when the relay was last confirmed alive (RelayHealth, used below and by relayFindTick)
 #include <esp_system.h>   // esp_reset_reason()
 using namespace esp32cam_logic;
 using esp32cam_settings::RecorderSettings;
@@ -37,7 +38,8 @@ WiFiClient pushClient;   // ONE persistent connection to the relay's raw push
                          // frames are written straight to it with no
                          // per-frame HTTP request/response round trip
 bool pushAuthed = false;
-volatile uint32_t g_relayOkAt = 0;   // millis() when the push connection was last up (read by relayFindTick())
+RelayHealth g_relayHealth;            // when the relay was last CONFIRMED alive (set by ensurePushConnection, read by relayFindTick)
+uint32_t pushConnectedAt = 0;             // millis() when the current push connection opened (see ensurePushConnection)
 
 // Whether the relay on the CURRENT push connection has announced that it
 // understands in-band alarm messages (see logic.h, RELAY_CAP_INBAND_ALARM).
@@ -381,7 +383,15 @@ size_t writePushBytes(const uint8_t *data, size_t len) {
 // the one-time auth line. Cheap to call every loop when already connected —
 // just checks the socket state, no reconnect attempt unless it's actually down.
 bool ensurePushConnection() {
-  if (pushClient.connected()) { g_relayOkAt = millis(); return true; }
+  if (pushClient.connected()) {
+    // Only count the relay as confirmed once this is really the relay, not a host
+    // that merely accepted TCP on the push port: either the relay announced its
+    // in-band alarm capability (a byte only the real relay sends), or the connection
+    // has been open for 10 s without being closed — longer than PUSH_WRITE_TIMEOUT_MS,
+    // so a wrong host that doesn't read push data stalls a frame write and is dropped.
+    if (relaySupportsInBandAlarm || (uint32_t)(millis() - pushConnectedAt) >= 10000) g_relayHealth.confirm(millis());
+    return true;
+  }
 
   pushAuthed = false;
   relaySupportsInBandAlarm = false; // capability is per connection: wait for this relay to announce it
@@ -389,11 +399,13 @@ bool ensurePushConnection() {
   if (!pushClient.connect(g_cfg.serverHost.c_str(), g_cfg.pushPort)) {
     return false;
   }
+  pushConnectedAt = millis();
   pushClient.setNoDelay(true);
   std::string authLine = buildAuthLine(g_cfg.cameraId, g_cfg.apiKey);
   pushClient.print(authLine.c_str());
   pushAuthed = true;
-  g_relayOkAt = millis();
+  // g_relayHealth is NOT confirmed here: a bare TCP connect is no proof.
+  // It is confirmed on the fast path above, once the connection is verified.
   RLOG_INFO("push connection to %s:%d established", g_cfg.serverHost.c_str(), g_cfg.pushPort);
   remoteLogRelayReachable(); // if remote logging had given up, the relay is evidently back
   return true;
@@ -840,7 +852,7 @@ void relayFindTick() {
     g_findStore = new PreferencesStore();
     g_find = new RelayFind(*g_findStore);
   }
-  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, (uint32_t)(millis() - g_relayOkAt) > RELAY_DOWN_MS)) restartBoard();
+  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), RELAY_DOWN_MS))) restartBoard();
 }
 // ── end of finding the relay again ──────────────────────────────────────
 
