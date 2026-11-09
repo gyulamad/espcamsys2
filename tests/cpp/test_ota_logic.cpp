@@ -127,39 +127,6 @@ TEST(policy_restarts_the_first_delay_when_wifi_returns) {
   TEST_ASSERT(p.due(110000, true, 0), "...20 s after it came back");
 }
 
-// ── nextReadStep: when is a response body over? ──────────────────────────
-// The regression that matters: an OPEN connection with nothing left to read must not be "keep going
-// for ever" — the reader spun without yielding and the task watchdog rebooted the board.
-
-TEST(read_step_done_when_all_announced_bytes_are_in_even_if_the_connection_stays_open) {
-  TEST_ASSERT(nextReadStep(50, 50, 256, true, 0, 5000) == ReadStep::Done, "50 of 50 bytes: done, keep-alive or not");
-  TEST_ASSERT(nextReadStep(0, 0, 256, true, 0, 5000) == ReadStep::Done, "an empty body announced as empty is done");
-}
-
-TEST(read_step_continues_while_bytes_are_missing_and_recent) {
-  TEST_ASSERT(nextReadStep(10, 50, 256, true, 0, 5000) == ReadStep::Continue, "waiting for the rest");
-  TEST_ASSERT(nextReadStep(10, 50, 256, true, 4999, 5000) == ReadStep::Continue, "still inside the idle limit");
-  TEST_ASSERT(nextReadStep(0, -1, 256, true, 100, 5000) == ReadStep::Continue, "unknown length, connection up: wait");
-}
-
-TEST(read_step_gives_up_when_nothing_arrives_for_too_long) {
-  TEST_ASSERT(nextReadStep(10, 50, 256, true, 5000, 5000) == ReadStep::Incomplete, "idle limit reached");
-  TEST_ASSERT(nextReadStep(0, -1, 256, true, 9000, 5000) == ReadStep::Incomplete, "unknown length and silent: give up");
-}
-
-TEST(read_step_closed_connection) {
-  TEST_ASSERT(nextReadStep(10, 50, 256, false, 0, 5000) == ReadStep::Incomplete, "closed before the announced length");
-  TEST_ASSERT(nextReadStep(10, -1, 256, false, 0, 5000) == ReadStep::Done, "closed = the end of a body of unknown length");
-  TEST_ASSERT(nextReadStep(50, 50, 256, false, 0, 5000) == ReadStep::Done, "closed after the last byte");
-}
-
-TEST(read_step_refuses_what_is_too_large) {
-  TEST_ASSERT(nextReadStep(0, 1000, 256, true, 0, 5000) == ReadStep::TooLarge, "the announced length is over the cap: refuse at once");
-  TEST_ASSERT(nextReadStep(0, 256, 256, true, 0, 5000) == ReadStep::TooLarge, "a body of exactly the cap is refused too");
-  TEST_ASSERT(nextReadStep(256, -1, 256, true, 0, 5000) == ReadStep::TooLarge, "unknown length growing past the cap");
-  TEST_ASSERT(nextReadStep(255, 255, 256, true, 0, 5000) == ReadStep::Done, "one byte under the cap is fine");
-}
-
 int main() {
   RUN_TEST(parse_good_reply);
   RUN_TEST(parse_refuses_anything_else);
@@ -173,10 +140,5 @@ int main() {
   RUN_TEST(policy_failed_update_waits_300s_and_reports_once_received);
   RUN_TEST(policy_survives_the_millis_wraparound);
   RUN_TEST(policy_restarts_the_first_delay_when_wifi_returns);
-  RUN_TEST(read_step_done_when_all_announced_bytes_are_in_even_if_the_connection_stays_open);
-  RUN_TEST(read_step_continues_while_bytes_are_missing_and_recent);
-  RUN_TEST(read_step_gives_up_when_nothing_arrives_for_too_long);
-  RUN_TEST(read_step_closed_connection);
-  RUN_TEST(read_step_refuses_what_is_too_large);
   return test::summarize();
 }

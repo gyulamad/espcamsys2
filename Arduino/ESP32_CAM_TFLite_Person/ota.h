@@ -61,16 +61,6 @@
 #define OTA_FIRMWARE_MAX_BYTES 2 * 1024 * 1024
 #endif
 
-// How long a response may stay silent before it is given up on. The reader yields while it waits (see
-// readBody), so this is not about the task watchdog; it is that a relay that goes quiet must not hold the
-// network task for ever. The version reply is a few dozen bytes, the image is megabytes over Wi-Fi.
-#ifndef OTA_VERSION_REPLY_IDLE_MS
-#define OTA_VERSION_REPLY_IDLE_MS 5000
-#endif
-#ifndef OTA_DOWNLOAD_IDLE_MS
-#define OTA_DOWNLOAD_IDLE_MS 15000
-#endif
-
 // Where this reports to. The recorder maps these to its remote log (so the relay's log file
 // shows them); the default is the serial port.
 #ifndef OTA_INFO
@@ -80,53 +70,31 @@
 #define OTA_WARN(...) Serial.printf("[ota] WARN " __VA_ARGS__), Serial.println()
 #endif
 
-// The outcome of readBody(): why it stopped, and how many bytes the sink took.
-struct BodyRead {
-  esp32cam_ota::ReadStep step;
-  size_t bytes;
-};
-
-// Reads the rest of a response body from `http` into `sink` (a callable taking (const uint8_t*, size_t) and
-// returning how many of those bytes it took), until esp32cam_ota::nextReadStep() says it is over: all the
-// announced bytes read, the connection closed, more than maxBytes, or nothing arriving for idleLimitMs.
+// Reads at most maxBytes bytes from http into out. Returns true on success
+// (the body was fully read AND within the bound); false if the body grew past
+// the bound (a hostile or buggy relay response) or the read failed.
 //
-// Two rules this loop exists to keep (a loop that broke either rebooted the board every ~50 s):
-//  * it ALWAYS yields with delay(1) — Arduino's yield() / delay(0) never let the idle task run, and the task
-//    watchdog reboots a board whose idle task is starved for 5 s. A connection that stays open after the last
-//    byte (HTTP keep-alive) is the normal case, not a reason to poll faster.
-//  * it ALWAYS ends: "connected() and nothing to read" is not "keep going", it is a timeout in the making.
-//
-// (review ARD-008) The body is read through the stream with an explicit cap instead of
-// HTTPClient::getString(), which is not bounded by Content-Length and would let a hostile or buggy relay
-// exhaust the camera's heap.
-template <typename Sink>
-static BodyRead readBody(HTTPClient& http, size_t maxBytes, uint32_t idleLimitMs, Sink sink) {
-  using esp32cam_ota::ReadStep;
+// (review ARD-008) HTTPClient::getString() calls WiFiClient::readString(),
+// which appends to a String until either the connection closes or setTimeout()
+// elapses — it is NOT bounded by Content-Length and does NOT cap the
+// allocation. A relay (or MITM) returning Content-Length: 50000000 and a few
+// MB of payload would OOM the camera. Reading through the stream pointer with
+// an explicit cap is the fix.
+static bool readBounded(HTTPClient& http, std::string& out, size_t maxBytes) {
   WiFiClient* stream = http.getStreamPtr();
-  if (!stream) return BodyRead{ReadStep::Incomplete, 0};
-
-  const int expected = http.getSize();   // the Content-Length, -1 when the relay did not announce one
-  uint8_t buf[1024];
-  size_t have = 0;
-  uint32_t lastByteAt = millis();
-
-  for (;;) {
-    ReadStep step = esp32cam_ota::nextReadStep(have, expected, maxBytes, http.connected(),
-                                               (uint32_t)(millis() - lastByteAt), idleLimitMs);
-    if (step != ReadStep::Continue) return BodyRead{step, have};
-
-    int avail = stream->available();
-    if (avail > 0) {
-      size_t room = maxBytes - have;                       // nextReadStep() ended the loop if there were none
-      size_t want = (size_t)avail < sizeof(buf) ? (size_t)avail : sizeof(buf);
-      int n = stream->read(buf, want < room ? want : room);
-      if (n > 0) {
-        have += sink(buf, (size_t)n);
-        lastByteAt = millis();
-      }
+  if (!stream) return false;
+  out.clear();
+  out.reserve(64);
+  uint8_t buf[256];
+  while (http.connected() && out.size() < maxBytes) {
+    int n = stream->read(buf, sizeof(buf));
+    if (n <= 0) {
+      if (!http.connected()) break;
+      continue;
     }
-    delay(1);
+    out.append(reinterpret_cast<const char*>(buf), static_cast<size_t>(n));
   }
+  return out.size() < maxBytes;   // false = was truncated = refuse
 }
 
 class OtaUpdater {
@@ -151,20 +119,12 @@ class OtaUpdater {
     int code = http.GET();
     std::string body;
     if (code == 200) {
-      // (review ARD-008) bounded read: a hostile relay (or a MITM, since the OTA URL is plain HTTP — see
-      // ARD-001) returning a huge body would otherwise exhaust the camera's heap. parseVersionReply only
-      // looks at the first ~120 bytes anyway.
-      BodyRead read = readBody(http, OTA_VERSION_REPLY_MAX_BYTES, OTA_VERSION_REPLY_IDLE_MS,
-                               [&body](const uint8_t* data, size_t n) {
-                                 body.append(reinterpret_cast<const char*>(data), n);
-                                 return n;
-                               });
-      if (read.step != esp32cam_ota::ReadStep::Done) {
-        if (read.step == esp32cam_ota::ReadStep::TooLarge) {
-          OTA_WARN("the relay's firmware answer was too large (>%d bytes) - ignoring it", (int)OTA_VERSION_REPLY_MAX_BYTES);
-        } else {
-          OTA_WARN("the relay's firmware answer did not arrive completely - ignoring it");
-        }
+      // (review ARD-008) bounded read: a hostile relay (or a MITM, since the
+      // OTA URL is plain HTTP — see ARD-001) returning a huge body would
+      // otherwise exhaust the camera's heap. parseVersionReply only looks at
+      // the first ~120 bytes anyway.
+      if (!readBounded(http, body, OTA_VERSION_REPLY_MAX_BYTES)) {
+        OTA_WARN("the relay's firmware answer was too large (>%d bytes) - ignoring it", (int)OTA_VERSION_REPLY_MAX_BYTES);
         http.end();
         policy_.onResult(millis(), true, "", jitter);
         return;
@@ -248,12 +208,26 @@ class OtaUpdater {
       return err;
     }
     Update.setMD5(reply.md5.c_str());
-    // The image goes to flash through the same reader as the version reply (see readBody): it yields on every
-    // pass, so the Wi-Fi stack and the idle task run during the whole download — Update.writeStream() reads
-    // in a tight loop that never yields, and the task watchdog reboots the board mid-download — and it gives
-    // up when the relay goes quiet instead of waiting for ever.
-    size_t written = readBody(http, (size_t)OTA_FIRMWARE_MAX_BYTES + 1, OTA_DOWNLOAD_IDLE_MS,
-                              [](const uint8_t* data, size_t n) { return Update.write(data, n); }).bytes;
+    // Write the firmware in chunks with a yield between each, instead of
+    // Update.writeStream: writeStream reads in a tight loop that doesn't yield
+    // when data is flowing, which blocks the network task (CPU 0) for the whole
+    // download, starves IDLE0 and trips the task watchdog — rebooting the board
+    // mid-download (and into an infinite reboot loop when the OTA tick retries on
+    // the next boot). delay(1) feeds IDLE0 and the WiFi stack between chunks.
+    // (Same class of fix as 0015's yield in writePushBytes.)
+    size_t written = 0;
+    if (WiFiClient *stream = http.getStreamPtr()) {
+      uint8_t buf[1024];
+      while (written < (size_t)len) {
+        int avail = stream->available();
+        if (avail <= 0) { if (!http.connected()) break; delay(1); continue; }
+        int toRead = avail > (int)sizeof(buf) ? (int)sizeof(buf) : avail;
+        int read = stream->read(buf, toRead);
+        if (read <= 0) { delay(1); continue; }
+        written += Update.write(buf, (size_t)read);
+        delay(1);
+      }
+    }
     http.end();
     if (written != (size_t)len) {
       Update.abort();
