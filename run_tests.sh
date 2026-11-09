@@ -822,6 +822,14 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
+# Auto-install playwright if missing, so the browser tests below run instead of SKIP.
+# Needs both the npm package (in tests/dom/) and the chromium browser binary.
+if command -v node >/dev/null 2>&1 && ! (cd "$ROOT_DIR/tests/dom" && node -e "require('playwright')" 2>/dev/null); then
+    echo "(playwright not found — installing for the browser tests: npm install + chromium download)"
+    (cd "$ROOT_DIR/tests/dom" && npm install playwright >/dev/null 2>&1 && ./node_modules/.bin/playwright install chromium >/dev/null 2>&1) \
+        || echo "(playwright install failed — the browser tests will SKIP)"
+fi
+
 heading "Browser (the icon chooser bubble of the settings pages, in a real Chromium) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"

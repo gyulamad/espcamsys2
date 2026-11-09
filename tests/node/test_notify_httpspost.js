@@ -8,6 +8,14 @@ const { postRequest } = require('../../nodejs/camera-relay/lib/notify/httpspost'
 function serve(handler) {
   return new Promise((resolve) => {
     const server = http.createServer(handler);
+    // Polyfill: Node 17 doesn't have server.closeAllConnections() (added in 18.2).
+    // Track sockets so the slow server (that never answers) can be cleaned up on
+    // any Node version — without this the test process hangs after the timeout test.
+    const sockets = new Set();
+    server.on('connection', (socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+    if (typeof server.closeAllConnections !== 'function') {
+      server.closeAllConnections = () => { sockets.forEach((s) => s.destroy()); };
+    }
     server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
   });
 }

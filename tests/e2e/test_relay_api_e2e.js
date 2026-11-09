@@ -200,6 +200,9 @@ const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('
     // ── 3. listing, downloading and deleting recordings ───────────────
     const dir = path.join(RECORDINGS_DIR, cam);
     fs.mkdirSync(dir, { recursive: true });
+    // Clean clips left from a previous run (or from this run's recording cycle above),
+    // so the listing below sees exactly the three we create — not a leftover.
+    for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
     const clipA = `${cam}_0.mp4`, clipB = `${cam}_1.mp4`, clipC = `${cam}_2.mp4`;
     const bytesA = Buffer.from('pretend this is an mp4 (A)');
     fs.writeFileSync(path.join(dir, clipA), bytesA);
