@@ -200,9 +200,16 @@ const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('
     // ── 3. listing, downloading and deleting recordings ───────────────
     const dir = path.join(RECORDINGS_DIR, cam);
     fs.mkdirSync(dir, { recursive: true });
-    // Clean clips left from a previous run (or from this run's recording cycle above),
-    // so the listing below sees exactly the three we create — not a leftover.
-    for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
+    // Wait for the recording's encoding to finish (so its clip and temp dir are
+    // fully present, not written mid-test), then clean everything left from previous
+    // runs and this run's recording cycle — so the listing below sees exactly the
+    // three we create. fs.rmSync (not unlinkSync) because the relay leaves .tmp_/
+    // encoding directories here, and unlinkSync throws EISDIR on a directory.
+    await waitFor(async () => {
+        const st = await get(`/record/${cam}`);
+        return st.json && !st.json.encoding;
+    }, 10000);
+    for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
     const clipA = `${cam}_0.mp4`, clipB = `${cam}_1.mp4`, clipC = `${cam}_2.mp4`;
     const bytesA = Buffer.from('pretend this is an mp4 (A)');
     fs.writeFileSync(path.join(dir, clipA), bytesA);
