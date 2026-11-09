@@ -53,6 +53,51 @@ test('catalog: the things people put cameras on can be found by a plain word', (
   }
 });
 
+test('catalog: a goat — found first by "goat", and by what people call one or where it lives', () => {
+  assertEqual(flat(Picker.search(GROUPS, 'goat'))[0], '🐐', 'the goat is the first answer to "goat"');
+  for (const word of ['billy', 'nanny', 'livestock', 'pen']) {
+    assertTrue(flat(Picker.search(GROUPS, word)).includes('🐐'), `"${word}" should find 🐐`);
+  }
+  const farm = flat(Picker.search(GROUPS, 'farm'));
+  for (const icon of ['🐐', '🐏', '🐑', '🐄', '🐓', '🦙', '🌾']) assertTrue(farm.includes(icon), `"farm" should find ${icon}`);
+});
+
+test('catalog: more farm and wild animals, and the farm and garden things, can be found by a plain word', () => {
+  for (const [word, icon] of [['ram', '🐏'], ['llama', '🦙'], ['turkey', '🦃'], ['swan', '🦢'], ['wolf', '🐺'], ['bear', '🐻'], ['raccoon', '🦝'], ['bat', '🦇'], ['snake', '🐍'],
+    ['frog', '🐸'], ['orchard', '🍎'], ['greenhouse', '🌱'], ['eggs', '🥚'], ['bucket', '🪣'], ['well', '🚰'], ['barrel', '🛢️']]) {
+    assertTrue(flat(Picker.search(GROUPS, word)).includes(icon), `"${word}" should find ${icon}`);
+  }
+});
+
+test('catalog: the pieces of a short phrase — where a camera looks and which one it is — can be found by a plain word', () => {
+  for (const [word, icon] of [['left', '⬅️'], ['right', '➡️'], ['up', '⬆️'], ['down', '⬇️'], ['two', '2️⃣'], ['3', '3️⃣'], ['compass', '🧭'], ['spot', '📍']]) {
+    assertTrue(flat(Picker.search(GROUPS, word)).includes(icon), `"${word}" should find ${icon}`);
+  }
+});
+
+test('catalog: every icon is a picture, not plain text (no typed digit or letter in the place of an emoji)', () => {
+  for (const group of GROUPS) {
+    for (const [icon] of group.icons) {
+      assertTrue([...icon].some((c) => c.codePointAt(0) > 0x7f), `${JSON.stringify(icon)} is only ASCII`);
+    }
+  }
+});
+
+test('catalog: every emoji is old enough for an older phone (Unicode 13, 2020, or earlier: nothing from the 2021+ additions)', () => {
+  // The ranges of the code points added to Unicode (and so to emoji) AFTER version 13: a phone that is a few years
+  // old draws them as an empty box. Only the planes with the newest additions are listed (the older ones are all
+  // fine): 1FAB7-1FABF, 1FAC3-1FACF, 1FAD7-1FADF, 1FAE0-1FAFF, 1F6DC-1F6DF, 1F7F0, 1FA75-1FA77, 1FA87-1FA8F, 1FAA9-1FAAF.
+  const tooNew = [[0x1fab7, 0x1fabf], [0x1fac3, 0x1facf], [0x1fad7, 0x1fadf], [0x1fae0, 0x1faff], [0x1f6dc, 0x1f6df], [0x1f7f0, 0x1f7f0], [0x1fa75, 0x1fa77], [0x1fa87, 0x1fa8f], [0x1faa9, 0x1faaf]];
+  for (const group of GROUPS) {
+    for (const [icon] of group.icons) {
+      for (const c of icon) {
+        const cp = c.codePointAt(0);
+        assertTrue(!tooNew.some(([lo, hi]) => cp >= lo && cp <= hi), `${icon} (U+${cp.toString(16).toUpperCase()}) is newer than Unicode 13`);
+      }
+    }
+  }
+});
+
 // ── terms / search ───────────────────────────────────────────────────
 
 test('terms: lower case, split at any spaces, nothing empty; no text is no terms', () => {
