@@ -4,5 +4,8 @@
   "description": "Runs the real dashboard page in jsdom (tests/dom/test_index_dom.js). The only dependency of the test suite; the tests skip themselves if it is not installed: cd tests/dom && npm install. Needs Node 16 or newer.",
   "devDependencies": {
     "jsdom": "^22.1.0"
+  },
+  "dependencies": {
+    "playwright": "^1.65.0"
   }
 }
