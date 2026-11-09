@@ -208,7 +208,26 @@ class OtaUpdater {
       return err;
     }
     Update.setMD5(reply.md5.c_str());
-    size_t written = Update.writeStream(*http.getStreamPtr());
+    // Write the firmware in chunks with a yield between each, instead of
+    // Update.writeStream: writeStream reads in a tight loop that doesn't yield
+    // when data is flowing, which blocks the network task (CPU 0) for the whole
+    // download, starves IDLE0 and trips the task watchdog — rebooting the board
+    // mid-download (and into an infinite reboot loop when the OTA tick retries on
+    // the next boot). delay(1) feeds IDLE0 and the WiFi stack between chunks.
+    // (Same class of fix as 0015's yield in writePushBytes.)
+    size_t written = 0;
+    if (WiFiClient *stream = http.getStreamPtr()) {
+      uint8_t buf[1024];
+      while (written < (size_t)len) {
+        int avail = stream->available();
+        if (avail <= 0) { if (!http.connected()) break; delay(1); continue; }
+        int toRead = avail > (int)sizeof(buf) ? (int)sizeof(buf) : avail;
+        int read = stream->read(buf, toRead);
+        if (read <= 0) { delay(1); continue; }
+        written += Update.write(buf, (size_t)read);
+        delay(1);
+      }
+    }
     http.end();
     if (written != (size_t)len) {
       Update.abort();

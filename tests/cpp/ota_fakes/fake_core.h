@@ -166,6 +166,7 @@ class WiFiClient : public Stream {
     bytes.erase(0, n);
     return (int)n;
   }
+  int available() { return (int)bytes.size(); }
 };
 
 class HTTPClient {
@@ -230,6 +231,12 @@ class UpdateClass {
   size_t writeStream(Stream& s) {
     size_t n = fake::g().shortWrite ? s.bytes.size() / 2 : s.bytes.size();
     fake::g().bytesFlashed = n;
+    return n;
+  }
+  size_t write(const uint8_t* buf, size_t len) { (void)buf;
+    size_t n = fake::g().shortWrite ? len / 2 : len;
+    if (fake::g().shortWrite) fake::g().shortWrite = false;   // only the first chunk is short
+    fake::g().bytesFlashed += n;
     return n;
   }
   bool end(bool) {
