@@ -474,10 +474,17 @@
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
           ...(f.scan ? [h('span', { className: 'files-scan' + (f.scan.state === 'error' ? ' error' : ''), textContent: scanLabel(f.scan) })] : []),
-          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => playRecording(f.cam, f.filename) }),
-          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: downloadUrl(f.cam, f.filename), onclick: () => { hooks.holdForDownload(); markSeen(f.cam, f.filename); } }),
-          h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteOne(f.cam, f.filename) })),
+          actions(
+            h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => playRecording(f.cam, f.filename) }),
+            h('a', { className: 'cam-btn', textContent: '⬇ GET', href: downloadUrl(f.cam, f.filename), onclick: () => { hooks.holdForDownload(); markSeen(f.cam, f.filename); } }),
+            h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteOne(f.cam, f.filename) }))),
       ];
+    }
+
+    // The buttons of one row in ONE box, so the stylesheet can move them as a group: at the row's right end on a
+    // wide screen, on a line of their own, floated right, on a small one (see recordingsListStyle in lib/Layout.php).
+    function actions(...buttons) {
+      return h('div', { className: 'files-actions' }, ...buttons);
     }
 
     // One row of the archive: where it is from, its name and size, and what can be done with it.
@@ -488,9 +495,10 @@
           ...(label === null ? [] : [h('span', { className: 'files-cam', textContent: label })]),
           h('span', { className: 'files-name', textContent: f.filename }),
           h('span', { className: 'files-size', textContent: formatBytes(f.sizeBytes) }),
-          h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => openVideo(`${ARCHIVE_ROW_ID}/${f.cam}/${f.filename}`, archivePlayUrl(f.cam, f.filename), f.filename) }),
-          h('a', { className: 'cam-btn', textContent: '⬇ GET', href: archiveDownloadUrl(f.cam, f.filename), onclick: () => hooks.holdForDownload() }),
-          h('button', { className: 'cam-btn', textContent: '♻ RESTORE', title: 'Put this recording back into the list', onclick: () => restoreOne(f.cam, f.filename) })),
+          actions(
+            h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => openVideo(`${ARCHIVE_ROW_ID}/${f.cam}/${f.filename}`, archivePlayUrl(f.cam, f.filename), f.filename) }),
+            h('a', { className: 'cam-btn', textContent: '⬇ GET', href: archiveDownloadUrl(f.cam, f.filename), onclick: () => hooks.holdForDownload() }),
+            h('button', { className: 'cam-btn', textContent: '♻ RESTORE', title: 'Put this recording back into the list', onclick: () => restoreOne(f.cam, f.filename) }))),
       ];
     }
 

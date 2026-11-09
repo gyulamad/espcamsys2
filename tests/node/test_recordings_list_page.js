@@ -150,6 +150,11 @@ async function main() {
     check('the header counts the clips', panel.querySelector('.files-panel-header').text().startsWith('4 recordings'));
     check('every row has PLAY, GET, DEL buttons as a camera\'s own panel does',
       rows(panel).every((r) => same(r.querySelectorAll('.cam-btn').map((b) => b.text()), ['▶ PLAY', '⬇ GET', '🗑 DEL'])));
+    check('a row\'s three buttons are in ONE actions box, last in the row, so the stylesheet can float them right as a group',
+      rows(panel).every((r) => {
+        const boxes = r.querySelectorAll('.files-actions');
+        return boxes.length === 1 && boxes[0].querySelectorAll('.cam-btn').length === 3 && r.querySelectorAll('.cam-btn').length === 3;
+      }));
     check('only the clips nobody has seen are marked unseen', same(rows(panel).map((r) => r.classes().includes('unseen')), [false, true, true, false]));
     check('the bottom buttons are the same as a camera\'s own panel',
       same(panel.querySelector('.files-panel-footer').querySelectorAll('.cam-btn').map((b) => b.text()),
@@ -295,6 +300,8 @@ async function main() {
     check('…each archived row names its camera and shows its size', same(inArchive(panel, '.files-cam').map((e) => e.text()), ['🚗 Drive', '🚪 Front', '🚪 Front']) && same(inArchive(panel, '.files-size').map((e) => e.text()), ['3.0 MB', '5 B', '2.0 KB']));
     check('…each archived row can be played, downloaded and restored — and not deleted one by one',
       inArchive(panel, '.files-row').every((r) => same(r.querySelectorAll('.cam-btn').map((b) => b.text()), ['▶ PLAY', '⬇ GET', '♻ RESTORE'])));
+    check('…and their buttons are in an actions box too, laid out like the list\'s own',
+      inArchive(panel, '.files-row').every((r) => r.querySelectorAll('.files-actions').length === 1 && r.querySelectorAll('.files-actions')[0].querySelectorAll('.cam-btn').length === 3));
     check('…the title says how many', panel.querySelector('.files-archive-title').text() === 'Archive: 3 recordings that the person check sorted out');
     check('…the normal list is still there and the button now hides the archive', same(listNames(panel), [D, B, C, A]) && browseBtn(doc).text() === '📂 HIDE ARCHIVE');
     check('…GET points at archiveDownload (never at the recordings)', panel.querySelector('.files-archive').descendants().filter((e) => e.tagName === 'A').every((a) => a.href.includes('archiveDownload=') && !a.href.includes('&download=')));

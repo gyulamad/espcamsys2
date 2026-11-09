@@ -112,4 +112,46 @@ test('a camera name longer than its cell is cut with an ellipsis, not wrapped or
   assertEqual(declaration(body, 'white-space'), 'nowrap');
 });
 
+// ── the row's buttons on a small screen (the layout itself is tried in a browser: tests/dom/test_files_list_layout_browser.js) ──
+
+// The rules of the list's small-screen block, as { selector: body }.
+function smallScreenRules() {
+  const block = /@media \(max-width: 700px\) \{([\s\S]*?)\n  \}/.exec(read('lib/Layout.php'));
+  assertTrue(block, 'no @media (max-width: 700px) block in the list style');
+  const css = block[1].replace(/\/\*[\s\S]*?\*\//g, '');   // a comment after one rule must not become the start of the next selector
+  return Object.fromEntries([...css.matchAll(/([^{}\n][^{}]*?)\s*\{([^}]*)\}/g)].map((m) => [m[1].trim(), m[2]]));
+}
+
+test('the row\'s buttons are one box: a flex line that sits at the right end and never shrinks', () => {
+  const body = ruleBody('.files-actions');
+  assertEqual(declaration(body, 'display'), 'flex');
+  assertEqual(declaration(body, 'margin-left'), 'auto');
+  assertEqual(declaration(body, 'flex-shrink'), '0');
+});
+
+test('small screen: the row wraps and its buttons get a line of their own, floated right', () => {
+  const rules = smallScreenRules();
+  assertEqual(declaration(rules['.files-row'], 'flex-wrap'), 'wrap');
+  assertEqual(declaration(rules['.files-actions'], 'flex'), '0 0 100%');
+  assertEqual(declaration(rules['.files-actions'], 'justify-content'), 'flex-end');
+});
+
+test('small screen: the file name may use several lines and is not squeezed below a readable width', () => {
+  const body = smallScreenRules()['.files-name'];
+  assertEqual(declaration(body, 'white-space'), 'normal');
+  assertTrue(/^\d+ch$/.test(declaration(body, 'min-width')), `min-width: ${declaration(body, 'min-width')}`);
+});
+
+test('small screen: the size stays at the right and the panel header wraps instead of running off the screen', () => {
+  const rules = smallScreenRules();
+  assertEqual(declaration(rules['.files-size'], 'margin-left'), 'auto');
+  assertEqual(declaration(rules['.files-panel-header'], 'flex-wrap'), 'wrap');
+});
+
+test('the small-screen block comes after the base rules it overrides (the cascade is by order)', () => {
+  const css = read('lib/Layout.php');
+  const at = (s) => css.indexOf(s);
+  assertTrue(at('@media (max-width: 700px) {') > Math.max(at('.files-row {'), at('.files-name {'), at('.files-size {'), at('.files-actions {'), at('.files-panel-header {')));
+});
+
 summarize();

@@ -465,6 +465,9 @@ fi
 #     and X-Actor to the relay, cap seconds, and leave an audit line; the old settings.php POST is gone.
 #   - tests/dom/test_nav_bar_browser.js: the navigation bar and the dashboard's grid / list switch in a real
 #     Chromium (LOG OUT at the right end, list = one column, remembered, ?layout= wins, phone width).
+#   - tests/dom/test_files_list_layout_browser.js: the footage list's rows in a real Chromium: on a phone the buttons
+#     (PLAY / GET / DEL, RESTORE in the archive) are on a line of their own, floated right, at the same place in
+#     every row, and nothing runs off the screen; on a wide screen they stay at the end of the name's line.
 #   - tests/e2e/test_dashboard_logout_e2e.js: the LOG OUT button (real php -S): on every page's navigation bar as a
 #     plain POST form; logout.php answers a logged-in same-origin POST with 401 + the login's own realm and
 #     a "logged out" page; a GET or a cross-site POST is refused and never prompts; one audit line per real
@@ -855,6 +858,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
     run_node_e2e "$ROOT_DIR/tests/dom/test_nav_bar_browser.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "Browser (footage list layout on a phone and on a wide screen) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
+    run_node_e2e "$ROOT_DIR/tests/dom/test_files_list_layout_browser.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

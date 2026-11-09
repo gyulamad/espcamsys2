@@ -69,6 +69,20 @@ class CamLayout
   /* Footage nobody has played or downloaded yet is bold and bright. */
   .files-row.unseen .files-name, .files-row.unseen .files-size { color: var(--text); font-weight: 700; }
   .files-select { flex-shrink: 0; margin: 0; cursor: pointer; accent-color: var(--accent2); }
+  /* A row's buttons (PLAY / GET / DEL) travel as one box: at the right end of the line on a wide screen ... */
+  .files-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: auto; }
+  /* ... and on a small screen, where one line cannot hold a name, a size and three buttons (the name was squeezed
+     to nothing and the buttons ran off the edge, starting at a different place in every row), the row wraps:
+     the name may use several lines and the buttons get a line of their own, floated right, the same in every row. */
+  @media (max-width: 700px) {
+    .files-panel-header { flex-wrap: wrap; row-gap: 6px; }   /* its four buttons (with an archive) do not fit one line of a 320 px screen */
+    .files-row { flex-wrap: wrap; row-gap: 6px; }
+    .files-row + .files-row { border-top: 1px solid var(--border); padding-top: 8px; }   /* with two lines each, the rows need a divider */
+    .files-name { flex: 1 1 14ch; min-width: 14ch; white-space: normal; overflow-wrap: anywhere; }
+    .files-size { margin-left: auto; }   /* stays at the right even when it wraps onto a line of its own (a row with a person's picture) */
+    .files-scan { max-width: 100%; }
+    .files-actions { flex: 0 0 100%; justify-content: flex-end; margin-left: 0; }
+  }
   /* Bulk actions for the ticked footage sit at the bottom of the list. */
   .files-panel-footer {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
