@@ -906,10 +906,11 @@ class CamLogic
     // relay's. Only plain values are accepted (no arrays or objects).
     //   -> ['ok' => true, 'dashboard' => [...], 'relay' => [...]] | ['ok' => false, 'error' => ...]
     // The relay settings the dashboard is allowed to change (review F-09). An ALLOW-list, so a setting the
-    // relay gains later stays out of reach until it is added here on purpose. Numbers, ports and keys only.
+    // relay gains later stays out of reach until it is added here on purpose. Numbers, ports and keys only
+    // (personScanConfidence is a decimal: the relay checks its range).
     const RELAY_SETTING_KEYS = [
         'alarmRecordSeconds', 'minFreeStorageMB', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort',
-        'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles',
+        'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles', 'personScanConfidence',
     ];
 
     // Free-text FILE and FOLDER paths on the Pi. Whoever can save settings here must not be able to point

@@ -18,9 +18,13 @@
 // No fs, no Express: server.js does the I/O and passes plain values in and out, so
 // all of this is unit tested with plain `node` — see tests/node/test_sysconfig.js.
 
+const personscan = require('./personscan');
+
 const MIB = 1024 * 1024;
 
-// One entry per setting. `type`: int | string | secret.
+// One entry per setting. `type`: int | float | string | secret.
+//   config   where config.js keeps it when that is not a top-level key of the same name (a path into it)
+//   minExclusive  a float's min is not itself allowed (0 < c <= 1)
 //   env      the environment variable that overrides it (or null)
 //   group    the section of the settings page
 //   restart  does a change need a relay restart to take effect
@@ -34,6 +38,9 @@ const FIELDS = [
     label: 'Pre-roll (seconds)', help: 'Footage from BEFORE the trigger that every recording starts with. 0 switches it off.' },
   { key: 'preRollMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 8 * MIB, env: 'PREROLL_MAX_BYTES', group: 'Recording', restart: true,
     label: 'Pre-roll RAM cap per camera (bytes)', help: 'The buffer drops its oldest frames first when it reaches this size. Default 8 MiB = 8388608.' },
+
+  { key: 'personScanConfidence', type: 'float', min: personscan.CONFIDENCE.min, max: personscan.CONFIDENCE.max, minExclusive: true, step: 0.05, default: personscan.CONFIDENCE.default, config: ['personScan', 'confidence'], env: null, group: 'Person check', restart: false,
+    label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check is switched on (personScan.enabled in config.js). Applies to the next clip checked — no restart.' },
 
   { key: 'port', type: 'int', min: 1, max: 65535, default: 8080, env: 'PORT', group: 'Network', restart: true,
     label: 'HTTP port', help: 'The relay\'s HTTP port (/stream, /snapshot, /status ...). The dashboard\'s relay address is updated to match when you change it here.' },
@@ -69,7 +76,18 @@ const OVERRIDE_KEYS = FIELDS.filter((f) => f.key !== 'alarmRecordSeconds').map((
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
 // Checks ONE value. -> { value } or { error }
+// A decimal like 0.4 or .55 (not 1e-1, 0x1, 0,5), as text or a number, inside the field's range. -> { value } or { error }
+const DECIMAL = /^\s*(\d+(\.\d*)?|\.\d+)\s*$/;
+function checkFloat(field, raw) {
+  const fail = { error: `${field.key} must be a number ${field.minExclusive ? 'above' : 'from'} ${field.min} and at most ${field.max}` };
+  const n = typeof raw === 'number' ? raw : (typeof raw === 'string' && raw.length <= 32 && DECIMAL.test(raw) ? Number(raw) : NaN);
+  if (!Number.isFinite(n)) return fail;
+  const aboveMin = field.minExclusive ? n > field.min : n >= field.min;
+  return aboveMin && n <= field.max ? { value: n } : fail;
+}
+
 function checkValue(field, raw) {
+  if (field.type === 'float') return checkFloat(field, raw);
   if (field.type === 'int') {
     const s = typeof raw === 'number' ? String(raw) : raw;
     if (typeof s !== 'string' || !/^\s*-?\d+\s*$/.test(s)) return { error: `${field.key} must be a whole number between ${field.min} and ${field.max}` };
@@ -149,8 +167,23 @@ function parseOverrides(text) {
   return { overrides, warnings };
 }
 
+// config.js's value for a field: its own top-level key, or (for a setting that config.js nests) the path in `config`.
+function configValue(field, base) {
+  if (!field.config) return base[field.key];
+  return field.config.reduce((v, k) => (v !== null && typeof v === 'object' ? v[k] : undefined), base);
+}
+
+// config.js with the saved settings laid over it. A setting that config.js nests (personScanConfidence ->
+// personScan.confidence) is put where the code that reads config.js looks for it; `base` itself is not changed.
 function mergeConfig(base, overrides) {
-  return { ...base, ...overrides };
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    const f = BY_KEY[key];
+    if (!f || !f.config) { merged[key] = value; continue; }
+    const [block, leaf] = f.config;
+    merged[block] = { ...(merged[block] !== null && typeof merged[block] === 'object' ? merged[block] : {}), [leaf]: value };
+  }
+  return merged;
 }
 
 // The value a field has right now and where it comes from.
@@ -158,14 +191,15 @@ function effective(field, base, overrides, env) {
   const envName = field.env;
   if (envName && env[envName] !== undefined) return { value: env[envName], source: 'environment' };
   if (overrides[field.key] !== undefined) return { value: overrides[field.key], source: 'settings' };
-  if (base[field.key] !== undefined && base[field.key] !== null && base[field.key] !== '') return { value: base[field.key], source: 'config.js' };
+  const fromConfig = configValue(field, base);
+  if (fromConfig !== undefined && fromConfig !== null && fromConfig !== '') return { value: fromConfig, source: 'config.js' };
   return { value: field.default, source: 'default' };
 }
 
-// The value an int setting has right now, checked like a saved one. A value that is no longer valid
-// (config.js edited by hand, an environment variable with text in it) falls back to the default, so a
+// The value a number setting (int or float) has right now, checked like a saved one. A value that is no longer
+// valid (config.js edited by hand, an environment variable with text in it) falls back to the default, so a
 // bad value can never break the code that reads it.   -> number
-function currentInt(key, { base, overrides, env }) {
+function currentNumber(key, { base, overrides, env }) {
   const f = BY_KEY[key];
   const r = checkValue(f, effective(f, base, overrides, env).value);
   return r.error ? f.default : r.value;
@@ -185,7 +219,8 @@ function buildView({ base, overrides, alarmRecordSeconds, env }) {
       out.min = f.min; out.max = f.max; out.value = alarmRecordSeconds; out.source = 'settings';
     } else {
       const e = effective(f, base, overrides, env);
-      out.min = f.min; out.max = f.max; out.value = f.type === 'int' ? Number(e.value) : String(e.value); out.source = e.source;
+      out.min = f.min; out.max = f.max; out.value = f.type === 'int' || f.type === 'float' ? Number(e.value) : String(e.value); out.source = e.source;
+      if (f.type === 'float') { out.step = f.step; out.minExclusive = Boolean(f.minExclusive); }
     }
     out.envOverride = Boolean(f.env && env[f.env] !== undefined);
     if (out.envOverride) out.envName = f.env;
@@ -217,7 +252,7 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env }, values) {
     const r = checkValue(f, raw);
     if (r.error) return { error: r.error };
     const current = key === 'alarmRecordSeconds' ? alarmRecordSeconds : effective(f, base, overrides, env).value;
-    if (f.type !== 'secret' && String(current) === String(r.value)) continue; // unchanged
+    if (f.type === 'float' ? Number(current) === r.value : (f.type !== 'secret' && String(current) === String(r.value))) continue; // unchanged
     if (f.type === 'secret' && current === r.value) continue;
     let value = r.value;
     if (f.path) {
@@ -258,4 +293,4 @@ function isSupervised(env) {
 // restarts after a non-zero exit. (75 = EX_TEMPFAIL, "try again".)
 const RESTART_EXIT_CODE = 75;
 
-module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, currentInt, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };
+module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, currentNumber, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };

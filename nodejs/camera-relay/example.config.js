@@ -65,7 +65,8 @@ module.exports = {
   //   model: 'models/person.onnx', // relative to this folder
   //   script: 'tools/person_scan.py', // the detector, shipped with the relay
   //   python: 'python3',
-  //   confidence: 0.4,           // 0 < c <= 1; lower keeps more doubtful clips
+  //   confidence: 0.4,           // 0 < c <= 1; lower keeps more doubtful clips. Only the STARTING value:
+  //                              // the dashboard's SETTINGS page (Person check) saves a new one, which wins
   //   stride: 1,                 // analyse every Nth frame (raise to go faster on a slow Pi)
   //   timeoutSeconds: 900,
   // },

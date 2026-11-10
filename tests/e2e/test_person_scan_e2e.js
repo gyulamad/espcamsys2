@@ -10,6 +10,8 @@
 //   - a clip checked once is not checked again; "sort out all" only queues the unchecked ones
 //   - the list shows "processing" while the detector works; deleting a clip removes its thumbnail
 //   - the routes need the dashboard key; unsafe names are refused; a missing clip is 404
+//   - the sensitivity (personScanConfidence): config.js sets it, a save from the settings page applies to the next
+//     clip with no restart, an invalid one is refused, and the saved value wins over config.js after a restart
 //   - with action 'delete' a clip with nobody in it is removed for good
 //   - the archive (<camera>/no-person/): GET .../archive counts its clips, DELETE .../archive removes them for
 //     good — needs the right key, leaves the listed clips, other files, folders and links alone, and is not
@@ -168,6 +170,35 @@ const scanConfig = (extra) => ({ enabled: true, auto: false, action: 'move', mod
     await waitFor(async () => { const e = await entry('g_crash.mp4'); return e && e.scan && e.scan.state === 'error'; });
     check("…but a crashed check never deletes", exists('g_crash.mp4'));
     await stopRelay(relay);
+
+    // ── the sensitivity (personScanConfidence): set in the settings, applied to the next clip, kept over a restart ──
+    // The fake detector finds a clip "SCORE:x" to have a person when --confidence is at most x.
+    const SYS_FILE = path.join(tmp, 'sys.json');
+    const save = (body) => new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const q = nodeHttp.request(`http://127.0.0.1:${PORT}/system-settings`, { method: 'POST', headers: { 'X-Control-Key': CONTROL_KEY, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, (res) => {
+        const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => { let json = null; try { json = JSON.parse(Buffer.concat(c).toString()); } catch (e) { /* not JSON */ } resolve({ status: res.statusCode, json }); });
+      });
+      q.on('error', reject); q.end(data);
+    });
+    writeConfig(scanConfig({ confidence: 0.9 }));
+    relay = await startRelay();
+    clip('h_score.mp4', 'SCORE:0.5'); await scan('h_score.mp4');
+    check('sensitivity from config.js (0.9): a person scored 0.5 is not enough — the clip is sorted out', !!(await waitFor(async () => exists('no-person', 'h_score.mp4'))));
+    r = await save({ personScanConfidence: '0.3' });
+    check('a new sensitivity is saved without a restart', r.status === 200 && r.json.changed[0] === 'personScanConfidence' && r.json.restartRequired === false, JSON.stringify(r.json));
+    clip('i_score.mp4', 'SCORE:0.5'); await scan('i_score.mp4');
+    check('...and counts from the next clip on: the same 0.5 now IS a person, the clip stays', !!(await waitFor(async () => (await entry('i_score.mp4') || {}).person === true)) && exists('i_score.mp4'));
+    r = await save({ personScanConfidence: '1.5' });
+    check('an invalid sensitivity is refused (400) and the running one is kept', r.status === 400 && /personScanConfidence/.test(r.json.error));
+    clip('k_score.mp4', 'SCORE:0.2'); await scan('k_score.mp4');
+    check('...0.2 is still below 0.3: sorted out', !!(await waitFor(async () => exists('no-person', 'k_score.mp4'))));
+    await stopRelay(relay);
+    relay = await startRelay();
+    clip('j_score.mp4', 'SCORE:0.4'); await scan('j_score.mp4');
+    check('after a restart the SAVED sensitivity (0.3) wins over config.js (0.9)', !!(await waitFor(async () => (await entry('j_score.mp4') || {}).person === true)) && !/personScan\./.test(relay.output()), relay.output().slice(-300));
+    await stopRelay(relay);
+    fs.rmSync(SYS_FILE, { force: true });
 
     // ── the archive: counted and deleted for good ──
     writeConfig(scanConfig({}));

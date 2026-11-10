@@ -1263,7 +1263,7 @@ const diskDeps = {
 };
 
 async function readStorageView() {
-  const minFreeMB = sysconfig.currentInt('minFreeStorageMB', systemSettingsState());
+  const minFreeMB = sysconfig.currentNumber('minFreeStorageMB', systemSettingsState());
   const freeBytes = await diskspace.readFreeBytes(RECORDINGS_DIR, diskDeps);
   return diskspace.buildStorageView(freeBytes, minFreeMB);
 }
@@ -1345,6 +1345,9 @@ app.post('/system-settings', requireControlKey, express.json({ limit: '16kb' }),
   }
   settings = { ...settings, alarmRecordSeconds: r.alarmRecordSeconds };
   systemOverrides = r.overrides;
+  // The person check reads its sensitivity for every clip it judges, so a saved one counts from the next clip on
+  // (a check already running keeps the value it started with). Nothing to restart.
+  scanCfg.confidence = sysconfig.currentNumber('personScanConfidence', systemSettingsState());
   // Names only — values can be keys.
   relayLog('INFO', `system settings changed by ${actorOf(req)}: ${r.changed.join(', ')}${r.restartRequired ? ' (restart needed to apply)' : ''}`);
   return res.json({ ok: true, changed: r.changed, restartRequired: r.restartRequired });

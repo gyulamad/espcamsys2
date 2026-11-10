@@ -260,7 +260,7 @@ async function main() {
 
     // ── F-09: the dashboard must not be able to point the relay at files and folders ──
     const PATH_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile'];
-    const OK_KEYS = ['alarmRecordSeconds', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort', 'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles'];
+    const OK_KEYS = ['alarmRecordSeconds', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort', 'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles', 'personScanConfidence'];
     check('the settings page is not offered the file and folder paths (no logFile, no Folders group)', PATH_KEYS.every((k) => !field(d1.json, k)) && !d1.json.fields.some((f) => f.group === 'Folders'), d1.json.fields.map((f) => f.key).join(','));
     check('...but still gets every setting it may change', OK_KEYS.every((k) => field(d1.json, k)), d1.json.fields.map((f) => f.key).join(','));
     const relayDirect = (await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json;
@@ -294,6 +294,21 @@ async function main() {
     const before = relay.restarts;
     const a = await dash('POST', 'system-settings.php', { body: { values: { alarmRecordSeconds: 45 } } });
     check('the alarm length saves without restarting the relay', a.status === 200 && a.json.restart === 'not-needed' && relay.restarts === before, a.text);
+
+    // person detection sensitivity: a decimal, no restart, refused outside (0, 1]
+    const confView = async () => field((await dash('GET', 'system-settings.php')).json, 'personScanConfidence');
+    check('the sensitivity is on the settings page, with its limits and step', await (async () => { const f = await confView(); return !!f && f.type === 'float' && f.value === 0.4 && f.min === 0 && f.max === 1 && f.minExclusive === true && f.restart === false && f.group === 'Person check'; })());
+    const c1 = await dash('POST', 'system-settings.php', { body: { values: { personScanConfidence: '0.65' } } });
+    check('a new sensitivity saves with no restart', c1.status === 200 && c1.json.ok === true && c1.json.restart === 'not-needed' && relay.restarts === before, c1.text);
+    check('...and the page and the relay both show it', (await confView()).value === 0.65 && field((await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json, 'personScanConfidence').value === 0.65);
+    check('...it is stored as a number next to server.js', JSON.parse(fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8')).personScanConfidence === 0.65);
+    const jsonC = fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8');
+    for (const bad of ['0', '1.5', '-0.2', 'abc', '1e-1', '0,5', '']) {
+      const r = await dash('POST', 'system-settings.php', { body: { values: { personScanConfidence: bad } } });
+      check(`a sensitivity of ${JSON.stringify(bad)} is refused and nothing changes`, r.status === 400 && /personScanConfidence/.test(r.json.error) && fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8') === jsonC, r.text);
+    }
+    check('the same value again is "nothing changed"', (await dash('POST', 'system-settings.php', { body: { values: { personScanConfidence: '0.65' } } })).json.message === 'Nothing changed.');
+    check('without the control key the relay refuses a sensitivity', (await relayReq(RELAY_PORT, 'POST', '/system-settings', null, { personScanConfidence: 0.9 })).status === 401 && (await confView()).value === 0.65);
 
     // relay + dashboard in one save, with a restart
     const one = await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: 7, logKeepFiles: 3, auth_user: 'new-user', auth_pass: 'new-pass-0002' } } });

@@ -90,4 +90,11 @@ test('parseScanResult: reasons are readable and short', () => {
   assertTrue(!long.includes('\u0007'));
 });
 
+test('CONFIDENCE: the one definition of the sensitivity (default and limits), used by resolveScanConfig', () => {
+  assertEqual([ps.CONFIDENCE.default, ps.CONFIDENCE.min, ps.CONFIDENCE.max], [0.4, 0, 1]);
+  for (const n of [0.0001, 0.4, 1]) assertTrue(ps.isValidConfidence(n), String(n));
+  for (const n of [0, -1, 1.0001, NaN, Infinity, '0.5', null, undefined]) assertTrue(!ps.isValidConfidence(n), String(n));
+  for (const n of [0, 0.0001, 1, 1.01]) assertEqual(cfg({ confidence: n }).confidence, ps.isValidConfidence(n) ? n : ps.CONFIDENCE.default, String(n));
+});
+
 summarize();

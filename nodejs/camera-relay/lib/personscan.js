@@ -12,12 +12,18 @@ const NO_PERSON_DIR = 'no-person';
 const THUMB_SUFFIX = '.thumb.jpg';
 const MAX_REASON_LENGTH = 200;
 
+// The sensitivity of the person check: the score the detector must give a person for a clip to count as "has a
+// person". The ONE definition — the settings page (lib/sysconfig.js) and config.js's personScan.confidence both use it.
+// Lower = more sensitive: more doubtful clips are kept (a missed person costs more than a false alarm).
+const CONFIDENCE = Object.freeze({ default: 0.4, min: 0, max: 1 });   // min is exclusive: 0 < c <= 1
+const isValidConfidence = (n) => typeof n === 'number' && Number.isFinite(n) && n > CONFIDENCE.min && n <= CONFIDENCE.max;
+
 const DEFAULTS = Object.freeze({
   enabled: false,        // switched on once the model is installed (INSTALL.md, "Sorting out footage without a person")
   auto: true,            // scan every recording right after it is saved
   action: 'move',        // a clip without a person: 'move' it to <camera>/no-person/ (safe) or 'delete' it
   python: 'python3',
-  confidence: 0.4,       // 0 < c <= 1; lower keeps more doubtful clips (a missed person costs more than a false alarm)
+  confidence: CONFIDENCE.default,
   stride: 1,             // analyse every Nth frame
   timeoutSeconds: 900,
 });
@@ -58,7 +64,7 @@ function resolveScanConfig(raw, relayDir) {
     python: text('python', DEFAULTS.python),
     script: path.resolve(relayDir, text('script', path.join('tools', 'person_scan.py'))),
     model: path.resolve(relayDir, text('model', path.join('models', 'person.onnx'))),
-    confidence: number(given.confidence, DEFAULTS.confidence, (n) => n > 0 && n <= 1, 'confidence', warnings),
+    confidence: number(given.confidence, DEFAULTS.confidence, isValidConfidence, 'confidence', warnings),
     stride,
     timeoutMs: number(given.timeoutSeconds, DEFAULTS.timeoutSeconds, inRange(10, 86400), 'timeoutSeconds', warnings) * 1000,
     warnings,
@@ -131,6 +137,6 @@ function parseScanResult(run) {
 }
 
 module.exports = {
-  ACTIONS, NO_PERSON_DIR, THUMB_SUFFIX, DEFAULTS,
+  ACTIONS, NO_PERSON_DIR, THUMB_SUFFIX, DEFAULTS, CONFIDENCE, isValidConfidence,
   resolveScanConfig, thumbnailPath, noPersonDir, noPersonPath, buildScanArgs, scanEnv, parseScanResult,
 };

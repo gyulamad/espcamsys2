@@ -1413,7 +1413,7 @@ camtest_test('sanitizeStorageStatus: text the relay sends along is never passed 
 
 camtest_test('splitSettingsValues passes every allowed relay setting on, and the dashboard\'s own to the dashboard', function () {
     $values = ['alarmRecordSeconds' => 60, 'minFreeStorageMB' => '1024', 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608, 'port' => 8080, 'pushPort' => 8081,
-               'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'auth_user' => 'bob'];
+               'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'personScanConfidence' => '0.55', 'auth_user' => 'bob'];
     $r = CamLogic::splitSettingsValues($values);
     camtest_assert_true($r['ok'] === true);
     camtest_assert_equal(array_keys($r['relay']), CamLogic::RELAY_SETTING_KEYS);

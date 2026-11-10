@@ -117,8 +117,9 @@ require_once __DIR__ . '/lib/Layout.php';
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
-  const GROUP_ORDER = ['Recording', 'Network', 'Keys', 'Log', 'Folders', 'Dashboard'];
+  const GROUP_ORDER = ['Recording', 'Person check', 'Network', 'Keys', 'Log', 'Folders', 'Dashboard'];
   const BREAKING = ['camKey', 'pushPort'];
+  const NUMERIC = ['int', 'float'];   // drawn as a number input (a float's step comes from the relay)
   const AJAX = { 'X-Requested-With': 'camdash' };
   let fields = [];
   let original = {};   // key -> the value loaded from the server (secrets: '')
@@ -197,10 +198,10 @@ require_once __DIR__ . '/lib/Layout.php';
     const secret = f.type === 'secret';
     const input = el('input', {
       id, name: f.key,
-      type: secret ? 'password' : (f.type === 'int' ? 'number' : 'text'),
+      type: secret ? 'password' : (NUMERIC.includes(f.type) ? 'number' : 'text'),
       autocomplete: 'off', spellcheck: false,
     });
-    if (f.type === 'int') { input.min = f.min; input.max = f.max; input.step = 1; }
+    if (NUMERIC.includes(f.type)) { input.min = f.min; input.max = f.max; input.step = f.type === 'int' ? 1 : (f.step || 'any'); }
     if (secret) {
       input.placeholder = f.isSet ? '(set — leave empty to keep)' : '(not set)';
       original[f.key] = '';
