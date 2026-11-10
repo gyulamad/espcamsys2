@@ -354,9 +354,14 @@ const unsigned long PUSH_MAX_GAP_MS = 1000;     // the pause after a push never 
 
 // Weak WiFi can't carry full-size frames, so the JPEG quality adapts to the
 // link (see adaptJpegQuality() in logic.h). Quality numbers: LOWER = better
-// picture, bigger file. The configured quality (set in initCamera()) is the
-// best it will ever use; this is the coarsest it will go down to.
-const int JPEG_QUALITY_WORST = 45;
+// picture, bigger file. The best/finest and worst/coarsest quality and whether
+// the adapter runs at all come from the JPEG_Q_MIN / JPEG_Q_MAX / JPEG_Q_DROP
+// settings (see settings_schema.h); initCamera() applies them. 63 is the
+// OV2640 JPEG engine's own ceiling — the esp32-camera driver clamps
+// set_quality() to 0-63, so a higher worst would be silently capped there and
+// only make the climb back longer for no gain. Kept as the boot default and the
+// schema's max; the configured JPEG_Q_MAX overrides it at run time.
+const int JPEG_QUALITY_WORST = 63;
 JpegQualityAdapter jpegQuality = makeJpegQualityAdapter(12, JPEG_QUALITY_WORST);
 
 size_t writePushBytes(const uint8_t *data, size_t len) {
@@ -567,12 +572,12 @@ bool initCamera() {
 
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;   // 640x480 — bump up if bandwidth allows
-    config.jpeg_quality = 12;            // lower number = higher quality, bigger file
+    config.jpeg_quality = g_cfg.jpegQualityMin;  // the configured finest quality (LOWER = better picture)
     config.fb_count = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM; // VGA*2 buffers only fits in PSRAM
   } else {
     config.frame_size = FRAMESIZE_QVGA;  // 320x240 — safer without PSRAM
-    config.jpeg_quality = 15;
+    config.jpeg_quality = g_cfg.jpegQualityMin;
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
@@ -582,7 +587,12 @@ bool initCamera() {
     RLOG_ERROR("camera init failed: 0x%x (%s)", (unsigned)err, esp_err_to_name(err));
     return false;
   }
-  jpegQuality = makeJpegQualityAdapter(config.jpeg_quality, JPEG_QUALITY_WORST);
+  // The adapter runs on the configured finest/coarsest pair, and is switched
+  // off entirely when JPEG_Q_DROP=0 (the camera then holds the fixed finest
+  // quality whatever the link — see adaptJpegQuality() in logic.h). Re-made
+  // here from g_cfg, which the boot flow loaded before initCamera() ran.
+  jpegQuality = makeJpegQualityAdapter(g_cfg.jpegQualityMin, g_cfg.jpegQualityMax);
+  jpegQuality.enabled = g_cfg.jpegQualityDrop;
 
   // Orientation: set explicitly (not left to driver defaults) and keep it
   // identical to ESP32_CAM_TFLite_Person, so the live video and the AI

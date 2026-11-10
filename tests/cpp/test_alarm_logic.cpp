@@ -166,35 +166,61 @@ TEST(push_delay_is_capped_so_a_slow_link_is_not_made_slower) {
 static const unsigned long SLOW_MS = 2000, FAST_MS = 600;
 
 TEST(jpeg_quality_starts_at_the_configured_best) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     TEST_ASSERT_EQ(a.current, 12, "starts at the configured quality");
     TEST_ASSERT_EQ(adaptJpegQuality(a, 300, true, SLOW_MS, FAST_MS), 12, "a good link changes nothing");
 }
 
 TEST(jpeg_quality_shrinks_frames_right_after_a_slow_push) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     TEST_ASSERT_EQ(adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS), 18, "one slow frame = one step coarser");
     TEST_ASSERT_EQ(adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS), 24, "and again");
 }
 
 TEST(jpeg_quality_shrinks_twice_as_hard_when_very_slow) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 24, "a 25 s push (the real -87 dBm case) takes a double step");
 }
 
 TEST(jpeg_quality_treats_a_failed_push_as_very_slow) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     TEST_ASSERT_EQ(adaptJpegQuality(a, 100, false, SLOW_MS, FAST_MS), 24, "even if the failed attempt was quick");
 }
 
 TEST(jpeg_quality_never_goes_past_the_worst_allowed) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     for (int i = 0; i < 20; i++) adaptJpegQuality(a, 30000, false, SLOW_MS, FAST_MS);
-    TEST_ASSERT_EQ(a.current, 45, "stops at the worst quality");
+    TEST_ASSERT_EQ(a.current, 63, "stops at the worst quality");
+}
+
+TEST(jpeg_quality_walks_the_full_range_down_to_the_sensor_limit) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 24, "a very slow push takes a double step: 12 -> 24");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 36, "24 -> 36");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 48, "36 -> 48");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 60, "48 -> 60");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 63, "the last step lands exactly on the OV2640's ceiling, never past it");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS), 63, "and it stays there while the link is this bad");
+}
+
+TEST(jpeg_quality_climbs_back_all_the_way_from_the_sensor_limit) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
+    while (a.current < 63) adaptJpegQuality(a, 25000, true, SLOW_MS, FAST_MS);
+    for (int i = 0; i < 200; i++) adaptJpegQuality(a, 100, true, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(a.current, 12, "a long good run brings the picture back from the ceiling, not just part way");
+}
+
+TEST(jpeg_quality_holds_the_configured_quality_when_disabled) {
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
+    a.enabled = false;   // JPEG_Q_DROP=0: the link never moves the quality
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 25000, false, SLOW_MS, FAST_MS), 12, "a very slow failed push changes nothing");
+    TEST_ASSERT_EQ(adaptJpegQuality(a, 100, true, SLOW_MS, FAST_MS), 12, "a run of fast pushes improves nothing either");
+    TEST_ASSERT_EQ(a.current, 12, "the configured finest quality is held whatever the link does");
+    TEST_ASSERT_EQ(a.fastStreak, 0, "and no recovery run is accumulated");
 }
 
 TEST(jpeg_quality_recovers_slowly_after_a_run_of_fast_pushes) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS); // 18
     for (int i = 0; i < JPEG_QUALITY_FAST_STREAK - 1; i++) {
         TEST_ASSERT_EQ(adaptJpegQuality(a, 200, true, SLOW_MS, FAST_MS), 18, "not yet: the link must stay good for a while");
@@ -203,14 +229,14 @@ TEST(jpeg_quality_recovers_slowly_after_a_run_of_fast_pushes) {
 }
 
 TEST(jpeg_quality_never_improves_past_the_configured_best) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS); // 18
     for (int i = 0; i < 100; i++) adaptJpegQuality(a, 100, true, SLOW_MS, FAST_MS);
     TEST_ASSERT_EQ(a.current, 12, "back to, and not beyond, the configured quality");
 }
 
 TEST(jpeg_quality_holds_in_the_middle_band_and_restarts_the_run) {
-    JpegQualityAdapter a = makeJpegQualityAdapter(12, 45);
+    JpegQualityAdapter a = makeJpegQualityAdapter(12, 63);
     adaptJpegQuality(a, 3000, true, SLOW_MS, FAST_MS); // 18
     for (int i = 0; i < JPEG_QUALITY_FAST_STREAK - 1; i++) adaptJpegQuality(a, 200, true, SLOW_MS, FAST_MS);
     TEST_ASSERT_EQ(adaptJpegQuality(a, 1000, true, SLOW_MS, FAST_MS), 18, "a so-so push neither degrades nor improves");
@@ -510,6 +536,9 @@ int main() {
     RUN_TEST(jpeg_quality_shrinks_twice_as_hard_when_very_slow);
     RUN_TEST(jpeg_quality_treats_a_failed_push_as_very_slow);
     RUN_TEST(jpeg_quality_never_goes_past_the_worst_allowed);
+    RUN_TEST(jpeg_quality_walks_the_full_range_down_to_the_sensor_limit);
+    RUN_TEST(jpeg_quality_climbs_back_all_the_way_from_the_sensor_limit);
+    RUN_TEST(jpeg_quality_holds_the_configured_quality_when_disabled);
     RUN_TEST(jpeg_quality_recovers_slowly_after_a_run_of_fast_pushes);
     RUN_TEST(jpeg_quality_never_improves_past_the_configured_best);
     RUN_TEST(jpeg_quality_holds_in_the_middle_band_and_restarts_the_run);

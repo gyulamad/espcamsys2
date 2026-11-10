@@ -261,7 +261,12 @@ inline unsigned long computePushDelayMs(unsigned long lastPushMs, float interval
 // picture comes back (one step at a time) when the link does. The resolution
 // never changes, so recordings and the dashboard always see the same size.
 //
-// Quality numbers: LOWER = better picture, bigger file (the camera's own scale).
+// Quality numbers: LOWER = better picture, bigger file (the camera's own
+// scale). The OV2640's scale ends at 63 — its driver clamps anything above —
+// so 63 is the coarsest frame the sensor can be asked for at all. The best
+// (finest) and worst (coarsest) quality and whether the adapter runs at all
+// are settings the dashboard can change (JPEG_Q_MIN / JPEG_Q_MAX / JPEG_Q_DROP
+// in settings_schema.h); the sketch applies them when it builds the adapter.
 
 const int JPEG_QUALITY_DEGRADE_STEP = 6;            // per slow frame
 const int JPEG_QUALITY_RECOVER_STEP = 2;            // per run of fast frames
@@ -270,9 +275,10 @@ const unsigned long JPEG_QUALITY_VERY_SLOW_FACTOR = 4; // this many times "slow"
 
 struct JpegQualityAdapter {
     int best = 12;        // the configured quality: never improve beyond this
-    int worst = 45;       // never degrade beyond this
+    int worst = 63;       // never degrade beyond this (the OV2640's ceiling: its driver clamps above 63)
     int current = 12;
     int fastStreak = 0;
+    bool enabled = true;  // false: hold the configured quality, never adapt (the JPEG_Q_DROP setting)
 };
 
 inline JpegQualityAdapter makeJpegQualityAdapter(int best, int worst) {
@@ -285,12 +291,14 @@ inline JpegQualityAdapter makeJpegQualityAdapter(int best, int worst) {
 
 // Call after each frame push with how long it took and whether it got through.
 // Returns the quality to use from now on (the caller applies it when it changed).
+//   - disabled: hold the configured quality whatever the link does
 //   - a failed push, or one slower than `slowMs`: shrink the frames right away
 //     (twice as hard when it was VERY slow)
 //   - a run of pushes faster than `fastMs`: improve the picture a little
 //   - anything in between: hold, and restart the run
 inline int adaptJpegQuality(JpegQualityAdapter &a, unsigned long pushMs, bool pushOk,
                             unsigned long slowMs, unsigned long fastMs) {
+    if (!a.enabled) return a.current;   // JPEG_Q_DROP=0: the link never moves the quality
     if (!pushOk || pushMs > slowMs) {
         a.fastStreak = 0;
         int step = JPEG_QUALITY_DEGRADE_STEP;

@@ -20,7 +20,8 @@
 
 static const char* TYPICAL =
     "WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;PUSH_PORT=8081;HTTP_PORT=8080;"
-    "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;"
+    "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;"
+    "ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;"
     "LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;"
     "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000";
 
@@ -133,6 +134,40 @@ TEST(the_alarm_and_log_locks_are_part_of_the_locked_set_review_ARD_009) {
         for (size_t i = 0; i < locked.size(); ++i) if (locked[i] == k) { found = true; break; }
         TEST_ASSERT(found, std::string("locked: ") + k);
     }
+    // The JPEG quality tuning is NOT locked: it is link adaptation, not safety
+    // or identity, so the dashboard may change it on a running camera.
+    for (const char* k : { "JPEG_Q_DROP", "JPEG_Q_MIN", "JPEG_Q_MAX" }) {
+        bool found = false;
+        for (size_t i = 0; i < locked.size(); ++i) if (locked[i] == k) { found = true; break; }
+        TEST_ASSERT(!found, std::string("NOT locked (dashboard-editable): ") + k);
+    }
+}
+
+TEST(the_jpeg_quality_range_is_refused_when_min_is_above_max) {
+    MemoryStore st; fill(st);
+    ChangeResult r = changeLine(st, "JPEG_Q_MIN=40;JPEG_Q_MAX=20");
+    TEST_ASSERT(!r.ok(), "an inverted range is refused");
+    TEST_ASSERT(mentions(r, "JPEG_Q_MIN") && mentions(r, "JPEG_Q_MAX"), "names the pair");
+    TEST_ASSERT(st.m["JPEG_Q_MIN"] == "12" && st.m["JPEG_Q_MAX"] == "63", "nothing stored");
+}
+
+TEST(the_jpeg_quality_range_can_be_swapped_in_one_line) {
+    MemoryStore st; fill(st);
+    ChangeResult r = changeLine(st, "JPEG_Q_MIN=20;JPEG_Q_MAX=40");
+    TEST_ASSERT(r.ok(), "a valid range is accepted");
+    TEST_ASSERT_EQ(st.m["JPEG_Q_MIN"], std::string("20"), "min stored");
+    TEST_ASSERT_EQ(st.m["JPEG_Q_MAX"], std::string("40"), "max stored");
+}
+
+TEST(turning_the_quality_drop_off_does_not_strand_the_board) {
+    // JPEG_Q_MIN / JPEG_Q_MAX are only needed while JPEG_Q_DROP=1, so switching
+    // the drop off must not leave the board "missing" anything. The min/max
+    // stay in flash (untouched), so switching it back on later still works.
+    MemoryStore st; fill(st);
+    ChangeResult r = changeLine(st, "JPEG_Q_DROP=0");
+    TEST_ASSERT(r.ok(), "drop off: the min/max are no longer required, so this succeeds");
+    TEST_ASSERT_EQ(st.m["JPEG_Q_DROP"], std::string("0"), "drop stored");
+    TEST_ASSERT(st.m.count("JPEG_Q_MIN") && st.m.count("JPEG_Q_MAX"), "the min/max stayed in flash");
 }
 
 TEST(a_failing_flash_write_puts_the_earlier_ones_back) {
@@ -401,6 +436,9 @@ int main() {
     RUN_TEST(switching_a_feature_on_needs_the_settings_it_requires);
     RUN_TEST(switching_a_feature_off_does_not_require_its_settings);
     RUN_TEST(the_alarm_and_log_locks_are_part_of_the_locked_set_review_ARD_009);
+    RUN_TEST(the_jpeg_quality_range_is_refused_when_min_is_above_max);
+    RUN_TEST(the_jpeg_quality_range_can_be_swapped_in_one_line);
+    RUN_TEST(turning_the_quality_drop_off_does_not_strand_the_board);
     RUN_TEST(a_failing_flash_write_puts_the_earlier_ones_back);
     RUN_TEST(only_existing_keys_are_read_from_flash);
     RUN_TEST(the_report_lists_stored_settings_with_secrets_masked);

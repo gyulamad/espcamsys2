@@ -36,6 +36,17 @@ static const KeyDef RECORDER_KEYS[] = {
     { "PUSH_GAP_MUL",    Kind::Float,     0.1,  10,      Cond::Always,        nullptr,           nullptr,
       "pause after each frame = last push time x this (1.5 is a good start)" },
 
+    // The weak-link JPEG quality adapter (adaptJpegQuality in logic.h). LOWER
+    // number = finer picture, bigger file (the OV2640's own scale, 0-63). The
+    // three together let the dashboard tune how far the picture coarsens on a
+    // slow link, or switch the adaptation off entirely (a fixed quality).
+    { "JPEG_Q_DROP",     Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
+      "1: on a slow link shrink the JPEG quality toward the coarsest and bring it back when it recovers; 0: hold the fixed quality whatever the link" },
+    { "JPEG_Q_MIN",      Kind::Int,       1,    63,      Cond::WhenEquals,    "JPEG_Q_DROP",    "1",
+      "the best quality (lowest number): what the camera sends on a good link. Lower = finer picture, bigger file. 12 is a good start" },
+    { "JPEG_Q_MAX",      Kind::Int,       1,    63,      Cond::WhenEquals,    "JPEG_Q_DROP",    "1",
+      "the coarsest quality (highest number) the adapter drops to on a slow link; 63 is the OV2640's ceiling. Not lower than JPEG_Q_MIN" },
+
     { "ALARM_GPIO_PIN",  Kind::PinOrOff,  0,    0,       Cond::Always,        nullptr,           nullptr,
       "GPIO the alarm input is wired to; -1 turns the alarm feature off" },
     { "ALARM_ACTIVE",    Kind::Level,     0,    0,       Cond::WhenNotEquals, "ALARM_GPIO_PIN",  "-1",
@@ -63,16 +74,36 @@ static const KeyDef RECORDER_KEYS[] = {
       "warn when free heap falls below this many bytes" },
 };
 
+// JPEG_Q_MIN (the finest quality) must not be above JPEG_Q_MAX (the coarsest):
+// the adapter walks best -> worst, so an inverted range would mean "the finest
+// the camera ever sends is coarser than the coarsest it drops to", which both
+// makes no sense and would stop the adapter dead (it could never move off best
+// because best already exceeds worst). Refused, like the detector's threshold
+// pair, only once both are known numbers (a missing or malformed one is reported
+// on its own). Send both in one line to swap them.
+inline bool jpegQualityRangeHolds(const IValues& v, std::string& err) {
+    std::string smin, smax;
+    if (!v.get("JPEG_Q_MIN", smin) || !v.get("JPEG_Q_MAX", smax)) return true;   // not both known yet
+    long long lo = 0, hi = 0;
+    if (!parseInt(smin, lo) || !parseInt(smax, hi)) return true;                 // reported on their own
+    if (lo > hi) {
+        err = "JPEG_Q_MIN (" + smin + ") must not be higher than JPEG_Q_MAX (" + smax +
+              ") - send both in one line to change them together";
+        return false;
+    }
+    return true;
+}
+
 static const Schema RECORDER_SCHEMA = {
     RECORDER_KEYS,
     sizeof(RECORDER_KEYS) / sizeof(RECORDER_KEYS[0]),
-    nullptr   // no rule spanning several settings
+    jpegQualityRangeHolds   // JPEG_Q_MIN <= JPEG_Q_MAX (both must be numbers first)
 };
 
 // The settings as the sketch uses them. Values of settings that are "not
-// needed" (alarm off, remote log off) hold the neutral values below — the
-// sketch still reads some of them (the heartbeat timer, the low-heap warning)
-// even with remote logging off.
+// needed" (alarm off, remote log off, quality drop off) hold the neutral
+// values below — the sketch still reads some of them (the heartbeat timer, the
+// low-heap warning) even with remote logging off.
 struct RecorderSettings {
     std::vector<WifiNet> wifi;
     std::string serverHost;
@@ -81,6 +112,10 @@ struct RecorderSettings {
     std::string cameraId;
     std::string apiKey;
     float pushGapMul = 1.5f;
+
+    bool jpegQualityDrop = true;   // JPEG_Q_DROP: the adapter runs
+    int jpegQualityMin = 12;       // JPEG_Q_MIN: best (finest) quality
+    int jpegQualityMax = 63;       // JPEG_Q_MAX: worst (coarsest) quality
 
     int alarmGpioPin = -1;            // -1: alarm feature off
     bool alarmActiveHigh = false;     // false: the pin is LOW when the alarm is on
@@ -151,6 +186,12 @@ inline bool loadRecorderSettings(ISettingsStore& store, RecorderSettings& out, s
     double mul = 1.5;
     parseFloat(store.get("PUSH_GAP_MUL"), mul);
     s.pushGapMul = static_cast<float>(mul);
+
+    s.jpegQualityDrop = store.get("JPEG_Q_DROP") == "1";
+    if (s.jpegQualityDrop) {
+        s.jpegQualityMin = static_cast<int>(storedInt(store, "JPEG_Q_MIN"));
+        s.jpegQualityMax = static_cast<int>(storedInt(store, "JPEG_Q_MAX"));
+    }
 
     s.alarmGpioPin = static_cast<int>(storedInt(store, "ALARM_GPIO_PIN"));
     if (s.alarmGpioPin >= 0) {

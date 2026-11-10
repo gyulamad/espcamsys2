@@ -261,6 +261,10 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       const v = currentValues(), d = parseFloat(v.DETECT_THRESH), cl = parseFloat(v.CLEAR_THRESH);
       if (!isNaN(d) && !isNaN(cl) && cl > d) { notify('CLEAR_THRESH (' + v.CLEAR_THRESH + ') must not be higher than DETECT_THRESH (' + v.DETECT_THRESH + ')', 'error'); return; }
     }
+    if (TYPE === 'recorder') {
+      const v = currentValues(), lo = parseInt(v.JPEG_Q_MIN), hi = parseInt(v.JPEG_Q_MAX);
+      if (!isNaN(lo) && !isNaN(hi) && lo > hi) { notify('JPEG_Q_MIN (' + v.JPEG_Q_MIN + ') must not be higher than JPEG_Q_MAX (' + v.JPEG_Q_MAX + ')', 'error'); return; }
+    }
     if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + (TYPE === 'detector' ? 'the detector of ' : '') + camera.name + '?\n\n' + (TYPE === 'detector' ? 'The detector restarts to apply it (its picture and alarm pin pause for about 10 seconds).' : 'The camera restarts to apply it (its stream and any recording stop for a few seconds).'))) return;
     saveBtn.disabled = revertBtn.disabled = true; setStatus('Queuing…', 'busy');
     try {
