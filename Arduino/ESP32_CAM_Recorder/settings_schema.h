@@ -46,6 +46,8 @@ static const KeyDef RECORDER_KEYS[] = {
       "the best quality (lowest number): what the camera sends on a good link. Lower = finer picture, bigger file. 12 is a good start" },
     { "JPEG_Q_MAX",      Kind::Int,       1,    63,      Cond::WhenEquals,    "JPEG_Q_DROP",    "1",
       "the coarsest quality (highest number) the adapter drops to on a slow link; 63 is the OV2640's ceiling. Not lower than JPEG_Q_MIN" },
+    { "SIZE_DROP",       Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
+      "1: when even the coarsest quality cannot get a frame through, also drop the resolution a step (down to QQVGA 160x120) and climb back when the link recovers; 0: never change the resolution" },
 
     { "ALARM_GPIO_PIN",  Kind::PinOrOff,  0,    0,       Cond::Always,        nullptr,           nullptr,
       "GPIO the alarm input is wired to; -1 turns the alarm feature off" },
@@ -113,9 +115,10 @@ struct RecorderSettings {
     std::string apiKey;
     float pushGapMul = 1.5f;
 
-    bool jpegQualityDrop = true;   // JPEG_Q_DROP: the adapter runs
+    bool jpegQualityDrop = true;   // JPEG_Q_DROP: the quality adapter runs
     int jpegQualityMin = 12;       // JPEG_Q_MIN: best (finest) quality
     int jpegQualityMax = 63;       // JPEG_Q_MAX: worst (coarsest) quality
+    bool frameSizeDrop = true;     // SIZE_DROP: the frame-size ladder runs
 
     int alarmGpioPin = -1;            // -1: alarm feature off
     bool alarmActiveHigh = false;     // false: the pin is LOW when the alarm is on
@@ -188,6 +191,7 @@ inline bool loadRecorderSettings(ISettingsStore& store, RecorderSettings& out, s
     s.pushGapMul = static_cast<float>(mul);
 
     s.jpegQualityDrop = store.get("JPEG_Q_DROP") == "1";
+    s.frameSizeDrop = store.get("SIZE_DROP") == "1";
     if (s.jpegQualityDrop) {
         s.jpegQualityMin = static_cast<int>(storedInt(store, "JPEG_Q_MIN"));
         s.jpegQualityMax = static_cast<int>(storedInt(store, "JPEG_Q_MAX"));

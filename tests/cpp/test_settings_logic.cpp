@@ -27,7 +27,7 @@ static bool has(const std::string& s, const char* part) { return s.find(part) !=
 // A complete, valid Recorder configuration as ONE line (the "template").
 static const char* TYPICAL =
     "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;PUSH_PORT=8081;HTTP_PORT=8080;"
-    "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;"
+    "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;SIZE_DROP=1;"
     "ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;"
     "LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;"
     "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000";
@@ -346,7 +346,7 @@ TEST(a_complete_store_has_no_problems) {
 TEST(switching_remote_logging_off_removes_its_settings_from_the_requirements) {
     MemoryStore st;
     TEST_ASSERT(store(st, "WIFI=home:password1;SERVER_HOST=h;PUSH_PORT=1;HTTP_PORT=2;CAMERA_ID=c;API_KEY=k;PUSH_GAP_MUL=1.5;"
-                          "JPEG_Q_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0"), "stored");
+                          "JPEG_Q_DROP=0;SIZE_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0"), "stored");
     std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
     TEST_ASSERT(ps.empty(), "LOG_* and ALARM_* are not needed with LOG_ENABLED=0 and ALARM_GPIO_PIN=-1");
     TEST_ASSERT_EQ(st.badGets, 0, "still no read of an absent key");
@@ -355,7 +355,7 @@ TEST(switching_remote_logging_off_removes_its_settings_from_the_requirements) {
 TEST(switching_a_feature_on_makes_its_settings_required_again) {
     MemoryStore st;
     store(st, "WIFI=home:password1;SERVER_HOST=h;PUSH_PORT=1;HTTP_PORT=2;CAMERA_ID=c;API_KEY=k;PUSH_GAP_MUL=1.5;"
-              "JPEG_Q_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0");
+              "JPEG_Q_DROP=0;SIZE_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0");
     TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "complete");
     store(st, "LOG_ENABLED=1;ALARM_GPIO_PIN=13");
     std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
@@ -617,6 +617,7 @@ TEST(settings_load_into_typed_fields) {
     TEST_ASSERT(s.cameraId == "cam2" && s.apiKey == "s3cret", "identity");
     TEST_ASSERT(s.pushGapMul == 1.5f, "gap multiplier");
     TEST_ASSERT(s.jpegQualityDrop && s.jpegQualityMin == 12 && s.jpegQualityMax == 63, "the JPEG quality adapter range and its on/off");
+    TEST_ASSERT(s.frameSizeDrop, "the frame-size ladder's on/off");
     TEST_ASSERT(s.alarmGpioPin == 13 && !s.alarmActiveHigh && !s.alarmRecordAll, "alarm");
     TEST_ASSERT(s.logEnabled && s.logMinLevel == 1 && s.logEcho && s.logRetryMax == 3, "log switches");
     TEST_ASSERT(s.logRetrySec == 300 && s.logFlushSec == 10 && s.logRepeatSec == 30 && s.logHeartbeatSec == 600 && s.logLowHeapBytes == 30000, "log timing");
@@ -636,13 +637,14 @@ TEST(alarm_level_and_scope_are_read_when_the_alarm_is_on) {
 TEST(features_that_are_off_load_as_neutral_values) {
     MemoryStore st;
     store(st, "WIFI=home:password1;SERVER_HOST=h;PUSH_PORT=1;HTTP_PORT=2;CAMERA_ID=c;API_KEY=k;PUSH_GAP_MUL=2;"
-              "JPEG_Q_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0");
+              "JPEG_Q_DROP=0;SIZE_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0");
     RecorderSettings s;
     std::string err;
     TEST_ASSERT(loadRecorderSettings(st, s, err), err.c_str());
     TEST_ASSERT(s.alarmGpioPin == -1 && !s.alarmRecordAll, "alarm off");
     TEST_ASSERT(!s.logEnabled, "remote logging off");
     TEST_ASSERT(!s.jpegQualityDrop && s.jpegQualityMin == 12 && s.jpegQualityMax == 63, "quality drop off: the min/max keep their neutral defaults (the sketch does not read them)");
+    TEST_ASSERT(!s.frameSizeDrop, "frame-size ladder off");
     TEST_ASSERT(s.logHeartbeatSec == 600 && s.logLowHeapBytes == 30000, "heartbeat and low-heap warning keep sensible values (the sketch still uses them for serial)");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
@@ -718,7 +720,7 @@ TEST(a_partial_line_is_stored_and_the_rest_is_asked_for_without_restarting) {
     TEST_ASSERT(r.st.m.size() == 2, "both are in flash already");
     TEST_ASSERT(r.con.said("These settings need a value (" + std::to_string(RECORDER_SCHEMA.count - 2) + ")"), "and all the others are listed");
     r.con.clear();
-    s = r.send("WIFI=home:password1;PUSH_PORT=8081;HTTP_PORT=8080;API_KEY=k;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0\n");
+    s = r.send("WIFI=home:password1;PUSH_PORT=8081;HTTP_PORT=8080;API_KEY=k;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=0;SIZE_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0\n");
     TEST_ASSERT(s == BootConfigFlow::Restart, "the second line completes it (the switches turned two features off): restart");
 }
 
@@ -827,7 +829,7 @@ TEST(a_flash_write_failure_is_reported) {
 TEST(a_setting_that_switches_a_feature_on_asks_for_the_new_settings_before_finishing) {
     Rig r;
     store(r.st, "WIFI=home:password1;SERVER_HOST=h;PUSH_PORT=1;HTTP_PORT=2;CAMERA_ID=c;API_KEY=k;PUSH_GAP_MUL=1.5;"
-                "JPEG_Q_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0");
+                "JPEG_Q_DROP=0;SIZE_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0");
     r.run(10);
     r.send("y\n");
     r.send("ALARM_GPIO_PIN=13\n");

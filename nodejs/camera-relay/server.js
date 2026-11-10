@@ -38,7 +38,7 @@ const { LogWriter } = require('./lib/logwriter');
 const { Throttle } = require('./lib/throttle');
 const { Lockout } = require('./lib/lockout');
 const connection = require('./lib/connection');
-const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg } = require('./lib/util');
+const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg, jpegDimensions } = require('./lib/util');
 const { RecordingSwitch, describeOff, parseMinutes, DEFAULT_OFF_MINUTES } = require('./lib/recswitch');
 const sysconfig = require('./lib/sysconfig');
 const diskspace = require('./lib/diskspace');
@@ -644,13 +644,49 @@ function removeTempDir(rec) {
 // list): the person check must not read them.
 const clipsBeingEncoded = new Set();
 
-function encodeRecording(rec) {
+// The pixel sizes of a recording's frames, in frame order, read from their
+// JPEG headers (the size sits near the start of the file, so only the head of
+// each frame is read, not the whole picture). Needed because a camera walks
+// its frame-size ladder on a very slow link, so one recording can mix sizes;
+// video.scaleArgsForFrameSizes() decides from this list whether the encode
+// needs a scale filter. Frames whose header cannot be parsed count as null.
+const FRAME_HEADER_BYTES = 4096;
+
+async function readFrameSizes(tempDir) {
+  const names = (await fsp.readdir(tempDir)).filter((n) => n.endsWith('.jpg')).sort();
+  const sizes = [];
+  for (const name of names) {
+    const handle = await fsp.open(path.join(tempDir, name), 'r');
+    try {
+      const { buffer, bytesRead } = await handle.read(Buffer.alloc(FRAME_HEADER_BYTES), 0, FRAME_HEADER_BYTES, 0);
+      sizes.push(jpegDimensions(buffer.subarray(0, bytesRead)));
+    } finally {
+      await handle.close();
+    }
+  }
+  return sizes;
+}
+
+async function encodeRecording(rec) {
   const fps = video.computeFps(rec.frameCount, rec.firstFrameAt, rec.lastFrameAt, DEFAULT_FPS);
   const outputPath = path.join(rec.dir, `${rec.id}_${rec.stamp}.mp4`);
   const framePattern = path.join(rec.tempDir, 'frame_%06d.jpg');
 
+  // Claimed before anything async runs, so no gap opens between "encoding"
+  // being logged and the guard set knowing about the clip.
   clipsBeingEncoded.add(outputPath);
-  const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath));
+
+  // A camera adapting to a slow link may have changed its frame size mid-clip;
+  // scale such a recording back to the size it started with. Failing to read
+  // the sizes must never lose footage: encode without the filter, as before.
+  let scaleArgs = [];
+  try {
+    scaleArgs = video.scaleArgsForFrameSizes(await readFrameSizes(rec.tempDir));
+  } catch (err) {
+    camLog('WARN', rec.id, `could not read the recording's frame sizes (${errorMessage(err)}) — encoding without normalising them`);
+  }
+
+  const ffmpeg = spawn('ffmpeg', video.buildFfmpegArgs(fps, framePattern, outputPath, scaleArgs));
 
   ffmpeg.on('error', (err) => {
     clipsBeingEncoded.delete(outputPath);

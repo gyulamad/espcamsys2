@@ -364,6 +364,43 @@ const unsigned long PUSH_MAX_GAP_MS = 1000;     // the pause after a push never 
 const int JPEG_QUALITY_WORST = 63;
 JpegQualityAdapter jpegQuality = makeJpegQualityAdapter(12, JPEG_QUALITY_WORST);
 
+// When even the coarsest quality can't get a frame through, the frame SIZE
+// drops a rung too (see the frame-size ladder in logic.h): fewer pixels is a
+// proportionally smaller file, so the two levers together reach a frame the
+// weakest link can still carry. Runs only while the SIZE_DROP setting is on.
+// The ladder runs from the configured size down to QQVGA and back, one rung at
+// a time — a board without PSRAM starts two rungs down (QVGA), where
+// initCamera() puts it. Keep it ordered largest first: a higher index must
+// mean a smaller frame.
+struct FrameSizeRung {
+  framesize_t size;
+  const char *name;
+};
+const FrameSizeRung FRAME_SIZE_LADDER[] = {
+  { FRAMESIZE_VGA,   "VGA 640x480"   },
+  { FRAMESIZE_CIF,   "CIF 400x296"   },
+  { FRAMESIZE_QVGA,  "QVGA 320x240"  },
+  { FRAMESIZE_HQVGA, "HQVGA 240x176" },
+  { FRAMESIZE_QQVGA, "QQVGA 160x120" },
+};
+const int FRAME_SIZE_LADDER_LEN = sizeof(FRAME_SIZE_LADDER) / sizeof(FRAME_SIZE_LADDER[0]);
+
+// The ladder's top rung for a given configured sensor size: its own index
+// when the size is on the ladder, or rung 0 (the largest) when it isn't — an
+// unknown size is then simply never re-applied, so the camera keeps whatever
+// initCamera() configured until the link forces a step down.
+int frameSizeLadderIndex(framesize_t size) {
+  for (int i = 0; i < FRAME_SIZE_LADDER_LEN; i++) {
+    if (FRAME_SIZE_LADDER[i].size == size) return i;
+  }
+  return 0;
+}
+
+// Starts at the configured size (rung 0 on a PSRAM board, QVGA without) and
+// can walk down to the smallest rung. initCamera() re-makes this from the
+// size it really configured.
+FrameSizeLadder frameSize = makeFrameSizeLadder(0, FRAME_SIZE_LADDER_LEN - 1);
+
 size_t writePushBytes(const uint8_t *data, size_t len) {
   size_t total = 0;
   unsigned long lastProgress = millis();
@@ -593,6 +630,7 @@ bool initCamera() {
   // here from g_cfg, which the boot flow loaded before initCamera() ran.
   jpegQuality = makeJpegQualityAdapter(g_cfg.jpegQualityMin, g_cfg.jpegQualityMax);
   jpegQuality.enabled = g_cfg.jpegQualityDrop;
+  frameSize = makeFrameSizeLadder(frameSizeLadderIndex(config.frame_size), FRAME_SIZE_LADDER_LEN - 1);
 
   // Orientation: set explicitly (not left to driver defaults) and keep it
   // identical to ESP32_CAM_TFLite_Person, so the live video and the AI
@@ -1047,6 +1085,19 @@ void applyJpegQuality(int quality) {
   sensor->set_quality(sensor, quality);
 }
 
+// Applies one rung of the frame-size ladder to the sensor. The JPEG quality is
+// left exactly as it is: a rung down means the SAME compression over fewer
+// pixels, which is the point — the smallest possible frame for the link.
+// A frame or two already in the sensor's buffer may still arrive at the old
+// size; that is harmless (a JPEG carries its own size), and the relay scales
+// a recording back to the size it started with when it encodes the clip.
+bool applyFrameSize(int rung) {
+  if (rung < 0 || rung >= FRAME_SIZE_LADDER_LEN) return false;
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (!sensor) return false;
+  return sensor->set_framesize(sensor, FRAME_SIZE_LADDER[rung].size) == 0;
+}
+
 // Shrinks the frames while the link is slow and brings the picture back when
 // it recovers, so a weak WiFi signal gives a slower, coarser picture instead
 // of a connection that keeps breaking.
@@ -1059,6 +1110,36 @@ void adaptJpegQualityToLink(unsigned long pushMs, bool pushOk) {
   RLOG_INFO("%s: JPEG quality %d -> %d (lower = better picture, best %d, coarsest %d)",
             after > before ? "link is slow, sending smaller frames" : "link recovered, improving the picture",
             before, after, jpegQuality.best, jpegQuality.worst);
+}
+
+// Steps the frame size down when even the coarsest quality cannot get a
+// frame through, and back up one rung at a time once the link has carried the
+// current size at full quality for a while (see the ladder in logic.h).
+// Called right after the quality adapter, on the same push result. The
+// SIZE_DROP setting switches the whole ladder off (the resolution then never
+// changes). With JPEG_Q_DROP=0 the quality never walks anywhere, so "the
+// compression lever has nothing left to give" means "the user pinned it": the
+// ladder then judges the link on its own, against the pinned quality.
+void adaptFrameSizeToLink(unsigned long pushMs, bool pushOk) {
+  if (!g_cfg.frameSizeDrop) return;
+  bool qualityExhausted = !jpegQuality.enabled || jpegQuality.current == jpegQuality.worst;
+  int before = frameSize.current;
+  adaptFrameSize(frameSize,
+                 qualityExhausted,
+                 jpegQuality.current == jpegQuality.best,
+                 pushMs, pushOk, PUSH_SLOW_WARN_MS, PUSH_FAST_MS);
+  if (frameSize.current == before) return;
+
+  if (!applyFrameSize(frameSize.current)) {
+    RLOG_ERROR("frame size change to %s failed — keeping %s",
+               FRAME_SIZE_LADDER[frameSize.current].name, FRAME_SIZE_LADDER[before].name);
+    frameSize.current = before; // the sensor kept the old size; try again from there next time
+    return;
+  }
+  RLOG_INFO("%s: frame size %s -> %s",
+            frameSize.current > before ? "link too slow even for the coarsest frames — dropping the resolution"
+                                       : "link recovered, adding pixels back",
+            FRAME_SIZE_LADDER[before].name, FRAME_SIZE_LADDER[frameSize.current].name);
 }
 
 // Pushes one frame ([4-byte length][JPEG]) down the push connection and
@@ -1078,6 +1159,7 @@ unsigned long pushFrame(const camera_fb_t *fb) {
 
   bool pushOk = pushWriteSucceeded(written, len, pushClient.connected());
   adaptJpegQualityToLink(pushMs, pushOk);
+  adaptFrameSizeToLink(pushMs, pushOk);
 
   if (!pushOk) {
     RLOG_WARN("push write failed after %lu ms (wrote %u of %u bytes, %s) — dropping the connection, reconnecting",

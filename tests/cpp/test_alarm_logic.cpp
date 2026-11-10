@@ -250,6 +250,91 @@ TEST(jpeg_quality_adapter_tolerates_a_worst_better_than_best) {
     TEST_ASSERT_EQ(adaptJpegQuality(a, 30000, false, SLOW_MS, FAST_MS), 30, "a nonsensical range pins the quality instead of misbehaving");
 }
 
+// ── adaptFrameSize ─────────────────────────────────────────────────────────
+
+TEST(frame_size_ladder_starts_at_the_configured_rung) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    TEST_ASSERT_EQ(l.current, 0, "starts at the configured (largest) rung");
+    TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 300, true, SLOW_MS, FAST_MS), 0, "a good link changes nothing");
+}
+
+TEST(frame_size_drops_one_rung_when_quality_is_exhausted_and_link_still_stalls) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, false, 25000, true, SLOW_MS, FAST_MS), 1, "coarsest quality + a 25 s push = one rung down");
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, false, 25000, true, SLOW_MS, FAST_MS), 2, "and again, one rung at a time");
+}
+
+TEST(frame_size_drops_on_a_failed_push_even_when_it_was_quick) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, false, 100, false, SLOW_MS, FAST_MS), 1, "a failed push is a stalled link whatever the clock says");
+}
+
+TEST(frame_size_holds_when_the_link_is_merely_slow) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, false, 3000, true, SLOW_MS, FAST_MS), 0,
+                   "3 s is slow but not the 8 s that means even the coarsest frames cannot get through");
+}
+
+TEST(frame_size_holds_while_quality_can_still_shrink) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    TEST_ASSERT_EQ(adaptFrameSize(l, false, false, 30000, true, SLOW_MS, FAST_MS), 0, "the compression lever is tried first");
+}
+
+TEST(frame_size_drops_when_the_quality_is_pinned_even_at_the_finest) {
+    // JPEG_Q_DROP=0 pins the quality: the caller then reports the compression
+    // lever as exhausted (nothing left to give — it will never move), so the
+    // ladder judges the link on its own, against the pinned quality.
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, true, 25000, true, SLOW_MS, FAST_MS), 1, "a pinned quality + a 25 s push = one rung down");
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, true, 200, true, SLOW_MS, FAST_MS), 1, "the first fast push of a climb run: the rung holds until the streak completes");
+}
+
+TEST(frame_size_never_drops_below_the_smallest_rung) {
+    FrameSizeLadder l = makeFrameSizeLadder(2, 4);
+    for (int i = 0; i < 20; i++) adaptFrameSize(l, true, false, 30000, false, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(l.current, 4, "stops at the smallest rung");
+}
+
+TEST(frame_size_climbs_one_rung_after_a_run_of_fast_pushes_at_full_quality) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    adaptFrameSize(l, true, false, 25000, true, SLOW_MS, FAST_MS); // down to 1
+    for (int i = 0; i < FRAME_SIZE_UP_FAST_STREAK - 1; i++) {
+        TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 200, true, SLOW_MS, FAST_MS), 1, "not yet: the small frames must go through fast for a while");
+    }
+    TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 200, true, SLOW_MS, FAST_MS), 0, "then one rung back up");
+}
+
+TEST(frame_size_climb_needs_quality_fully_recovered) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    adaptFrameSize(l, true, false, 25000, true, SLOW_MS, FAST_MS); // down to 1
+    for (int i = 0; i < 100; i++) adaptFrameSize(l, false, false, 100, true, SLOW_MS, FAST_MS); // fast, but quality mid-range
+    TEST_ASSERT_EQ(l.current, 1, "no climb while the picture is still coarse");
+}
+
+TEST(frame_size_climb_run_resets_on_a_soso_push) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    adaptFrameSize(l, true, false, 25000, true, SLOW_MS, FAST_MS); // down to 1
+    for (int i = 0; i < FRAME_SIZE_UP_FAST_STREAK - 1; i++) adaptFrameSize(l, false, true, 200, true, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 1000, true, SLOW_MS, FAST_MS), 1, "a so-so push neither climbs nor keeps the run going");
+    for (int i = 0; i < FRAME_SIZE_UP_FAST_STREAK - 1; i++) {
+        TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 200, true, SLOW_MS, FAST_MS), 1, "the run of fast pushes started over");
+    }
+}
+
+TEST(frame_size_climb_run_resets_on_a_failed_push) {
+    FrameSizeLadder l = makeFrameSizeLadder(0, 4);
+    adaptFrameSize(l, true, false, 25000, true, SLOW_MS, FAST_MS); // down to 1
+    for (int i = 0; i < FRAME_SIZE_UP_FAST_STREAK - 1; i++) adaptFrameSize(l, false, true, 200, true, SLOW_MS, FAST_MS);
+    TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 200, false, SLOW_MS, FAST_MS), 1, "a failed push stops the climb");
+    TEST_ASSERT_EQ(adaptFrameSize(l, false, true, 200, true, SLOW_MS, FAST_MS), 1, "and the run restarted (one fast push is not a streak)");
+}
+
+TEST(frame_size_ladder_tolerates_a_degenerate_range) {
+    FrameSizeLadder l = makeFrameSizeLadder(2, 0);
+    TEST_ASSERT_EQ(l.worst, 2, "a nonsense range pins the ladder to the one rung instead of misbehaving");
+    TEST_ASSERT_EQ(adaptFrameSize(l, true, true, 30000, false, SLOW_MS, FAST_MS), 2, "cannot leave the only rung");
+}
+
 // ── writeStalled ─────────────────────────────────────────────────────
 
 TEST(write_stalled_false_while_within_timeout) {
@@ -543,6 +628,18 @@ int main() {
     RUN_TEST(jpeg_quality_never_improves_past_the_configured_best);
     RUN_TEST(jpeg_quality_holds_in_the_middle_band_and_restarts_the_run);
     RUN_TEST(jpeg_quality_adapter_tolerates_a_worst_better_than_best);
+    RUN_TEST(frame_size_ladder_starts_at_the_configured_rung);
+    RUN_TEST(frame_size_drops_one_rung_when_quality_is_exhausted_and_link_still_stalls);
+    RUN_TEST(frame_size_drops_on_a_failed_push_even_when_it_was_quick);
+    RUN_TEST(frame_size_holds_when_the_link_is_merely_slow);
+    RUN_TEST(frame_size_holds_while_quality_can_still_shrink);
+    RUN_TEST(frame_size_drops_when_the_quality_is_pinned_even_at_the_finest);
+    RUN_TEST(frame_size_never_drops_below_the_smallest_rung);
+    RUN_TEST(frame_size_climbs_one_rung_after_a_run_of_fast_pushes_at_full_quality);
+    RUN_TEST(frame_size_climb_needs_quality_fully_recovered);
+    RUN_TEST(frame_size_climb_run_resets_on_a_soso_push);
+    RUN_TEST(frame_size_climb_run_resets_on_a_failed_push);
+    RUN_TEST(frame_size_ladder_tolerates_a_degenerate_range);
 
 
     RUN_TEST(write_stalled_false_while_within_timeout);

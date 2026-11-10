@@ -51,4 +51,39 @@ function isJpeg(buf) {
   return Buffer.isBuffer(buf) && buf.length > 3 && buf.subarray(0, 3).equals(JPEG_MAGIC);
 }
 
-module.exports = { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg };
+// The pixel size of a JPEG, read from its start-of-frame (SOF) marker, or null
+// when the buffer is not a JPEG a size can be read from. Pure buffer parsing:
+// no files, no dependencies. Needed because a camera walks its frame-size
+// ladder while its link is slow, so the frames of one recording are not all
+// the same size any more — the encoder scales them back to the clip's first
+// size (see video.js) and needs to know the sizes to tell.
+//
+// Walks the marker segments ([FF][marker][length u16 BE][payload]) until the
+// first start-of-frame marker, whose payload starts with
+// [precision u8][height u16 BE][width u16 BE]. Segment markers without a
+// payload (restart markers, RSTn) and the standalones are skipped; hitting the
+// scan data (SOS) or the end (EOI) before any SOF means no size is carried —
+// and so does anything malformed: a wrong-looking buffer yields null, never a
+// guess, because a guessed size would silently mis-scale a recording.
+function jpegDimensions(buf) {
+  if (!isJpeg(buf)) return null;
+  let i = 2; // past the SOI marker; isJpeg() guarantees the FF at i
+  while (i + 4 <= buf.length) {
+    if (buf[i] !== 0xff) return null; // a marker must start here — not a well-formed JPEG
+    const marker = buf[i + 1];
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; } // no payload
+    if (marker === 0xd9 || marker === 0xda) return null; // image data or end before any size was seen
+    const len = buf.readUInt16BE(i + 2);
+    if (len < 2 || i + 2 + len > buf.length) return null; // segment must fit in the buffer
+    const isStartOfFrame = marker >= 0xc0 && marker <= 0xcf
+      && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc; // C4/C8/CC are DHT/JPG/DAC, not sizes
+    if (isStartOfFrame) {
+      if (len < 8) return null; // precision + height + width + at least one component
+      return { width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+    }
+    i += 2 + len;
+  }
+  return null;
+}
+
+module.exports = { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg, jpegDimensions };

@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { test, assertEqual, summarize } = require('./framework');
-const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg } = require('../../nodejs/camera-relay/lib/util');
+const { envOr, errorMessage, errorTrace, consoleMethodFor, writeFileAtomic, isJpeg, jpegDimensions } = require('../../nodejs/camera-relay/lib/util');
 
 test('envOr: a set variable wins over the config value', () => {
   assertEqual(envOr({ PORT: '9000' }, 'PORT', 8080), '9000');
@@ -76,6 +76,42 @@ test('isJpeg: a non-Buffer input is rejected (no throw)', () => {
   assertEqual(isJpeg(null), false);
   assertEqual(isJpeg('not a buffer'), false);
   assertEqual(isJpeg([0xff, 0xd8, 0xff, 0xe0]), false);
+});
+
+// A minimal well-formed JPEG header carrying a size: SOI, a DQT segment (to
+// prove the walker skips payload-carrying segments), then SOF0 with
+// [precision][height u16 BE][width u16 BE], then EOI.
+function fakeJpeg(width, height) {
+  return Buffer.from([
+    0xff, 0xd8,                                 // SOI
+    0xff, 0xdb, 0x00, 0x05, 1, 2, 3,            // DQT (not a size marker — must be skipped)
+    0xff, 0xc0, 0x00, 0x11,                     // SOF0, len 17
+    0x08,                                       // precision
+    (height >> 8) & 0xff, height & 0xff,        // height
+    (width >> 8) & 0xff, width & 0xff,          // width
+    0x03, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, // 3 components (pads the segment to its length)
+    0xff, 0xd9,                                 // EOI
+  ]);
+}
+
+test('jpegDimensions: reads the size out of a baseline (SOF0) header', () => {
+  assertEqual(jpegDimensions(fakeJpeg(640, 480)), { width: 640, height: 480 });
+  assertEqual(jpegDimensions(fakeJpeg(160, 120)), { width: 160, height: 120 });
+});
+
+test('jpegDimensions: reads progressive (SOF2) headers too', () => {
+  const sof2 = fakeJpeg(320, 240);
+  sof2[10] = 0xc2; // the same layout, a different start-of-frame marker
+  assertEqual(jpegDimensions(sof2), { width: 320, height: 240 });
+});
+
+test('jpegDimensions: null for anything a size cannot be read from', () => {
+  assertEqual(jpegDimensions(undefined), null);                       // not a buffer at all
+  assertEqual(jpegDimensions(Buffer.from([0xff, 0xd8, 0xff])), null); // too short to carry a marker
+  assertEqual(jpegDimensions(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xda]), Buffer.alloc(16)])), null); // scan data, no SOF
+  assertEqual(jpegDimensions(Buffer.from([0xff, 0xd8, 0xff, 0x00, 0xc0, 0x00, 0x11, 0x08, 0x01, 0xe0, 0x02, 0x80, 0x03, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01])), null); // not a marker where one belongs
+  const truncated = fakeJpeg(640, 480).subarray(0, 12);               // segment claims more than the buffer has
+  assertEqual(jpegDimensions(truncated), null);
 });
 
 summarize();

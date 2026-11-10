@@ -256,17 +256,20 @@ inline unsigned long computePushDelayMs(unsigned long lastPushMs, float interval
 // A VGA frame is ~26 KB. On a strong link that is a blink; at -87 dBm it can
 // take 10-45 seconds, the write stalls, and the camera has to drop and
 // re-open its connection — over and over, so almost nothing arrives. The
-// remedy is to send SMALLER frames when the link is slow: a higher JPEG
+// first remedy is to send SMALLER frames when the link is slow: a higher JPEG
 // quality number means heavier compression and a smaller file, and the
-// picture comes back (one step at a time) when the link does. The resolution
-// never changes, so recordings and the dashboard always see the same size.
+// picture comes back (one step at a time) when the link does. When even the
+// coarsest quality still cannot get a frame through, the frame SIZE drops a
+// rung too (see the frame-size ladder below) — the two levers together can
+// shrink a VGA frame from ~26 KB down to roughly 1-2 KB.
 //
 // Quality numbers: LOWER = better picture, bigger file (the camera's own
 // scale). The OV2640's scale ends at 63 — its driver clamps anything above —
 // so 63 is the coarsest frame the sensor can be asked for at all. The best
-// (finest) and worst (coarsest) quality and whether the adapter runs at all
-// are settings the dashboard can change (JPEG_Q_MIN / JPEG_Q_MAX / JPEG_Q_DROP
-// in settings_schema.h); the sketch applies them when it builds the adapter.
+// (finest) and worst (coarsest) quality, whether the adapter runs at all, and
+// whether the frame-size ladder runs, are settings the dashboard can change
+// (JPEG_Q_MIN / JPEG_Q_MAX / JPEG_Q_DROP / SIZE_DROP in settings_schema.h);
+// the sketch applies them when it builds the adapters.
 
 const int JPEG_QUALITY_DEGRADE_STEP = 6;            // per slow frame
 const int JPEG_QUALITY_RECOVER_STEP = 2;            // per run of fast frames
@@ -314,6 +317,80 @@ inline int adaptJpegQuality(JpegQualityAdapter &a, unsigned long pushMs, bool pu
     a.fastStreak = 0;
     a.current = a.current - JPEG_QUALITY_RECOVER_STEP < a.best ? a.best : a.current - JPEG_QUALITY_RECOVER_STEP;
     return a.current;
+}
+
+// ── Adaptive frame size (the resolution ladder) ──────────────
+// The SECOND lever, used only when the quality lever is exhausted: compression
+// alone shrinks a VGA frame by ~2-3x (quality 12 -> 63), but a very slow link
+// (-87 dBm) needs more. Dropping the frame size multiplies whatever shrink the
+// quality achieved — each rung down is ~2.5-4x fewer pixels — so the smallest
+// rung (QQVGA, 160x120) at the coarsest quality is a frame of roughly 1-2 KB:
+// small enough to squeeze through a link on which a full frame takes tens of
+// seconds. The camera walks DOWN one rung at a time and climbs back the same
+// way, so the dashboard and the recordings see the size the link can currently
+// carry. (A recording whose camera changed size mid-clip is normalised by the
+// relay when it encodes the clip.)
+//
+// The ladder is walked on RUNG INDICES, not sensor constants, so this stays
+// plain desktop C++ (the .ino owns the framesize_t table it maps a rung to).
+// A HIGHER index means a SMALLER frame; rung 0 is the configured size.
+
+const int FRAME_SIZE_UP_FAST_STREAK = 10; // fast pushes in a row before adding pixels back
+
+struct FrameSizeLadder {
+    int best = 0;        // the configured (largest) rung: never climb above it
+    int worst = 0;       // the smallest rung: never drop below it
+    int current = 0;     // the rung in use
+    int fastStreak = 0;  // fast pushes in a row while eligible to climb
+};
+
+inline FrameSizeLadder makeFrameSizeLadder(int best, int worst) {
+    FrameSizeLadder l;
+    l.best = best;
+    l.worst = worst < best ? best : worst;
+    l.current = best;
+    return l;
+}
+
+// Call right after adaptJpegQuality(), on the same push result. `qualityExhausted` /
+// `qualityAtFinest` are the quality adapter's "does the compression lever have nothing
+// left to give / is it fully recovered" — the size lever is only touched when the first
+// one holds: the quality is at its coarsest, OR the quality adapter is switched off
+// (JPEG_Q_DROP=0 — the user pinned the quality, so this lever alone decides; the .ino
+// computes that). Returns the rung in use; the caller reconfigures the sensor when it
+// changed.
+//   - quality exhausted AND a very slow (or failed) push: step DOWN one rung.
+//     The quality is deliberately NOT reset: the frame is already as compressed as it
+//     gets, and keeping it that way makes the smaller frame as small as possible right
+//     away. It also damps oscillation: to climb again the quality must first recover
+//     (a long run of fast pushes), then the rung must prove itself for a while longer.
+//   - quality fully recovered AND the rung below the configured one AND a run of fast
+//     pushes: step UP one rung, the honest test of a link that seems good again.
+//   - anything else: hold, and restart any climb run.
+inline int adaptFrameSize(FrameSizeLadder &l, bool qualityExhausted, bool qualityAtFinest,
+                          unsigned long pushMs, bool pushOk,
+                          unsigned long slowMs, unsigned long fastMs) {
+    if (qualityExhausted && (!pushOk || pushMs > slowMs * JPEG_QUALITY_VERY_SLOW_FACTOR)) {
+        l.fastStreak = 0;
+        if (l.current >= l.worst) return l.current; // already the smallest rung
+        l.current++;
+        return l.current;
+    }
+
+    if (qualityAtFinest && l.current > l.best) {
+        if (pushOk && pushMs < fastMs) {
+            if (++l.fastStreak >= FRAME_SIZE_UP_FAST_STREAK) {
+                l.fastStreak = 0;
+                l.current--;
+            }
+            return l.current;
+        }
+        l.fastStreak = 0;
+        return l.current;
+    }
+
+    l.fastStreak = 0;
+    return l.current;
 }
 
 // True once a stalled write (no forward progress at all) has gone on long

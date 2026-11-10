@@ -20,7 +20,7 @@
 
 static const char* TYPICAL =
     "WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;PUSH_PORT=8081;HTTP_PORT=8080;"
-    "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;"
+    "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;SIZE_DROP=1;"
     "ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;"
     "LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;"
     "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000";
@@ -134,9 +134,10 @@ TEST(the_alarm_and_log_locks_are_part_of_the_locked_set_review_ARD_009) {
         for (size_t i = 0; i < locked.size(); ++i) if (locked[i] == k) { found = true; break; }
         TEST_ASSERT(found, std::string("locked: ") + k);
     }
-    // The JPEG quality tuning is NOT locked: it is link adaptation, not safety
-    // or identity, so the dashboard may change it on a running camera.
-    for (const char* k : { "JPEG_Q_DROP", "JPEG_Q_MIN", "JPEG_Q_MAX" }) {
+    // The JPEG quality tuning and the frame-size ladder are NOT locked: they
+    // are link adaptation, not safety or identity, so the dashboard may change
+    // them on a running camera.
+    for (const char* k : { "JPEG_Q_DROP", "JPEG_Q_MIN", "JPEG_Q_MAX", "SIZE_DROP" }) {
         bool found = false;
         for (size_t i = 0; i < locked.size(); ++i) if (locked[i] == k) { found = true; break; }
         TEST_ASSERT(!found, std::string("NOT locked (dashboard-editable): ") + k);
