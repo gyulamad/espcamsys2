@@ -6,6 +6,13 @@ require_once __DIR__ . '/lib/Layout.php';
 require_once __DIR__ . '/relay.php';
 $count = count($cameras);
 $dashboardLayout = CamLogic::dashboardLayout($_GET['layout'] ?? null);
+
+// The site's address itself (https://host/) opens SIMPLE LIST; the dashboard is one click away in the navigation bar.
+$landing = CamLogic::defaultPageRedirect($dashboardLayout, parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH));
+if ($landing !== null) {
+    header('Location: ' . $landing, true, 302);
+    exit;
+}
 $cols  = CamLogic::computeGridColumns($count);
 
 // Pictures through ONE mux.php connection (config.php 'mux_enabled') or one stream.php per camera.

@@ -153,6 +153,17 @@ async function main() {
       const n = await get('index.php' + query);
       check(`index.php${query}: the bar marks ${key} (an unknown value falls back to the grid)`, n.status === 200 && (n.text.match(/aria-current/g) || []).length === 1 && n.text.includes(`data-nav="${key}" data-page-load aria-current="page"`) && !n.text.includes('evil"'), detail(n));
     }
+    // the site's address opens SIMPLE LIST; an address that names the dashboard still shows it
+    for (const p of ['', '?x=1', '?layout=evil']) {
+      const n = await get(p);
+      check(`/${p}: the site's address sends the browser to SIMPLE LIST (302, a plain relative address)`, n.status === 302 && n.headers.location === 'simple-list.php' && safe(n), detail(n));
+    }
+    const anon = await get('', { auth: false });
+    check('/ without a login asks for the login first (401), it does not redirect', anon.status === 401 && !anon.headers.location, detail(anon));
+    for (const p of ['index.php', 'index.php?layout=grid', 'index.php?layout=list']) {
+      const n = await get(p);
+      check(`${p}: still the dashboard itself (200, no redirect)`, n.status === 200 && !n.headers.location && n.text.includes('id="grid"'), detail(n));
+    }
     for (const [page, input] of [['camera-settings-page.php?cam=cam-a', 'e-icon'], ['settings-page.php', 'c-icon']]) {
       const n = await get(page);
       check(`${page}: the icon input has the chooser bubble — its scripts (catalog first), its style, and the attach call`,

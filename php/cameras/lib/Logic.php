@@ -338,6 +338,19 @@ class CamLogic
         return $raw === 'grid' || $raw === 'list' ? $raw : null;
     }
 
+    // The page a visit to the site's address (https://host/) opens: SIMPLE LIST, unless the visitor picked something. Gives
+    // the address to send the browser to, or null when index.php is to show the dashboard itself. Picked is: a layout in
+    // the address (?layout=grid / ?layout=list, what the navigation bar's DASHBOARD links have), or index.php named in
+    // the address (a bookmark, a typed address), so every address that showed the dashboard before still shows it.
+    // $layout is dashboardLayout()'s answer, $path the path of the request (REQUEST_URI without its query).
+    public static function defaultPageRedirect(?string $layout, $path): ?string
+    {
+        if ($layout !== null) return null;
+        if (!is_string($path)) return null;
+        if (preg_match('~(^|/)index\.php$~i', $path) === 1) return null;
+        return 'simple-list.php';
+    }
+
     // Grid column count for the dashboard: 1 camera -> 1 column, up to 4 ->
     // 2 columns, more than that -> 3 columns. Pure presentation logic, but
     // easy to get subtly wrong at the boundaries, so worth pinning down.

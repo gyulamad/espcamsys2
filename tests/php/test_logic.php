@@ -71,6 +71,28 @@ camtest_test('dashboardLayout: only grid and list are accepted', function () {
     }
 });
 
+// ── defaultPageRedirect ──────────────────────────────────────────────
+
+camtest_test('defaultPageRedirect: the site\'s address opens SIMPLE LIST', function () {
+    foreach (['/', '', '/cams/', '/a/b/'] as $path) {
+        camtest_assert_equal(CamLogic::defaultPageRedirect(null, $path), 'simple-list.php', var_export($path, true));
+    }
+});
+
+camtest_test('defaultPageRedirect: a picked layout or index.php in the address keeps the dashboard', function () {
+    camtest_assert_equal(CamLogic::defaultPageRedirect('grid', '/'), null);
+    camtest_assert_equal(CamLogic::defaultPageRedirect('list', '/cams/'), null);
+    foreach (['/index.php', '/cams/index.php', 'index.php', '/INDEX.PHP'] as $path) {
+        camtest_assert_equal(CamLogic::defaultPageRedirect(null, $path), null, $path);
+    }
+});
+
+camtest_test('defaultPageRedirect: a path that only ends like index.php, or is not a path, is treated plainly', function () {
+    camtest_assert_equal(CamLogic::defaultPageRedirect(null, '/myindex.php'), 'simple-list.php');
+    camtest_assert_equal(CamLogic::defaultPageRedirect(null, false), null, 'an address that cannot be read changes nothing');
+    camtest_assert_equal(CamLogic::defaultPageRedirect(null, null), null);
+});
+
 // ── computeGridColumns ───────────────────────────────────────────────
 
 camtest_test('computeGridColumns: a single camera gets one column', function () {
