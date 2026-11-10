@@ -120,8 +120,9 @@ camtest_test('loggedOutPage explains the login prompt that comes with it', funct
     camtest_assert_true(stripos($html, 'close every window') !== false, 'admits browsers differ and says how to be sure');
 });
 
-camtest_test('loggedOutPage is self-contained: no script, no outside resource', function () {
-    $html = CamLayout::loggedOutPage();
+camtest_test('loggedOutPage is self-contained: no script, no outside resource (its own two icon links aside)', function () {
+    $html = str_replace(CamLayout::faviconLinks(), '', CamLayout::loggedOutPage());
+    camtest_assert_true(strpos(CamLayout::loggedOutPage(), CamLayout::faviconLinks()) !== false, 'the icon links are exactly the shared ones');
     camtest_assert_true(!preg_match('/<script|https?:\/\/|@import|<link|<img|<iframe/i', $html));
 });
 
@@ -568,6 +569,31 @@ camtest_test('pageLoadAttr / busyStyle: the marker that says a link or form repl
         camtest_assert_true(strpos($html, 'busy.js') !== false && strpos($html, 'data-page-load') !== false, 'busy.js and marked links');
         camtest_assert_true(strpos($html, '.page-busy') !== false, 'and the look of the cover');
     }
+});
+
+camtest_test('faviconLinks: the vector icon and the .ico, on every page that is built here', function () {
+    $links = CamLayout::faviconLinks();
+    camtest_assert_equal($links, '<link rel="icon" href="favicon.svg" type="image/svg+xml">' . "\n" . '<link rel="icon" href="favicon.ico" sizes="48x48">' . "\n");
+    $cams = [['id' => 'a', 'name' => 'A']];
+    foreach (['simple list' => CamLayout::simpleListPage($cams), 'simple view' => CamLayout::simpleViewPage($cams, $cams[0], 10)] as $name => $html) {
+        camtest_assert_true(strpos($html, $links) !== false, $name);
+    }
+    camtest_assert_true(strpos(CamLayout::loggedOutPage(), 'href="favicon.svg"') !== false && strpos(CamLayout::loggedOutPage(), 'href="favicon.ico"') !== false, 'the logged-out page');
+});
+
+camtest_test('the icon files exist and are what they say: a standalone SVG and an .ico with 16, 32 and 48 pixel pictures', function () {
+    $dir = dirname(__DIR__, 2) . '/php/cameras/';
+    $svg = file_get_contents($dir . 'favicon.svg');
+    camtest_assert_true($svg !== false && strpos($svg, '<svg xmlns="http://www.w3.org/2000/svg"') === 0 && strpos($svg, 'viewBox') !== false, 'svg');
+    camtest_assert_true(strpos($svg, '<script') === false && stripos($svg, 'onload') === false && stripos($svg, 'href=') === false, 'a picture only: no script, handler or link');
+    camtest_assert_true(simplexml_load_string($svg) !== false, 'well-formed XML');
+    $ico = file_get_contents($dir . 'favicon.ico');
+    $head = unpack('vreserved/vtype/vcount', substr($ico, 0, 6));
+    camtest_assert_equal([$head['reserved'], $head['type'], $head['count']], [0, 1, 3], 'ICO header: icon type, three pictures');
+    $sizes = [];
+    for ($i = 0; $i < 3; $i++) { $e = unpack('Cw/Ch', substr($ico, 6 + 16 * $i, 2)); $sizes[] = $e['w']; }
+    sort($sizes);
+    camtest_assert_equal($sizes, [16, 32, 48]);
 });
 
 exit(camtest_summarize());

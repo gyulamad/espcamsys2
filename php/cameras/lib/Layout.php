@@ -370,6 +370,14 @@ CSS . "\n";
 
     // The frame both simple pages share: the dashboard's look, a title, $body, and the scripts (file names in js/).
     // $bodyClass is also the page's key in the navigation bar (NAV_PAGES): 'simple-list' or 'simple-view'.
+    // The page's icon (favicon.svg for browsers that take a vector icon, favicon.ico for the rest), for the <head> of every
+    // page, so that no browser has to ask for /favicon.ico by guessing. The files sit next to the pages.
+    public static function faviconLinks(): string
+    {
+        return '<link rel="icon" href="favicon.svg" type="image/svg+xml">' . "\n"
+            . '<link rel="icon" href="favicon.ico" sizes="48x48">' . "\n";
+    }
+
     private static function simplePage(string $title, string $bodyClass, string $body, array $scripts): string
     {
         $tags = '';
@@ -379,6 +387,7 @@ CSS . "\n";
         return "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n"
             . "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
             . '<title>' . self::esc($title) . " — ESP32-CAM Dashboard</title>\n"
+            . self::faviconLinks()
             . '<link rel="stylesheet" href="fonts/fonts.css">' . "\n"
             . "<style>\n" . self::simpleCss() . "</style>\n</head>\n"
             . '<body class="' . self::esc($bodyClass) . "\">\n" . self::navBar($bodyClass) . $body . "\n" . $tags
@@ -496,6 +505,8 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Logged out — ESP32-CAM Dashboard</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.ico" sizes="48x48">
 <style>
   body { margin: 0; min-height: 100vh; background: #0b0e14; color: #cdd8f0; font-family: system-ui, sans-serif; }
   main { max-width: 520px; margin: 0 auto; padding: 64px 24px; }

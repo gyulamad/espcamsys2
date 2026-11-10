@@ -47,6 +47,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ESP32-CAM Dashboard</title>
+<?= CamLayout::faviconLinks() ?>
 <link rel="stylesheet" href="fonts/fonts.css">
 <style>
   :root {

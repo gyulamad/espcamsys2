@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>ESP32-CAM Dashboard</title>
+  <rect width="64" height="64" rx="14" fill="#0b0e14"/>
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="none" stroke="#00e5ff" stroke-opacity=".35" stroke-width="2"/>
+  <circle cx="32" cy="33" r="19" fill="none" stroke="#00e5ff" stroke-width="5"/>
+  <circle cx="32" cy="33" r="9" fill="#00e5ff" fill-opacity=".25"/>
+  <circle cx="32" cy="33" r="4" fill="#00e5ff"/>
+  <circle cx="51" cy="13" r="5" fill="#ff4f5e"/>
+</svg>

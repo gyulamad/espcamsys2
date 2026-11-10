@@ -165,6 +165,15 @@ async function main() {
       const n = await get(p);
       check(`${p}: still the dashboard itself (200, no redirect)`, n.status === 200 && !n.headers.location && n.text.includes('id="grid"'), detail(n));
     }
+    // F-27: every page names the icon, and the icon files are served (so no browser guesses /favicon.ico into a 404)
+    for (const p of ['index.php?layout=grid', 'simple-list.php', 'simple-view.php', 'all-recordings.php', 'settings-page.php', 'camera-settings-page.php?cam=cam-a']) {
+      const n = await get(p);
+      check(`${p}: the head names favicon.svg and favicon.ico`, n.status === 200 && n.text.includes('<link rel="icon" href="favicon.svg" type="image/svg+xml">') && n.text.includes('<link rel="icon" href="favicon.ico" sizes="48x48">'), detail(n));
+    }
+    const svgIcon = await get('favicon.svg');
+    check('favicon.svg is served as an SVG picture', svgIcon.status === 200 && /image\/svg\+xml/.test(svgIcon.headers['content-type'] || '') && svgIcon.text.startsWith('<svg'), detail(svgIcon));
+    const icoIcon = await get('favicon.ico');
+    check('favicon.ico is served (200, an icon file)', icoIcon.status === 200 && /image\/(x-icon|vnd\.microsoft\.icon)/.test(icoIcon.headers['content-type'] || ''), detail(icoIcon));
     for (const [page, input] of [['camera-settings-page.php?cam=cam-a', 'e-icon'], ['settings-page.php', 'c-icon']]) {
       const n = await get(page);
       check(`${page}: the icon input has the chooser bubble — its scripts (catalog first), its style, and the attach call`,

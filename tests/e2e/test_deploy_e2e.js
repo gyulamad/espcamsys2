@@ -72,6 +72,7 @@ try {
   const fontFiles = [...fontCss.matchAll(/url\('([^']+)'\)/g)].map((m) => m[1]);
   check('fonts/ is copied: fonts.css, the licence and every font file fonts.css points at', fontFiles.length === 7 && fontFiles.every((f) => fs.existsSync(path.join(dest, 'fonts', f)) && fs.statSync(path.join(dest, 'fonts', f)).size > 1000) && fs.existsSync(path.join(dest, 'fonts/OFL.txt')), fontFiles.join(','));
   check('no page loads anything from Google Fonts, all four link fonts/fonts.css', ['index.php', 'settings-page.php', 'camera-settings-page.php', 'all-recordings.php'].every((f) => { const t = fs.readFileSync(path.join(dest, f), 'utf8'); return !/googleapis|gstatic/.test(t) && t.includes('href="fonts/fonts.css"'); }));
+  check('the page icons are copied (favicon.svg and favicon.ico, the ones every page names)', ['favicon.svg', 'favicon.ico'].every((f) => fs.existsSync(path.join(dest, f)) && fs.statSync(path.join(dest, f)).size > 100));
   check('no config.php is invented — and the owner is told to create one', !fs.existsSync(path.join(dest, 'config.php')) && /no .*config\.php yet/.test(r.out), r.out);
   check('no note about a stray folder when there is none', !/stray/.test(r.out), r.out);
   if (IS_ROOT && HAS_WWW_DATA) {
