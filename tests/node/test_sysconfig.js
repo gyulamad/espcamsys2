@@ -10,7 +10,7 @@ const state = (extra = {}) => Object.assign({ base: BASE, overrides: {}, alarmRe
 test('every field has a unique key, a group, a label and a help text', () => {
   const keys = sc.FIELDS.map((f) => f.key);
   assertEqual(new Set(keys).size, keys.length);
-  for (const f of sc.FIELDS) { assertTrue(f.group && f.label && f.help, f.key); assertTrue(['int', 'float', 'string', 'secret'].includes(f.type), f.key); }
+  for (const f of sc.FIELDS) { assertTrue(f.group && f.label && f.help, f.key); assertTrue(['int', 'float', 'bool', 'string', 'secret'].includes(f.type), f.key); }
 });
 
 test('checkValue: integers are range checked and parsed from text or numbers', () => {
@@ -66,19 +66,19 @@ test('minFreeStorageMB: an invalid value is refused and changes nothing', () => 
   assertTrue(r.error && !r.overrides, JSON.stringify(r));
 });
 
-test('currentNumber: environment, then saved settings, then config.js, then the default', () => {
-  assertEqual(sc.currentNumber('minFreeStorageMB', state()), 1024);
-  assertEqual(sc.currentNumber('minFreeStorageMB', state({ base: { minFreeStorageMB: 300 } })), 300);
-  assertEqual(sc.currentNumber('minFreeStorageMB', state({ base: { minFreeStorageMB: 300 }, overrides: { minFreeStorageMB: 500 } })), 500);
-  assertEqual(sc.currentNumber('minFreeStorageMB', state({ overrides: { minFreeStorageMB: 500 }, env: { MIN_FREE_STORAGE_MB: '700' } })), 700);
+test('currentValue: environment, then saved settings, then config.js, then the default', () => {
+  assertEqual(sc.currentValue('minFreeStorageMB', state()), 1024);
+  assertEqual(sc.currentValue('minFreeStorageMB', state({ base: { minFreeStorageMB: 300 } })), 300);
+  assertEqual(sc.currentValue('minFreeStorageMB', state({ base: { minFreeStorageMB: 300 }, overrides: { minFreeStorageMB: 500 } })), 500);
+  assertEqual(sc.currentValue('minFreeStorageMB', state({ overrides: { minFreeStorageMB: 500 }, env: { MIN_FREE_STORAGE_MB: '700' } })), 700);
 });
 
-test('currentNumber: a value that is not valid (hand-edited config.js, bad environment) falls back to the default, and 0 stays 0', () => {
+test('currentValue: a value that is not valid (hand-edited config.js, bad environment) falls back to the default, and 0 stays 0', () => {
   for (const bad of ['lots', -3, 1.5, 99999999999, {}]) {
-    assertEqual(sc.currentNumber('minFreeStorageMB', state({ base: { minFreeStorageMB: bad } })), 1024, JSON.stringify(bad));
+    assertEqual(sc.currentValue('minFreeStorageMB', state({ base: { minFreeStorageMB: bad } })), 1024, JSON.stringify(bad));
   }
-  assertEqual(sc.currentNumber('minFreeStorageMB', state({ env: { MIN_FREE_STORAGE_MB: 'x' } })), 1024);
-  assertEqual(sc.currentNumber('minFreeStorageMB', state({ base: { minFreeStorageMB: 0 } })), 0);
+  assertEqual(sc.currentValue('minFreeStorageMB', state({ env: { MIN_FREE_STORAGE_MB: 'x' } })), 1024);
+  assertEqual(sc.currentValue('minFreeStorageMB', state({ base: { minFreeStorageMB: 0 } })), 0);
 });
 
 test('parseOverrides: the live alarm value is not an override (it lives in settings.json)', () => {
@@ -346,8 +346,8 @@ test('personScanConfidence: config.js\'s personScan.confidence is the starting v
   assertEqual([view(saved).min, view(saved).max, typeof view(saved).value], [0, 1, 'number']);
 });
 
-test('currentNumber: the person scan\'s confidence — nested config.js value, saved value, default, and a bad value falls back', () => {
-  const cur = (extra) => sc.currentNumber('personScanConfidence', state(extra));
+test('currentValue: the person scan\'s confidence — nested config.js value, saved value, default, and a bad value falls back', () => {
+  const cur = (extra) => sc.currentValue('personScanConfidence', state(extra));
   assertEqual(cur(), 0.4);
   assertEqual(cur({ base: { personScan: { confidence: 0.55 } } }), 0.55);
   assertEqual(cur({ base: { personScan: { confidence: 0.55 } }, overrides: { personScanConfidence: 0.7 } }), 0.7);
@@ -393,6 +393,72 @@ test('a saved confidence reaches the person scan: mergeConfig, then resolveScanC
   const merged = sc.mergeConfig({ personScan: { enabled: true } }, { personScanConfidence: 0.7 });
   const scanCfg = ps.resolveScanConfig(merged.personScan, '/relay');
   assertEqual([scanCfg.confidence, scanCfg.enabled, scanCfg.warnings], [0.7, true, []]);
+});
+
+// ── personScanEnabled: the switch of the person check ────────────────
+
+test('personScanEnabled: the first setting of the Person check group, off by default, applies at once', () => {
+  const f = field('personScanEnabled');
+  assertTrue(f, 'field exists');
+  assertEqual([f.type, f.group, f.restart, f.env, f.default, f.config], ['bool', 'Person check', false, null, ps.DEFAULTS.enabled, ['personScan', 'enabled']]);
+  assertTrue(f.label && f.help, 'label and help');
+  const inGroup = sc.FIELDS.filter((x) => x.group === 'Person check').map((x) => x.key);
+  assertEqual(inGroup, ['personScanEnabled', 'personScanConfidence']);
+});
+
+test('checkValue (bool): true or false, as a boolean or as the text true / false — nothing else (no 1, yes, on)', () => {
+  const f = field('personScanEnabled');
+  for (const [raw, v] of [[true, true], [false, false], ['true', true], ['false', false], [' TRUE ', true], ['False', false]]) assertEqual(sc.checkValue(f, raw), { value: v }, String(raw));
+  for (const bad of [1, 0, '1', '0', 'yes', 'no', 'on', 'off', '', ' ', 'truefalse', 'true\n', null, undefined, NaN, [true], { v: true }]) {
+    const r = sc.checkValue(f, bad);
+    assertTrue(r.error && r.value === undefined, `${JSON.stringify(bad)} -> ${JSON.stringify(r)}`);
+  }
+  assertEqual(sc.checkValue(f, 'yes').error, 'personScanEnabled must be true or false');
+});
+
+test('personScanEnabled: config.js\'s personScan.enabled is the starting value, a saved one wins, else it is off', () => {
+  const view = (extra) => sc.buildView(state(extra)).fields.find((x) => x.key === 'personScanEnabled');
+  assertEqual([view().value, view().source, view().envOverride], [false, 'default', false]);
+  const fromConfig = { base: { ...BASE, personScan: { enabled: true } } };
+  assertEqual([view(fromConfig).value, view(fromConfig).source], [true, 'config.js']);
+  const saved = { ...fromConfig, overrides: { personScanEnabled: false } };
+  assertEqual([view(saved).value, view(saved).source, typeof view(saved).value], [false, 'settings', 'boolean']);
+});
+
+test('currentValue: the switch — saved value, config.js, default; anything not true/false falls back to OFF', () => {
+  const cur = (extra) => sc.currentValue('personScanEnabled', state(extra));
+  assertEqual(cur(), false);
+  assertEqual(cur({ base: { personScan: { enabled: true } } }), true);
+  assertEqual(cur({ base: { personScan: { enabled: true } }, overrides: { personScanEnabled: false } }), false);
+  for (const bad of ['yes', 1, 'x', []]) assertEqual(cur({ base: { personScan: { enabled: bad } } }), false, JSON.stringify(bad));
+});
+
+test('applyUpdate: switching the check on/off is stored as a boolean, needs no restart, and the same state is not a change', () => {
+  const on = sc.applyUpdate(state(), { personScanEnabled: 'true' });
+  assertEqual([on.error, on.changed, on.restartRequired, on.overrides.personScanEnabled], [undefined, ['personScanEnabled'], false, true]);
+  assertEqual(sc.applyUpdate(state(), { personScanEnabled: 'false' }).changed, [], 'already off');
+  assertEqual(sc.applyUpdate(state(), { personScanEnabled: false }).changed, []);
+  const fromConfig = state({ base: { ...BASE, personScan: { enabled: true } } });
+  assertEqual(sc.applyUpdate(fromConfig, { personScanEnabled: true }).changed, [], 'already on through config.js');
+  assertEqual(sc.applyUpdate(fromConfig, { personScanEnabled: 'false' }).changed, ['personScanEnabled']);
+});
+
+test('applyUpdate: a bad switch value changes nothing, even next to valid settings', () => {
+  for (const bad of ['yes', '1', 1, '', null]) {
+    const r = sc.applyUpdate(state(), { personScanConfidence: '0.5', personScanEnabled: bad });
+    assertTrue(r.error && /personScanEnabled/.test(r.error) && r.overrides === undefined && r.changed === undefined, `${JSON.stringify(bad)} -> ${JSON.stringify(r)}`);
+  }
+});
+
+test('mergeConfig + parseOverrides: a saved switch lands in personScan.enabled next to the confidence; a bad saved one is skipped with a warning', () => {
+  const merged = sc.mergeConfig({ personScan: { model: 'm.onnx' } }, { personScanEnabled: true, personScanConfidence: 0.7 });
+  assertEqual(merged.personScan, { model: 'm.onnx', enabled: true, confidence: 0.7 });
+  assertEqual(merged.personScanEnabled, undefined);
+  assertEqual(sc.parseOverrides('{"personScanEnabled":true}'), { overrides: { personScanEnabled: true }, warnings: [] });
+  const bad = sc.parseOverrides('{"personScanEnabled":"yes"}');
+  assertTrue(Object.keys(bad.overrides).length === 0 && bad.warnings.length === 1 && /personScanEnabled/.test(bad.warnings[0]), JSON.stringify(bad));
+  const scanCfg = ps.resolveScanConfig(sc.mergeConfig({}, { personScanEnabled: true }).personScan, '/relay');
+  assertEqual([scanCfg.enabled, scanCfg.warnings], [true, []]);
 });
 
 summarize();

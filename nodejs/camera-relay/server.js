@@ -1263,7 +1263,7 @@ const diskDeps = {
 };
 
 async function readStorageView() {
-  const minFreeMB = sysconfig.currentNumber('minFreeStorageMB', systemSettingsState());
+  const minFreeMB = sysconfig.currentValue('minFreeStorageMB', systemSettingsState());
   const freeBytes = await diskspace.readFreeBytes(RECORDINGS_DIR, diskDeps);
   return diskspace.buildStorageView(freeBytes, minFreeMB);
 }
@@ -1345,9 +1345,11 @@ app.post('/system-settings', requireControlKey, express.json({ limit: '16kb' }),
   }
   settings = { ...settings, alarmRecordSeconds: r.alarmRecordSeconds };
   systemOverrides = r.overrides;
-  // The person check reads its sensitivity for every clip it judges, so a saved one counts from the next clip on
-  // (a check already running keeps the value it started with). Nothing to restart.
-  scanCfg.confidence = sysconfig.currentNumber('personScanConfidence', systemSettingsState());
+  // The person check reads its switch and its sensitivity for every clip it judges, so a saved one counts from the
+  // next clip on (a check already running keeps the value it started with; clips still waiting are left alone when
+  // it is switched off). Nothing to restart.
+  scanCfg.confidence = sysconfig.currentValue('personScanConfidence', systemSettingsState());
+  scanCfg.enabled = sysconfig.currentValue('personScanEnabled', systemSettingsState());
   // Names only — values can be keys.
   relayLog('INFO', `system settings changed by ${actorOf(req)}: ${r.changed.join(', ')}${r.restartRequired ? ' (restart needed to apply)' : ''}`);
   return res.json({ ok: true, changed: r.changed, restartRequired: r.restartRequired });
@@ -2420,7 +2422,7 @@ app.get('/recordings/:id/:filename/thumbnail', requireReadKey, requireExistingRe
 // Is the person check usable? Answers 409 (with the reason) when it is switched off, so the dashboard can say why.
 function requireScanEnabled(req, res, next) {
   if (scanCfg.enabled) return next();
-  return res.status(409).json({ error: 'the person check is switched off (personScan.enabled in config.js — see INSTALL.md)' });
+  return res.status(409).json({ error: 'the person check is switched off (switch it on under SETTINGS → Person check, or personScan.enabled in config.js — see INSTALL.md)' });
 }
 
 // Sort out one clip: a clip without a person is moved to no-person/ (or deleted, personScan.action).

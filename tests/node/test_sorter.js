@@ -8,7 +8,7 @@ const CLIP = '/r/cam1/cam1_2026.mp4';
 
 function rig({ action = 'move', writing = false, modelExists = true, clipExists = true, detector, moveFails = false, clipGoneAtStart = false } = {}) {
   const calls = [];
-  const config = ps.resolveScanConfig({ action }, '/relay');
+  const config = ps.resolveScanConfig({ action, enabled: true }, '/relay');
   let checks = 0;
   const files = {
     // the clip exists at the first look unless clipGoneAtStart; clipExists=false means it vanishes while the detector works
@@ -90,6 +90,17 @@ test('move fails: error, not a crash', async () => {
   const o = await r.sorter.sort(CLIP);
   assertEqual(o.state, 'error');
   assertTrue(o.reason.includes('EACCES'));
+});
+
+test('a check that is switched off refuses to sort (also one that was queued while it was on) and leaves the clip alone', async () => {
+  const { sorter, calls, config } = rig({ detector: answer({ ok: true, person: false }) });
+  config.enabled = false;   // switched off in the settings while the clip waited in the queue
+  const out = await sorter.sort('/r/cam/a.mp4');
+  assertEqual(out.state, 'error');
+  assertTrue(/switched off/.test(out.reason), out.reason);
+  assertEqual(calls, [], 'the detector did not run and nothing was moved or removed');
+  config.enabled = true;
+  assertEqual((await sorter.sort('/r/cam/a.mp4')).state, 'moved', 'switched on again: works, no restart');
 });
 
 summarize();

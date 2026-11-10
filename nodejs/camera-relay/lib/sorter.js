@@ -21,6 +21,7 @@ function createSorter({ config, runDetector, files }) {
   const error = (reason) => ({ state: 'error', reason });
 
   function checkReady(clipPath) {
+    if (!config.enabled) return 'the person check is switched off';   // read per clip: also stops what waits in the queue
     if (!files.exists(clipPath)) return 'the recording no longer exists';
     if (files.isBeingWritten(clipPath)) return 'the recording is still being encoded — try again in a moment';
     if (!files.exists(config.model)) return `the person detector model is not installed (expected at ${config.model})`;

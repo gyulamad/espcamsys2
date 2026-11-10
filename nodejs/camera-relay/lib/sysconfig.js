@@ -22,7 +22,7 @@ const personscan = require('./personscan');
 
 const MIB = 1024 * 1024;
 
-// One entry per setting. `type`: int | float | string | secret.
+// One entry per setting. `type`: int | float | bool | string | secret.
 //   config   where config.js keeps it when that is not a top-level key of the same name (a path into it)
 //   minExclusive  a float's min is not itself allowed (0 < c <= 1)
 //   env      the environment variable that overrides it (or null)
@@ -39,8 +39,10 @@ const FIELDS = [
   { key: 'preRollMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 8 * MIB, env: 'PREROLL_MAX_BYTES', group: 'Recording', restart: true,
     label: 'Pre-roll RAM cap per camera (bytes)', help: 'The buffer drops its oldest frames first when it reaches this size. Default 8 MiB = 8388608.' },
 
+  { key: 'personScanEnabled', type: 'bool', default: personscan.DEFAULTS.enabled, config: ['personScan', 'enabled'], env: null, group: 'Person check', restart: false,
+    label: 'Person check (sort out recordings without a person)', help: 'ON: every new recording is checked by the person detector, and a clip with nobody in it is moved to the archive (or deleted — personScan.action in config.js); the check can also be started by hand on a recording. OFF: nothing is checked or moved, and clips already waiting for their check are left alone. Needs the detector model installed first (INSTALL.md, "Sorting out footage without a person"); without it every check just reports an error and no clip is touched. Applies at once — no restart.' },
   { key: 'personScanConfidence', type: 'float', min: personscan.CONFIDENCE.min, max: personscan.CONFIDENCE.max, minExclusive: true, step: 0.05, default: personscan.CONFIDENCE.default, config: ['personScan', 'confidence'], env: null, group: 'Person check', restart: false,
-    label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check is switched on (personScan.enabled in config.js). Applies to the next clip checked — no restart.' },
+    label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check above is ON. Applies to the next clip checked — no restart.' },
 
   { key: 'port', type: 'int', min: 1, max: 65535, default: 8080, env: 'PORT', group: 'Network', restart: true,
     label: 'HTTP port', help: 'The relay\'s HTTP port (/stream, /snapshot, /status ...). The dashboard\'s relay address is updated to match when you change it here.' },
@@ -86,8 +88,18 @@ function checkFloat(field, raw) {
   return aboveMin && n <= field.max ? { value: n } : fail;
 }
 
+// true or false, as a boolean or as the text "true" / "false" (what the settings page sends) — nothing else: no 1,
+// yes or on, so a typo can never switch a feature that moves footage. -> { value } or { error }
+function checkBool(field, raw) {
+  const v = typeof raw === 'string' ? raw.replace(/^ +| +$/g, '').toLowerCase() : raw;   // spaces only: a line break is refused
+  if (v === true || v === 'true') return { value: true };
+  if (v === false || v === 'false') return { value: false };
+  return { error: `${field.key} must be true or false` };
+}
+
 function checkValue(field, raw) {
   if (field.type === 'float') return checkFloat(field, raw);
+  if (field.type === 'bool') return checkBool(field, raw);
   if (field.type === 'int') {
     const s = typeof raw === 'number' ? String(raw) : raw;
     if (typeof s !== 'string' || !/^\s*-?\d+\s*$/.test(s)) return { error: `${field.key} must be a whole number between ${field.min} and ${field.max}` };
@@ -196,10 +208,10 @@ function effective(field, base, overrides, env) {
   return { value: field.default, source: 'default' };
 }
 
-// The value a number setting (int or float) has right now, checked like a saved one. A value that is no longer
-// valid (config.js edited by hand, an environment variable with text in it) falls back to the default, so a
-// bad value can never break the code that reads it.   -> number
-function currentNumber(key, { base, overrides, env }) {
+// The value a setting (a number or a true/false switch) has right now, checked like a saved one. A value that is
+// no longer valid (config.js edited by hand, an environment variable with text in it) falls back to the default,
+// so a bad value can never break the code that reads it.   -> number | boolean
+function currentValue(key, { base, overrides, env }) {
   const f = BY_KEY[key];
   const r = checkValue(f, effective(f, base, overrides, env).value);
   return r.error ? f.default : r.value;
@@ -207,6 +219,9 @@ function currentNumber(key, { base, overrides, env }) {
 
 // What GET /system-settings returns: the schema plus the current values. Secrets are
 // NEVER sent back — only whether one is set.
+// How a value is shown to the settings page, per type (a switch is the text "true" / "false", like the page sends it).
+const VIEW_VALUE = { int: Number, float: Number, bool: Boolean, string: String, secret: String };
+
 function buildView({ base, overrides, alarmRecordSeconds, env }) {
   const fields = FIELDS.map((f) => {
     const out = { key: f.key, type: f.type, label: f.label, help: f.help, group: f.group, restart: f.restart };
@@ -219,7 +234,7 @@ function buildView({ base, overrides, alarmRecordSeconds, env }) {
       out.min = f.min; out.max = f.max; out.value = alarmRecordSeconds; out.source = 'settings';
     } else {
       const e = effective(f, base, overrides, env);
-      out.min = f.min; out.max = f.max; out.value = f.type === 'int' || f.type === 'float' ? Number(e.value) : String(e.value); out.source = e.source;
+      out.min = f.min; out.max = f.max; out.value = VIEW_VALUE[f.type](e.value); out.source = e.source;
       if (f.type === 'float') { out.step = f.step; out.minExclusive = Boolean(f.minExclusive); }
     }
     out.envOverride = Boolean(f.env && env[f.env] !== undefined);
@@ -252,7 +267,7 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env }, values) {
     const r = checkValue(f, raw);
     if (r.error) return { error: r.error };
     const current = key === 'alarmRecordSeconds' ? alarmRecordSeconds : effective(f, base, overrides, env).value;
-    if (f.type === 'float' ? Number(current) === r.value : (f.type !== 'secret' && String(current) === String(r.value))) continue; // unchanged
+    if (f.type !== 'secret' && (f.type === 'float' ? Number(current) === r.value : String(current) === String(r.value))) continue; // unchanged
     if (f.type === 'secret' && current === r.value) continue;
     let value = r.value;
     if (f.path) {
@@ -293,4 +308,4 @@ function isSupervised(env) {
 // restarts after a non-zero exit. (75 = EX_TEMPFAIL, "try again".)
 const RESTART_EXIT_CODE = 75;
 
-module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, currentNumber, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };
+module.exports = { FIELDS, OVERRIDE_KEYS, checkValue, checkRelayPath, parseOverrides, mergeConfig, currentValue, buildView, applyUpdate, isSupervised, RESTART_EXIT_CODE };

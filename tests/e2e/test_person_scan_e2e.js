@@ -12,6 +12,8 @@
 //   - the routes need the dashboard key; unsafe names are refused; a missing clip is 404
 //   - the sensitivity (personScanConfidence): config.js sets it, a save from the settings page applies to the next
 //     clip with no restart, an invalid one is refused, and the saved value wins over config.js after a restart
+//   - the switch (personScanEnabled): config.js sets it, the settings page switches the check on/off at once, a clip
+//     that waits in the queue is left alone once it is off, and the saved value wins over config.js after a restart
 //   - with action 'delete' a clip with nobody in it is removed for good
 //   - the archive (<camera>/no-person/): GET .../archive counts its clips, DELETE .../archive removes them for
 //     good — needs the right key, leaves the listed clips, other files, folders and links alone, and is not
@@ -197,6 +199,36 @@ const scanConfig = (extra) => ({ enabled: true, auto: false, action: 'move', mod
     relay = await startRelay();
     clip('j_score.mp4', 'SCORE:0.4'); await scan('j_score.mp4');
     check('after a restart the SAVED sensitivity (0.3) wins over config.js (0.9)', !!(await waitFor(async () => (await entry('j_score.mp4') || {}).person === true)) && !/personScan\./.test(relay.output()), relay.output().slice(-300));
+    await stopRelay(relay);
+    fs.rmSync(SYS_FILE, { force: true });
+
+    // ── the switch (personScanEnabled): from the settings, at once, also for what waits in the queue, kept over restarts ──
+    writeConfig(scanConfig({ enabled: false }));
+    relay = await startRelay();
+    clip('m_empty.mp4', 'EMPTY');
+    r = await scan('m_empty.mp4');
+    check('config.js has the check off: sorting out answers 409 and points to the SETTINGS page', r.status === 409 && /SETTINGS/.test(r.json.error), JSON.stringify(r.json));
+    r = await save({ personScanEnabled: 'yes' });
+    check('a switch value that is not true/false is refused (400) and the check stays off', r.status === 400 && /personScanEnabled/.test(r.json.error) && (await scan('m_empty.mp4')).status === 409, JSON.stringify(r.json));
+    r = await save({ personScanEnabled: 'true' });
+    check('switching it on is saved without a restart', r.status === 200 && r.json.changed[0] === 'personScanEnabled' && r.json.restartRequired === false, JSON.stringify(r.json));
+    r = await scan('m_empty.mp4');
+    check('...and works from the next request: the clip is sorted out', r.status < 300 && !!(await waitFor(async () => exists('no-person', 'm_empty.mp4'))), String(r.status));
+    clip('n_slow.mp4', 'SLOW EMPTY'); clip('o_empty.mp4', 'EMPTY');
+    await scan('n_slow.mp4'); await scan('o_empty.mp4');
+    await waitFor(async () => ((await entry('n_slow.mp4')) || {}).scan && (await entry('n_slow.mp4')).scan.state === 'processing');
+    r = await save({ personScanEnabled: false });
+    check('switching it off while clips are queued is saved', r.status === 200 && r.json.changed[0] === 'personScanEnabled', JSON.stringify(r.json));
+    check('the clip that waited in the queue is NOT sorted out any more: it stays, with the reason', !!(await waitFor(async () => { const e = await entry('o_empty.mp4'); return e && e.scan && e.scan.state === 'error' && /switched off/.test(e.scan.reason || ''); })) && exists('o_empty.mp4') && !exists('no-person', 'o_empty.mp4'));
+    check('...and sorting out by hand answers 409 again', (await scan('o_empty.mp4')).status === 409);
+    await stopRelay(relay);
+    relay = await startRelay();
+    check('after a restart it is still off (saved)', (await scan('o_empty.mp4')).status === 409);
+    await save({ personScanEnabled: 'true' });
+    await stopRelay(relay);
+    relay = await startRelay();
+    r = await scan('o_empty.mp4');
+    check('after a restart the SAVED switch (on) wins over config.js (off)', r.status < 300 && !!(await waitFor(async () => exists('no-person', 'o_empty.mp4'))), String(r.status));
     await stopRelay(relay);
     fs.rmSync(SYS_FILE, { force: true });
 

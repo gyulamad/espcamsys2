@@ -50,13 +50,13 @@ require_once __DIR__ . '/lib/Layout.php';
   .tag { font-family: var(--mono); font-size: .6rem; border: 1px solid var(--border-light); border-radius: 20px; padding: 1px 7px; margin-right: 4px; color: var(--muted); }
   .tag.restart { border-color: var(--warn); color: var(--warn); }
   .tag.danger  { border-color: var(--accent2); color: var(--accent2); }
-  .row input {
+  .row input, .row select {
     width: 100%; font-family: var(--mono); font-size: .85rem; padding: 7px 9px; border-radius: var(--radius);
     border: 1px solid var(--border-light); background: var(--bg); color: var(--text);
   }
-  .row input:focus { outline: none; border-color: var(--accent); }
-  .row input:disabled { opacity: .5; }
-  .row input.changed { border-color: var(--warn); }
+  .row input:focus, .row select:focus { outline: none; border-color: var(--accent); }
+  .row input:disabled, .row select:disabled { opacity: .5; }
+  .row input.changed, .row select.changed { border-color: var(--warn); }
   .help { grid-column: 2; font-size: .75rem; color: var(--muted); line-height: 1.4; }
   .cams .cam-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .cams .cam-row:first-of-type { border-top: 0; }
@@ -193,10 +193,16 @@ require_once __DIR__ . '/lib/Layout.php';
     if (ok) { $('c-id').value = ''; $('c-name').value = ''; $('c-icon').value = ''; }
   }));
 
+  // A true/false setting is an ON/OFF choice whose value is the text the relay takes ("true" / "false"), so it
+  // goes through the same change tracking, revert and save as every other field.
+  function switchInput(id, name) {
+    return el('select', { id, name }, el('option', { value: 'true', textContent: 'ON' }), el('option', { value: 'false', textContent: 'OFF' }));
+  }
+
   function renderField(f) {
     const id = 'f-' + f.key;
     const secret = f.type === 'secret';
-    const input = el('input', {
+    const input = f.type === 'bool' ? switchInput(id, f.key) : el('input', {
       id, name: f.key,
       type: secret ? 'password' : (NUMERIC.includes(f.type) ? 'number' : 'text'),
       autocomplete: 'off', spellcheck: false,

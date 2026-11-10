@@ -59,7 +59,8 @@ module.exports = {
   // becomes the clip's thumbnail) and files a clip that shows nobody under <camera>/no-person/ or deletes it.
   // A clip is NEVER removed unless the whole clip was read and no person found; any failure keeps it.
   // personScan: {
-  //   enabled: false,            // switch on after installing the model (INSTALL.md)
+  //   enabled: false,            // switch on after installing the model (INSTALL.md): the starting state only —
+  //                              // the dashboard's SETTINGS page (Person check) switches it on/off, and wins
   //   auto: true,                // check every recording right after it is saved
   //   action: 'move',            // 'move' (safe) or 'delete' a clip with nobody in it
   //   model: 'models/person.onnx', // relative to this folder
