@@ -138,12 +138,14 @@ function stopProc(child) {
   });
 }
 
-// The page in jsdom: the inline script runs, toast.js is loaded (the toasts are what we assert), the
-// POSTs the page makes are recorded and forwarded with the login, so does the fake relay see them.
+// The page in jsdom: the inline script runs, toast.js is loaded (the toasts are what we assert) and busy.js too
+// (since F-11 every button runs through CamBusy.run — without it each save click dies with "CamBusy is not defined"
+// and nothing is ever posted), the POSTs the page makes are recorded and forwarded with the login, so does the
+// fake relay see them.
 async function openPage(toasts) {
   const html = await (await nodeFetch(PAGE, { headers: { Authorization: basic } })).text();
   const dom = new JSDOM(html, {
-    url: PAGE, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js']), pretendToBeVisual: true,
+    url: PAGE, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js']), pretendToBeVisual: true,
     beforeParse(window) {
       window.confirm = () => true;
       window.alert = () => {};
