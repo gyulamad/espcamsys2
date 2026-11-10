@@ -26,6 +26,7 @@ async function runAll() {
 
 const JS = path.join(__dirname, '../../php/cameras/js');
 const CamSimple = require(path.join(JS, 'simple-logic.js'));
+const CamOffline = require(path.join(JS, 'camera-offline.js'));   // the real one: the pages' cover rule and its way of showing it
 const CamRelayJson = require(path.join(JS, 'relay-json.js'));   // the real one: it asks the environment's fetch
 
 const CAMS = [{ id: 'a', name: 'Alpha', icon: '🚪' }, { id: 'b', name: 'Beta', icon: '🚗' }, { id: 'c', name: 'Gamma' }];   // c: an older page without icons
@@ -46,14 +47,15 @@ function makeEl(extra) {
 }
 
 // A page environment. `relay`: what status.php / detector-status.php answer (mutable by the test; null = failed).
-function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, relayJson = true } = {}) {
+function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, relayJson = true, offlineHelper = true } = {}) {
   const env = { now: 1000000, intervals: [], timeouts: [], urls: [], relay: { status: {}, detectors: {} }, clockWindow: {} };
   // js/fullscreen.js stand-in: records the elements it was asked to toggle (the real one is tested in test_fullscreen.js)
   env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
   env.relayJson = relayJson;   // false: the helper script is not on the page
+  env.offlineHelper = offlineHelper;   // false: js/camera-offline.js is not on the page
   const els = {};
-  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'loading']) els[id] = makeEl();
-  for (const id of ['countdown', 'countdown-bar', 'loading']) els[id].hidden = true;   // as the page is delivered
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline']) els[id] = makeEl();
+  for (const id of ['countdown', 'countdown-bar', 'offline']) els[id].hidden = true;   // as the page is delivered
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -100,7 +102,7 @@ function install(env) {
 // until the test is over.
 function load(env, file) {
   env.windowListeners = {};
-  env.window = { CamSimple, CamRelayJson: env.relayJson ? CamRelayJson : undefined, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
+  env.window = { CamSimple, CamOffline: env.offlineHelper ? CamOffline : undefined, CamRelayJson: env.relayJson ? CamRelayJson : undefined, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
   cleanups.push(install(env));
   delete require.cache[require.resolve(path.join(JS, file))];
   require(path.join(JS, file));
@@ -277,6 +279,13 @@ test('view: a page without the helper that asks the relay does nothing at all (i
   const env = await started({ relayJson: false });
   assertEqual(env.urls, []);
   assertEqual(env.intervals.length, 0);
+});
+
+test('view: a page without the offline-cover script does nothing at all, and does not throw', async () => {
+  const env = await started({ offlineHelper: false });
+  assertEqual(env.urls, []);
+  assertEqual(env.intervals.length, 0);
+  assertTrue(env.els.offline.hidden, 'nothing is covered');
 });
 
 test('view: asks status.php and detector-status.php, and an HTTP error answer is treated as unknown', async () => {
@@ -516,25 +525,25 @@ test('view: the slideshow time falls back to 10 s when the page does not give a 
 
 // ── cameras that are not connected ───────────────────────────────────
 
-test('view: the loading indicator covers the picture of a camera that is not connected, and goes when it is back', async () => {
+test('view: the offline cover is over the picture of a camera that is not connected, and goes when it is back', async () => {
   const env = await started({ current: 'a' });
-  assertTrue(env.els.loading.hidden, 'nothing is covered before the relay says so');
+  assertTrue(env.els.offline.hidden, 'nothing is covered before the relay says so');
   env.relay.status = { a: { online: false }, b: { online: true } };
   await env.poll();
-  assertTrue(!env.els.loading.hidden, 'a is offline');
+  assertTrue(!env.els.offline.hidden, 'a is offline');
   env.els.next.fire('click');   // the pager still goes to b: the viewer picks by hand
   assertEqual(env.els.picture.src, 'stream.php?cam=b');
-  assertTrue(env.els.loading.hidden, 'b is online');
+  assertTrue(env.els.offline.hidden, 'b is online');
   env.els.prev.fire('click');   // a again: offline, covered AT ONCE (no wait for the next poll)
-  assertTrue(!env.els.loading.hidden);
+  assertTrue(!env.els.offline.hidden);
   env.relay.status = { a: { online: true } };
   await env.poll();
-  assertTrue(env.els.loading.hidden, 'a is back');
+  assertTrue(env.els.offline.hidden, 'a is back');
   env.relay.status = { a: { online: false } };
   await env.poll();
   env.relay.status = null;   // no answer: not known to be offline
   await env.poll();
-  assertTrue(env.els.loading.hidden);
+  assertTrue(env.els.offline.hidden);
 });
 
 test('view: the slideshow skips the cameras that are not connected, and the pager does not', async () => {
@@ -553,12 +562,12 @@ test('view: the slideshow skips the cameras that are not connected, and the page
 // ── simple-list.js ───────────────────────────────────────────────────
 
 const THUMB_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
-function listEnv(count, { width = 1024, height = 768, relayJson = true, navHeight = 44 } = {}) {
-  const env = makeEnv({ relayJson });
+function listEnv(count, { width = 1024, height = 768, relayJson = true, navHeight = 44, offlineHelper = true } = {}) {
+  const env = makeEnv({ relayJson, offlineHelper });
   // one thumbnail per camera, as the page has them: an element that carries its camera id in data-cam
   env.thumbs = Array.from({ length: count }, (_, i) => {
-    const loading = makeEl(); loading.hidden = true;   // the cover inside the thumbnail, as the page delivers it
-    return makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i }, loading, querySelector: (sel) => (sel === '.cam-loading' ? loading : null) });
+    const offline = makeEl(); offline.hidden = true;   // the cover inside the thumbnail, as the page delivers it
+    return makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i }, offline, querySelector: (sel) => (sel === '.cam-offline' ? offline : null) });
   });
   const grid = makeEl({ dataset: { count: String(count) }, children: env.thumbs });
   env.document.getElementById = (id) => (id === 'thumbs' ? grid : null);
@@ -630,12 +639,12 @@ test('list: a thumbnail whose camera records gets the red frame class, the other
   assertTrue(env.urls.length >= 5 && env.urls.every((u) => u === 'status.php'), 'only status.php is asked: ' + env.urls.join());
 });
 
-test('list: the loading cover is on the thumbnail of a camera that is not connected, and only on that one', async () => {
+test('list: the offline cover is on the thumbnail of a camera that is not connected, and only on that one', async () => {
   const env = listEnv(3);
   env.relay.status = { a: { online: true }, b: { online: false }, c: {} };   // c: an older relay says nothing
   load(env, 'simple-list.js');
   await env.run(async () => {});
-  const covered = () => env.thumbs.map((t) => !t.loading.hidden);
+  const covered = () => env.thumbs.map((t) => !t.offline.hidden);
   assertEqual(covered(), [false, true, false]);
   env.relay.status = { a: { online: false }, b: { online: true } };
   await env.poll();
@@ -661,6 +670,16 @@ test('list: without the helper that asks the relay the thumbnails are still size
   assertEqual(env.urls, []);
   assertEqual(env.intervals.length, 0);
   assertTrue(env.grid.classList.contains('fitted'));
+});
+
+test('list: a page without the offline-cover script does nothing at all, and does not throw', async () => {
+  const env = listEnv(3, { offlineHelper: false });
+  env.relay.status = { a: { online: false } };
+  load(env, 'simple-list.js');
+  await env.run(async () => {});
+  assertEqual(env.urls, []);
+  assertEqual(env.intervals.length, 0);
+  assertTrue(env.thumbs.every((t) => t.offline.hidden), 'nothing is covered');
 });
 
 test('list: a page without the grid (no cameras) does nothing', () => {

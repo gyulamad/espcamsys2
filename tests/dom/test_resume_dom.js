@@ -137,7 +137,7 @@ async function main() {
     const virtualConsole = new VirtualConsole();
     virtualConsole.on('jsdomError', (e) => pageErrors.push(String(e && e.message || e)));
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js']), pretendToBeVisual: true, virtualConsole,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js', 'camera-offline.js']), pretendToBeVisual: true, virtualConsole,
       beforeParse(window) {
         window.confirm = () => false;
         window.alert = () => {};

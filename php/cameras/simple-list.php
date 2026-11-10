@@ -1,7 +1,8 @@
 <?php
 // simple-list.php — every camera as a small live thumbnail, nothing else. Each thumbnail links to the
 // large view (simple-view.php). The thumbnails are sized to fit the screen by js/simple-list.js (never
-// below a recognisable size: then the page scrolls). Markup: CamLayout::simpleListPage(), rules:
+// below a recognisable size: then the page scrolls). A camera that is not connected has its last picture covered
+// with a "camera offline" message (js/camera-offline.js). Markup: CamLayout::simpleListPage(), rules:
 // js/simple-logic.js — both unit tested.
 
 require_once __DIR__ . '/auth.php';

@@ -3,14 +3,14 @@
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
 // them to the page, status.php (recording: the status line and the red frame around the picture) and
 // detector-status.php (motion). A camera that is not connected is skipped by the slideshow and, when picked
-// by hand, shows a loading indicator instead of its stale last picture. A click on the picture toggles full
+// by hand, has its stale last picture covered with an "offline" message (js/camera-offline.js). A click on the picture toggles full
 // screen (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
 // under the picture show the time left before the next camera.
 
 (function () {
   const S = window.CamSimple;
   const root = document.getElementById('view');
-  if (!S || !window.CamRelayJson || !root) return;
+  if (!S || !window.CamOffline || !window.CamRelayJson || !root) return;
 
   const POLL_MS = 2000;     // how often the relay is asked what the cameras do
   const TICK_MS = 1000;     // clock, and how often the slideshow looks at the situation
@@ -60,10 +60,9 @@
   }
 
   // A camera that is not connected sends nothing, and the picture would stay on its last frame: cover it with the
-  // loading indicator until the camera is back. (Also the status line says so.)
-  function renderLoading() {
-    const loading = el('loading');
-    if (loading) loading.hidden = !S.isOffline(status, current);
+  // "offline" message until the camera is back.
+  function renderOffline() {
+    window.CamOffline.render(el('offline'), status, current);
   }
 
   // The stream is a never-ending picture: switching the camera replaces it, which closes the old connection.
@@ -76,7 +75,7 @@
     document.title = nameOf(id) + ' — ESP32-CAM Dashboard';
     try { history.replaceState(null, '', 'simple-view.php?cam=' + encodeURIComponent(id)); } catch (e) { /* not allowed here: the address just stays */ }
     renderRecording();
-    renderLoading();
+    renderOffline();
   }
 
   function step(direction) {
@@ -146,7 +145,7 @@
     looksAnswered = look;
     [status, detectors] = answers;
     renderRecording();
-    renderLoading();
+    renderOffline();
     keepViews();
     tick();   // a camera that has just started recording is shown now, not at the next second
   }

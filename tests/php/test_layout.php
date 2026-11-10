@@ -185,18 +185,51 @@ camtest_test('simpleListPage: one thumbnail per camera, a live picture that link
     camtest_assert_true(strpos($html, '2 CAMERAS') !== false);
 });
 
-camtest_test('simpleListPage: every thumbnail has its own hidden loading cover (shown by the script for a camera that is not connected)', function () use ($SIMPLE_CAMS) {
+camtest_test('simpleListPage: every thumbnail has its own hidden offline cover (shown by the script for a camera that is not connected)', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleListPage($SIMPLE_CAMS);
-    camtest_assert_equal(substr_count($html, '<div class="cam-loading" role="status" hidden>'), 2);
-    camtest_assert_equal(preg_match_all('/<a class="thumb rec-frame"[^>]*><img [^>]*><div class="cam-loading"/', $html), 2, 'inside each thumbnail, over its picture');
-    camtest_assert_true(strpos($html, '.cam-loading[hidden] { display: none; }') !== false, 'hidden stays hidden although the cover has its own display');
+    camtest_assert_equal(substr_count($html, '<div class="cam-offline" role="status" hidden>'), 2);
+    camtest_assert_equal(preg_match_all('/<a class="thumb rec-frame"[^>]*><img [^>]*><div class="cam-offline"/', $html), 2, 'inside each thumbnail, over its picture');
+    camtest_assert_equal(substr_count($html, 'CAMERA OFFLINE'), 2, 'each cover says so');
+    camtest_assert_true(strpos($html, '.cam-offline[hidden] { display: none; }') !== false, 'hidden stays hidden although the cover has its own display');
     camtest_assert_true(strpos($html, 'pointer-events: none') !== false, 'a click goes through the cover');
+    camtest_assert_true(strpos($html, 'cam-loading') === false, 'the old opaque loading cover is gone');
 });
 
-camtest_test('simpleViewPage: the loading cover is inside the picture box (so it goes full screen with it), hidden at first', function () use ($SIMPLE_CAMS) {
+camtest_test('simpleViewPage: the offline cover is inside the picture box (so it goes full screen with it), hidden at first', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[1], 15);
-    camtest_assert_equal(preg_match('/<div class="picture rec-frame" id="picture-box"><img [^>]*><div class="cam-loading" id="loading" role="status" hidden>.*?<\/div><\/div>/', $html), 1);
-    camtest_assert_equal(substr_count($html, 'id="loading"'), 1);
+    camtest_assert_equal(preg_match('/<div class="picture rec-frame" id="picture-box"><img [^>]*><div class="cam-offline" id="offline" role="status" hidden>.*?<\/div><\/div>/', $html), 1);
+    camtest_assert_equal(substr_count($html, 'id="offline"'), 1);
+    camtest_assert_true(strpos($html, 'CAMERA OFFLINE') !== false && strpos($html, '.cam-offline[hidden] { display: none; }') !== false);
+    camtest_assert_true(strpos($html, 'cam-loading') === false, 'the old opaque loading cover is gone');
+});
+
+camtest_test('offlineCover: a hidden status element that says the camera is offline and is being reconnected', function () {
+    camtest_assert_equal(CamLayout::offlineCover(),
+        '<div class="cam-offline" role="status" hidden><span class="cam-offline-spinner" aria-hidden="true"></span>'
+        . '<span class="cam-offline-title">CAMERA OFFLINE</span><span class="cam-offline-note">Reconnecting…</span></div>');
+});
+
+camtest_test('offlineCover: the id is optional, and an id that is markup stays text', function () {
+    camtest_assert_true(strpos(CamLayout::offlineCover(), ' id=') === false, 'no id asked, none given');
+    camtest_assert_true(strpos(CamLayout::offlineCover('offline-cam1'), '<div class="cam-offline" id="offline-cam1" role="status" hidden>') !== false);
+    $html = CamLayout::offlineCover('offline-"><script>window.__pwned=1</script>');
+    camtest_assert_true(strpos($html, '<script>') === false, 'escaped');
+    camtest_assert_true(strpos($html, 'id="offline-&quot;&gt;&lt;script&gt;') !== false);
+});
+
+camtest_test('offlineCoverStyle: the cover is dark but see-through, covers the whole picture and lets clicks through', function () {
+    $css = CamLayout::offlineCoverStyle();
+    camtest_assert_equal(preg_match('/\.cam-offline \{[^}]*background: rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)/', $css, $m), 1, 'a background that is not opaque');
+    camtest_assert_true($m[1] < 64 && $m[2] < 64 && $m[3] < 64, 'dark');
+    camtest_assert_true((float) $m[4] > 0.4 && (float) $m[4] < 1, 'but the picture under it still shows');
+    camtest_assert_true(strpos($css, 'position: absolute; inset: 0') !== false, 'over the whole picture');
+    camtest_assert_true(strpos($css, 'pointer-events: none') !== false, 'a click goes through the cover');
+    camtest_assert_true(strpos($css, '.cam-offline[hidden] { display: none; }') !== false, 'hidden stays hidden although the cover has its own display');
+    camtest_assert_true(strpos($css, 'prefers-reduced-motion') !== false, 'the spinner slows down for people who asked for less motion');
+});
+
+camtest_test('offlineCoverStyle: it does not lean on any colour variable that a page may or may not define', function () {
+    camtest_assert_equal(preg_match_all('/var\(--(?!mono\b)[a-z-]+/', CamLayout::offlineCoverStyle()), 0);
 });
 
 camtest_test('simpleListPage: loads the logic and the list script, links the storage warning, leaks no relay address', function () use ($SIMPLE_CAMS) {
@@ -220,7 +253,7 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 4, 'only our three script files and the storage warning');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 5, 'only our four script files and the storage warning');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
@@ -255,7 +288,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 6);   // simple-logic.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 7);   // camera-offline.js, simple-logic.js, relay-json.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
@@ -356,6 +389,14 @@ camtest_test('simple pages: relay-json.js is loaded before the script that uses 
         $page = strpos($html, '<script src="js/' . $script . '">');
         camtest_assert_true($helper !== false && $page !== false && $helper < $page, $script);
         camtest_assert_true($logic !== false && $logic < $page, 'simple-logic.js too: ' . $script);
+    }
+});
+
+camtest_test('simple pages: camera-offline.js is loaded before simple-logic.js, which needs it', function () use ($SIMPLE_CAMS) {
+    foreach ([CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), CamLayout::simpleListPage($SIMPLE_CAMS)] as $html) {
+        $offline = strpos($html, '<script src="js/camera-offline.js">');
+        $logic = strpos($html, '<script src="js/simple-logic.js">');
+        camtest_assert_true($offline !== false && $logic !== false && $offline < $logic);
     }
 });
 

@@ -6,7 +6,7 @@
 
 (function () {
   const grid = document.getElementById('thumbs');
-  if (!grid || !window.CamSimple) return;
+  if (!grid || !window.CamSimple || !window.CamOffline) return;
 
   const count = Number(grid.dataset.count) || grid.children.length;
   const POLL_MS = 2000;    // how often the relay is asked which cameras record (the simple view asks as often)
@@ -40,11 +40,10 @@
     }
   }
 
-  // A camera that is not connected keeps its last picture in the stream: cover it with the loading indicator.
+  // A camera that is not connected keeps its last picture in the stream: cover it with the "offline" message.
   function markOffline(status) {
     for (const thumb of Array.from(grid.children)) {
-      const loading = thumb.querySelector('.cam-loading');
-      if (loading) loading.hidden = !window.CamSimple.isOffline(status, thumb.dataset.cam);
+      window.CamOffline.render(thumb.querySelector('.cam-offline'), status, thumb.dataset.cam);
     }
   }
 

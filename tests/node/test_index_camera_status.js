@@ -1,12 +1,14 @@
 'use strict';
 
-// test_index_camera_status.js — how the dashboard page (php/cameras/index.php) keeps the REC pills, FILES counts and
-// switches current: the map pushed on the mux.php connection when it comes, status.php polled otherwise. Runs
-// exactly the block between its <camera-status-source> markers against stand-ins for the page (no PHP, no browser).
+// test_index_camera_status.js — how the dashboard page (php/cameras/index.php) keeps the REC pills, FILES counts, switches
+// and the "camera offline" covers current: the map pushed on the mux.php connection when it comes, status.php polled
+// otherwise. Runs exactly the block between its <camera-status-source> markers against stand-ins for the page (no PHP,
+// no browser).
 
 const fs = require('fs');
 const path = require('path');
 const { assertEqual, assertTrue } = require('./framework');
+const CamOffline = require('../../php/cameras/js/camera-offline');   // the real one: it is what the page runs
 
 const page = fs.readFileSync(path.join(__dirname, '../../php/cameras/index.php'), 'utf8');
 const m = /\/\/ <camera-status-source>\n([\s\S]*?)\/\/ <\/camera-status-source>/.exec(page);
@@ -31,8 +33,10 @@ function run({ answers = [] } = {}) {
   const clock = { now: 1000000 };
   const fetches = [];
   const chips = [];   // what each camera's Wi-Fi chip was told: [element id, the reading]
+  const els = {};     // the page's elements, one per id (the covers keep their `hidden` between calls, as on the page)
   const env = {
-    document: { getElementById: (id) => ({ id }) },
+    document: { getElementById: (id) => (els[id] = els[id] || { id, hidden: true }) },
+    CamOffline,
     CamWifi: { render: (el, wifi) => chips.push([el && el.id, wifi]) },
     Date: { now: () => clock.now },
     isStatusMap: (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error,
@@ -49,7 +53,7 @@ function run({ answers = [] } = {}) {
   };
   const names = Object.keys(env);
   const api = new Function(...names, `${m[1]}\nreturn { pollAllStatuses, applyCameraStatuses, onLiveCameraStatus, cameraStatusIsLive, pollStatusesUnlessLive, CAMERA_STATUS_LIVE_MS };`)(...names.map((n) => env[n]));
-  return { api, log, clock, fetches, chips };
+  return { api, log, clock, fetches, chips, els };
 }
 
 const MAP = { a: { recording: true, recordingEndAt: 99, recordingCount: 3, recordingOff: 'off until 8:00' } };
@@ -71,6 +75,56 @@ test('a camera whose answer has no Wi-Fi (an older relay or firmware) is given n
   const t = run();
   t.api.onLiveCameraStatus({ a: { recording: false }, b: { recording: false, wifi: null } });
   assertEqual(t.chips, [['wifi-a', undefined], ['wifi-b', null]]);
+});
+
+// The cover of a camera's picture is the element `offline-<id>`; it is hidden as the page delivers it.
+const covered = (t) => ['a', 'b'].map((id) => !t.els['offline-' + id].hidden);
+
+test('a camera the relay says is offline gets its cover shown, one that is online does not', () => {
+  const t = run();
+  t.api.onLiveCameraStatus({ a: { online: false }, b: { online: true } });
+  assertEqual(covered(t), [true, false]);
+});
+
+test('the cover goes when the camera is back, comes again when it drops, and each camera has its own', () => {
+  const t = run();
+  t.api.onLiveCameraStatus({ a: { online: false }, b: { online: true } });
+  t.api.onLiveCameraStatus({ a: { online: true }, b: { online: true } });
+  assertEqual(covered(t), [false, false], 'a is back');
+  t.api.onLiveCameraStatus({ a: { online: true }, b: { online: false } });
+  assertEqual(covered(t), [false, true], 'b dropped');
+});
+
+test('nothing is covered on a guess: a camera missing from the map, or one with no `online` (an older relay)', () => {
+  const t = run();
+  t.api.onLiveCameraStatus({ a: { recording: false } });
+  assertEqual(covered(t), [false, false]);
+  t.api.onLiveCameraStatus({ a: { online: false }, b: { online: false } });
+  t.api.onLiveCameraStatus({ b: { online: false } });
+  assertEqual(covered(t), [false, true], 'a left the map: it is not known to be offline any more');
+});
+
+test('a pushed answer and a polled one both cover an offline camera', async () => {
+  const pushed = run();
+  pushed.api.onLiveCameraStatus({ a: { online: false } });
+  assertEqual(covered(pushed), [true, false], 'pushed');
+  const polled = run({ answers: [{ ok: true, json: { b: { online: false } } }] });
+  await polled.api.pollAllStatuses();
+  assertEqual(covered(polled), [false, true], 'polled');
+});
+
+test('an answer that is not a genuine map, or a failed poll, leaves the covers as they are', async () => {
+  const t = run({ answers: [{ ok: false, json: {} }, { ok: true, json: { error: 'Could not reach relay' } }, { throws: true }] });
+  t.api.onLiveCameraStatus({ a: { online: false } });
+  for (const bad of [{ error: 'x' }, [], null]) t.api.onLiveCameraStatus(bad);
+  for (let i = 0; i < 3; i++) await t.api.pollAllStatuses();
+  assertEqual(covered(t), [true, false], 'the relay could not be reached: the cover of a is not lifted on a guess');
+});
+
+test('the cover does not change what is shown about recording, files or the switch', () => {
+  const t = run();
+  t.api.onLiveCameraStatus({ a: { online: false, recording: true, recordingEndAt: 99, recordingCount: 3, recordingOff: null }, b: { online: true } });
+  assertEqual(t.log, ['recording a true 99', 'files a 3', 'switch a null', 'recording b undefined undefined', 'files b undefined', 'switch b null']);
 });
 
 test('a pushed answer that is not a genuine map (error, list, null) changes nothing and does not count as live', () => {

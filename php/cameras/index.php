@@ -302,6 +302,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   <?= CamLayout::recordingFrameStyle() ?>
 
+  /* A camera that is not connected keeps its last picture on the relay: a dark, see-through cover (js/camera-offline.js) says so. */
+  <?= CamLayout::offlineCoverStyle() ?>
+
   /* The picture is a link to the camera's simple view (where a click on it goes full screen). */
   .cam-stream-wrap a.stream-link { display: block; width: 100%; height: 100%; }
 
@@ -544,6 +547,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
       <div class="cam-stream-wrap rec-frame" id="wrap-<?= $camId ?>">
 
+        <!-- Offline cover: dims the last picture of a camera that is not connected (js/camera-offline.js).
+             Before the overlay below, so that one (connecting, error, paused) is on top when both show. -->
+        <?= CamLayout::offlineCover('offline-' . $cam['id']) ?>
+
         <!-- Connecting spinner (visible until image loads) -->
         <div class="cam-overlay visible" id="overlay-<?= $camId ?>">
           <div class="spinner"></div>
@@ -631,6 +638,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <script src="js/mux-pictures.js"></script>
 <?php endif; ?>
 <script src="js/wifi-info.js"></script>
+<script src="js/camera-offline.js"></script>
 <script>
   // ── Clock ──
   function tick() {
@@ -1335,6 +1343,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     for (const id of getAllCameraIds()) {
       const s = data[id];
       CamWifi.render(document.getElementById('wifi-' + id), s && s.wifi);   // the network and signal the camera reported (or nothing)
+      CamOffline.render(document.getElementById('offline-' + id), data, id);   // a camera that is not connected: its last picture is dimmed and says so
       if (!s) {
         // Neither connected to the relay yet nor any footage on disk for it.
         setFilesCount(id, 0);

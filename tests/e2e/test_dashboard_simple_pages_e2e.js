@@ -171,6 +171,11 @@ async function main() {
       ['cam-a', 'cam-b', 'cam-c'].every((id) => links(id).test(r.text)) && !r.text.includes('toggleStreamFullscreen') && !/<img[^>]*class="stream"[^>]*onclick=/.test(r.text), detail(r));
     check('dashboard: every camera\'s picture frame has the transparent-until-recording border (class rec-frame) and the page has its style',
       ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`<div class="cam-stream-wrap rec-frame" id="wrap-${id}">`)) && r.text.includes('.rec-frame.recording { border-color: var(--accent2)'), detail(r));
+    check('dashboard: every camera\'s picture box has its hidden "camera offline" cover (dark, see-through, says so), before the connecting overlay, and the page has its style and script',
+      ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`<div class="cam-offline" id="offline-${id}" role="status" hidden>`)
+        && r.text.indexOf(`id="offline-${id}"`) < r.text.indexOf(`id="overlay-${id}"`) && r.text.indexOf(`id="overlay-${id}"`) < r.text.indexOf(`id="img-${id}"`))
+      && (r.text.match(/CAMERA OFFLINE/g) || []).length === 3 && r.text.includes('.cam-offline[hidden] { display: none; }') && r.text.includes('<script src="js/camera-offline.js"></script>'), detail(r));
+    check('dashboard: the camera status block shows the cover of a camera that is not connected (applyCameraStatuses)', /CamOffline\.render\(document\.getElementById\('offline-' \+ id\), data, id\)/.test(r.text), detail(r));
     check('dashboard: the recording state also switches the frame (updateCameraRecordButtonState)', /getElementById\('wrap-' \+ id\)[\s\S]{0,200}classList\.toggle\('recording', recording\)/.test(r.text), detail(r));
     for (const page of ['simple-list.php', 'simple-view.php', 'simple-view.php?cam=cam-a']) {
       r = await get(page, { auth: false });
@@ -187,11 +192,14 @@ async function main() {
       && r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚗</span>Cam B</span>'), r.text.slice(0, 200));
     check('list: the cameras\' names are the captions, and the navigation bar (list marked) is the way to the other pages — no second back button', /Cam A/.test(r.text) && /Cam C/.test(r.text)
       && /<body class="simple-list">\s*<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-list.php" data-nav="simple-list" aria-current="page"') && !r.text.includes('← DASHBOARD'));
-    check('list: loads simple-logic.js and simple-list.js, no inline handler, nothing of the relay\'s address',
-      r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
+    check('list: every thumbnail has its hidden "camera offline" cover over its picture, and the page has its style',
+      (r.text.match(/<img src="stream\.php\?cam=[^"]*" alt="[^"]*"><div class="cam-offline" role="status" hidden>/g) || []).length === 3
+      && (r.text.match(/CAMERA OFFLINE/g) || []).length === 3 && r.text.includes('.cam-offline[hidden] { display: none; }'), detail(r));
+    check('list: loads camera-offline.js before simple-logic.js, then simple-list.js, no inline handler, nothing of the relay\'s address',
+      r.text.indexOf('src="js/camera-offline.js"') !== -1 && r.text.indexOf('src="js/camera-offline.js"') < r.text.indexOf('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
 
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
+    for (const f of ['camera-offline.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }
@@ -204,7 +212,9 @@ async function main() {
       d !== null && JSON.stringify(d.cameras) === JSON.stringify([{ id: 'cam-a', name: 'Cam A', icon: '🚪' }, { id: 'cam-b', name: 'Cam B', icon: '🚗' }, { id: 'cam-c', name: 'Cam C', icon: '📷' }]) && d.seconds === '25', JSON.stringify(d));
     check('view: pager, status line (time, camera name, recording) and slideshow button are there',
       ['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Cam A<', 'id="rec"', 'id="slideshow"'].every((s) => r.text.includes(s)));
-    check('view: loads simple-logic.js, fullscreen.js and simple-view.js', r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
+    check('view: the "camera offline" cover is inside the picture box (it goes full screen with it), hidden at first',
+      /<div class="picture rec-frame" id="picture-box"><img id="picture"[^>]*><div class="cam-offline" id="offline" role="status" hidden>[\s\S]*?CAMERA OFFLINE[\s\S]*?<\/div><\/div>/.test(r.text), r.text.slice(0, 200));
+    check('view: loads camera-offline.js before simple-logic.js, fullscreen.js and simple-view.js', r.text.indexOf('src="js/camera-offline.js"') !== -1 && r.text.indexOf('src="js/camera-offline.js"') < r.text.indexOf('src="js/simple-logic.js"') && r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
     check('view: the icon of the camera is in front of its name', r.text.includes('<span class="cam-icon" id="cam-icon" aria-hidden="true">🚪</span><span id="cam-name">Cam A</span>'), r.text.slice(0, 200));
     check('view: the slideshow\'s time-left indicator (bar and seconds) is on the page, hidden until the slideshow runs',
       r.text.includes('id="countdown-bar" aria-hidden="true" hidden>') && /id="countdown"[^>]*\shidden>/.test(r.text) && r.text.includes('id="countdown-fill"'), r.text.slice(0, 200));

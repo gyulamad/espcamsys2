@@ -301,17 +301,48 @@ HTML;
         return 'simple-view.php?cam=' . rawurlencode($id);
     }
 
-    // The frame both simple pages share: the dashboard's look, a title, $body, and the scripts (file names in js/).
-    // $bodyClass is also the page's key in the navigation bar (NAV_PAGES): 'simple-list' or 'simple-view'.
-    // The "waiting for the camera" cover of a picture: a spinner and a line, laid over the (stale) last picture of a
-    // camera that is not connected. Hidden until the page's script finds the camera offline (js/simple-view.js,
-    // js/simple-list.js); it lets clicks through, so a click on the picture still works.
-    private static function loadingOverlay(string $id = ''): string
+    // The "camera offline" cover of a picture: a dark but transparent layer over the (stale) last picture of a camera that
+    // is not connected, with a spinner, a title and a line saying the camera is being reconnected. Without it that picture
+    // stays clear and still, and looks as if all were quiet. Put it inside the box that holds the picture, after the
+    // picture; it is hidden until the page's script finds the camera offline (js/camera-offline.js) and it lets clicks
+    // through, so a click on the picture still works. $id: an id for the element ('' for none); raw, it is escaped here.
+    // The dashboard and both simple pages use this one, with offlineCoverStyle().
+    public static function offlineCover(string $id = ''): string
     {
-        return '<div class="cam-loading"' . ($id === '' ? '' : ' id="' . self::esc($id) . '"') . ' role="status" hidden>'
-            . '<span class="spinner" aria-hidden="true"></span><span class="cam-loading-text">Waiting for the camera…</span></div>';
+        return '<div class="cam-offline"' . ($id === '' ? '' : ' id="' . self::esc($id) . '"') . ' role="status" hidden>'
+            . '<span class="cam-offline-spinner" aria-hidden="true"></span>'
+            . '<span class="cam-offline-title">CAMERA OFFLINE</span>'
+            . '<span class="cam-offline-note">Reconnecting…</span></div>';
     }
 
+    // The look of offlineCover(). It does not lean on the page's own colours (the dashboard and the simple pages
+    // differ), so the message reads the same on both, over any picture. The layer is see-through and drains the colour
+    // of what is under it, so the last picture is still there but plainly not live.
+    public static function offlineCoverStyle(): string
+    {
+        return <<<'CSS'
+  .cam-offline { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center;
+    background: rgba(6,8,16,.68); -webkit-backdrop-filter: grayscale(1); backdrop-filter: grayscale(1);
+    font-family: var(--mono, ui-monospace, monospace); text-align: center; padding: 8px; overflow: hidden; pointer-events: none; }
+  .cam-offline[hidden] { display: none; }
+  .cam-offline-spinner { width: 24px; height: 24px; border: 2px solid #3c4d80; border-top-color: #00e5ff; border-radius: 50%; animation: cam-offline-spin 1s linear infinite; }
+  .cam-offline-title { color: #ff4f5e; font-size: .9rem; letter-spacing: .12em; text-shadow: 0 1px 3px #000; }
+  .cam-offline-note { color: #cdd8f0; font-size: .75rem; letter-spacing: .06em; text-shadow: 0 1px 3px #000; }
+  .thumb .cam-offline { gap: 4px; }
+  .thumb .cam-offline-spinner { width: 18px; height: 18px; }
+  .thumb .cam-offline-title { font-size: .75rem; }
+  .thumb .cam-offline-note { font-size: .65rem; }
+  .picture .cam-offline { gap: 12px; }
+  .picture .cam-offline-spinner { width: 40px; height: 40px; border-width: 3px; }
+  .picture .cam-offline-title { font-size: 1.6rem; }
+  .picture .cam-offline-note { font-size: 1.1rem; }
+  @keyframes cam-offline-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .cam-offline-spinner { animation-duration: 3s; } }
+CSS . "\n";
+    }
+
+    // The frame both simple pages share: the dashboard's look, a title, $body, and the scripts (file names in js/).
+    // $bodyClass is also the page's key in the navigation bar (NAV_PAGES): 'simple-list' or 'simple-view'.
     private static function simplePage(string $title, string $bodyClass, string $body, array $scripts): string
     {
         $tags = '';
@@ -349,15 +380,6 @@ HTML;
   .thumb:hover, .thumb:focus-visible { border-color: var(--accent); }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .cam-icon { margin-right: .4em; }
-  /* a camera that is not connected: its last picture is covered, with a spinner, until it sends again */
-  .cam-loading { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center;
-    background: #000; color: var(--muted); font-family: var(--mono); pointer-events: none; text-align: center; padding: 8px; }
-  .cam-loading[hidden] { display: none; }
-  .cam-loading .spinner { width: 36px; height: 36px; border: 3px solid var(--border-light); border-top-color: var(--accent); border-radius: 50%; animation: cam-spin 1s linear infinite; }
-  .thumb .cam-loading .spinner { width: 22px; height: 22px; border-width: 2px; }
-  .thumb .cam-loading { gap: 6px; font-size: .75rem; }
-  @keyframes cam-spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .cam-loading .spinner { animation-duration: 3s; } }
   .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* the large view: the picture takes everything the status line leaves */
@@ -382,7 +404,7 @@ HTML;
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
   .status .rec-off { color: var(--muted); }
-CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
+CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCoverStyle();
     }
 
     // The camera's icon in front of its name, as the page shows both. The icon is decoration (the name says it
@@ -400,12 +422,12 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
         foreach (CamLogic::cameraSummaries($cameras) as $cam) {
             $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '" title="' . self::esc($cam['name']) . '">'
                 . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
-                . self::loadingOverlay()
+                . self::offlineCover()
                 . '<span class="cap">' . self::iconSpan($cam['icon']) . self::esc($cam['name']) . '</span></a>';
         }
         $body = '<div class="bar"><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
-        return self::simplePage('Cameras', 'simple-list', $body, ['simple-logic.js', 'relay-json.js', 'simple-list.js']);
+        return self::simplePage('Cameras', 'simple-list', $body, ['camera-offline.js', 'simple-logic.js', 'relay-json.js', 'simple-list.js']);
     }
 
     // simple-view.php: one camera large (a click on it shows it full screen), the pager, the status line and
@@ -420,7 +442,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
             . ' data-current="' . self::esc($summary['id']) . '"'
             . ' data-slideshow-seconds="' . $slideshowSeconds . '"';
         $body = '<div class="simple-view-root" id="view"' . $data . '>'
-            . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen">' . self::loadingOverlay('loading') . '</div>'
+            . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen">' . self::offlineCover('offline') . '</div>'
             . '<div class="countdown-bar" id="countdown-bar" aria-hidden="true" hidden><div class="countdown-fill" id="countdown-fill"></div></div>'
             . '<div class="status" role="status">'
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'
@@ -433,7 +455,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle();
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['camera-offline.js', 'simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser

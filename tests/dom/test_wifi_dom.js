@@ -149,7 +149,7 @@ async function main() {
     const html = await (await nodeFetch(`${BASE}/index.php`, { headers: { Authorization: basic } })).text();
 
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js']), pretendToBeVisual: true,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js', 'camera-offline.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
         window.confirm = () => false;

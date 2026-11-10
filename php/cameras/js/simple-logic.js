@@ -1,12 +1,13 @@
 'use strict';
 // simple-logic.js — the rules of the two simple camera pages (simple-list.php, simple-view.php), with no
 // DOM, no network and no clock of their own, so tests/node/test_simple_logic.js can run every rule.
-// Loaded by the pages as a plain script (window.CamSimple) and by the tests with require().
+// Loaded by the pages as a plain script (window.CamSimple) and by the tests with require(). It needs
+// js/camera-offline.js (window.CamOffline) loaded before it.
 //
 //   fitThumbnails   how big the thumbnails of the list page are, and in how many columns
 //   neighbor        the previous / next camera of the pager (wraps around)
 //   isRecording     is a camera recording, from status.php's answer (the red frame of both pages)
-//   isOffline       is a camera known not to be connected (its picture is covered, the slideshow skips it)
+//   isOffline       is a camera known not to be connected (the slideshow skips it; the rule is camera-offline.js's)
 //   countdown       what the slideshow's "time left" indicator shows (whole seconds and the part of the time left)
 //   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
@@ -21,10 +22,13 @@
 // anywhere does motion get its turn; only with neither do all the cameras take theirs.
 
 (function (root, factory) {
-  const api = factory();
-  if (typeof module === 'object' && module.exports) module.exports = api;
+  const isModule = typeof module === 'object' && module.exports;
+  const api = factory(isModule ? require('./camera-offline') : root.CamOffline);
+  if (isModule) module.exports = api;
   else root.CamSimple = api;
-})(typeof self !== 'undefined' ? self : this, function () {
+})(typeof self !== 'undefined' ? self : this, function (CamOffline) {
+  if (!CamOffline) throw new Error('simple-logic.js needs js/camera-offline.js loaded before it');
+
   // Higher wins. Recording beats a person, a person beats motion, motion beats everything else. A camera that is
   // not connected is below all of them: the slideshow only shows it when every camera is offline.
   const PRIORITY = Object.freeze({ OFFLINE: -1, IDLE: 0, MOTION: 1, PERSON: 2, RECORDING: 3 });
@@ -82,12 +86,9 @@
     return !!(status && status[id] && status[id].recording === true);
   }
 
-  // Is the camera `id` known NOT to be connected, going by status.php's answer (`online` is the relay's word)?
-  // Only a plain false counts: no answer, an unknown camera or an older relay without the field is "not known
-  // to be offline", so nothing is hidden or skipped on a guess.
-  function isOffline(status, id) {
-    return !!(status && status[id] && status[id].online === false);
-  }
+  // Is the camera `id` known NOT to be connected? The rule is the one every page shares (js/camera-offline.js); the
+  // slideshow uses it to skip such a camera.
+  const isOffline = CamOffline.isOffline;
 
   // Is the person detector of a camera reporting motion at or above its threshold? The threshold is the one in
   // force (`motionLimit`: MOTION_THRESH, or more while the auto-calibration follows a noisy scene), else the

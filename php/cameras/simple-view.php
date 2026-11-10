@@ -4,7 +4,8 @@
 // setting). Usage: simple-view.php?cam=cam1 (no cam = the first camera).
 //
 // The cam parameter must match an 'id' in config.php, as for stream.php. Markup: CamLayout::simpleViewPage();
-// the pager, the status line and the slideshow rules are in js/simple-logic.js and js/simple-view.js.
+// the pager, the status line and the slideshow rules are in js/simple-logic.js and js/simple-view.js; the "camera
+// offline" cover over the picture of a camera that is not connected is shown by js/camera-offline.js.
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';
