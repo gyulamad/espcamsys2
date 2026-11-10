@@ -446,6 +446,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   @media (max-width: 600px) { .header-meta { display: none; } }
   <?= CamLayout::navBarStyle() ?>
+  <?= CamLayout::busyStyle() ?>
 </style>
 </head>
 <body>
@@ -467,20 +468,20 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   <div class="controls">
     <button class="btn" onclick="reloadAll()">↺ RELOAD ALL</button>
-    <a class="btn" id="btn-settings" href="settings-page.php"
+    <a class="btn" id="btn-settings" href="settings-page.php"<?= CamLayout::pageLoadAttr() ?>
        title="Settings of the whole system: recording lengths, relay, keys, pre-roll, log, alarm, dashboard login">⚙ SETTINGS</a>
     <span class="record-controls">
-      <button class="btn" id="btn-record-all" onclick="recordAll()"
+      <button class="btn" id="btn-record-all" onclick="CamBusy.run(this, () => recordAll())"
               title="Record every camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it by that many seconds from now">⏺ RECORD ALL</button>
-      <button class="btn danger" id="btn-stop-all" onclick="stopRecordAll()" style="display:none;">⏹ STOP ALL</button>
+      <button class="btn danger" id="btn-stop-all" onclick="CamBusy.run(this, () => stopRecordAll())" style="display:none;">⏹ STOP ALL</button>
     </span>
     <span class="switch-controls" id="switch-all"
           title="Switch recording OFF while people are on site, so nothing is recorded for no reason. Applies to every camera the relay currently knows; each camera can then be changed on its own.">
       <span class="lbl title">⏻ RECORDING:</span>
       <span class="switch-pill" id="switch-all-pill">…</span>
-      <button class="btn danger" id="btn-switch-all-off" onclick="switchRecording('all', null, 'off')"
+      <button class="btn danger" id="btn-switch-all-off" onclick="CamBusy.run(this, () => switchRecording('all', null, 'off'))"
               title="Switch recording OFF for every camera <?= $offFor ?> (set on the SETTINGS page)">⏻ ALL OFF</button>
-      <button class="btn" id="btn-switch-all-on" onclick="switchRecording('all', null, 'on')"
+      <button class="btn" id="btn-switch-all-on" onclick="CamBusy.run(this, () => switchRecording('all', null, 'on'))"
               title="Switch recording back ON for every camera">⏻ ALL ON</button>
     </span>
     <?= CamLayout::rebootMenu(CamLogic::rebootMenu('system'), 'btn') ?>
@@ -506,7 +507,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <span class="status-pill connecting" id="pill-<?= $camId ?>">CONNECTING</span>
           <span class="rec-pill" id="recpill-<?= $camId ?>"></span>
           <button data-cam="<?= $camId ?>" class="cam-btn" onclick="reloadStream(this.dataset.cam)">↺ RELOAD</button>
-          <a class="cam-btn" id="settings-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>"
+          <a class="cam-btn" id="settings-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>"<?= CamLayout::pageLoadAttr() ?>
              title="Settings of this camera: name, icon and everything stored in the board">⚙ SETTINGS</a>
           <?= CamLayout::rebootMenu(CamLogic::rebootMenu('camera', CamLogic::detectorIdOf($cam) !== null), 'cam-btn', $cam['id']) ?>
           <button data-cam="<?= $camId ?>" class="cam-btn danger" id="hide-<?= $camId ?>"
@@ -522,22 +523,22 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       <div class="cam-record-row">
         <button data-cam="<?= $camId ?>" class="cam-btn" id="rec-btn-<?= $camId ?>"
                 title="Record this camera for <?= $recordSeconds ?> s (set on the SETTINGS page). Press again mid-recording to extend it"
-                onclick="recordOne(this.dataset.cam)">⏺ RECORD</button>
+                onclick="CamBusy.run(this, () => recordOne(this.dataset.cam))">⏺ RECORD</button>
         <button data-cam="<?= $camId ?>" class="cam-btn danger" id="stop-btn-<?= $camId ?>" style="display:none;"
-                onclick="stopOne(this.dataset.cam)">⏹ STOP</button>
+                onclick="CamBusy.run(this, () => stopOne(this.dataset.cam))">⏹ STOP</button>
         <button data-cam="<?= $camId ?>" class="cam-btn" id="files-btn-<?= $camId ?>"
                 title="Saved recordings for this camera — click to open the list"
-                onclick="toggleRecordingsPanel(this.dataset.cam)"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
+                onclick="CamBusy.run(this, () => toggleRecordingsPanel(this.dataset.cam))"><?= CamLogic::formatFilesButtonLabel($recordingCounts[$cam['id']] ?? null) ?></button>
       </div>
 
       <div class="cam-record-row cam-switch-row">
         <span class="switch-pill" id="sw-pill-<?= $camId ?>">…</span>
         <button data-cam="<?= $camId ?>" class="cam-btn danger" id="sw-off-<?= $camId ?>"
                 title="Switch recording OFF for this camera only, <?= $offFor ?> (set on the SETTINGS page)"
-                onclick="switchRecording('camera', this.dataset.cam, 'off')">⏻ OFF</button>
+                onclick="CamBusy.run(this, () => switchRecording('camera', this.dataset.cam, 'off'))">⏻ OFF</button>
         <button data-cam="<?= $camId ?>" class="cam-btn" id="sw-on-<?= $camId ?>"
                 title="Switch recording back ON for this camera"
-                onclick="switchRecording('camera', this.dataset.cam, 'on')">⏻ ON</button>
+                onclick="CamBusy.run(this, () => switchRecording('camera', this.dataset.cam, 'on'))">⏻ ON</button>
       </div>
 
       <div class="files-panel" id="files-<?= $camId ?>"></div>
@@ -554,7 +555,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <span>CONNECTING…</span>
         </div>
 
-        <a class="stream-link" href="<?= htmlspecialchars(CamLayout::simpleViewUrl($cam['id'])) ?>"
+        <a class="stream-link" href="<?= htmlspecialchars(CamLayout::simpleViewUrl($cam['id'])) ?>"<?= CamLayout::pageLoadAttr() ?>
            title="Click to open this camera in the simple view">
           <img data-cam="<?= $camId ?>"
             class="stream"
@@ -586,7 +587,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <div class="det-off" id="detoff-<?= $camId ?>"><div class="det-off-title" id="dettitle-<?= $camId ?>">DETECTOR OFFLINE</div><div class="det-off-why" id="detwhy-<?= $camId ?>"></div></div>
         </div>
         <div class="det-vals">
-          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><button type="button" class="cam-btn" id="detwatch-<?= $camId ?>" data-cam="<?= $camId ?>" hidden onclick="toggleDetectorWatch(this.dataset.cam)"></button><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
+          <div class="det-line"><span class="k">DETECTOR</span><span class="det-chip" id="detgate-<?= $camId ?>">…</span><button type="button" class="cam-btn" id="detwatch-<?= $camId ?>" data-cam="<?= $camId ?>" hidden onclick="CamBusy.run(this, () => toggleDetectorWatch(this.dataset.cam))"></button><a class="cam-btn" id="detcalib-<?= $camId ?>" href="camera-settings-page.php?cam=<?= urlencode($cam['id']) ?>&amp;type=detector" title="Calibrate this detector: DARK_THRESH, MOTION_THRESH, DETECT_THRESH, CLEAR_THRESH ... from the browser">⚙ CALIBRATE</a></div>
           <div class="det-line" id="detwifirow-<?= $camId ?>" hidden><span class="k">WI-FI</span><span class="wifi-chip" id="detwifi-<?= $camId ?>" hidden></span></div>
           <div>
             <div class="det-line"><span class="k">BRIGHTNESS</span><span class="v" id="detbright-<?= $camId ?>">–</span></div>
@@ -603,7 +604,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
             <div class="det-bar"><div class="fill" id="detpersonbar-<?= $camId ?>"></div><div class="mark" id="detpersondetect-<?= $camId ?>" style="display:none"></div><div class="mark soft" id="detpersonclear-<?= $camId ?>" style="display:none"></div></div>
             <div class="det-sub" id="detpersonsub-<?= $camId ?>"></div>
           </div>
-          <div class="det-apply" id="detapply-<?= $camId ?>"><span id="detapplytxt-<?= $camId ?>"></span><span class="det-apply-btns"><button data-cam="<?= $camId ?>" type="button" class="cam-btn" id="detapplybtn-<?= $camId ?>" onclick="applyDetectorThresholds(this.dataset.cam)" title="Send the moved thresholds to the detector (it stores them and restarts)">APPLY</button><button data-cam="<?= $camId ?>" type="button" class="cam-btn" onclick="resetDetectorThresholds(this.dataset.cam)" title="Forget the moved thresholds">RESET</button></span></div>
+          <div class="det-apply" id="detapply-<?= $camId ?>"><span id="detapplytxt-<?= $camId ?>"></span><span class="det-apply-btns"><button data-cam="<?= $camId ?>" type="button" class="cam-btn" id="detapplybtn-<?= $camId ?>" onclick="CamBusy.run(this, () => applyDetectorThresholds(this.dataset.cam))" title="Send the moved thresholds to the detector (it stores them and restarts)">APPLY</button><button data-cam="<?= $camId ?>" type="button" class="cam-btn" onclick="resetDetectorThresholds(this.dataset.cam)" title="Forget the moved thresholds">RESET</button></span></div>
           <div class="det-line"><span class="k" id="detpinlabel-<?= $camId ?>">ALARM PIN</span><span class="det-chip" id="detpin-<?= $camId ?>">–</span></div>
           <div class="det-sub" id="detinfo-<?= $camId ?>"></div>
         </div>
@@ -625,6 +626,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   <span id="footer-time"></span>
 </footer>
 
+<script src="js/busy.js"></script>
 <?= CamLayout::recordingsListScript() ?>
 <script src="js/dashboard-layout.js"></script>
 <script src="js/toast.js"></script>
@@ -1113,7 +1115,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (caret) { toggleRebootList(caret); return; }
     closeRebootLists();   // any other click closes an open list
     const action = ev.target.closest('.reboot-main, .reboot-item');
-    if (action) requestReboot(action.closest('.reboot-menu'), action.dataset.target, action.dataset.confirm);
+    if (action) CamBusy.run(action, () => requestReboot(action.closest('.reboot-menu'), action.dataset.target, action.dataset.confirm));
   });
 
   document.addEventListener('keydown', ev => {
@@ -1843,7 +1845,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (b.hidden) return;
     lastActivityAt = Date.now();
     detEl('watch', id).disabled = true;   // re-enabled by the next status (the relay pushes one at once)
-    postDetectorView(id, b.action).then((ok) => { if (!ok) detEl('watch', id).disabled = false; });
+    return postDetectorView(id, b.action).then((ok) => { if (!ok) detEl('watch', id).disabled = false; });
   }
   function renderWatchButton(id, d) {
     const el = detEl('watch', id);

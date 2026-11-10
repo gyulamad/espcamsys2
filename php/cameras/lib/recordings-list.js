@@ -254,6 +254,11 @@
     const elId = (key) => `files-${key}-${prefix}`;
     let archiveOpen = false;   // is the archive's own list showing?
 
+    // A button that works in the background shows a rolling spinner until its work is done (busy.js, CamBusy). Without
+    // busy.js (the unit tests, a page that left it out) the work just runs.
+    const withBusy = (button, work) => (root.CamBusy ? root.CamBusy.run(button, work) : work());
+    const busyClick = (action) => (ev) => withBusy(ev && ev.currentTarget, () => action());
+
     function boxes(onlySeen) {
       return Array.from(panel.querySelectorAll('.files-select')).filter((b) => !onlySeen || b.dataset.seen === '1');
     }
@@ -477,7 +482,7 @@
           actions(
             h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => playRecording(f.cam, f.filename) }),
             h('a', { className: 'cam-btn', textContent: '⬇ GET', href: downloadUrl(f.cam, f.filename), onclick: () => { hooks.holdForDownload(); markSeen(f.cam, f.filename); } }),
-            h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: () => deleteOne(f.cam, f.filename) }))),
+            h('button', { className: 'cam-btn danger', textContent: '🗑 DEL', onclick: busyClick(() => deleteOne(f.cam, f.filename)) }))),
       ];
     }
 
@@ -498,7 +503,7 @@
           actions(
             h('button', { className: 'cam-btn', textContent: '▶ PLAY', onclick: () => openVideo(`${ARCHIVE_ROW_ID}/${f.cam}/${f.filename}`, archivePlayUrl(f.cam, f.filename), f.filename) }),
             h('a', { className: 'cam-btn', textContent: '⬇ GET', href: archiveDownloadUrl(f.cam, f.filename), onclick: () => hooks.holdForDownload() }),
-            h('button', { className: 'cam-btn', textContent: '♻ RESTORE', title: 'Put this recording back into the list', onclick: () => restoreOne(f.cam, f.filename) }))),
+            h('button', { className: 'cam-btn', textContent: '♻ RESTORE', title: 'Put this recording back into the list', onclick: busyClick(() => restoreOne(f.cam, f.filename)) }))),
       ];
     }
 
@@ -515,9 +520,9 @@
       return h('div', { className: 'files-panel-footer' },
         h('button', { className: 'cam-btn', id: elId('sel-all'), textContent: '☑ SELECT ALL', onclick: () => toggleSelectAll(false) }),
         h('button', { className: 'cam-btn', id: elId('sel-seen'), textContent: '☑ SELECT ALL SEEN', onclick: () => toggleSelectAll(true) }),
-        h('button', { className: 'cam-btn', id: elId('dl-selected'), disabled: true, textContent: '⬇ DOWNLOAD SELECTED (0)', onclick: downloadSelected }),
-        h('button', { className: 'cam-btn', id: elId('sort-selected'), disabled: true, textContent: '🧑 SORT OUT SELECTED (0)', onclick: sortOutSelected }),
-        h('button', { className: 'cam-btn danger', id: elId('del-selected'), disabled: true, textContent: '🗑 DELETE SELECTED (0)', onclick: deleteSelected }));
+        h('button', { className: 'cam-btn', id: elId('dl-selected'), disabled: true, textContent: '⬇ DOWNLOAD SELECTED (0)', onclick: busyClick(downloadSelected) }),
+        h('button', { className: 'cam-btn', id: elId('sort-selected'), disabled: true, textContent: '🧑 SORT OUT SELECTED (0)', onclick: busyClick(sortOutSelected) }),
+        h('button', { className: 'cam-btn danger', id: elId('del-selected'), disabled: true, textContent: '🗑 DELETE SELECTED (0)', onclick: busyClick(deleteSelected) }));
     }
 
     const empty = (text) => h('div', { className: 'files-empty', textContent: text });
@@ -526,12 +531,12 @@
     function header(fileCount, archiveTotal) {
       return h('div', { className: 'files-panel-header' },
         h('span', { textContent: fileCount > 0 ? plural(fileCount, 'recording') : '' }),
-        ...(fileCount > 0 ? [h('button', { className: 'cam-btn', id: elId('sort-all'), textContent: '🧑 SORT OUT ALL', onclick: sortOutAll })] : []),
+        ...(fileCount > 0 ? [h('button', { className: 'cam-btn', id: elId('sort-all'), textContent: '🧑 SORT OUT ALL', onclick: busyClick(sortOutAll) })] : []),
         ...(archiveTotal > 0 ? [h('button', { className: 'cam-btn', id: elId('browse-archive'), title: 'Look at the archived recordings and put back the ones you want to keep',
-                                             textContent: archiveOpen ? '📂 HIDE ARCHIVE' : '📂 BROWSE ARCHIVE', onclick: toggleArchive })] : []),
+                                             textContent: archiveOpen ? '📂 HIDE ARCHIVE' : '📂 BROWSE ARCHIVE', onclick: busyClick(toggleArchive) })] : []),
         ...(archiveTotal > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-archive'), title: ARCHIVE_HINT,
-                                             textContent: `🗄 DELETE ARCHIVE (${archiveTotal})`, onclick: () => deleteArchive(archiveTotal) })] : []),
-        ...(fileCount > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-all'), textContent: '🗑 DELETE ALL', onclick: deleteAll })] : []));
+                                             textContent: `🗄 DELETE ARCHIVE (${archiveTotal})`, onclick: busyClick(() => deleteArchive(archiveTotal)) })] : []),
+        ...(fileCount > 0 ? [h('button', { className: 'cam-btn danger', id: elId('delete-all'), textContent: '🗑 DELETE ALL', onclick: busyClick(deleteAll) })] : []));
     }
 
     // Loads and draws the list. A draw that fails shows a message in the panel instead of throwing.

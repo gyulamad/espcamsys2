@@ -76,6 +76,7 @@ require_once __DIR__ . '/lib/Layout.php';
     .row { grid-template-columns: 1fr; } .help { grid-column: 1; }
   }
 <?= CamLayout::navBarStyle() ?>
+<?= CamLayout::busyStyle() ?>
 <?= CamLayout::iconPickerStyle() ?>
   .cams .add .icon-picker { flex-basis: 80px; min-width: 60px; }
 </style>
@@ -112,6 +113,7 @@ require_once __DIR__ . '/lib/Layout.php';
 </div>
 
 <script src="js/toast.js"></script>
+<script src="js/busy.js"></script>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
@@ -165,10 +167,12 @@ require_once __DIR__ . '/lib/Layout.php';
     if (!cams.length) list.append(el('div', { className: 'help', textContent: 'No cameras yet — add one below.' }));
     for (const c of cams) {
       const rm = el('button', { className: 'btn', textContent: '🗑 REMOVE' });
-      rm.addEventListener('click', () => removeCamera(c));
+      rm.addEventListener('click', () => CamBusy.run(rm, () => removeCamera(c)));
+      const settings = el('a', { className: 'btn', href: 'camera-settings-page.php?cam=' + encodeURIComponent(c.id), textContent: '⚙ SETTINGS' });
+      settings.setAttribute('data-page-load', '');   // opens a page: js/busy.js covers this one meanwhile
       list.append(el('div', { className: 'cam-row' },
         el('div', { className: 'nm' }, c.icon + ' ' + c.name, el('small', { textContent: c.id })),
-        el('a', { className: 'btn', href: 'camera-settings-page.php?cam=' + encodeURIComponent(c.id), textContent: '⚙ SETTINGS' }), rm));
+        settings, rm));
     }
   }
   async function cameraAction(body) {
@@ -183,10 +187,10 @@ require_once __DIR__ . '/lib/Layout.php';
     if (!confirm('Remove ' + c.name + ' (' + c.id + ') from the dashboard?\n\nIts recordings are kept and the board is not touched.')) return;
     await cameraAction({ action: 'remove', id: c.id });
   }
-  $('c-add').addEventListener('click', async () => {
+  $('c-add').addEventListener('click', () => CamBusy.run($('c-add'), async () => {
     const ok = await cameraAction({ action: 'add', id: $('c-id').value.trim(), name: $('c-name').value, icon: $('c-icon').value.trim() || '🎥' });
     if (ok) { $('c-id').value = ''; $('c-name').value = ''; $('c-icon').value = ''; }
-  });
+  }));
 
   function renderField(f) {
     const id = 'f-' + f.key;
@@ -270,7 +274,7 @@ require_once __DIR__ . '/lib/Layout.php';
     }
   }
 
-  saveBtn.addEventListener('click', save);
+  saveBtn.addEventListener('click', () => CamBusy.run(saveBtn, save));
   revertBtn.addEventListener('click', () => { for (const f of fields) { const i = $('f-' + f.key); i.value = original[f.key]; i.classList.remove('changed'); } updateButtons(); notify('Reverted.', 'ok'); });
   // The new camera's icon input gets a chooser bubble with a search bar (js/icon-picker.js); without the scripts it stays a plain input.
   if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('c-icon'), window.CamIconCatalog.GROUPS);

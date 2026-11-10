@@ -131,7 +131,7 @@ CSS;
         $links = '';
         foreach (self::NAV_PAGES as [$key, $href, $label, $hint]) {
             $current = $key === $active;
-            $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '" data-nav="' . self::esc($key) . '"'
+            $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '" data-nav="' . self::esc($key) . '"' . self::pageLoadAttr()
                 . ($current ? ' aria-current="page"' : '') . ' title="' . self::esc($hint) . '">' . self::esc($label) . '</a>';
         }
         return '<nav class="site-nav" aria-label="Pages">' . $links . self::logoutForm('nav-link nav-logout') . "</nav>\n";
@@ -214,7 +214,7 @@ CSS . "\n";
     // browser's own same-origin headers are what logout.php checks, see CamLogic::logoutRefusalStatus().
     public static function logoutForm(string $btnClass = 'btn'): string
     {
-        return '<form class="logout-form" method="post" action="logout.php">'
+        return '<form class="logout-form" method="post" action="logout.php"' . self::pageLoadAttr('Logging out…') . '>'
             . '<button class="' . self::esc($btnClass) . '" type="submit" title="Log out: this browser forgets the dashboard login">⏻ LOG OUT</button>'
             . '</form>';
     }
@@ -340,6 +340,37 @@ HTML;
 CSS . "\n";
     }
 
+    // The attribute that tells js/busy.js that a link or a form REPLACES THE PAGE, so it puts the full-screen
+    // "loading" cover up on the click. $text: what the cover says ('' for its default, "Loading…"). Put it on an
+    // <a> that opens a page of this site in this window, or on a <form> that posts to one; never on a download or a
+    // link that opens a new tab (no page comes, so the cover would wait for nothing). Returns it with a space in front.
+    public static function pageLoadAttr(string $text = ''): string
+    {
+        return $text === '' ? ' data-page-load' : ' data-page-load="' . self::esc($text) . '"';
+    }
+
+    // The look of what js/busy.js shows, on every page: the rolling spinner in front of the text of a button that
+    // is busy (.is-busy) and the full-screen cover of a page that is loading (#page-busy). Like offlineCoverStyle()
+    // it does not lean on the page's own colours. The cover is above everything, the full-screen player and the
+    // navigation bar included (z-index 1000 / 900), and takes the clicks, so nothing is pressed twice.
+    public static function busyStyle(): string
+    {
+        return <<<'CSS'
+  .is-busy { cursor: progress; pointer-events: none; }
+  .is-busy::before { content: ''; display: inline-block; box-sizing: border-box; width: .9em; height: .9em; margin-right: .5em; vertical-align: -.12em;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: busy-spin .8s linear infinite; }
+  .page-busy { position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center;
+    background: rgba(6,8,16,.72); color: #cdd8f0; font-family: var(--mono, ui-monospace, monospace); font-size: 1rem; letter-spacing: .08em;
+    cursor: progress; animation: busy-fade .15s ease-out; }
+  .page-busy[hidden] { display: none; }
+  .busy-spinner { width: 44px; height: 44px; box-sizing: border-box; border: 3px solid #3c4d80; border-top-color: #00e5ff; border-radius: 50%; animation: busy-spin .8s linear infinite; }
+  .page-busy-text { text-shadow: 0 1px 3px #000; }
+  @keyframes busy-spin { to { transform: rotate(360deg); } }
+  @keyframes busy-fade { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .is-busy::before, .busy-spinner { animation-duration: 3s; } .page-busy { animation: none; } }
+CSS . "\n";
+    }
+
     // The frame both simple pages share: the dashboard's look, a title, $body, and the scripts (file names in js/).
     // $bodyClass is also the page's key in the navigation bar (NAV_PAGES): 'simple-list' or 'simple-view'.
     private static function simplePage(string $title, string $bodyClass, string $body, array $scripts): string
@@ -403,7 +434,7 @@ CSS . "\n";
   .status .grow { flex: 1 1 auto; }
   .status .rec-on { color: var(--accent2); }
   .status .rec-off { color: var(--muted); }
-CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCoverStyle();
+CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCoverStyle() . self::busyStyle();
     }
 
     // The camera's icon in front of its name, as the page shows both. The icon is decoration (the name says it
@@ -419,14 +450,14 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
     {
         $items = '';
         foreach (CamLogic::cameraSummaries($cameras) as $cam) {
-            $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '" title="' . self::esc($cam['name']) . '">'
+            $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '"' . self::pageLoadAttr() . ' title="' . self::esc($cam['name']) . '">'
                 . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
                 . self::offlineCover()
                 . '<span class="cap">' . self::iconSpan($cam['icon']) . self::esc($cam['name']) . '</span></a>';
         }
         $body = '<div class="bar"><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
-        return self::simplePage('Cameras', 'simple-list', $body, ['camera-offline.js', 'simple-logic.js', 'relay-json.js', 'simple-list.js']);
+        return self::simplePage('Cameras', 'simple-list', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'relay-json.js', 'simple-list.js']);
     }
 
     // simple-view.php: one camera large (a click on it shows it full screen), the pager, the status line and
@@ -454,7 +485,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['camera-offline.js', 'simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser

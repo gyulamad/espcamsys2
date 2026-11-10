@@ -133,7 +133,7 @@ async function main() {
     for (const page of PAGES) {
       const r = await req('GET', page);
       const bar = (r.text.match(/<nav class="site-nav"[\s\S]*?<\/nav>/) || [''])[0];
-      const forms = bar.match(/<form class="logout-form" method="post" action="logout\.php">[\s\S]*?<\/form>/g) || [];
+      const forms = bar.match(/<form class="logout-form" method="post" action="logout\.php"[^>]*>[\s\S]*?<\/form>/g) || [];
       check(`${page}: loads (200) and its navigation bar has exactly one LOG OUT form (a POST, no script), the page's only one`,
         r.status === 200 && forms.length === 1 && (r.text.match(/action="logout\.php"/g) || []).length === 1 && /type="submit"/.test(forms[0]) && /LOG OUT/.test(forms[0]) && !/onclick|onsubmit|<script/.test(forms[0]), `status=${r.status} forms=${forms.length}`);
       const action = (forms[0] || '').match(/action="([^"]+)"/);

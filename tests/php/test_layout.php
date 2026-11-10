@@ -254,7 +254,7 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 5, 'only our four script files and the storage warning');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 6, 'only our five script files and the storage warning');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
@@ -289,7 +289,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 7);   // camera-offline.js, simple-logic.js, relay-json.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 8);   // busy.js, camera-offline.js, simple-logic.js, relay-json.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
@@ -452,7 +452,7 @@ camtest_test('simple view: the bar runs out smoothly, and holds still for reduce
 camtest_test('navBar: the pages in a fixed order, as plain links with a hint', function () {
     $html = CamLayout::navBar(null);
     camtest_assert_true(strpos($html, '<nav class="site-nav" aria-label="Pages">') === 0);
-    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)"/', $html, $m), 5);
+    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 5);
     camtest_assert_equal($m[1], ['./?layout=grid', './?layout=list', 'simple-view.php', 'simple-list.php', 'all-recordings.php']);
     camtest_assert_equal($m[2], ['dashboard-grid', 'dashboard-list', 'simple-view', 'simple-list', 'all-files']);
     camtest_assert_equal(preg_match_all('/<a [^>]* title="[^"]+"/', $html), 5, 'every link says where it goes');
@@ -475,7 +475,7 @@ camtest_test('navBar: the page that shows it is marked (class and aria-current),
     foreach ($pages as $key => $href) {
         $html = CamLayout::navBar($key);
         camtest_assert_equal(substr_count($html, 'aria-current="page"'), 1, $key);
-        camtest_assert_true(strpos($html, '<a class="nav-link current" href="' . $href . '" data-nav="' . $key . '" aria-current="page"') !== false, $key);
+        camtest_assert_true(strpos($html, '<a class="nav-link current" href="' . $href . '" data-nav="' . $key . '" data-page-load aria-current="page"') !== false, $key);
     }
     camtest_assert_equal(substr_count(CamLayout::navBar('nonsense'), 'aria-current'), 0, 'an unknown key marks nothing');
 });
@@ -532,6 +532,21 @@ camtest_test('iconPickerStyle: a bubble under the input that sits above the page
     camtest_assert_true(strpos($rule('.icon-results'), 'overflow-y: auto') !== false && strpos($rule('.icon-results'), 'max-height') !== false);
     camtest_assert_true(strpos($rule('.icon-picker'), 'position: relative') !== false, 'the box the bubble is placed in');
     camtest_assert_true(strpos($css, '.icon-choice.selected') !== false && strpos($css, '.icon-choice:focus-visible') !== false);
+});
+
+camtest_test('pageLoadAttr / busyStyle: the marker that says a link or form replaces the page, and the look of the spinner and the cover', function () {
+    camtest_assert_equal(CamLayout::pageLoadAttr(), ' data-page-load');
+    camtest_assert_equal(CamLayout::pageLoadAttr('Logging out…'), ' data-page-load="Logging out…"');
+    camtest_assert_equal(CamLayout::pageLoadAttr('"><script>'), ' data-page-load="&quot;&gt;&lt;script&gt;"', 'the text is escaped');
+    $css = CamLayout::busyStyle();
+    foreach (['.is-busy::before', '.page-busy', '.page-busy[hidden]', '@keyframes busy-spin', 'prefers-reduced-motion'] as $needle) {
+        camtest_assert_true(strpos($css, $needle) !== false, $needle);
+    }
+    camtest_assert_true(strpos(CamLayout::logoutForm('x'), 'data-page-load="Logging out…"') !== false, 'LOG OUT covers the page');
+    foreach ([CamLayout::simpleListPage([['id' => 'a', 'name' => 'A']]), CamLayout::simpleViewPage([['id' => 'a', 'name' => 'A']], ['id' => 'a', 'name' => 'A'], 10)] as $html) {
+        camtest_assert_true(strpos($html, 'busy.js') !== false && strpos($html, 'data-page-load') !== false, 'busy.js and marked links');
+        camtest_assert_true(strpos($html, '.page-busy') !== false, 'and the look of the cover');
+    }
 });
 
 exit(camtest_summarize());

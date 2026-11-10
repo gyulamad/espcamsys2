@@ -58,6 +58,7 @@ $cameraLabelsJson = json_encode(
   }
 <?= CamLayout::recordingsListStyle() ?>
 <?= CamLayout::navBarStyle() ?>
+<?= CamLayout::busyStyle() ?>
 </style>
 </head>
 <body>
@@ -76,6 +77,7 @@ $cameraLabelsJson = json_encode(
   <div class="files-panel open" id="files-all"><div class="files-empty">Loading…</div></div>
 </main>
 
+<script src="js/busy.js"></script>
 <?= CamLayout::recordingsListScript() ?>
 <script>
   const CAMERA_LABELS = <?= $cameraLabelsJson ?>;

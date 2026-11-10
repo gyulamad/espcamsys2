@@ -105,7 +105,7 @@ async function main() {
     check('a link with a clip still serves the whole page (list, navigation bar), not a bare video', linked.status === 200 && linked.text.includes('id="files-all"') && linked.text.includes('data-nav="all-files"'));
     check('the lib/ folder is not asked for by the page (its script is inlined)', !/src="lib\//.test(page.text));
     check('the page has a LOG OUT button (in the navigation bar, once)', (page.text.match(/<nav class="site-nav"[\s\S]*action="logout\.php"[\s\S]*<\/nav>/g) || []).length === 1 && (page.text.match(/action="logout\.php"/g) || []).length === 1);
-    check('the page is marked as the current one in the bar, and offers DELETE ALL itself (the dashboard has no such button any more)', page.text.includes('data-nav="all-files" aria-current="page"') && page.text.includes('deleteAllConfirm:'));
+    check('the page is marked as the current one in the bar, and offers DELETE ALL itself (the dashboard has no such button any more)', page.text.includes('data-nav="all-files" data-page-load aria-current="page"') && page.text.includes('deleteAllConfirm:'));
 
     // the dashboard links to it
     const home = await dash('GET', 'index.php');

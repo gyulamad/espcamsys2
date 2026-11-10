@@ -58,6 +58,7 @@ require_once __DIR__ . '/lib/Layout.php';
   #status.err { color: var(--accent2); } #status.ok { color: var(--ok); } #status.busy { color: var(--warn); }
   @media (max-width: 700px) { header, main, .savebar { padding-left: 16px; padding-right: 16px; } .row { grid-template-columns: 1fr; } .help { grid-column: 1; } }
 <?= CamLayout::navBarStyle() ?>
+<?= CamLayout::busyStyle() ?>
 <?= CamLayout::iconPickerStyle() ?>
 </style>
 </head>
@@ -107,6 +108,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 </div>
 
 <script src="js/toast.js"></script>
+<script src="js/busy.js"></script>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
@@ -256,7 +258,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     return { res, data: await res.json().catch(() => ({})) };
   }
 
-  saveBtn.addEventListener('click', async () => {
+  saveBtn.addEventListener('click', () => CamBusy.run(saveBtn, async () => {
     const c = changes();
     if (c.missing) { notify(c.missing + ' is needed too — give it a value', 'error'); return; }
     if (!Object.keys(c.values).length) return;
@@ -276,29 +278,29 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       await load(true);
       notify(data.message, data.queued ? 'busy' : 'ok');
     } catch (e) { notify('Failed: ' + e.message, 'error'); refresh(); }
-  });
+  }));
   revertBtn.addEventListener('click', () => { for (const d of keys) { if (isFixed(d)) continue; $('f-' + d.name).value = original[d.name]; } refresh(); notify('Reverted.', 'ok'); });
-  cancelBtn.addEventListener('click', async () => {
+  cancelBtn.addEventListener('click', () => CamBusy.run(cancelBtn, async () => {
     const { res, data } = await post(API, { cancel: true });
     notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
-    load(true);
-  });
+    await load(true);
+  }));
 
-  $('e-save').addEventListener('click', async () => {
+  $('e-save').addEventListener('click', () => CamBusy.run($('e-save'), async () => {
     const { res, data } = await post('camera-admin.php', { action: 'update', id: CAM, name: $('e-name').value, icon: $('e-icon').value });
     notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
-    if (res.ok) load(true);
-  });
-  $('e-detector-save').addEventListener('click', async () => {
+    if (res.ok) await load(true);
+  }));
+  $('e-detector-save').addEventListener('click', () => CamBusy.run($('e-detector-save'), async () => {
     const { res, data } = await post('camera-admin.php', { action: 'detector', id: CAM, detector: $('e-detector').value });
     notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
-    if (res.ok) load(true);
-  });
-  $('e-remove').addEventListener('click', async () => {
+    if (res.ok) await load(true);
+  }));
+  $('e-remove').addEventListener('click', () => CamBusy.run($('e-remove'), async () => {
     if (!confirm('Remove ' + camera.name + ' from the dashboard?\n\nIts recordings are kept and the board is not touched. You can add it again later with the same id.')) return;
     const { res, data } = await post('camera-admin.php', { action: 'remove', id: CAM });
-    if (res.ok) location.href = 'index.php'; else notify(data.error || ('Error ' + res.status), 'error');
-  });
+    if (res.ok) CamBusy.navigate('index.php'); else notify(data.error || ('Error ' + res.status), 'error');
+  }));
 
   // The icon input gets a chooser bubble with a search bar (js/icon-picker.js). Without the scripts it stays a plain input.
   if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('e-icon'), window.CamIconCatalog.GROUPS);
