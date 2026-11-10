@@ -22,6 +22,9 @@
 //   - folder listings are off inside the dashboard (a folder without index answers 403, no "Index of")
 //   - a recording keeps its own "private, no-cache" (Apache only touches the security headers)
 //   - the dashboard still works through it (login, page, JSON endpoint)
+//   - the site's address itself opens SIMPLE LIST (F-16: a 302 to a plain relative address, sent after the
+//     login, with the security headers already on it); every address that names the dashboard (index.php) still
+//     serves the dashboard itself, so "the dashboard answers here" is checked against index.php
 //   - HTTPS: TLS 1.2+ only, the certificate carries the names it was made for, no HSTS header
 //   - the certificate script: key mode 0600, right names, refuses to overwrite without --force,
 //     refuses anything that is not a host name or address
@@ -215,8 +218,14 @@ async function suite(label, where) {
   r = await q('GET', '/');
   check(n('GET / without a login -> 401 (the login prompt)'), r.status === 401 && /Basic/.test(r.headers['www-authenticate'] || ''), secHeaderDetail(r));
   check(n('...and the 401 already carries the security headers'), hasSecurityHeaders(r), secHeaderDetail(r));
+  // Since F-16 the site's address (the folder itself, here /camdash/) opens SIMPLE LIST: a 302 sent after the login,
+  // to a plain relative address. The dashboard is one named address away: /index.php still serves it, and through
+  // THIS way in — which is what the two checks after the redirect ones are about.
   r = await q('GET', '/', { auth: true });
-  check(n('GET / with the login -> 200 dashboard page'), r.status === 200 && r.text.length > 1000, `status=${r.status}`);
+  check(n('GET / with the login sends the browser to SIMPLE LIST (F-16: 302, a plain relative address)'), r.status === 302 && r.headers.location === 'simple-list.php', secHeaderDetail(r));
+  check(n('...and the redirect answer already carries the security headers and Cache-Control: no-store'), hasSecurityHeaders(r) && r.headers['cache-control'] === 'no-store', secHeaderDetail(r));
+  r = await q('GET', '/index.php', { auth: true });
+  check(n('GET /index.php with the login -> 200 dashboard page (an address that names the dashboard still shows it)'), r.status === 200 && r.text.length > 1000, `status=${r.status}`);
   check(n('the page has the security headers and Cache-Control: no-store'), hasSecurityHeaders(r) && r.headers['cache-control'] === 'no-store', secHeaderDetail(r));
   r = await q('GET', '/status.php', { auth: true });
   check(n('a JSON endpoint answers and is no-store too'), r.status === 200 && r.headers['cache-control'] === 'no-store' && hasSecurityHeaders(r), secHeaderDetail(r));
@@ -383,7 +392,9 @@ async function main() {
       const got11 = /New, TLSv1\.1, Cipher is (?!\(NONE\))/.test(probeOut);
       check('TLS 1.1 is refused on this machine (modern OpenSSL refuses it by default anyway; the SSLProtocol line, checked above, is what guarantees it elsewhere)', !got11 && /alert number 70|alert protocol version/.test(probeOut), probeOut.slice(-300));
       const plain = await request('GET', '/camdash/', { auth: true, where: { host: tlsHost, port: PORT, tls: false } });
-      check('plain HTTP keeps working next to HTTPS (HTTPS is optional, not forced)', plain.status === 200, `status=${plain.status}`);
+      check('plain HTTP keeps working next to HTTPS (HTTPS is optional, not forced): the site address answers with its own SIMPLE LIST redirect, not an https one', plain.status === 302 && plain.headers.location === 'simple-list.php', `status=${plain.status} location=${plain.headers.location}`);
+      const plainDash = await request('GET', '/camdash/index.php', { auth: true, where: { host: tlsHost, port: PORT, tls: false } });
+      check('...and the dashboard itself is still served over plain HTTP', plainDash.status === 200, `status=${plainDash.status}`);
     }
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
