@@ -16,7 +16,8 @@
 //
 // Independent client (no require() of lib/ or server.js), own ports, throwaway log/settings/switch
 // files and a decoy folder in a temp directory. Recordings live in the relay's real recordings/
-// folder (not configurable), so it only touches folders named e2e-camid-*, and removes them.
+// folder (not configurable), so it only touches folders named e2e-camid-*, and removes them (also the ones an earlier,
+// interrupted run left behind: the relay counts every folder there as a camera).
 // Core modules only. Takes about 5 seconds.
 //
 // Usage:  node tests/e2e/test_relay_camera_id_e2e.js
@@ -154,6 +155,19 @@ const waitClosed = (sock, ms) => new Promise((resolve) => {
 });
 
 const readFile = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
+
+// The relay lists every folder it finds in its recordings folder as a camera (/status), and that folder is the real
+// one (not configurable). So a folder this test (or an earlier run of it that was interrupted, or ran against an
+// older relay) left behind would count as a camera the relay "knows" and break the cap checks below: the 65th camera
+// would be the 66th. The prefix marks a folder as this test's own, so they are all removed before the run and after it.
+const OWN_FOLDER_PREFIX = 'e2e-camid-';
+function removeOwnRecordingFolders() {
+  if (!fs.existsSync(RECORDINGS_DIR)) return;
+  for (const name of fs.readdirSync(RECORDINGS_DIR)) {
+    if (!name.startsWith(OWN_FOLDER_PREFIX)) continue;
+    fs.rmSync(path.join(RECORDINGS_DIR, name), { recursive: true, force: true });
+  }
+}
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('not a real picture, but it starts like one'), Buffer.from([0xff, 0xd9])]);
 
 
@@ -175,7 +189,7 @@ const statusIds = async () => Object.keys((await get('/status')).json || {});
 const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e-camid-'));
 
 (async () => {
-  const preexisting = fs.existsSync(path.join(RECORDINGS_DIR, OK_CAM));
+  removeOwnRecordingFolders();   // what an earlier run left behind (see above)
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-relay-camid-'));
   const logFile = path.join(tmp, 'relay.log');
   const common = { LOG_FILE: logFile, SETTINGS_FILE: path.join(tmp, 'settings.json'), SWITCH_FILE: path.join(tmp, 'switch.json') };
@@ -297,7 +311,7 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
   } finally {
     for (const s of socks) s.destroy();
     await stopRelay(relay);
-    if (!preexisting) fs.rmSync(path.join(RECORDINGS_DIR, OK_CAM), { recursive: true, force: true });
+    removeOwnRecordingFolders();
     fs.rmSync(tmp, { recursive: true, force: true });
     if (createdTempConfig) { try { fs.unlinkSync(CONFIG_PATH); } catch (e) { /* gone */ } }
   }
