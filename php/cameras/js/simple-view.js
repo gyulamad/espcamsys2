@@ -41,7 +41,14 @@
   let status = null;               // the last answers of the relay (null: not known)
   let detectors = null;
   let retryTimer = null;
+  let looksAsked = 0;              // numbers the looks at the relay, so an answer that comes in late can be told from the newest
+  let looksAnswered = 0;
   const viewAsked = {};            // detector id -> when its live view was last requested
+  const humans = S.createHumanHold();   // a camera that had a human keeps it for a moment when a look is lost or fails
+
+  // How interesting each camera is at `now`, the way the slideshow (and its countdown) must see it: from the last
+  // answers of the relay, with a human held through a gap in them. One place, so they can never disagree.
+  const situation = (now) => humans.apply(now, S.priorities(ids, status, detectors));
 
   // The status line and the red frame around the picture follow the recording state of the current camera.
   function renderRecording() {
@@ -77,7 +84,7 @@
     if (id === null) return;
     if (slideshow) slideshow.show(id, Date.now());   // the viewer's choice gets a full time
     show(id);
-    renderCountdown(Date.now(), S.priorities(ids, status, detectors));
+    renderCountdown(Date.now(), situation(Date.now()));
   }
 
   function setSlideshow(on) {
@@ -89,7 +96,7 @@
     if (on) keepViews();
     button.textContent = on ? '⏸ SLIDESHOW ON' : '▶ SLIDESHOW';
     lastFraction = 0;
-    renderCountdown(Date.now(), on ? S.priorities(ids, status, detectors) : null);
+    renderCountdown(Date.now(), on ? situation(Date.now()) : null);
   }
 
   // The slideshow's "time left" indicator: seconds in the status line and a bar under the picture that runs
@@ -111,7 +118,7 @@
     el('clock').textContent = S.formatClock(new Date());
     if (!slideshow) { renderCountdown(Date.now(), null); return; }
     const now = Date.now();
-    const prio = S.priorities(ids, status, detectors);
+    const prio = situation(now);
     const next = slideshow.tick(now, prio);
     if (next !== null) show(next);
     renderCountdown(now, prio);
@@ -132,7 +139,12 @@
   }
 
   async function poll() {
-    [status, detectors] = await Promise.all([window.CamRelayJson.get('status.php'), window.CamRelayJson.get('detector-status.php')]);
+    looksAsked += 1;
+    const look = looksAsked;
+    const answers = await Promise.all([window.CamRelayJson.get('status.php'), window.CamRelayJson.get('detector-status.php')]);
+    if (look < looksAnswered) return;   // a newer look has been answered already: this one is old news
+    looksAnswered = look;
+    [status, detectors] = answers;
     renderRecording();
     renderLoading();
     keepViews();

@@ -398,6 +398,58 @@ test('view: motion from a paired person detector is shown at once, but not inste
   assertEqual(env.els.picture.src, 'stream.php?cam=b', 'motion on c does not pull the view away from the recording b');
 });
 
+const MOVING = { online: true, report: { scene: { motion: 900, motionAtLeast: 300 } } };
+
+test('view: one failed look at the relay does not take the view from a camera that records, whatever starts to move elsewhere', async () => {
+  const env = await started({ seconds: 60, current: 'b' });
+  env.els.slideshow.fire('click');
+  env.relay.status = { b: { recording: true } };
+  await env.poll();
+  env.relay.status = 'http-error';             // one look fails ...
+  env.relay.detectors = { c: MOVING };         // ... just as another camera starts to move
+  await env.poll();
+  assertEqual(env.els.picture.src, '', 'still on b');
+  await env.advance(1000, 3);
+  assertEqual(env.els.picture.src, '', 'still on b');
+  env.relay.status = { b: { recording: true } };
+  await env.poll();
+  assertEqual(env.els.picture.src, '', 'and when the relay answers again');
+});
+
+test('view: an answer that arrives late does not replace a newer one', async () => {
+  const env = await started({ seconds: 60, current: 'b' });
+  env.els.slideshow.fire('click');
+  const pending = [];   // the requests the page makes, answered by hand
+  globalThis.fetch = (url) => new Promise((resolve) => pending.push({ url, answer: (body) => resolve({ ok: true, json: async () => body }) }));
+  const [look] = env.interval(2000);
+  const older = look.fn();                      // two looks at the relay: pending[0], [1] and pending[2], [3] ...
+  const newer = look.fn();
+  pending[2].answer({ b: { recording: true } });   // ... the newer one is answered first
+  pending[3].answer({});
+  await newer;
+  assertEqual(env.els.rec.textContent, 'RECORDING: ON');
+  pending[0].answer({ b: { recording: false } });  // the older answer comes in last
+  pending[1].answer({});
+  await older;
+  assertEqual(env.els.rec.textContent, 'RECORDING: ON', 'the older answer is old news');
+});
+
+test('view: a human on the screen keeps the view through every turn, and a missing look; only once he is gone for good the time moves it on', async () => {
+  const env = await started({ seconds: 10, current: 'b' });
+  env.els.slideshow.fire('click');
+  env.relay.status = { b: { recording: true } };
+  await env.poll();
+  await env.advance(1000, 15);                 // the 10 s are up once: the human stays
+  assertEqual(env.els.picture.src, '', 'b stays');
+  env.relay.status = {};                       // the data lets go of the human (gone, or just a gap)
+  env.relay.detectors = { c: MOVING };
+  await env.poll();
+  await env.advance(1000, 5);
+  assertEqual(env.els.picture.src, '', 'held: 5 s later it is still b');
+  await env.advance(1000, 15);
+  assertEqual(env.els.picture.src, 'stream.php?cam=c', 'gone for good: on to the camera that moves');
+});
+
 test('view: with cameras recording, the slideshow skips the ones that do not', async () => {
   const env = await started({ current: 'a', seconds: 5 });
   env.relay.status = { a: { recording: true }, c: { recording: true } };

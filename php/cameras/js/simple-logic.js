@@ -10,9 +10,15 @@
 //   countdown       what the slideshow's "time left" indicator shows (whole seconds and the part of the time left)
 //   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
+//   tier            the kinds of "interesting" that count as one: a person seen and a recording are both a human
+//   createHumanHold keeps a camera's human for a short while when the data lets go of it (a lost or failed look)
 //   nextByPriority  which camera follows after the slideshow time is up
 //   jumpTarget      which camera the slideshow shows AT ONCE, without waiting for the time
 //   createSlideshow the slideshow itself: the two rules above plus the timer
+//
+// The order of the slideshow: a HUMAN (a recording, or a person the detector sees) comes first and is never left for
+// anything less — not for motion elsewhere, not when the time is up. Several humans take turns. Only with no human
+// anywhere does motion get its turn; only with neither do all the cameras take theirs.
 
 (function (root, factory) {
   const api = factory();
@@ -23,7 +29,17 @@
   // not connected is below all of them: the slideshow only shows it when every camera is offline.
   const PRIORITY = Object.freeze({ OFFLINE: -1, IDLE: 0, MOTION: 1, PERSON: 2, RECORDING: 3 });
 
+  // How long a camera keeps its human after the data stops showing one. The cameras are looked at every 2 s, and a look
+  // can be lost (the relay is busy saving a recording, a request fails): that must not look like "the human left". Long
+  // enough to bridge a couple of lost looks, shorter than a slideshow turn so a human who really left does not hold the view.
+  const HUMAN_HOLD_MS = 6000;
+
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+
+  // A person seen and a recording are one tier: either way a human is on the screen. Used wherever cameras are
+  // grouped, so that a person who is not (yet) recorded is not skipped while another camera records.
+  const tier = (priority) => Math.min(priority, PRIORITY.PERSON);
+  const isHuman = (priority) => priority >= PRIORITY.PERSON;
 
   // The thumbnails of the list page: as big as all of them fit on the screen without scrolling, but never
   // narrower than minWidth — below that they would no longer be recognisable, so the page scrolls instead.
@@ -120,12 +136,35 @@
     return out;
   }
 
-  // The camera after the current one once the slideshow time is up: only the cameras of the highest
-  // priority take part (all recording ones, else all moving ones, else all of them), so the others are
-  // skipped. The current camera alone in that group stays.
+  // The same priorities, but a camera that had a human a moment ago keeps it for `holdMs` after the data stops
+  // showing one (see HUMAN_HOLD_MS). The page's looks at the relay are all the slideshow knows: a look that is lost
+  // or fails makes every camera look idle, and a person flag can flicker off while the camera still records —
+  // without this the view would leave a human for whatever else moves. A camera known to be offline is not held.
+  // Each call is a look at time `at` (ms, not going back); asking again for the same moment gives the same answer.
+  function createHumanHold(holdMs = HUMAN_HOLD_MS) {
+    const lastHuman = {};   // id -> { at, level } of the last look that showed a human there
+    const held = (id, level, at) => {
+      if (level === PRIORITY.OFFLINE) { delete lastHuman[id]; return level; }
+      if (isHuman(level)) { lastHuman[id] = { at, level }; return level; }
+      const seen = lastHuman[id];
+      if (!seen || at - seen.at >= holdMs) return level;
+      return seen.level;
+    };
+    return {
+      apply(at, prio) {
+        const out = {};
+        for (const id of Object.keys(prio)) out[id] = held(id, prio[id], at);
+        return out;
+      },
+    };
+  }
+
+  // The camera after the current one once the slideshow time is up: only the cameras of the highest tier take
+  // part (all humans, else all moving ones, else all of them), so the others are skipped. The current camera
+  // alone in that group stays: a human is never left for something less.
   function nextByPriority(ids, currentId, prio) {
     if (!ids.length) return null;
-    const level = (id) => prio[id] || PRIORITY.IDLE;
+    const level = (id) => tier(prio[id] || PRIORITY.IDLE);
     const top = Math.max(...ids.map(level));
     const group = ids.filter((id) => level(id) === top);
     const at = ids.indexOf(currentId);
@@ -199,5 +238,5 @@
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, fitThumbnails, neighbor, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, nextByPriority, jumpTarget, createSlideshow, countdown, formatClock };
+  return { PRIORITY, HUMAN_HOLD_MS, fitThumbnails, neighbor, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, tier, createHumanHold, nextByPriority, jumpTarget, createSlideshow, countdown, formatClock };
 });

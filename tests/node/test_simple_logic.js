@@ -6,7 +6,7 @@
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
 const S = require('../../php/cameras/js/simple-logic');
 
-const { IDLE, MOTION, RECORDING } = S.PRIORITY;
+const { OFFLINE, IDLE, MOTION, PERSON, RECORDING } = S.PRIORITY;
 const IDS = ['a', 'b', 'c', 'd'];
 const prio = (o) => Object.assign({ a: IDLE, b: IDLE, c: IDLE, d: IDLE }, o);
 
@@ -239,7 +239,132 @@ test('jumpTarget: nothing happening, or things calming down, is no reason to jum
   assertEqual(S.jumpTarget(IDS, 'a', prio({ b: RECORDING }), prio({})), null);
 });
 
+// ── humans: one tier, never left for something less ──────────────────
+
+test('tier: a person seen and a recording are one tier — a human is on the screen either way', () => {
+  assertEqual([OFFLINE, IDLE, MOTION, PERSON, RECORDING].map((p) => S.tier(p)), [OFFLINE, IDLE, MOTION, PERSON, PERSON]);
+});
+
+test('nextByPriority: every human takes a turn — a camera that sees a person and one that records are one group', () => {
+  const p = prio({ a: RECORDING, c: PERSON, b: MOTION });
+  assertEqual(S.nextByPriority(IDS, 'a', p), 'c');
+  assertEqual(S.nextByPriority(IDS, 'c', p), 'a');
+});
+
+test('nextByPriority: a lone human stays, whatever moves elsewhere — and so does a lone person', () => {
+  assertEqual(S.nextByPriority(IDS, 'a', prio({ a: PERSON, b: MOTION, c: MOTION })), 'a');
+  assertEqual(S.nextByPriority(IDS, 'a', prio({ a: RECORDING, b: MOTION, c: MOTION })), 'a');
+});
+
+test('nextByPriority: motion is only visited when no human is on any camera', () => {
+  assertEqual(S.nextByPriority(IDS, 'b', prio({ a: PERSON, b: MOTION })), 'a', 'from motion on to the human');
+  assertEqual(S.nextByPriority(IDS, 'a', prio({ b: MOTION, d: MOTION })), 'b');
+});
+
+test('jumpTarget: motion does not pull the view away from a person either, only from something less', () => {
+  assertEqual(S.jumpTarget(IDS, 'a', prio({}), prio({ a: PERSON, b: MOTION })), null);
+  assertEqual(S.jumpTarget(IDS, 'a', prio({ a: MOTION }), prio({ a: PERSON, b: MOTION })), null);
+  assertEqual(S.jumpTarget(IDS, 'a', prio({}), prio({ a: MOTION, b: MOTION })), 'b', 'equal motion may');
+});
+
+// ── createHumanHold ──────────────────────────────────────────────────
+
+test('createHumanHold: a camera that had a human keeps it through a gap in the data shorter than the hold', () => {
+  const hold = S.createHumanHold(5000);
+  assertEqual(hold.apply(0, prio({ a: RECORDING })), prio({ a: RECORDING }));
+  assertEqual(hold.apply(2000, prio({})), prio({ a: RECORDING }));
+  assertEqual(hold.apply(4999, prio({})), prio({ a: RECORDING }));
+  assertEqual(hold.apply(5000, prio({})), prio({}), 'the hold is over');
+});
+
+test('createHumanHold: a human seen again starts the hold over', () => {
+  const hold = S.createHumanHold(5000);
+  hold.apply(0, prio({ a: PERSON }));
+  hold.apply(4000, prio({ a: PERSON }));
+  assertEqual(hold.apply(8999, prio({})), prio({ a: PERSON }));
+  assertEqual(hold.apply(9000, prio({})), prio({}));
+});
+
+test('createHumanHold: the human tier is held against motion too (a person flag that flickers off, motion still on)', () => {
+  const hold = S.createHumanHold(5000);
+  hold.apply(0, prio({ a: RECORDING }));
+  assertEqual(hold.apply(1000, prio({ a: MOTION })), prio({ a: RECORDING }));
+});
+
+test('createHumanHold: what is not a human is taken as it comes, and a human is never lowered', () => {
+  const hold = S.createHumanHold(5000);
+  assertEqual(hold.apply(0, prio({ b: MOTION })), prio({ b: MOTION }));
+  assertEqual(hold.apply(1000, prio({ b: IDLE })), prio({ b: IDLE }));
+  hold.apply(2000, prio({ a: PERSON }));
+  assertEqual(hold.apply(3000, prio({ a: RECORDING })), prio({ a: RECORDING }));
+});
+
+test('createHumanHold: a camera known to be offline is not held, and its human is forgotten', () => {
+  const hold = S.createHumanHold(5000);
+  hold.apply(0, prio({ a: RECORDING }));
+  assertEqual(hold.apply(1000, prio({ a: OFFLINE })), prio({ a: OFFLINE }));
+  assertEqual(hold.apply(2000, prio({ a: IDLE })), prio({ a: IDLE }), 'back online with nobody: not a human any more');
+});
+
+test('createHumanHold: cameras are held separately, the input is not changed, asking twice gives the same answer', () => {
+  const hold = S.createHumanHold(5000);
+  hold.apply(0, prio({ a: RECORDING, c: PERSON }));
+  const input = prio({ b: MOTION });
+  const out = hold.apply(1000, input);
+  assertEqual(out, prio({ a: RECORDING, b: MOTION, c: PERSON }));
+  assertEqual(input, prio({ b: MOTION }));
+  assertEqual(hold.apply(1000, input), out);
+});
+
+test('createHumanHold: the default hold is HUMAN_HOLD_MS — long enough for a missed look, shorter than a slideshow turn', () => {
+  assertTrue(S.HUMAN_HOLD_MS >= 4000 && S.HUMAN_HOLD_MS < 10000, 'a lost look (2 s each) is bridged, yet a human who left does not hold the view for a whole turn');
+  const hold = S.createHumanHold();
+  hold.apply(0, prio({ a: RECORDING }));
+  assertEqual(hold.apply(S.HUMAN_HOLD_MS - 1, prio({})).a, RECORDING);
+  assertEqual(hold.apply(S.HUMAN_HOLD_MS, prio({})).a, IDLE);
+});
+
 // ── createSlideshow ──────────────────────────────────────────────────
+
+// The page's loop: every look goes through the hold, then to the slideshow. -> the camera shown after each look.
+function play(looks, intervalMs = 10000, start = 'a') {
+  const show = S.createSlideshow(IDS, start, intervalMs, 0);
+  const hold = S.createHumanHold();
+  return looks.map(([at, p]) => { show.tick(at, hold.apply(at, p)); return show.current(); });
+}
+const secondly = (from, to, p) => { const out = []; for (let at = from; at <= to; at += 1000) out.push([at, typeof p === 'function' ? p(at) : p]); return out; };
+
+test('slideshow: a lost look (everything idle for once) while motion starts elsewhere does not take the view from a human', () => {
+  const looks = [[1000, prio({})], [3000, prio({ a: RECORDING })], [5000, prio({ b: MOTION })], [7000, prio({ a: RECORDING, b: MOTION })]];
+  assertEqual(play(looks), ['a', 'a', 'a', 'a']);
+});
+
+test('slideshow: a person flag that flickers off while motion starts elsewhere does not take the view from a human', () => {
+  const looks = [[1000, prio({ a: PERSON })], [3000, prio({ b: MOTION })], [5000, prio({ a: PERSON, b: MOTION })]];
+  assertEqual(play(looks), ['a', 'a', 'a']);
+});
+
+test('slideshow: a human who stays is never left, however many times the time is up, whatever moves elsewhere', () => {
+  const shown = play(secondly(1000, 65000, () => prio({ a: RECORDING, b: MOTION, c: MOTION })));
+  assertTrue(shown.every((id) => id === 'a'), 'stayed on a for 65 s');
+});
+
+test('slideshow: the time moves the view on only once the human is gone (the hold included), to motion if there is any', () => {
+  const shown = play(secondly(1000, 35000, (at) => (at <= 20000 ? prio({ a: RECORDING, b: MOTION }) : prio({ b: MOTION }))));
+  assertEqual(shown[28], 'a', 'at 29 s: the human left at 20 s, the hold is over at 26 s but the turn is not up');
+  assertEqual(shown[29], 'b', 'at 30 s: the turn is up and nobody is on a');
+});
+
+test('slideshow: with several humans they take turns, and motion is not visited meanwhile', () => {
+  const shown = play(secondly(1000, 30000, () => prio({ a: RECORDING, c: PERSON, b: MOTION })));
+  assertEqual([shown[0], shown[9], shown[19], shown[29]], ['a', 'c', 'a', 'c'], 'at 1 s, 10 s, 20 s, 30 s');
+  assertTrue(!shown.includes('b') && !shown.includes('d'), 'only the humans were shown');
+});
+
+test('slideshow: nothing at all happening: every camera in turn, as before', () => {
+  const shown = play(secondly(1000, 41000, () => prio({})));
+  assertEqual([shown[9], shown[19], shown[29], shown[39]], ['b', 'c', 'd', 'a']);
+});
 
 test('slideshow: stays for the interval, then moves to the next camera', () => {
   const s = S.createSlideshow(IDS, 'a', 10000, 0);
