@@ -137,10 +137,19 @@ function fetchPage() {
     req.setTimeout(15000, () => req.destroy(new Error('page request timed out')));
   });
 }
-// The text on a camera's FILES button, as it appears in the raw HTML.
+// The text on a camera's FILES button, as it appears in the raw HTML. The button's attributes may hold ">" of
+// their own — the onclick handlers have held arrow functions ("CamBusy.run(this, () => …)") since F-11 — so the
+// first ">" after the id is NOT the end of the tag. The label is what sits between the tag's own closing ">"
+// (the LAST one before this button's </button>, since an attribute value never contains "<") and that </button>.
 function filesLabel(html, id) {
-  const m = new RegExp(`id="files-btn-${id}"[^>]*>([^<]*)</button>`).exec(html);
-  return m ? m[1].trim() : null;
+  const at = html.indexOf(`id="files-btn-${id}"`);
+  if (at === -1) return null;
+  const end = html.indexOf('</button>', at);
+  if (end === -1) return null;
+  const seg = html.slice(at, end);
+  const tagEnd = seg.lastIndexOf('>');
+  if (tagEnd === -1) return null;
+  return seg.slice(tagEnd + 1).trim();
 }
 
 // ── a simulated OLDER relay: /status without counts, plain file lists ─
