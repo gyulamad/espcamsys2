@@ -66,6 +66,7 @@ camtest_test('rebootMenu: a split button — main button runs the default, the a
     camtest_assert_true(preg_match('/<span class="reboot-list" role="menu" hidden>/', $html) === 1, 'the list starts closed');
     camtest_assert_true(strpos($html, 'aria-expanded="false"') !== false);
     camtest_assert_equal(substr_count($html, 'reboot-item default'), 1, 'exactly one entry is marked as the default');
+    camtest_assert_true(strpos($html, 'reboot-note') === false, 'no note next to the menu any more: the result message is a toast popup (F-12, js/toast.js)');
 });
 
 camtest_test('rebootMenu: lists every target of the menu, in order, with its label', function () {

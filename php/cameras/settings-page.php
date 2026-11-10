@@ -111,6 +111,7 @@ require_once __DIR__ . '/lib/Layout.php';
   <span id="status">Loading…</span>
 </div>
 
+<script src="js/toast.js"></script>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
@@ -124,6 +125,10 @@ require_once __DIR__ . '/lib/Layout.php';
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert');
 
   function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ''; }
+  // The result of pressing a button (SAVE, REVERT, add / remove a camera): a toast popup (F-12) instead of
+  // a message in the save bar, where a longer answer wrapped the bar into several lines. The save bar's
+  // own #status line stays for the passive states (loading, unsaved-changes count, saving...).
+  function notify(text, kind) { CamToast.show(text, kind || 'info'); }
   function el(tag, props, ...children) {
     const e = document.createElement(tag);
     Object.assign(e, props || {});
@@ -169,9 +174,9 @@ require_once __DIR__ . '/lib/Layout.php';
   async function cameraAction(body) {
     const res = await fetch('camera-admin.php', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, AJAX), body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) { setStatus(data.error || ('Error ' + res.status), 'err'); return false; }
+    if (!res.ok || !data.ok) { notify(data.error || ('Error ' + res.status), 'error'); return false; }
     renderCameras(data.cameras);
-    setStatus(data.message, 'ok');
+    notify(data.message, 'ok');
     return true;
   }
   async function removeCamera(c) {
@@ -254,19 +259,19 @@ require_once __DIR__ . '/lib/Layout.php';
         body: JSON.stringify({ values, confirm: breaking.length > 0 }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) { setStatus(data.error || ('Error ' + res.status), 'err'); updateButtons(); return; }
+      if (!res.ok || !data.ok) { notify(data.error || ('Error ' + res.status), 'error'); updateButtons(); return; }
       const warn = data.restart === 'manual' || data.restart === 'timeout';
       await load();
-      setStatus(data.message + (data.relogin ? ' The browser will ask you to log in again.' : ''), warn ? 'err' : 'ok');
+      notify(data.message + (data.relogin ? ' The browser will ask you to log in again.' : ''), warn ? 'error' : 'ok');
     } catch (e) {
       // Changing the login makes this very request come back 401 in some browsers; reload tells the truth.
-      setStatus('The answer did not arrive (' + e.message + '). Reloading what is stored…', 'err');
+      notify('The answer did not arrive (' + e.message + '). Reloading what is stored…', 'error');
       setTimeout(load, 1500);
     }
   }
 
   saveBtn.addEventListener('click', save);
-  revertBtn.addEventListener('click', () => { for (const f of fields) { const i = $('f-' + f.key); i.value = original[f.key]; i.classList.remove('changed'); } updateButtons(); setStatus('Reverted.', ''); });
+  revertBtn.addEventListener('click', () => { for (const f of fields) { const i = $('f-' + f.key); i.value = original[f.key]; i.classList.remove('changed'); } updateButtons(); notify('Reverted.', 'ok'); });
   // The new camera's icon input gets a chooser bubble with a search bar (js/icon-picker.js); without the scripts it stays a plain input.
   if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('c-icon'), window.CamIconCatalog.GROUPS);
 

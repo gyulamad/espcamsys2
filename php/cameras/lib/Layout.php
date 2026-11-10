@@ -275,8 +275,7 @@ HTML;
             . ' aria-label="More reboot options" title="More reboot options">▾</button>'
             . '<span class="reboot-list" role="menu" hidden>' . $items . '</span>'
             . '</span>'
-            . '<span class="switch-note reboot-note" role="status"></span>'
-            . '</span>';
+            . '</span>';   // the result message is a toast popup (js/toast.js), not a note printed next to the button
     }
 
     // ── The two simple camera pages (simple-list.php, simple-view.php) ──

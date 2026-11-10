@@ -171,12 +171,11 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   .switch-pill.on  { color: var(--accent); border-color: rgba(0,229,255,.35); }
   .switch-pill.off { color: #ffb74d; border-color: #6b4a14; }
-  .switch-note { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
-  .switch-note.err { color: var(--accent2); }
   .cam-btn.switched-off { opacity: .45; }
 
   /* Reboot / reset drop-down (CamLayout::rebootMenu): a split button — the main action plus an arrow
-     that opens the list of every target. In the header (.btn) and on each camera card (.cam-btn). */
+     that opens the list of every target. In the header (.btn) and on each camera card (.cam-btn).
+     Its result message is a toast popup now (js/toast.js), not a note printed next to the button. */
   .reboot-menu { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .reboot-split { position: relative; display: inline-flex; }
   .reboot-menu .danger { border-color: #7a2e3a; color: var(--accent2); }
@@ -483,7 +482,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
               title="Switch recording OFF for every camera <?= $offFor ?> (set on the SETTINGS page)">⏻ ALL OFF</button>
       <button class="btn" id="btn-switch-all-on" onclick="switchRecording('all', null, 'on')"
               title="Switch recording back ON for every camera">⏻ ALL ON</button>
-      <span class="switch-note" id="switch-all-note"></span>
     </span>
     <?= CamLayout::rebootMenu(CamLogic::rebootMenu('system'), 'btn') ?>
   </div>
@@ -540,7 +538,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         <button data-cam="<?= $camId ?>" class="cam-btn" id="sw-on-<?= $camId ?>"
                 title="Switch recording back ON for this camera"
                 onclick="switchRecording('camera', this.dataset.cam, 'on')">⏻ ON</button>
-        <span class="switch-note" id="sw-note-<?= $camId ?>"></span>
       </div>
 
       <div class="files-panel" id="files-<?= $camId ?>"></div>
@@ -630,6 +627,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
 <?= CamLayout::recordingsListScript() ?>
 <script src="js/dashboard-layout.js"></script>
+<script src="js/toast.js"></script>
 <script src="js/screen-keeper.js"></script>
 <script>if (window.CamScreenKeeper) CamScreenKeeper.create().keepAwake();   // live pictures: the device screen must not go dark</script>
 <?php if ($muxEnabled): ?>
@@ -999,25 +997,29 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     renderSwitchAll();
   }
 
-  // A short message next to a button (a .switch-note element) that clears itself after 8 s.
-  const noteTimers = new WeakMap();
-  function setNote(el, text, isError) {
-    if (!el) return;
-    el.textContent = text;
-    el.classList.toggle('err', !!isError);
-    clearTimeout(noteTimers.get(el));
-    if (text) noteTimers.set(el, setTimeout(() => { el.textContent = ''; }, 8000));
+  // ── Toasts (F-12) ──
+  // The short result messages of the buttons (the recording switch, RECORD, REBOOT...) used to be
+  // printed in a span next to the button they belong to, where a longer message wrapped the
+  // surrounding UI into extra lines. They are toast popups now (js/toast.js): they appear in a
+  // corner of the window, clear themselves, and never move the layout. The one implementation is
+  // window.CamToast; unit tested in tests/node/test_toast.js.
+  function toast(text, kind) {
+    CamToast.show(text, kind || 'info');
   }
 
-  function setSwitchNote(id, text, isError) {
-    setNote(document.getElementById(id === null ? 'switch-all-note' : 'sw-note-' + id), text, isError);
+  // A camera's name as the card shows it (the text node after the icon), for messages that must say
+  // WHICH camera they are about, now that they no longer sit on that camera's card. Falls back to the id.
+  function cameraNameOf(id) {
+    const card = document.getElementById('card-' + id);
+    const title = card && card.querySelector('.cam-title');
+    const name = title && title.lastChild;
+    return name && name.nodeType === 3 && name.textContent.trim() ? name.textContent.trim() : id;
   }
 
   // scope: 'camera' (with id) or 'all'; action: 'on' or 'off'.
   async function switchRecording(scope, id, action) {
-    const noteId = scope === 'all' ? null : id;
     if (!SWITCH_ENABLED) {
-      setSwitchNote(noteId, 'Not set up: add relay_control_key to config.php (see INSTALL.md)', true);
+      toast('Not set up: add relay_control_key to config.php (see INSTALL.md)', 'error');
       return;
     }
     let url = `recording-switch.php?scope=${scope}&action=${action}`;
@@ -1044,17 +1046,18 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       if (res.ok && data && data.ok) {
         for (const affectedId of data.affected) applySwitchState(affectedId, data.off[affectedId] || null);
         const n = data.affected.length;
-        const what = scope === 'all' ? `${n} camera${n === 1 ? '' : 's'}` : 'this camera';
-        setSwitchNote(noteId, action === 'on' ? `Recording is ON for ${what}`
-          : (data.forever ? `Recording is OFF for ${what} until switched ON` : `Recording is OFF for ${what} for ${data.minutes} min`), false);
+        // A single camera's message names it (the toast does not sit on that camera's card any more).
+        const what = scope === 'all' ? `${n} camera${n === 1 ? '' : 's'}` : cameraNameOf(id);
+        toast(action === 'on' ? `Recording is ON for ${what}`
+          : (data.forever ? `Recording is OFF for ${what} until switched ON` : `Recording is OFF for ${what} for ${data.minutes} min`), 'ok');
         pollAllStatuses(); // a recording that was running has just been stopped: pick that up now
       } else {
         let msg = (data && data.error) || `Request failed (HTTP ${res.status})`;
         if (res.status === 401) msg = "The relay refused the control key — relay_control_key in config.php must equal controlKey in the relay's config.js";
-        setSwitchNote(noteId, msg, true);
+        toast(msg, 'error');
       }
     } catch (e) {
-      setSwitchNote(noteId, 'Could not reach the dashboard server', true);
+      toast('Could not reach the dashboard server', 'error');
     } finally {
       buttons.forEach(b => { if (b) b.disabled = false; });
     }
@@ -1089,18 +1092,17 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (!confirm(confirmText)) return;
     let url = `reboot.php?target=${encodeURIComponent(target)}`;
     if (menu.dataset.cam) url += `&cam=${encodeURIComponent(menu.dataset.cam)}`;
-    const note = menu.querySelector('.reboot-note');
     const buttons = menu.querySelectorAll('button');
     buttons.forEach(b => { b.disabled = true; });
-    setNote(note, 'Sending…', false);
+    toast('Sending…', 'busy');
     try {
       const res = await fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
       let data = null;
       try { data = await res.json(); } catch (e) { /* not JSON */ }
-      if (res.ok && data && data.ok) setNote(note, data.message || 'Reboot requested', false);
-      else setNote(note, (data && data.error) || `Request failed (HTTP ${res.status})`, true);
+      if (res.ok && data && data.ok) toast(data.message || 'Reboot requested', 'ok');
+      else toast((data && data.error) || `Request failed (HTTP ${res.status})`, 'error');
     } catch (e) {
-      setNote(note, 'Could not reach the dashboard server', true);
+      toast('Could not reach the dashboard server', 'error');
     } finally {
       buttons.forEach(b => { b.disabled = false; });
     }
@@ -1129,7 +1131,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const seconds = RECORD_SECONDS;
     const btn = document.getElementById('btn-record-all');
     btn.disabled = true;
-    const results = await Promise.all(getAllCameraIds().map(id => startRecording(id, seconds)));
+    // The per-camera "switched OFF" note stays quiet here: the summary below names them in one toast.
+    const results = await Promise.all(getAllCameraIds().map(id => startRecording(id, seconds, { quiet: true })));
     btn.disabled = false;
 
     if (results.some(r => r && r.recording)) {
@@ -1137,7 +1140,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       document.getElementById('btn-stop-all').style.display = '';
     }
     const skipped = results.filter(r => r && r.suppressed).length;
-    if (skipped > 0) setSwitchNote(null, `${skipped} camera${skipped === 1 ? ' is' : 's are'} switched OFF and ${skipped === 1 ? 'was' : 'were'} not recorded`, false);
+    if (skipped > 0) toast(`${skipped} camera${skipped === 1 ? ' is' : 's are'} switched OFF and ${skipped === 1 ? 'was' : 'were'} not recorded`, 'info');
   }
 
   async function stopRecordAll() {
@@ -1179,7 +1182,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (frame) frame.classList.toggle('recording', recording);
   }
 
-  async function startRecording(id, seconds) {
+  // Starts (or extends) one camera's timed recording. `opts.quiet` keeps the "switched OFF" toast
+  // quiet: RECORD ALL sums the suppressed cameras up in one toast of its own.
+  async function startRecording(id, seconds, opts = {}) {
     try {
       const res = await fetch(`record.php?cam=${encodeURIComponent(id)}&seconds=${seconds}`, { method: 'POST', headers: { 'X-Requested-With': 'camdash' } });
       const data = await res.json();
@@ -1187,7 +1192,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         beginRecordCountdown(id, seconds); // restarts the countdown, whether this was a fresh start or an extend
       } else if (data && data.suppressed) {
         // The camera is switched OFF: nothing was started. Say so, instead of failing silently.
-        setSwitchNote(id, 'Recording is switched OFF for this camera — press ON first', true);
+        if (!opts.quiet) toast(`Recording is switched OFF for ${cameraNameOf(id)} — press ON first`, 'error');
       } else {
         console.warn('Record start failed for', id, data);
       }

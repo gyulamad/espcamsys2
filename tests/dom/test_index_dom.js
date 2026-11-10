@@ -160,7 +160,7 @@ async function main() {
     // The browser side: scripts run, fetch goes to the real PHP; raw=true skips PHP's list filter on purpose.
     let bypassFilter = false;
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['wifi-info.js', 'camera-offline.js']), pretendToBeVisual: true,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
         window.confirm = () => false;
@@ -271,6 +271,27 @@ async function main() {
     await sleep(300);
     check('NO script from any hostile data ran (window.__pwned was never set)', w.__pwned === undefined, String(w.__pwned));
     check('the page source has no innerHTML / outerHTML / insertAdjacentHTML left', !/\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write/.test(fs.readFileSync(path.join(DASH_SRC, 'index.php'), 'utf8')));
+
+    // ── F-12: the buttons' result messages are toasts now ──
+    // This dashboard copy has no relay_control_key, so pressing a recording-switch button takes the
+    // "not set up" early return: its message was a note printed next to the button, it is a toast now.
+    const toastsOf = () => Array.from(d.querySelectorAll('#cam-toasts .cam-toast'));
+    check('no toast is open before a button says anything', toastsOf().length === 0 && d.getElementById('cam-toasts') === null);
+    w.switchRecording('camera', 'cam1', 'off');
+    await sleep(50);
+    check('the recording switch answers as a toast popup (not a note next to the button)', toastsOf().length === 1 && toastsOf()[0].textContent.includes('Not set up'), toastsOf().map((t) => t.textContent).join(' | '));
+    check('the toast carries the message as plain text, and the old note spans are gone', toastsOf()[0].querySelector('.cam-toast-msg').children.length === 0 && !d.querySelector('.switch-note') && !d.querySelector('.reboot-note'));
+    toastsOf()[0].querySelector('.cam-toast-x').click();
+    await sleep(300);   // the out-animation (150 ms) runs before the toast leaves the DOM
+    check('the ✕ dismisses the toast', toastsOf().length === 0, `toasts=${toastsOf().length}`);
+    w.confirm = () => true;   // a reboot asks first
+    const rebootMenu = d.querySelector('.reboot-menu');
+    w.requestReboot(rebootMenu, 'nodejs', 'Reboot the Node.js relay?');
+    await sleep(400);
+    const rebootToasts = toastsOf().map((t) => t.textContent);
+    // The fake relay answers {} to /restart, so the dashboard refuses — the message is an error toast
+    // ("Sending…" may still be on the screen next to it). No note is printed next to the menu either way.
+    check('the reboot menu answers as a toast too', toastsOf().length >= 1 && /Sending|relay|reach|failed|Reboot/i.test(rebootToasts.join(' ')), rebootToasts.join(' | '));
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
   } finally {

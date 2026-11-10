@@ -106,6 +106,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   <span id="status">Loading…</span>
 </div>
 
+<script src="js/toast.js"></script>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
@@ -119,6 +120,10 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert'), cancelBtn = $('cancel');
   function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = cls || ''; }
+  // The result of pressing a button (APPLY TO CAMERA, SAVE NAME, WITHDRAW...): a toast popup (F-12) instead of
+  // a message in the save bar, where a longer answer wrapped the bar into several lines. The save bar's
+  // own #status line stays for the passive states (loading, unsaved-changes count, queuing...).
+  function notify(t, kind) { CamToast.show(t, kind || 'info'); }
   function el(tag, props, ...kids) { const e = document.createElement(tag); Object.assign(e, props || {}); for (const k of kids) e.append(k); return e; }
   function banner(t, cls) { $('banners').append(el('div', { className: 'banner ' + cls, textContent: t })); }
   function ago(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago'; }
@@ -239,7 +244,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     clearTimeout(pollTimer);
     if (state && state.pending) pollTimer = setTimeout(async () => {
       const d = await load(true);
-      if (d && !d.state.pending && d.state.last) setStatus((TYPE === 'detector' ? 'Detector' : 'Camera') + ' answered: ' + d.state.last.result + (d.state.last.message ? ' — ' + d.state.last.message : ''), d.state.last.result === 'applied' ? 'ok' : 'err');
+      if (d && !d.state.pending && d.state.last) notify((TYPE === 'detector' ? 'Detector' : 'Camera') + ' answered: ' + d.state.last.result + (d.state.last.message ? ' — ' + d.state.last.message : ''), d.state.last.result === 'applied' ? 'ok' : 'error');
     }, 3000);
   }
 
@@ -250,42 +255,42 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 
   saveBtn.addEventListener('click', async () => {
     const c = changes();
-    if (c.missing) { setStatus(c.missing + ' is needed too — give it a value', 'err'); return; }
+    if (c.missing) { notify(c.missing + ' is needed too — give it a value', 'error'); return; }
     if (!Object.keys(c.values).length) return;
     if (TYPE === 'detector') {
       const v = currentValues(), d = parseFloat(v.DETECT_THRESH), cl = parseFloat(v.CLEAR_THRESH);
-      if (!isNaN(d) && !isNaN(cl) && cl > d) { setStatus('CLEAR_THRESH (' + v.CLEAR_THRESH + ') must not be higher than DETECT_THRESH (' + v.DETECT_THRESH + ')', 'err'); return; }
+      if (!isNaN(d) && !isNaN(cl) && cl > d) { notify('CLEAR_THRESH (' + v.CLEAR_THRESH + ') must not be higher than DETECT_THRESH (' + v.DETECT_THRESH + ')', 'error'); return; }
     }
     if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + (TYPE === 'detector' ? 'the detector of ' : '') + camera.name + '?\n\n' + (TYPE === 'detector' ? 'The detector restarts to apply it (its picture and alarm pin pause for about 10 seconds).' : 'The camera restarts to apply it (its stream and any recording stop for a few seconds).'))) return;
     saveBtn.disabled = revertBtn.disabled = true; setStatus('Queuing…', 'busy');
     try {
       const { res, data } = await post(API, { values: c.values });
-      if (!res.ok || !data.ok) { setStatus(data.error || ('Error ' + res.status), 'err'); refresh(); return; }
+      if (!res.ok || !data.ok) { notify(data.error || ('Error ' + res.status), 'error'); refresh(); return; }
       await load(true);
-      setStatus(data.message, data.queued ? 'busy' : 'ok');
-    } catch (e) { setStatus('Failed: ' + e.message, 'err'); refresh(); }
+      notify(data.message, data.queued ? 'busy' : 'ok');
+    } catch (e) { notify('Failed: ' + e.message, 'error'); refresh(); }
   });
-  revertBtn.addEventListener('click', () => { for (const d of keys) { if (isFixed(d)) continue; $('f-' + d.name).value = original[d.name]; } refresh(); setStatus('Reverted.', ''); });
+  revertBtn.addEventListener('click', () => { for (const d of keys) { if (isFixed(d)) continue; $('f-' + d.name).value = original[d.name]; } refresh(); notify('Reverted.', 'ok'); });
   cancelBtn.addEventListener('click', async () => {
     const { res, data } = await post(API, { cancel: true });
-    setStatus(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'err');
+    notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
     load(true);
   });
 
   $('e-save').addEventListener('click', async () => {
     const { res, data } = await post('camera-admin.php', { action: 'update', id: CAM, name: $('e-name').value, icon: $('e-icon').value });
-    setStatus(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'err');
+    notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
     if (res.ok) load(true);
   });
   $('e-detector-save').addEventListener('click', async () => {
     const { res, data } = await post('camera-admin.php', { action: 'detector', id: CAM, detector: $('e-detector').value });
-    setStatus(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'err');
+    notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
     if (res.ok) load(true);
   });
   $('e-remove').addEventListener('click', async () => {
     if (!confirm('Remove ' + camera.name + ' from the dashboard?\n\nIts recordings are kept and the board is not touched. You can add it again later with the same id.')) return;
     const { res, data } = await post('camera-admin.php', { action: 'remove', id: CAM });
-    if (res.ok) location.href = 'index.php'; else setStatus(data.error || ('Error ' + res.status), 'err');
+    if (res.ok) location.href = 'index.php'; else notify(data.error || ('Error ' + res.status), 'error');
   });
 
   // The icon input gets a chooser bubble with a search bar (js/icon-picker.js). Without the scripts it stays a plain input.
