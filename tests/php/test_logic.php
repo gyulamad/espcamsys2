@@ -821,6 +821,36 @@ camtest_test('buildDeviceChange: values are normalised like the board does (bool
     camtest_assert_equal($r['line'], 'LOG_ECHO=0;LOG_RETRY_MAX=7');
 });
 
+// The F-14 link-tuning keys (JPEG_Q_DROP / JPEG_Q_MIN / JPEG_Q_MAX / SIZE_DROP) meet boards that
+// predate them: a camera running older firmware never reports them. Such a board was already
+// "needing" those settings before any change, so a change must not be refused over them — that
+// would block EVERY change on it (the version-skew regression). But switching the quality drop
+// on must still bring its range along, exactly like the detector's MOTION_EMA pair above.
+
+camtest_test('buildDeviceChange: a board that predates the JPEG quality keys can still be changed (nothing is demanded for settings it never reported)', function () {
+    $r = camtest_change(camtest_reported(), ['LOG_ECHO' => '0']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'LOG_ECHO=0']);
+    $r = camtest_change(camtest_reported(), ['JPEG_Q_DROP' => '1', 'JPEG_Q_MIN' => '12', 'JPEG_Q_MAX' => '40']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=40']);
+});
+
+camtest_test('buildDeviceChange: switching the quality drop on needs its range, and all of it can be queued together', function () {
+    $rep = camtest_reported();
+    $rep['JPEG_Q_DROP'] = '0';   // a board that has the keys with the drop off: the range is not needed yet
+    $r = camtest_change($rep, ['JPEG_Q_DROP' => '1']);
+    camtest_assert_equal($r['ok'], false);
+    camtest_assert_true(strpos($r['error'], 'JPEG_Q_MIN') !== false, 'the error names the missing range');
+    $r = camtest_change($rep, ['JPEG_Q_DROP' => '1', 'JPEG_Q_MIN' => '12', 'JPEG_Q_MAX' => '63']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63']);
+});
+
+camtest_test('buildDeviceChange: switching the quality drop off stops needing the range (no stranded board)', function () {
+    $rep = camtest_reported();
+    $rep['JPEG_Q_DROP'] = '1'; $rep['JPEG_Q_MIN'] = '12'; $rep['JPEG_Q_MAX'] = '63';
+    $r = camtest_change($rep, ['JPEG_Q_DROP' => '0']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=0']);
+});
+
 camtest_test('buildDeviceChange: switching a feature on is refused when the feature is locked (review ARD-009)', function () {
     $rep = camtest_reported();
     $rep['ALARM_GPIO_PIN'] = '-1';

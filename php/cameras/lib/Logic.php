@@ -1747,11 +1747,24 @@ class CamLogic
             return ['ok' => true, 'line' => '', 'changed' => []];
         }
         // The camera must not be left needing a setting it does not have (the board checks this too).
+        // But a setting the camera never reported — its firmware predates the setting, like a board
+        // from before the JPEG_Q_* / SIZE_DROP keys — was already needed before this change: the
+        // change did not cause it, and demanding a value would refuse EVERY change on such a board.
+        // So only a setting that this change has just made needed (it was not needed with the values
+        // the camera itself reported) is an error: switching a feature on must bring its companions,
+        // exactly like the detector's MOTION_EMA pair (see isDeviceSettingRequired).
         $after = array_merge($reported, $changes);
         foreach ($schemaKeys as $def) {
-            if (self::isDeviceSettingRequired($def, $after) && !isset($after[$def['name']])) {
-                return ['ok' => false, 'error' => $def['name'] . ' is needed too — it has no value yet'];
+            if (isset($after[$def['name']])) {
+                continue;
             }
+            if (!self::isDeviceSettingRequired($def, $after)) {
+                continue;
+            }
+            if (self::isDeviceSettingRequired($def, $reported)) {
+                continue;   // needed before the change as well: not this change's doing
+            }
+            return ['ok' => false, 'error' => $def['name'] . ' is needed too — it has no value yet'];
         }
         if (isset($rules['motionArea']) && is_array($rules['motionArea'])) {
             $problem = self::motionAreaError($after, $rules['motionArea']);

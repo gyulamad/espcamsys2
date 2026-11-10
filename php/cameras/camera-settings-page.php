@@ -214,14 +214,17 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     saveBtn.disabled = n === 0; revertBtn.disabled = n === 0;
     if (n > 0) setStatus(n + ' unsaved change' + (n === 1 ? '' : 's'), '');
   }
-  // Only what differs from what the camera holds (plus a needed setting that has no value yet).
+  // Only what differs from what the camera holds. A setting this edit has just made needed (a feature
+  // was switched on) must be given a value; one the camera already needed before — a setting its
+  // firmware predates, unreported and empty — is not this edit's doing and is not demanded, or no
+  // change at all could be saved on such a board (the same rule as buildDeviceChange in Logic.php).
   function changes() {
     const vals = currentValues(), out = {}; let missing = null;
     for (const d of keys) {
       if (isFixed(d)) continue;
-      const need = required(d, vals);
+      const need = required(d, vals), neededBefore = required(d, reported);
       if (!need && reported[d.name] === undefined) continue;
-      if (vals[d.name] === '') { if (need) missing = missing || d.name; continue; }
+      if (vals[d.name] === '') { if (need && !neededBefore) missing = missing || d.name; continue; }
       if (vals[d.name] !== original[d.name]) out[d.name] = vals[d.name];
     }
     return { values: out, missing };

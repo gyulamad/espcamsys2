@@ -500,6 +500,11 @@ fi
 #   - tests/dom/test_wifi_dom.js: the Wi-Fi chips on the real dashboard page in jsdom — a chip per camera and a
 #     line per detector (a resting one too), a hostile network name shown as text only, chips following the data.
 #     Needs php and jsdom. Override the port with E2E_WIFIDOM_PORT (and the next one up).
+#   - tests/dom/test_camera_settings_dom.js: the camera settings page in jsdom saving a change — a board that
+#     predates the JPEG quality keys (JPEG_Q_* / SIZE_DROP, F-14) is not asked for values it cannot have yet
+#     (the version-skew regression), while a board that has the keys must still give the range when it switches
+#     the drop on; what the page posts is what the relay is handed. Needs php and jsdom. Override the port with
+#     E2E_CAMSETDOM_PORT (and the next one up).
 #   - tests/e2e/test_logging_e2e.js: the relay's log file and POST /log — key
 #     authentication, entries filed under the time they HAPPENED with the
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
@@ -908,6 +913,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_wifi_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the camera settings page saving a change) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_camera_settings_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
