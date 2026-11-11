@@ -1,6 +1,6 @@
 <?php
-// detector-status.php — the numbers of every camera's paired person detector, for the dashboard
-// to poll (about once a second, to aim a detector and tune its thresholds).
+// detector-status.php — the numbers of every camera's paired person detector, as one plain request (the
+// dashboard's live numbers arrive on mux.php instead; this answers the same { camId: status } map).
 //
 // GET detector-status.php
 //   -> { camId: { detector, state, online, hasPicture, connected, ageMs, pictureAgeMs, ip, message,
@@ -11,7 +11,7 @@
 // Only cameras with a 'detector' in config.php appear. `state` is online / no-picture / offline /
 // never and `message` says why a detector is not (fully) showing — the dashboard prints it. The
 // detector pushes its numbers and pictures to the relay over one connection it keeps open (so it can
-// sit behind a NAT router); the picture itself is detector-stream.php.
+// sit behind a NAT router); the picture itself is on mux.php (dets=).
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';

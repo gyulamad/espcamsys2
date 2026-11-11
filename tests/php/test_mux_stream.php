@@ -127,6 +127,29 @@ camtest_test('forward: a picture nobody asked for, a type nobody asked for and r
     camtest_assert_equal($out, '');
 });
 
+camtest_test('detectorReadingsJson: the relay\'s detectors become the { camId: status } map of detector-status.php, as JSON', function () use ($cams) {
+    $relay = json_encode(['det1' => ['state' => 'online', 'online' => true, 'hasPicture' => true, 'connected' => true,
+        'ageMs' => 10, 'pictureAgeMs' => 10, 'ip' => '1.2.3.4', 'message' => '', 'report' => null]]);
+    $json = json_decode((string) CamMuxStream::detectorReadingsJson($relay, $cams), true);
+    camtest_assert_equal([array_keys($json), $json['cam1']['detector'], $json['cam1']['state']], [['cam1'], 'det1', 'online']);
+});
+
+camtest_test('detectorReadingsJson: a detector the relay does not know is "never"; an empty map still answers', function () use ($cams) {
+    camtest_assert_true(strpos((string) CamMuxStream::detectorReadingsJson('{}', $cams), '"state":"never"') !== false);
+    camtest_assert_true(strpos((string) CamMuxStream::detectorReadingsJson('[]', $cams), 'cam1') !== false);
+});
+
+camtest_test('detectorReadingsJson: data that is not a JSON object is null', function () use ($cams) {
+    foreach (['not json', '5', 'null', '"x"', ''] as $bad) {
+        camtest_assert_equal(CamMuxStream::detectorReadingsJson($bad, $cams), null, var_export($bad, true));
+    }
+});
+
+camtest_test('detectorReadingsJson never passes the relay text through: only the shaped status leaves', function () use ($cams) {
+    $json = (string) CamMuxStream::detectorReadingsJson('{"evil":{"state":"online"},"det1":{"state":"online"}}', $cams);
+    camtest_assert_true(strpos($json, 'evil') === false, 'unpaired detector ids are not forwarded');
+});
+
 camtest_test('forward: readings are shaped like detector-status.php answers, under the same source', function () use ($allowed, $cams) {
     $relayReadings = json_encode(['det1' => ['online' => true, 'state' => 'online', 'hasPicture' => true, 'connected' => true, 'ageMs' => 40, 'message' => '', 'report' => ['fw' => 'x']]]);
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_DETECTORS, $relayReadings);

@@ -75,6 +75,7 @@ function startFakeRelay() {
   return new Promise((resolve) => {
     const server = nodeHttp.createServer((req, res) => {
       if (req.url.endsWith('.mp4')) { res.setHeader('Content-Type', 'video/mp4'); res.end('x'); }
+      else if (req.url === '/mux?cams=cam-a') { res.setHeader('Content-Type', 'application/x-espcam-mux'); res.end(Buffer.from([0, 0, 0, 3, 1, 2, 0])); }   // one heartbeat, then the end
       else { res.setHeader('Content-Type', 'application/json'); res.end('[]'); }
     });
     server.listen(RELAY_PORT, '127.0.0.1', () => resolve(server));
@@ -117,12 +118,14 @@ async function main() {
     await withDashboard(AUTH.user, AUTH.pass, async () => {
       let r = await get('/', null);
       check('the 401 login prompt carries the safe headers', r.status === 401 && safe(r) && r.headers['cache-control'] === 'no-store', detail(r));
-      const pages = ['/', '/status.php', '/recordings.php?cam=cam-a', '/record.php?cam=cam-a', '/settings.php', '/detector-status.php', '/detector-events.php', '/detector-view.php',
+      const pages = ['/', '/status.php', '/recordings.php?cam=cam-a', '/record.php?cam=cam-a', '/settings.php', '/detector-status.php', '/mux.php?rec=1', '/detector-view.php',
         '/system-settings.php', '/camera-settings.php?cam=cam-a', '/recording-switch.php', '/logout.php'];   // (a page that does not exist never reaches PHP: Apache's headers cover that, see the Apache test)
       for (const p of pages) {
         r = await get(p, AUTH);
         check(`${p} (status ${r.status}) has the safe headers and no-store`, safe(r) && r.headers['cache-control'] === 'no-store', detail(r));
       }
+      r = await get('/mux.php?cams=cam-a', AUTH);
+      check('the live stream (mux.php, status 200) has the safe headers, is never cached and is typed as the mux stream', r.status === 200 && safe(r) && /no-store/.test(r.headers['cache-control'] || '') && r.headers['content-type'] === 'application/x-espcam-mux', detail(r));
       r = await get('/recordings.php?cam=cam-a&play=cam-a-20260101-000000.mp4', AUTH);
       check('a recording is served with "private, no-cache" and the safe headers', r.status === 200 && r.headers['cache-control'] === 'private, no-cache' && safe(r), detail(r));
       check('headers are each sent once (no ", " duplicates)', !/,/.test(r.headers['x-content-type-options'] + r.headers['referrer-policy'] + r.headers['x-frame-options']), detail(r));

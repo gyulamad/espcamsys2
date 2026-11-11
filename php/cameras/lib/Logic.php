@@ -412,43 +412,12 @@ class CamLogic
         }));
     }
 
-    // The Content-Type of a live picture stream, only if it is one the dashboard serves: a motion-JPEG
-    // stream (multipart/x-mixed-replace with a plain boundary) or a JPEG. Anything else (text/html from a
-    // spoofed relay would run as a page in the dashboard's own origin) -> null. A stream that names no
-    // type gets the default. Returned fresh, rebuilt from the checked parts.
-    public static function safeStreamContentType(array $wrapperData, string $fallback = 'multipart/x-mixed-replace; boundary=frame'): ?string
-    {
-        $raw = self::extractContentType($wrapperData, $fallback);
-        if (!preg_match('~^\s*([A-Za-z0-9.+/-]{1,60})\s*(?:;\s*boundary=("?)([A-Za-z0-9\'()+_,./:=?-]{1,70})\2)?\s*$~D', $raw, $m)) {
-            return null;
-        }
-        $type = strtolower($m[1]);
-        if ($type === 'image/jpeg') {
-            return isset($m[3]) ? null : 'image/jpeg';
-        }
-        if ($type === 'multipart/x-mixed-replace') {
-            return 'multipart/x-mixed-replace; boundary=' . (isset($m[3]) && $m[3] !== '' ? $m[3] : 'frame');
-        }
-        return null;
-    }
-
     // ── The mux stream (mux.php): the pictures of every camera on ONE connection ──
-    // A browser allows only about 6 connections per address over HTTP/1.1, so a stream.php connection per camera
-    // left no room for the dashboard's other requests. The format is documented in nodejs/camera-relay/lib/muxcodec.js.
+    // A browser allows only about 6 connections per address over HTTP/1.1, so a connection per camera would leave no
+    // room for the dashboard's other requests: everything live rides on this one. The format is documented in
+    // nodejs/camera-relay/lib/muxcodec.js.
 
     public const MUX_CONTENT_TYPE = 'application/x-espcam-mux';
-
-    // Whether the dashboard shows the cameras through mux.php: on, unless config.php says 'mux_enabled' => false (or
-    // 0, 'off', 'no' ...). Off = one stream.php connection per camera, as before. Anything that is not a yes/no (a
-    // missing key, null, a list, a word nobody knows) is the default: on.
-    public static function muxEnabled(array $config): bool
-    {
-        $value = $config['mux_enabled'] ?? null;
-        if (!is_scalar($value)) {
-            return true;
-        }
-        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
-    }
 
     // The cameras a mux request asks for ("cam1,cam2"): each once, in the order given; [] when it asks for none (a
     // page whose cameras are all hidden still wants the readings and the recording state). Null when the list is not
@@ -534,6 +503,24 @@ class CamLogic
     public static function isMuxContentType(array $wrapperData): bool
     {
         return strtolower(trim(self::extractContentType($wrapperData, ''))) === self::MUX_CONTENT_TYPE;
+    }
+
+    // Why mux.php could not get the mux stream, as one line for the web server's error log (the browser only ever
+    // gets "Could not connect to the relay": the relay's address and words stay out of it). $relayStatus is null when
+    // the relay could not be reached at all ($transportError then carries PHP's reason, which names the address:
+    // that is fine in a log). Anything else is an answer that is not the mux stream: a redirect (never followed),
+    // or - the likeliest after an update - a relay that predates GET /mux and answers its 404.
+    public static function muxRelayProblem(?int $relayStatus, string $transportError = ''): string
+    {
+        if ($relayStatus === null) {
+            return 'could not reach the relay for GET /mux' . ($transportError !== '' ? ' (' . $transportError . ')' : '')
+                . ': is it running, and is relay_url in config.php right?';
+        }
+        if (self::isRedirectStatus($relayStatus)) {
+            return 'the relay answered GET /mux with a redirect (HTTP ' . $relayStatus . '), which is never followed (the control key must not be sent anywhere else): check relay_url in config.php';
+        }
+        return 'the relay answered GET /mux with HTTP ' . $relayStatus . ' and not the mux stream: is the relay (nodejs/camera-relay on the Pi)'
+            . ' older than this dashboard? Update and restart it - the relay first, then the dashboard.';
     }
 
     // The browser's Range header, if it is exactly ONE plain byte range (bytes=0-99, bytes=500-, bytes=-500),
@@ -1560,53 +1547,6 @@ class CamLogic
             $msg .= ': check that the board is powered, has joined Wi-Fi and its SERVER_HOST / HTTP_PORT / API_KEY are right (the relay log shows every refused or accepted attempt)';
         }
         return $msg;
-    }
-
-    // The short reason out of PHP's own error text, for the browser: "fopen(http://10.0.0.5:8080/x): Failed to
-    // open stream: Connection refused" -> "Connection refused". The address and PHP's internals stay in the
-    // log (review F-20); what a person can use ("refused", "timed out", "no route") stays.
-    public static function transportReason(string $phpError): string
-    {
-        if (!preg_match('/failed to open stream:\s*(.+)$/is', $phpError, $m)) {
-            return 'the connection failed';
-        }
-        $reason = $m[1];
-        if (stripos($reason, 'getaddrinfo') !== false || stripos($reason, 'name or service') !== false) {
-            return 'the relay\'s name could not be looked up';
-        }
-        $reason = preg_replace('~[a-z][a-z0-9+.-]*://\S+~i', '', $reason);       // any address that slipped in
-        $reason = trim(preg_replace('/[^\x20-\x7e]/', ' ', $reason));
-        return $reason !== '' ? substr($reason, 0, 80) : 'the connection failed';
-    }
-
-    // What detector-stream.php tells the browser (and the web server's error log) when the relay gives no
-    // picture: [status, message]. $relayStatus is null when the relay could not be reached at all
-    // ($transportError then carries PHP's reason); otherwise it is the relay's HTTP status and
-    // $relayBody its body — normally {"error": "..."} saying why (the relay answers at once, it does not
-    // make a viewer wait for a picture that is not coming).
-    public static function detectorStreamFailure(?int $relayStatus, string $relayBody, string $cameraName, string $transportError = ''): array
-    {
-        $who = 'the person detector of ' . $cameraName;
-        if ($relayStatus === null) {
-            return [
-                'status' => 502,
-                'message' => 'Could not reach the relay to get the picture of ' . $who . ($transportError !== '' ? ' (' . $transportError . ')' : ''),
-            ];
-        }
-        $json = json_decode($relayBody, true);
-        $why = is_array($json) && isset($json['error']) && is_string($json['error']) ? $json['error'] : null;
-        if ($why === null) {
-            // Not the relay's own answer: a relay that predates the detector stream answers an HTML 404.
-            return [
-                'status' => 502,
-                'message' => 'The relay answered HTTP ' . $relayStatus . ' without a reason when asked for the picture of ' . $who
-                    . ' — is the relay (nodejs/camera-relay on the Pi) older than this dashboard? Update and restart it.',
-            ];
-        }
-        return [
-            'status' => in_array($relayStatus, [404, 503], true) ? $relayStatus : 502,
-            'message' => ucfirst($who) . ': ' . $why,
-        ];
     }
 
     // Whether something that can repeat every few seconds (the dashboard re-asking for a stream that is

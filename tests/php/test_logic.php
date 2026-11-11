@@ -1032,30 +1032,6 @@ camtest_test('buildDetectorStatus: odd values from the relay are not trusted', f
     camtest_assert_equal([$s['cam1']['message'], $s['cam1']['ip'], $s['cam1']['state']], ['', null, 'online']);
 });
 
-camtest_test('detectorStreamFailure: relay unreachable is a 502 that carries PHP\'s reason', function () {
-    $f = CamLogic::detectorStreamFailure(null, '', 'Front Door', 'Connection refused');
-    camtest_assert_equal($f['status'], 502);
-    camtest_assert_equal($f['message'], 'Could not reach the relay to get the picture of the person detector of Front Door (Connection refused)');
-    camtest_assert_equal(CamLogic::detectorStreamFailure(null, '', 'Front Door')['message'], 'Could not reach the relay to get the picture of the person detector of Front Door');
-});
-
-camtest_test('detectorStreamFailure: the relay\'s own reason is passed on, with its 404 / 503', function () {
-    $never = CamLogic::detectorStreamFailure(404, '{"error":"no detector called \'d1\' has connected to the relay since it started","state":"never"}', 'Front Door');
-    camtest_assert_equal($never['status'], 404);
-    camtest_assert_equal($never['message'], "The person detector of Front Door: no detector called 'd1' has connected to the relay since it started");
-    $off = CamLogic::detectorStreamFailure(503, '{"error":"detector \'d1\' has no picture to show: last heard 9 s ago"}', 'Back');
-    camtest_assert_equal([$off['status'], $off['message']], [503, "The person detector of Back: detector 'd1' has no picture to show: last heard 9 s ago"]);
-});
-
-camtest_test('detectorStreamFailure: an answer that is not the relay\'s own is a 502 that suspects an old relay', function () {
-    $html = CamLogic::detectorStreamFailure(404, '<!DOCTYPE html><pre>Cannot GET /detector/d1/stream</pre>', 'Front Door');
-    camtest_assert_equal($html['status'], 502);
-    camtest_assert_true(strpos($html['message'], 'HTTP 404 without a reason') !== false && strpos($html['message'], 'older than this dashboard') !== false, $html['message']);
-    camtest_assert_equal(CamLogic::detectorStreamFailure(500, '', 'X')['status'], 502);
-    camtest_assert_equal(CamLogic::detectorStreamFailure(400, '{"error":"invalid detector id"}', 'X')['status'], 502, 'only 404 and 503 are passed on as they are');
-    camtest_assert_equal(CamLogic::detectorStreamFailure(503, '{"error":7}', 'X')['status'], 502, 'a reason that is not text is no reason');
-});
-
 camtest_test('logDue: at most once per period, and a clock that went backwards does not silence it', function () {
     camtest_assert_true(CamLogic::logDue(null, 1000, 300));
     camtest_assert_true(!CamLogic::logDue(1000, 1299, 300));
@@ -1531,22 +1507,6 @@ camtest_test('F-16: firstNonStringParam names the first parameter that is not pl
     camtest_assert_equal(CamLogic::firstNonStringParam([], ['cam']), null);
 });
 
-camtest_test('F-14: safeStreamContentType serves picture streams only', function () {
-    $mj = fn($v) => CamLogic::safeStreamContentType(['HTTP/1.1 200 OK', 'Content-Type: ' . $v]);
-    camtest_assert_equal($mj('multipart/x-mixed-replace; boundary=frame'), 'multipart/x-mixed-replace; boundary=frame');
-    camtest_assert_equal($mj('multipart/x-mixed-replace;boundary="myboundary-1"'), 'multipart/x-mixed-replace; boundary=myboundary-1');
-    camtest_assert_equal($mj('MULTIPART/X-MIXED-REPLACE; boundary=abc'), 'multipart/x-mixed-replace; boundary=abc');
-    camtest_assert_equal($mj('multipart/x-mixed-replace'), 'multipart/x-mixed-replace; boundary=frame', 'no boundary: the default one');
-    camtest_assert_equal($mj('image/jpeg'), 'image/jpeg');
-    camtest_assert_equal(CamLogic::safeStreamContentType(['HTTP/1.1 200 OK']), 'multipart/x-mixed-replace; boundary=frame', 'no Content-Type at all: the default');
-    camtest_assert_equal($mj(''), 'multipart/x-mixed-replace; boundary=frame', 'an empty Content-Type counts as none');
-    foreach (['text/html', 'text/html; charset=utf-8', 'application/javascript', 'image/svg+xml', 'application/xhtml+xml', 'text/plain', 'video/mp4',
-              'multipart/x-mixed-replace; boundary=<script>', 'multipart/x-mixed-replace; boundary=a b', 'multipart/x-mixed-replace; charset=x', 'image/jpeg; boundary=x',
-              'multipart/x-mixed-replace; boundary=' . str_repeat('a', 71), 'multipart/x-mixed-replace; boundary=frame; x=y', "text/html\nX: y"] as $bad) {
-        camtest_assert_equal($mj($bad), null, var_export($bad, true));
-    }
-});
-
 camtest_test('F-14: validRangeHeader passes ONE plain byte range and nothing else', function () {
     foreach (['bytes=0-99', 'bytes=500-', 'bytes=-500', 'bytes=0-0', 'bytes=123456789012345-123456789012345'] as $ok) camtest_assert_equal(CamLogic::validRangeHeader($ok), $ok, $ok);
     foreach (['bytes=0-1,5-9', 'bytes=-', 'bytes=', 'bytes=abc', 'bytes=5-2', 'items=0-5', 'bytes=0-5 ', " bytes=0-5", "bytes=0-5\n", "bytes=0-5\r\nX-Evil: 1", 'bytes=0-9999999999999999', 'bytes=1-2-3', '', 'bytes=+1-2'] as $bad) {
@@ -1568,25 +1528,6 @@ camtest_test('F-14: only well-formed Content-Range / Content-Length / Accept-Ran
 camtest_test('F-14: passableStatus repeats real final answers only', function () {
     foreach ([200, 206, 204, 400, 404, 416, 500, 502, 599] as $ok) camtest_assert_equal(CamLogic::passableStatus($ok), $ok, (string) $ok);
     foreach ([null, 0, 100, 101, 199, 300, 301, 302, 399, 600, 999, -1] as $bad) camtest_assert_equal(CamLogic::passableStatus($bad), null, var_export($bad, true));
-});
-
-camtest_test('F-20: transportReason keeps the reason in words and drops the address', function () {
-    $cases = [
-        ['fopen(http://127.0.0.1:8080/detector/det-A/stream): Failed to open stream: Connection refused', 'Connection refused'],
-        ['fopen(http://192.168.1.9:8080/x): Failed to open stream: Connection timed out', 'Connection timed out'],
-        ['fopen(http://10.0.0.5:8080/x): Failed to open stream: No route to host', 'No route to host'],
-        ['fopen(http://pi.local:8080/x): Failed to open stream: php_network_getaddresses: getaddrinfo for pi.local failed: Name or service not known', "the relay's name could not be looked up"],
-        ['file_get_contents(): Failed to open stream: HTTP request failed!', 'HTTP request failed!'],
-        ['something else entirely', 'the connection failed'],
-        ['', 'the connection failed'],
-        ['fopen(x): Failed to open stream: ', 'the connection failed'],
-    ];
-    foreach ($cases as [$in, $out]) camtest_assert_equal(CamLogic::transportReason($in), $out, $in);
-    $long = CamLogic::transportReason('fopen(x): Failed to open stream: ' . str_repeat('a', 500));
-    camtest_assert_true(strlen($long) <= 80, 'cut short');
-    $weird = CamLogic::transportReason("fopen(x): Failed to open stream: bad http://secret.example:99/path\x00\n stuff");
-    camtest_assert_true(strpos($weird, 'secret') === false && preg_match('/^[\x20-\x7e]*$/', $weird) === 1, $weird);
-    foreach ($cases as [$in]) camtest_assert_true(!preg_match('~://|127\.0\.0\.1|192\.168|fopen|pi\.local~', CamLogic::transportReason($in)), 'no address in the reason for: ' . $in);
 });
 
 // ── F-18 / F-10: settings saved on the dashboard (data/settings.json) laid over config.php ──
@@ -1792,27 +1733,6 @@ camtest_test('cameraSummaries: id, name and icon only; a missing or blank name f
 
 // ── mux.php: every camera's picture on one connection ────────────────
 
-camtest_test('muxEnabled is on unless config.php says no', function () {
-    camtest_assert_equal(CamLogic::muxEnabled([]), true);
-    camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => true]), true);
-    camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => false]), false);
-});
-
-camtest_test('muxEnabled reads the usual ways of writing yes and no', function () {
-    foreach ([true, 1, '1', 'true', 'on', 'yes'] as $yes) {
-        camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $yes]), true, var_export($yes, true));
-    }
-    foreach ([false, 0, '0', 'false', 'off', 'no', ''] as $no) {
-        camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $no]), false, var_export($no, true));
-    }
-});
-
-camtest_test('muxEnabled: anything that is not a yes or a no is the default, on', function () {
-    foreach ([null, 'banana', 2, [], ['x']] as $other) {
-        camtest_assert_equal(CamLogic::muxEnabled(['mux_enabled' => $other]), true, var_export($other, true));
-    }
-});
-
 $muxCams = [['id' => 'cam1', 'name' => 'A'], ['id' => 'cam2', 'name' => 'B'], ['id' => 'cam-3', 'name' => 'C']];
 
 camtest_test('muxCameraIds: the cameras asked for, each once, in the order given', function () use ($muxCams) {
@@ -1855,6 +1775,34 @@ camtest_test('isMuxContentType accepts exactly the mux type (any case, spaces ar
     }
     camtest_assert_true(!CamLogic::isMuxContentType(['HTTP/1.1 200 OK']), 'no Content-Type at all');
     camtest_assert_true(!CamLogic::isMuxContentType([]));
+});
+
+camtest_test('muxRelayProblem: an unreachable relay carries PHP\'s reason and says what to check', function () {
+    $line = CamLogic::muxRelayProblem(null, 'fopen(http://10.0.0.5:8080/mux): Failed to open stream: Connection refused');
+    camtest_assert_true(strpos($line, 'could not reach the relay for GET /mux') === 0, $line);
+    camtest_assert_true(strpos($line, 'Connection refused') !== false && strpos($line, 'relay_url') !== false, $line);
+    camtest_assert_true(strpos(CamLogic::muxRelayProblem(null), '()') === false, 'no empty brackets without a reason');
+});
+
+camtest_test('muxRelayProblem: a redirect is named as one that is never followed', function () {
+    foreach ([301, 302, 307, 399] as $status) {
+        $line = CamLogic::muxRelayProblem($status);
+        camtest_assert_true(strpos($line, 'redirect (HTTP ' . $status . ')') !== false && strpos($line, 'never followed') !== false, $line);
+    }
+});
+
+camtest_test('muxRelayProblem: any other answer that is not the mux stream suspects an old relay and says to update the relay first', function () {
+    foreach ([404, 401, 500, 200] as $status) {
+        $line = CamLogic::muxRelayProblem($status);
+        camtest_assert_true(strpos($line, 'HTTP ' . $status . ' and not the mux stream') !== false, $line);
+        camtest_assert_true(strpos($line, 'older than this dashboard') !== false && strpos($line, 'relay first') !== false, $line);
+    }
+});
+
+camtest_test('muxRelayProblem: is always one line (an error log line must not wrap)', function () {
+    foreach ([null, 404, 302] as $status) {
+        camtest_assert_true(strpos(CamLogic::muxRelayProblem($status), "\n") === false);
+    }
 });
 
 $muxDetCams = [['id' => 'cam1', 'name' => 'A', 'detector' => 'det1'], ['id' => 'cam2', 'name' => 'B'], ['id' => 'cam-3', 'name' => 'C', 'detector' => 'det-3']];
