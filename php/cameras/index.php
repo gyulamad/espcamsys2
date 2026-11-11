@@ -15,14 +15,11 @@ if ($landing !== null) {
 }
 $cols  = CamLogic::computeGridColumns($count);
 
-// Pictures through ONE mux.php connection (config.php 'mux_enabled') or one stream.php per camera.
-$muxEnabled = CamLogic::muxEnabled($config);
-
 // How many recordings each camera has, worked out NOW so the FILES buttons
 // already show it in the page the browser receives — no waiting for a
 // background request. Short timeout: the relay is on the local network, and
 // if it's down the page must still appear promptly (just without numbers;
-// the live status poll fills them in once it's reachable). See
+// the mux.php connection fills them in once it's reachable). See
 // CamLogic::collectRecordingCounts() for exactly what is asked of the relay.
 $readHeaders = relay_read_headers($config);
 $recordingCounts = CamLogic::collectRecordingCounts($cameras, function (string $url) use ($readHeaders): ?string {
@@ -50,17 +47,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ESP32-CAM Dashboard</title>
-<script>
-  // The live <img> elements start loading while the HTML is still being parsed, and the relay answers
-  // with the last known frame at once, so an image can fire load/error BEFORE the main script at the
-  // bottom of the page has run (that script waits for the stylesheet below; a slow font
-  // download is enough). An event fired with no handler is never repeated, which left the card on
-  // "CONNECTING" for a stream that was in fact running, until RELOAD was pressed. So these stand-ins
-  // (defined before anything that can block) only remember what happened; the main script replays it.
-  window.__earlyStreamEvents = [];
-  function onStreamLoad(id)  { window.__earlyStreamEvents.push(['load', id]); }
-  function onStreamError(id) { window.__earlyStreamEvents.push(['error', id]); }
-</script>
 <link rel="stylesheet" href="fonts/fonts.css">
 <style>
   :root {
@@ -502,7 +488,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     <?php foreach ($cameras as $i => $cam):
       $camId    = htmlspecialchars($cam['id']);
       $camName  = htmlspecialchars($cam['name']);
-      $proxyUrl = 'stream.php?cam=' . urlencode($cam['id']);
     ?>
     <div class="cam-card" id="card-<?= $camId ?>">
 
@@ -568,15 +553,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           <span>CONNECTING…</span>
         </div>
 
+        <!-- The picture has no src: js/mux-pictures.js paints each picture that arrives on the one mux.php connection. -->
         <a class="stream-link" href="<?= htmlspecialchars(CamLayout::simpleViewUrl($cam['id'])) ?>"<?= CamLayout::pageLoadAttr() ?>
            title="Click to open this camera in the simple view">
           <img data-cam="<?= $camId ?>"
             class="stream"
             id="img-<?= $camId ?>"
-            <?= $muxEnabled ? '' : 'src="' . $proxyUrl . '"' ?>
-
             alt="<?= $camName ?>"
-            data-src="<?= $proxyUrl ?>"
             onload="onStreamLoad(this.dataset.cam)"
             onerror="onStreamError(this.dataset.cam)"
           >
@@ -587,13 +570,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       <?php if (CamLogic::detectorIdOf($cam) !== null): ?>
       <!-- The paired person detector: its 96x96 picture (what the model sees) and the numbers behind
            its alarm line, to aim it and tune its thresholds (DARK_THRESH, MOTION_THRESH, DETECT_THRESH...)
-           with visual confirmation. Filled in by pollDetectors(). -->
+           with visual confirmation. Filled in from the readings pushed on the mux.php connection. -->
       <div class="det-row offline" id="det-<?= $camId ?>" data-cam="<?= $camId ?>">
         <div class="det-pic">
-          <img data-cam="<?= $camId ?>" id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>"
-               data-src="detector-stream.php?cam=<?= urlencode($cam['id']) ?>" <?= $muxEnabled ? '' : 'src="detector-stream.php?cam=' . urlencode($cam['id']) . '"' ?>
-
-               onload="this.dataset.failed=''" onerror="onDetectorImgError(this.dataset.cam)">
+          <img data-cam="<?= $camId ?>" id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>">
           <div class="det-area" id="detarea-<?= $camId ?>" data-cam="<?= $camId ?>" hidden title="Motion area: only motion inside this rectangle counts. Drag it to move it, drag an edge or corner to resize it, then APPLY.">
             <?php foreach (['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as $h): ?><span class="h h-<?= $h ?>" data-h="<?= $h ?>"></span><?php endforeach; ?>
           </div>
@@ -625,7 +605,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       <?php endif; ?>
 
       <div class="cam-footer">
-        <span>PROXY → <?= $muxEnabled ? 'mux.php' : 'stream.php?cam=' . $camId ?></span>
+        <span>PROXY → mux.php</span>
         <span>CAM <?= str_pad($i + 1, 2, '0', STR_PAD_LEFT) ?></span>
       </div>
 
@@ -645,11 +625,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <script src="js/toast.js"></script>
 <script src="js/screen-keeper.js"></script>
 <script>if (window.CamScreenKeeper) CamScreenKeeper.create().keepAwake();   // live pictures: the device screen must not go dark</script>
-<?php if ($muxEnabled): ?>
 <script src="js/mux-codec.js"></script>
 <script src="js/mux-client.js"></script>
 <script src="js/mux-pictures.js"></script>
-<?php endif; ?>
 <script src="js/wifi-info.js"></script>
 <script src="js/camera-offline.js"></script>
 <script src="js/device-info.js"></script>
@@ -666,115 +644,45 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     return [...document.querySelectorAll('.cam-card')].map(el => el.id.replace('card-', ''));
   }
 
-  // True while the live pictures are closed on purpose to make room for footage (see "Making room for footage").
-  // Declared up here because the early-event replay below runs before the rest of the script.
-  let streamsPaused = false;
-
   // ── Stream state callbacks ──
+  // Called for every picture the mux paints on a camera's <img> (onload) and when the connection goes down (onDown below).
   function onStreamLoad(id) {
-    if (streamsPaused) return;   // the picture was stopped on purpose (see "Making room for footage")
-    clearStreamWatchdog(id);
     setStatus(id, 'live', 'LIVE');
     hideOverlay(id);
   }
 
   function onStreamError(id) {
-    if (streamsPaused) return;
-    clearStreamWatchdog(id);
     setStatus(id, 'error', 'ERROR');
     showOverlay(id, '✕', 'STREAM ERROR', true);
   }
 
-  // A stream that is still "connecting" after this long is retried by itself (what pressing RELOAD
-  // does): a request that was never answered fires neither load nor error, so nothing else would
-  // ever notice it.
-  const STREAM_CONNECT_TIMEOUT_MS = 15000;
-  const streamWatchdogs = {};
-  function clearStreamWatchdog(id) {
-    clearTimeout(streamWatchdogs[id]);
-    delete streamWatchdogs[id];
-  }
-  function armStreamWatchdog(id) {
-    clearStreamWatchdog(id);
-    streamWatchdogs[id] = setTimeout(() => reloadStream(id), STREAM_CONNECT_TIMEOUT_MS);
-  }
-
-  // Events the images fired before this script was ready (see the stand-ins in <head>).
-  (function replayEarlyStreamEvents() {
-    const early = window.__earlyStreamEvents || [];
-    window.__earlyStreamEvents = [];
-    for (const [kind, id] of early) (kind === 'load' ? onStreamLoad : onStreamError)(id);
-    // Whatever is still connecting (no event yet) gets the watchdog too.
-    for (const id of getAllCameraIds()) {
-      const pill = document.getElementById('pill-' + id);
-      if (pill && pill.classList.contains('connecting')) armStreamWatchdog(id);
-    }
-  })();
-
-  // ── Where the pictures come from ──
-  // Normally ONE connection (mux.php) carries every camera's picture: a browser allows only about 6 connections per
-  // address over HTTP/1.1, and one stream.php per camera used to leave no room for the other requests of this page.
-  // If mux.php cannot be used from here (js/mux-client.js: three attempts in a row that never delivered anything)
-  // or is switched off in config.php, each camera gets its own stream.php connection, as before.
+  // ── Where the live data comes from ──
+  // ONE connection (mux.php) carries every camera's picture, every detector's picture and readings, and the cameras'
+  // recording state: a browser allows only about 6 connections per address over HTTP/1.1, and a connection per picture
+  // used to leave no room for the other requests of this page. js/mux-client.js reopens it for ever when it drops, so
+  // nothing here asks for live data by itself: it arrives, or the page says there is none (onDown).
   // <pictures-source>
-  const MUX_ENABLED = <?= $muxEnabled ? 'true' : 'false' ?>;
-  let pictures = MUX_ENABLED && window.CamMuxPictures ? CamMuxPictures.create({
+  const pictures = CamMuxPictures.create({
     url: 'mux.php',
     imgFor: (kind, id) => document.getElementById((kind === 'det' ? 'detimg-' : 'img-') + id),
     onStatus: (data) => onLiveDetectorData(data),
     onCameraStatus: (data) => onLiveCameraStatus(data),
-    onDown: (ids) => ids.forEach((id) => onStreamError(id)),   // it is reopened by itself; pictures resume on their own
-    onFallback: fallBackToStreams,
-  }) : null;
+    onDown: (ids) => {   // it is reopened by itself; pictures and numbers resume on their own
+      ids.forEach((id) => onStreamError(id));
+      onLiveDataDown();
+    },
+  });
 
-  function openPicture(id) {
-    if (pictures) {
-      pictures.show(id);
-      return;
-    }
-    const img = document.getElementById('img-' + id);
-    img.src = img.dataset.src + '&_=' + Date.now();   // cache-bust so the browser actually re-requests
-    armStreamWatchdog(id);
-  }
+  const openPicture = (id) => pictures.show(id);
+  const closePicture = (id) => pictures.hide(id);
+  const closeDetectorPicture = (id) => pictures.hideDetector(id);
 
-  function closePicture(id) {
-    if (pictures) {
-      pictures.hide(id);
-      return;
-    }
-    document.getElementById('img-' + id).src = '';
-  }
-
-  // The picture of the detector paired with a camera (the page asks for it in reconnectDetectorImg).
-  function closeDetectorPicture(id) {
-    if (pictures) {
-      pictures.hideDetector(id);
-      return;
-    }
-    const di = document.getElementById('detimg-' + id);
-    if (di) di.src = '';
-  }
-
-  // The detectors' pictures and readings had their own connections too (detector-stream.php, detector-events.php).
-  function fallBackToStreams() {
-    console.warn('mux.php cannot be used from here: showing one stream.php connection per camera');
-    pictures.close();
-    pictures = null;
-    getAllCameraIds().forEach((id) => reloadStream(id));
-    const detectorRows = document.querySelectorAll('.det-row');
-    detectorRows.forEach((row) => reconnectDetectorImg(row.dataset.cam));
-    if (detectorRows.length > 0) openDetectorEvents();
-  }
-
-  // With mux.php the images have no src yet (a src would open a connection per picture): start them now.
-  // (Also when the mux scripts could not be loaded: then every camera gets its own stream.php, via openPicture.)
-  if (MUX_ENABLED) getAllCameraIds().forEach((id) => reloadStream(id));
-  if (pictures) {
-    pictures.watchCameraStatus(true);   // recording state, FILES counts, switch: pushed on the same connection
-    const detectorRows = document.querySelectorAll('.det-row');
-    detectorRows.forEach((row) => pictures.showDetector(row.dataset.cam));
-    if (detectorRows.length > 0) pictures.watchStatus(true);   // the readings come on the same connection, whatever the tab does
-  }
+  // The images have no src: start every camera now, and ask for what rides along on the connection.
+  getAllCameraIds().forEach((id) => reloadStream(id));
+  pictures.watchCameraStatus(true);   // recording state, FILES counts, switch: pushed on the same connection
+  const detectorRows = document.querySelectorAll('.det-row');
+  detectorRows.forEach((row) => pictures.showDetector(row.dataset.cam));
+  if (detectorRows.length > 0) pictures.watchStatus(true);   // the readings come on the same connection, whatever the tab does
   // </pictures-source>
 
   function setStatus(id, cls, label) {
@@ -805,8 +713,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function reloadStream(id) {
     const img  = document.getElementById('img-' + id);
 
-    // Only reload if not hidden, and not while the pictures are paused to make room for footage
-    if (img.dataset.hidden === '1' || streamsPaused) return;
+    if (img.dataset.hidden === '1') return;   // the user pressed HIDE on this camera
 
     setStatus(id, 'connecting', 'CONNECTING');
     const overlay = document.getElementById('overlay-' + id);
@@ -835,12 +742,12 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (hidden) {
       // Restore
       img.dataset.hidden = '0';
-      if (document.getElementById('detimg-' + id)) reconnectDetectorImg(id);
+      showDetectorPicture(id);
       btn.textContent = '✕ HIDE';
       btn.classList.remove('danger');
       reloadStream(id);
     } else {
-      // Hide — stop the stream by clearing src
+      // Hide — the mux stops sending this camera's picture
       img.dataset.hidden = '1';
       stopPictures(id);
       btn.textContent = '▶ SHOW';
@@ -852,96 +759,18 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     }
   }
 
-  // Closes the live connections of one camera: its picture and its detector's picture.
+  // Stops showing one camera's picture and its detector's picture (the one connection stays: it carries the rest).
   function stopPictures(id) {
-    clearStreamWatchdog(id);
     closePicture(id);
     closeDetectorPicture(id);
   }
 
-  // Opens them again (cameras the user pressed HIDE on stay closed: both functions skip them).
-  function restartAllPictures() {
-    for (const id of getAllCameraIds()) {
-      reloadStream(id);
-      if (document.getElementById('detimg-' + id)) reconnectDetectorImg(id);
-    }
-  }
-
-  // ── Making room for footage ──
-  // Every live picture is a connection that never ends, and a browser allows only about 6 at a time to
-  // one address (Brave and Chrome; Firefox copes better). A dashboard with 4 cameras and a detector has
-  // 5 of them open, so the file list, a clip that is playing (it needs two connections to seek), a
-  // download or a delete waits in the browser's queue and never starts: the list stays empty and the video
-  // loads forever. So while the user is waiting for footage, ALL live pictures are closed, and they come
-  // back when nothing needs the room any more. Requests nest (a list load while a clip plays): the pictures
-  // return only when the last one is done. Pressing the browser's stop button used to be the only cure.
-  // <stream-pause>
-  function createStreamPauser(pauseAll, resumeAll) {
-    let holds = 0;
-    return {
-      // Asks for room. Returns the function that gives it back (safe to call more than once).
-      acquire() {
-        holds += 1;
-        if (holds === 1) pauseAll();
-        let released = false;
-        return () => {
-          if (released) return;
-          released = true;
-          holds -= 1;
-          if (holds === 0) resumeAll();
-        };
-      },
-    };
-  }
-  // </stream-pause>
-
-  const streamPauser = createStreamPauser(pauseLiveStreams, resumeLiveStreams);
-
-  function pauseLiveStreams() {
-    streamsPaused = true;
-    for (const id of getAllCameraIds()) {
-      if (document.getElementById('img-' + id).dataset.hidden === '1') continue;   // already closed by the user
-      stopPictures(id);
-      setStatus(id, 'hidden', 'PAUSED');
-      showOverlay(id, '◼', 'LIVE VIEW PAUSED WHILE FOOTAGE LOADS', false);
-    }
-  }
-
-  function resumeLiveStreams() {
-    streamsPaused = false;
-    restartAllPictures();
-  }
-
-  // Runs one request for footage with the live pictures closed.
-  async function withLiveViewPaused(request) {
-    const release = streamPauser.acquire();
-    try {
-      return await request();
-    } finally {
-      release();
-    }
-  }
-
-  // A download is handed to the browser, which tells the page nothing about it: give its request
-  // time to get started (it keeps its connection afterwards), then let the pictures come back.
-  const DOWNLOAD_START_MS = 5000;
-  function holdLiveViewPausedWhileDownloadStarts() {
-    const release = streamPauser.acquire();
-    setTimeout(release, DOWNLOAD_START_MS);
-  }
-
-  // A clip being played holds the room until its window is closed or the clip has played to its end.
-  let playerRelease = null;
-  function updatePlayerHold() {
-    const playing = Array.from(document.querySelectorAll('.files-video-modal video')).some(video => !video.ended);
-    if (playing && !playerRelease) {
-      playerRelease = streamPauser.acquire();
-      return;
-    }
-    if (!playing && playerRelease) {
-      playerRelease();
-      playerRelease = null;
-    }
+  // The picture of the detector paired with a camera, unless the user pressed HIDE on that camera.
+  function showDetectorPicture(id) {
+    if (!document.getElementById('detimg-' + id)) return;   // a camera without a detector
+    const cam = document.getElementById('img-' + id);
+    if (cam && cam.dataset.hidden === '1') return;
+    pictures.showDetector(id);
   }
 
   // ── Recording — one button + one duration field starts a timed,
@@ -986,7 +815,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const st = switchState[id];
     const label = switchLabel(st);
     const pill = document.getElementById('sw-pill-' + id);
-    if (pill) { pill.textContent = label.text; pill.className = 'switch-pill ' + (label.off ? 'off' : 'on'); }
+    if (pill && !cameraDataIsDown()) { pill.textContent = label.text; pill.className = 'switch-pill ' + (label.off ? 'off' : 'on'); }
     const rec = document.getElementById('rec-btn-' + id);
     if (rec) {
       rec.classList.toggle('switched-off', label.off);
@@ -999,7 +828,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const ids = getAllCameraIds();
     const off = ids.filter(id => switchState[id]).length;
     const pill = document.getElementById('switch-all-pill');
-    if (!pill) return;
+    if (!pill || cameraDataIsDown()) return;
     if (off === 0)             { pill.textContent = 'ALL ON';                     pill.className = 'switch-pill on'; }
     else if (off === ids.length) { pill.textContent = 'ALL OFF';                   pill.className = 'switch-pill off'; }
     else                       { pill.textContent = `${off} of ${ids.length} OFF`; pill.className = 'switch-pill off'; }
@@ -1279,16 +1108,16 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   // ── Recordings list panel — browse, play, download and delete saved footage ──
   // The list itself (rows, buttons, selection, play / download / delete) is lib/recordings-list.js, the
-  // same code the all-files page runs. This page adds what only the dashboard needs: the live pictures are
-  // closed while footage loads (a list per camera panel, see recordingsListOf), and the FILES button
-  // shows the recording count.
+  // same code the all-files page runs. This page adds what only the dashboard needs: a list per camera panel
+  // (see recordingsListOf), and the recording count on the FILES button. The live pictures keep running while footage
+  // loads: they are one connection, so they leave the browser's other connections free.
 
   // <recordings-panels>
   // Shows how many recordings a camera has right on its FILES button —
   // "📼 FILES (3)" — so you don't have to open the list to know. The page
   // arrives with the number already in it (PHP wrote it, see the top of this
-  // file); from there it's kept current by the relay's /status (polled every
-  // few seconds, so it follows clips finishing and deletes made anywhere) and
+  // file); from there it's kept current by the relay's status (pushed on the
+  // mux.php connection, so it follows clips finishing and deletes made anywhere) and
   // set instantly whenever this tab loads the list itself. Anything that isn't
   // a whole number (a folder the relay couldn't read) leaves the button
   // showing whatever it showed before rather than a wrong number. The text
@@ -1309,9 +1138,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
         camLabel: null,   // one camera: no need to say which
         deleteAllConfirm: 'Delete ALL recordings for this camera? This cannot be undone.',
         hooks: {
-          withPaused: withLiveViewPaused,
-          holdForDownload: holdLiveViewPausedWhileDownloadStarts,
-          playersChanged: updatePlayerHold,
           // keep the button in step with what the list shows (but never from a list that could not be read in full)
           loaded: (files, failed) => { if (failed.length === 0) setFilesCount(id, files.length); },
         },
@@ -1324,7 +1150,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const panel = document.getElementById('files-' + id);
     const open = panel.classList.toggle('open');
     if (!open) return;
-    await withLiveViewPaused(() => refreshRecordingsList(id));
+    await refreshRecordingsList(id);
   }
 
   // Redraws a camera's list if its panel is open (the list refreshes itself when a recording finishes).
@@ -1335,16 +1161,14 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   // </recordings-panels>
 
-  // ── Status polling — the single mechanism that keeps the dashboard in
-  // sync with state that can change on the relay without this browser tab
-  // being the one that caused it: another tab, another user, or a
-  // camera's alarm-trigger GPIO calling /record directly on the relay.
-  // Without this, nothing here updates until the user next clicks
-  // something — the REC pill and the file list would silently go
-  // stale. Also doubles as the initial-state load on page
-  // open (including "was already recording before I opened this page",
-  // which previously wasn't handled at all). ──
+  // ── Recording state: kept in sync with what can change on the relay without this browser tab being the one that
+  // caused it (another tab, another user, a camera's alarm-trigger GPIO calling /record directly on the relay). ──
+  // The relay pushes the { camId: status } map of every camera on the mux.php connection (at once when it opens, then
+  // every 2 s), so nothing here asks for it on a timer. That is also the page's initial state, including "was already
+  // recording before I opened this page".
   // <camera-status-source>
+  // One-shot ask for the same map, for after a command of this page (switching recording OFF stops a running recording:
+  // show that now, not at the next push). status.php answers it, short and once.
   async function pollAllStatuses() {
     try {
       const res = await fetch('status.php');
@@ -1355,12 +1179,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       if (!isStatusMap(data)) return;
       applyCameraStatuses(data);
     } catch (e) {
-      // Relay unreachable this round — the next poll will try again.
+      // Relay unreachable this round — the next push will show it.
     }
   }
 
   // Shows a { camId: status } map (status.php's answer, or the same pushed on the mux.php connection).
   function applyCameraStatuses(data) {
+    cameraDataDown = false;   // an answer: the pills are drawn again below
     for (const id of getAllCameraIds()) {
       const s = data[id];
       CamWifi.render(document.getElementById('wifi-' + id), s && s.wifi);   // the network and signal the camera reported (or nothing)
@@ -1378,33 +1203,37 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     }
   }
 
-  // The same map pushed on the mux.php connection (every 2 s): while it keeps coming the interval below does not
-  // ask status.php. The page still asks once at load, after its own commands and when it comes back to the screen.
-  const CAMERA_STATUS_LIVE_MS = 8000;   // delivering if the last push is younger than this (the relay pushes every 2 s)
-  let cameraStatusAt = 0;
-  const cameraStatusIsLive = () => Date.now() - cameraStatusAt < CAMERA_STATUS_LIVE_MS;
+  // The map pushed on the mux.php connection.
   function onLiveCameraStatus(data) {
     if (!isStatusMap(data)) return;
-    cameraStatusAt = Date.now();
     applyCameraStatuses(data);
   }
 
-  // What the interval does: ask status.php, unless the pushed map is arriving.
-  function pollStatusesUnlessLive() {
-    if (!cameraStatusIsLive()) pollAllStatuses();
+  // The connection is down: the switch pills must not keep saying "REC ON" for a state nobody is reporting any more.
+  // (The REC countdown is this page's own clock and the FILES count the last known number: both stay.) renderSwitch
+  // (also drawn by a 1 s clock for its "N min left") leaves the pills alone meanwhile; the next push draws the real state.
+  let cameraDataDown = false;
+  const cameraDataIsDown = () => cameraDataDown;
+  function showCameraStatusProblem() {
+    cameraDataDown = true;
+    for (const id of getAllCameraIds()) setSwitchPillNoData(document.getElementById('sw-pill-' + id));
+    setSwitchPillNoData(document.getElementById('switch-all-pill'));
+  }
+  function setSwitchPillNoData(pill) {
+    if (!pill) return;
+    pill.textContent = 'NO DATA';
+    pill.className = 'switch-pill';
   }
   // </camera-status-source>
   // ── Person detector rows (cameras with a 'detector' in config.php) ──
   // The detector keeps one connection open to the relay and pushes its 96x96 grayscale picture and
   // the numbers behind its alarm line up it (it may sit behind a NAT router, so nothing connects to
-  // it). The picture is a normal MJPEG <img>; the numbers are polled about once a second so you can
+  // it). The relay passes both on to this page on the mux.php connection (the picture as an <img> painted by
+  // js/mux-pictures.js, the numbers as the { camId: status } map the moment they change) so you can
   // aim the detector and tune DARK_THRESH / MOTION_THRESH / DETECT_THRESH / CLEAR_THRESH per camera
   // and SEE the effect: a bar per value, a red mark at the threshold the value has to cross, and the
   // alarm pin level the detector is driving. When the detector is not showing, the picture says WHY
   // (the relay works it out: never connected, connection lost, no picture, ...).
-  const DETECTOR_POLL_MS = 1000;           // the polling fallback's interval
-  const DETECTOR_LIVE_MS = 3500;           // the live stream counts as delivering if its last message is younger than this (the relay pushes at least every 1 s)
-  const DETECTOR_EVENTS_RETRY_MS = 5000;   // after the live stream was refused, try it again this often
   const detEl = (k, id) => document.getElementById('det' + k + '-' + id);
   const setW = (e, frac) => { e.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%'; };
   function placeMark(e, frac) {
@@ -1461,7 +1290,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // change and restarts. RESET forgets them. Once the detector reports the new values they are dropped.
   const detLast = {};      // cam id -> last report received
   const detLastD = {};     // cam id -> last detector status (what renderDetector was given)
-  const detIdle = {};      // cam id -> true while the detector's live view is off (no picture to retry for)
   const detPending = {};   // cam id -> { SETTING: value } moved but not applied yet
   const detApplying = {};  // cam id -> true between APPLY and the detector reporting the values
   const detDrag = {};      // cam id -> { key, scale } while a stick is held
@@ -1709,7 +1537,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const row = document.getElementById('det-' + id);
     if (!row) return;
     detLastD[id] = d;
-    detIdle[id] = !!d && d.state === 'idle';
     renderWatchButton(id, d);
     renderDetectorWifi(id, d);   // before the early returns below: a resting detector has no readings but is on a network
     const r = d && d.report;
@@ -1719,7 +1546,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     row.classList.toggle('stale', !online);
     if (showing) {
       setDetectorOverlay(id, '', '');
-      reconnectDetectorImgIfFailed(id);   // the picture is available again: don't wait for the retry timer
     } else if (!d) {
       setDetectorOverlay(id, 'NO DATA', 'the dashboard got no answer about this detector');
     } else {
@@ -1870,9 +1696,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     });
   }
 
-  // Shows one { camId: status } answer on every detector row. Both the live stream and the polling fallback
-  // end up here. Applied at most once per animation frame, and only the newest answer: when messages come
-  // faster than the screen draws, the ones in between are skipped, never queued.
+  // Shows one { camId: status } map on every detector row. Applied at most once per animation frame, and only the
+  // newest map: when messages come faster than the screen draws, the ones in between are skipped, never queued.
   let pendingDetectorData = null;
   function showDetectorData(data) {
     const schedule = pendingDetectorData === null;
@@ -1881,6 +1706,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     requestAnimationFrame(() => {
       const latest = pendingDetectorData;
       pendingDetectorData = null;
+      if (latest === null) return;   // the connection went down meanwhile: its message is the newer one
       document.querySelectorAll('.det-row').forEach(row => renderDetector(row.dataset.cam, latest[row.dataset.cam]));
     });
   }
@@ -1890,138 +1716,41 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   const isStatusMap = (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error;
 
-  // A { camId: status } answer that arrived over a live connection (detector-events.php below, or mux.php): it is
-  // what the page shows, and while they keep coming the polling fallback stays quiet.
+  // The readings pushed on the mux.php connection.
   function onLiveDetectorData(data) {
     if (!isStatusMap(data)) return;
-    detectorEventsAt = Date.now();
-    detectorPollFailures = 0;
     showDetectorData(data);
   }
 
-  // LIVE: the dashboard keeps one Server-Sent Events stream open (detector-events.php) and the relay pushes
-  // the numbers the moment a detector sends them — no polling interval in between. If the stream cannot be
-  // had (an older relay, a proxy that buffers, a network hiccup) the polling below takes over by itself.
-  let detectorEvents = null;
-  let detectorEventsAt = 0;     // when the last message arrived
-  let detectorEventsTimer = null;
-  const detectorStreamIsLive = () => Date.now() - detectorEventsAt < DETECTOR_LIVE_MS;
-  function closeDetectorEvents() {
-    clearTimeout(detectorEventsTimer);
-    detectorEventsTimer = null;
-    if (detectorEvents) detectorEvents.close();
-    detectorEvents = null;
-  }
-  function openDetectorEvents() {
-    closeDetectorEvents();
-    if (pictures || document.hidden || typeof EventSource === 'undefined') return;   // (with mux.php the readings come on its connection)
-    const source = new EventSource('detector-events.php');
-    detectorEvents = source;
-    source.addEventListener('detectors', (e) => {
-      let data = null;
-      try { data = JSON.parse(e.data); } catch (err) { /* not JSON: ignore this message */ }
-      onLiveDetectorData(data);
-    });
-    source.onerror = () => {
-      // The browser retries by itself while it is CONNECTING; once CLOSED (an HTTP error answer) it never does.
-      if (source.readyState !== EventSource.CLOSED) return;
-      if (detectorEvents === source) detectorEvents = null;
-      clearTimeout(detectorEventsTimer);
-      detectorEventsTimer = setTimeout(openDetectorEvents, DETECTOR_EVENTS_RETRY_MS);
-    };
+  // The connection is down: neither the bars nor the pills are live. Say so; the next push replaces it.
+  function onLiveDataDown() {
+    showDetectorProblem('the live connection to the dashboard is down; trying again');
+    showCameraStatusProblem();
   }
 
-  // FALLBACK: ask once a second while no live stream is delivering.
-  let detectorsPolling = false;
-  let detectorPollFailures = 0;
-  async function pollDetectors() {
-    if (detectorsPolling || document.hidden || detectorStreamIsLive()) return;
-    detectorsPolling = true;
-    try {
-      const res = await fetch('detector-status.php', { cache: 'no-store' });
-      let data = null;
-      try { data = await res.json(); } catch (e) { /* not JSON */ }
-      if (!res.ok || !isStatusMap(data)) {
-        throw new Error((data && data.error) || ('the dashboard got HTTP ' + res.status));
-      }
-      if (detectorStreamIsLive()) return; // the stream delivered while this answer was on its way: it is newer
-      detectorPollFailures = 0;
-      showDetectorData(data);
-    } catch (e) {
-      // One failed round is a blip; two in a row mean the numbers on screen are no longer live — say so.
-      detectorPollFailures += 1;
-      if (detectorPollFailures >= 2) showDetectorProblem(String((e && e.message) || e));
-    } finally {
-      detectorsPolling = false;
-    }
-  }
-
-  // The picture stream: the relay answers at once (frames, or an error saying why there are none), so a
-  // detector that is offline just makes this fail quickly and retry every few seconds.
-  const detImgTimers = {};
-  function reconnectDetectorImg(id) {
-    clearTimeout(detImgTimers[id]);
-    delete detImgTimers[id];
-    const img = document.getElementById('detimg-' + id);
-    const cam = document.getElementById('img-' + id);
-    if (!img || document.hidden || streamsPaused || (cam && cam.dataset.hidden === '1')) return;
-    if (pictures) {   // the picture comes on the one connection, whenever the detector streams (also after it was idle)
-      pictures.showDetector(id);
-      return;
-    }
-    if (detIdle[id]) return;   // idle: the picture comes back by itself when the view is switched on
-    img.dataset.failed = '';
-    img.dataset.lastTry = String(Date.now());
-    img.src = img.dataset.src + '&_=' + Date.now();
-  }
-  function reconnectDetectorImgIfFailed(id) {
-    const img = document.getElementById('detimg-' + id);
-    // not more than once every 2 s, so a stream the relay keeps refusing is not hammered at the poll rate
-    if (img && img.dataset.failed === '1' && Date.now() - Number(img.dataset.lastTry || 0) > 2000) reconnectDetectorImg(id);
-  }
-  function onDetectorImgError(id) {
-    if (streamsPaused) return;
-    const img = document.getElementById('detimg-' + id);
-    if (img) img.dataset.failed = '1';
-    clearTimeout(detImgTimers[id]);
-    detImgTimers[id] = setTimeout(() => reconnectDetectorImg(id), 5000);
-  }
   // ── Coming back to the page ──
-  // A locked phone (or a tab left in the background for a while) cannot keep its connections: the streams
-  // die without a sound and the pictures are blank when the page is shown again. So after the page has been
-  // hidden for a while, every picture starts over from a new connection and the numbers are asked for at
-  // once. Cameras the user pressed HIDE on stay hidden (reloadStream / reconnectDetectorImg both skip them).
-  const RESUME_AFTER_HIDDEN_MS = 3000;   // shorter than this is a tab switch, not a lock: the streams are fine
+  // A locked phone (or a tab left in the background for a while) cannot keep its connection: it dies without a
+  // sound and the pictures are blank when the page is shown again. So after the page has been hidden for a while, the
+  // one connection is opened again; the relay sends the state at once and the pictures follow. Cameras the user
+  // pressed HIDE on stay hidden (reloadStream / showDetectorPicture both skip them).
+  const RESUME_AFTER_HIDDEN_MS = 3000;   // shorter than this is a tab switch, not a lock: the connection is fine
   let hiddenSince = null;
   function resumeAfterHidden() {
-    restartAllPictures();
-    if (pictures) pictures.reconnect();   // the one connection may have died without a sound too
-    pollAllStatuses();
-    if (document.querySelector('.det-row')) pollDetectors();
+    reloadAll();
+    document.querySelectorAll('.det-row').forEach((row) => showDetectorPicture(row.dataset.cam));
+    pictures.reconnect();   // the one connection may have died without a sound
   }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { hiddenSince = Date.now(); return; }
-    const away = hiddenSince === null ? Infinity : Date.now() - hiddenSince;   // shown without ever being seen hidden: reload too
+    const away = hiddenSince === null ? Infinity : Date.now() - hiddenSince;   // shown without ever being seen hidden: reconnect too
     hiddenSince = null;
     if (away >= RESUME_AFTER_HIDDEN_MS) resumeAfterHidden();
   });
-  // Back/forward cache: the page returns exactly as it was left, with the connections the browser closed meanwhile.
+  // Back/forward cache: the page returns exactly as it was left, with the connection the browser closed meanwhile.
   window.addEventListener('pageshow', (ev) => { if (ev.persisted) resumeAfterHidden(); });
 
-  if (document.querySelector('.det-row')) {
-    // (mux.php wanted but its scripts did not load: the detectors' pictures start the old way, like the cameras')
-    if (MUX_ENABLED && !pictures) document.querySelectorAll('.det-row').forEach((row) => reconnectDetectorImg(row.dataset.cam));
-    openDetectorEvents();
-    pollDetectors();
-    setInterval(pollDetectors, DETECTOR_POLL_MS);
-    // A hidden tab needs no live numbers (and holds no connection); coming back reopens the stream.
-    document.addEventListener('visibilitychange', () => { if (document.hidden) closeDetectorEvents(); else openDetectorEvents(); });
-    setInterval(keepDetectorViewsAlive, WATCH_KEEP_MS);
-  }
-
-  const STATUS_POLL_MS = 4000;
-  pollAllStatuses();
-  setInterval(pollStatusesUnlessLive, STATUS_POLL_MS);
+  // While somebody watches a detector, tell the relay "still looking" (an abandoned tab lets the view run out).
+  if (document.querySelector('.det-row')) setInterval(keepDetectorViewsAlive, WATCH_KEEP_MS);
 
   // ── Layout: DASHBOARD GRID / DASHBOARD LIST of the navigation bar (js/dashboard-layout.js) ──
   if (window.CamDashboardLayout) {

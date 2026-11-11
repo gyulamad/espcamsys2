@@ -3,8 +3,8 @@
 // Tests how the dashboard (php/cameras/index.php) hangs its per-camera FILES panels on the shared footage
 // list (lib/recordings-list.js), by running exactly the block between its <recordings-panels> markers:
 // the "📼 FILES (n)" button count, opening a panel loads that camera's list only, the list is drawn
-// inside the "make room" wrapper (the live pictures close while footage loads), a closed panel is never
-// drawn, and DELETE ALL in a panel names a single camera.
+// the live pictures keep running meanwhile (they are one connection, so nothing needs to make room for the
+// footage), a closed panel is never drawn, and DELETE ALL in a panel names a single camera.
 
 const fs = require('fs');
 const path = require('path');
@@ -32,7 +32,6 @@ async function main() {
 
   const requests = [];
   const confirms = [];
-  let paused = 0, playerChecks = 0, downloadHolds = 0;
   const clip = 'cam1_2026-10-01T10-00-00-000Z.mp4';
   let unreadable = false;
   const fetchFake = async (url, init = {}) => {
@@ -47,9 +46,6 @@ async function main() {
   const env = {
     CamRecordingsList: list,
     document: doc,
-    withLiveViewPaused: async (fn) => { paused += 1; return fn(); },
-    holdLiveViewPausedWhileDownloadStarts: () => { downloadHolds += 1; },
-    updatePlayerHold: () => { playerChecks += 1; },
   };
   const api = new Function(...Object.keys(env), `${m[1]}\nreturn { setFilesCount, recordingsListOf, toggleRecordingsPanel, refreshRecordingsList };`)(...Object.values(env));
 
@@ -69,7 +65,7 @@ async function main() {
   // opening
   await api.toggleRecordingsPanel('cam1');
   check('opening a panel loads that camera\'s list, and only that camera\'s', requests.join() === 'GET recordings.php?cam=cam1,GET recordings.php?cam=cam1&archive=1' || requests.join() === 'GET recordings.php?cam=cam1&archive=1,GET recordings.php?cam=cam1', requests.join(','));
-  check('…inside the "make room for footage" wrapper', paused === 1);
+  check('…without closing the live pictures: the list asks nothing of the page but the FILES count', !/withPaused|holdForDownload|playersChanged|LiveViewPaused|PlayerHold/.test(m[1]));
   check('…and draws the clip without a camera name (it is one camera)', panel1.querySelectorAll('.files-name').map((e) => e.text()).join() === clip && panel1.querySelectorAll('.files-cam').length === 0);
   check('…with this camera\'s own button ids', !!doc.getElementById('files-sel-all-cam1') && !!doc.getElementById('files-del-selected-cam1'));
   check('…and updates the FILES button to what the list shows', btn.textContent === '📼 FILES (1)');
@@ -80,15 +76,13 @@ async function main() {
   check('refreshing an open panel redraws it and keeps what was ticked', panel1.querySelectorAll('.files-select:checked').length === 1);
   check('one list object per camera', api.recordingsListOf('cam1') === api.recordingsListOf('cam1') && api.recordingsListOf('cam1') !== api.recordingsListOf('cam2'));
 
-  // the video window and the dashboard's "make room" hold
-  const checksBefore = playerChecks;
+  // the video window
   panel1.querySelectorAll('.files-row')[0].querySelectorAll('.cam-btn')[0].click();   // PLAY
-  check('PLAY opens the video window and tells the player-hold check, so the live view makes room', doc.body.querySelector('.files-video-modal') !== null && playerChecks > checksBefore);
-  const checksOpen = playerChecks;
+  check('PLAY opens the video window', doc.body.querySelector('.files-video-modal') !== null);
   await api.refreshRecordingsList('cam1');
-  check('a redraw of the list leaves the window alone (nothing to re-check)', doc.body.querySelector('.files-video-modal') !== null && playerChecks === checksOpen);
+  check('a redraw of the list leaves the window alone', doc.body.querySelector('.files-video-modal') !== null);
   doc.body.querySelector('.files-video-close').click();
-  check('closing the window tells the player-hold check again, so the live view comes back', doc.body.querySelector('.files-video-modal') === null && playerChecks > checksOpen);
+  check('closing the window removes it', doc.body.querySelector('.files-video-modal') === null);
 
   // a list that could not be read must not change the count
   unreadable = true;
