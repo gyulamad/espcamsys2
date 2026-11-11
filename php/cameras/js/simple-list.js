@@ -1,15 +1,16 @@
 'use strict';
 // simple-list.js — simple-list.php: sizes the thumbnails to the screen, and puts a blinking red frame
 // around the ones whose camera is recording. The rules are CamSimple.fitThumbnails / isRecording
-// (js/simple-logic.js); this only reads the window, sets two CSS variables and asks status.php.
-// Without this script the CSS still shows a grid of minimum-size thumbnails.
+// (js/simple-logic.js); this only reads the window and sets two CSS variables. Every thumbnail's picture and the
+// recording state of the cameras arrive on ONE mux.php connection (js/mux-pictures.js), however many cameras
+// there are; nothing is polled. While the connection is down the pictures are blank and no frame is shown.
+// Without this script the CSS still shows a grid of minimum-size thumbnails (without pictures).
 
 (function () {
   const grid = document.getElementById('thumbs');
   if (!grid || !window.CamSimple || !window.CamOffline) return;
 
   const count = Number(grid.dataset.count) || grid.children.length;
-  const POLL_MS = 2000;    // how often the relay is asked which cameras record (the simple view asks as often)
   const MIN_WIDTH = 160;   // below this a picture is no longer recognisable: the page scrolls instead
   const GAP = 8;
   const NAV_HEIGHT_FALLBACK = 44;   // the navigation bar (CamLayout::navBarStyle --nav-h)
@@ -47,15 +48,28 @@
     }
   }
 
-  async function poll() {
-    const status = await window.CamRelayJson.get('status.php');
-    markRecording(status);
-    markOffline(status);
-  }
-
   layout();
   window.addEventListener('resize', layout);
-  if (!window.CamRelayJson) return;   // the frames are the only thing that needs the relay
-  poll();
-  setInterval(poll, POLL_MS);
+  if (!window.CamMuxPictures) return;   // the pictures and the recording state are the only things that need the relay
+
+  const thumbs = new Map(Array.from(grid.children).map((thumb) => [thumb.dataset.cam, thumb]));
+  const imgOf = (id) => (thumbs.has(id) ? thumbs.get(id).querySelector('img') : null);
+  const asMap = (data) => (data && typeof data === 'object' && !Array.isArray(data) ? data : null);
+  const pictures = window.CamMuxPictures.create({
+    url: 'mux.php',
+    imgFor: (kind, id) => (kind === 'cam' ? imgOf(id) : null),
+    onCameraStatus: (data) => { const status = asMap(data); markRecording(status); markOffline(status); },
+    // Down: no state is known (no frame, no cover) and the last pictures are blanked rather than left standing as if live.
+    onDown: (ids) => {
+      markRecording(null);
+      markOffline(null);
+      for (const id of ids) {
+        const img = imgOf(id);
+        if (img) img.removeAttribute('src');
+      }
+    },
+  });
+  // All the thumbnails go in one go: they become ONE (re)connection, not one per camera.
+  for (const id of thumbs.keys()) pictures.show(id);
+  pictures.watchCameraStatus(true);
 })();

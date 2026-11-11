@@ -1,8 +1,11 @@
 'use strict';
 // simple-view.js — simple-view.php: shows one camera, the pager, the status line and the slideshow. The
 // decisions (next camera, what is shown at once, priorities) are in js/simple-logic.js; this only wires
-// them to the page, status.php (recording: the status line and the red frame around the picture) and
-// detector-status.php (motion). A camera that is not connected is skipped by the slideshow and, when picked
+// them to the page. Everything live arrives on ONE mux.php connection (js/mux-pictures.js): the picture of the
+// camera being shown (one at a time: switching hides the old one and shows the new one), the recording state
+// (the status line and the red frame around the picture) and the detectors' readings (motion). Nothing is
+// polled. While the connection is down the picture is blank (its alt text shows) and nothing is known: the
+// status line says so. A camera that is not connected is skipped by the slideshow and, when picked
 // by hand, has its stale last picture covered with an "offline" message (js/camera-offline.js). A click on the picture toggles full
 // screen (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
 // under the picture show the time left before the next camera.
@@ -10,11 +13,9 @@
 (function () {
   const S = window.CamSimple;
   const root = document.getElementById('view');
-  if (!S || !window.CamOffline || !window.CamRelayJson || !root) return;
+  if (!S || !window.CamOffline || !window.CamMuxPictures || !root) return;
 
-  const POLL_MS = 2000;     // how often the relay is asked what the cameras do
   const TICK_MS = 1000;     // clock, and how often the slideshow looks at the situation
-  const RETRY_MS = 3000;    // a broken picture stream is opened again after this long
   const VIEW_KEEP_MS = 20000;   // the live view of a detector is renewed this often while the slideshow runs
   const DEFAULT_SLIDESHOW_SECONDS = 10;
 
@@ -38,11 +39,8 @@
   const pictureBox = el('picture-box');   // what goes full screen: everything laid over the picture goes with it
   let current = ids.includes(root.dataset.current) ? root.dataset.current : ids[0];
   let slideshow = null;            // the running slideshow, or null
-  let status = null;               // the last answers of the relay (null: not known)
-  let detectors = null;
-  let retryTimer = null;
-  let looksAsked = 0;              // numbers the looks at the relay, so an answer that comes in late can be told from the newest
-  let looksAnswered = 0;
+  let status = null;               // the newest recording state of the cameras the relay pushed (null: not known)
+  let detectors = null;            // the newest readings of the detectors (null: not known)
   const viewAsked = {};            // detector id -> when its live view was last requested
   const humans = S.createHumanHold();   // a camera that had a human keeps it for a moment when a look is lost or fails
 
@@ -65,10 +63,12 @@
     window.CamOffline.render(el('offline'), status, current);
   }
 
-  // The stream is a never-ending picture: switching the camera replaces it, which closes the old connection.
+  // Only the camera on screen is asked for: the old one is hidden first (its picture is dropped from the one
+  // connection, which is renewed once for both calls) and frames of any other camera are never painted.
   function show(id) {
+    if (id !== current && current !== undefined) pictures.hide(current);
     current = id;
-    picture.src = 'stream.php?cam=' + encodeURIComponent(id);
+    pictures.show(id);
     picture.alt = nameOf(id);
     el('cam-name').textContent = nameOf(id);
     el('cam-icon').textContent = iconOf(id);
@@ -118,6 +118,7 @@
     if (!slideshow) { renderCountdown(Date.now(), null); return; }
     const now = Date.now();
     const prio = situation(now);
+    keepViews();   // no poll to ride on any more: the tick renews the views (viewRequests lets one through per VIEW_KEEP_MS)
     const next = slideshow.tick(now, prio);
     if (next !== null) show(next);
     renderCountdown(now, prio);
@@ -133,27 +134,37 @@
       viewAsked[id] = now;
       fetch('detector-view.php?cam=' + encodeURIComponent(id) + '&action=' + action, {
         method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'camdash' },
-      }).catch(() => { delete viewAsked[id]; });   // out of reach: ask again at the next poll
+      }).catch(() => { delete viewAsked[id]; });   // out of reach: ask again at the next tick
     }
   }
 
-  async function poll() {
-    looksAsked += 1;
-    const look = looksAsked;
-    const answers = await Promise.all([window.CamRelayJson.get('status.php'), window.CamRelayJson.get('detector-status.php')]);
-    if (look < looksAnswered) return;   // a newer look has been answered already: this one is old news
-    looksAnswered = look;
-    [status, detectors] = answers;
+  // What the relay pushed is all there is to know: the pages' state follows it, and the slideshow and the
+  // status line are brought up to date at once (a camera that has just started recording is shown now, not
+  // at the next second).
+  function refresh() {
     renderRecording();
     renderOffline();
-    keepViews();
-    tick();   // a camera that has just started recording is shown now, not at the next second
+    tick();
   }
 
-  picture.addEventListener('error', () => {
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(() => show(current), RETRY_MS);
+  const asMap = (data) => (data && typeof data === 'object' && !Array.isArray(data) ? data : null);
+
+  const pictures = window.CamMuxPictures.create({
+    url: 'mux.php',
+    // Only the camera on screen has an image; a frame of any other is dropped by the caller.
+    imgFor: (kind, id) => (kind === 'cam' && id === current ? picture : null),
+    onStatus: (data) => { detectors = asMap(data); refresh(); },
+    onCameraStatus: (data) => { status = asMap(data); refresh(); },
+    // The connection ended (it opens again by itself): nothing is known until it is back, and the picture
+    // that stands is the last one — blank it rather than show a frozen image as if it were live.
+    onDown: () => {
+      status = null;
+      detectors = null;
+      picture.removeAttribute('src');
+      refresh();
+    },
   });
+
   // A click on the picture shows it full screen, another one leaves (the page works without the helper).
   if (window.CamFullscreen && pictureBox) picture.addEventListener('click', () => window.CamFullscreen.toggle(pictureBox));
   el('prev').addEventListener('click', () => step(-1));
@@ -178,9 +189,10 @@
     }, 2000);
   }
 
+  if (current !== undefined) pictures.show(current);   // (no usable camera list: nothing to show)
+  pictures.watchCameraStatus(true);
+  pictures.watchStatus(true);
   setSlideshow(true);   // the slideshow runs from the moment the page opens; the button stops it
   tick();
   setInterval(tick, TICK_MS);
-  poll();
-  setInterval(poll, POLL_MS);
 })();

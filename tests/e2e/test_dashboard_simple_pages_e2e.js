@@ -5,7 +5,8 @@
 // Checks that:
 //   - every page behind the login has the navigation bar (dashboard, simple view, simple list), and both simple pages
 //     need the dashboard login
-//   - the list shows every camera as a thumbnail of stream.php that links to its large view, with the
+//   - the list shows every camera as a thumbnail (a picture without a source: the one mux.php connection paints it,
+//     js/mux-pictures.js) that links to its large view, with the
 //     safe headers, the scripts and the logic file it needs, and nothing of the relay's address
 //   - the dashboard's pictures are links to their camera's large view (no full-screen click there any more);
 //     the large view's picture goes full screen on a click (its box and the helper script are on the page)
@@ -196,21 +197,25 @@ async function main() {
     // ── the list ────────────────────────────────────────────────────
     r = await get('simple-list.php');
     check('list: 200, an HTML page with the safe headers', r.status === 200 && /text\/html/.test(r.headers['content-type'] || '') && safe(r), detail(r));
-    const thumbs = r.text.match(/<a class="thumb rec-frame" data-cam="[^"]*" href="[^"]*"[^>]*><img src="[^"]*"/g) || [];
-    check('list: one thumbnail per camera, each a live stream.php picture linking to its simple-view.php', thumbs.length === 3
-      && ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`href="simple-view.php?cam=${id}"`) && r.text.includes(`src="stream.php?cam=${id}"`)), thumbs.join(' | '));
+    const thumbs = r.text.match(/<a class="thumb rec-frame" data-cam="[^"]*" href="[^"]*"[^>]*><img alt="[^"]*">/g) || [];
+    check('list: one thumbnail per camera, each a picture without a source linking to its simple-view.php, no stream.php anywhere', thumbs.length === 3
+      && ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`href="simple-view.php?cam=${id}"`)) && !r.text.includes('stream.php') && !/<img\b[^>]*\bsrc=/i.test(r.text), thumbs.join(' | '));
     check('list: each caption starts with that camera\'s own icon', r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚪</span>Cam A</span>')
       && r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚗</span>Cam B</span>'), r.text.slice(0, 200));
     check('list: the cameras\' names are the captions, and the navigation bar (list marked) is the way to the other pages — no second back button', /Cam A/.test(r.text) && /Cam C/.test(r.text)
       && /<body class="simple-list">\s*<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-list.php" data-nav="simple-list" data-page-load aria-current="page"') && !r.text.includes('← DASHBOARD'));
     check('list: every thumbnail has its hidden "camera offline" cover over its picture, and the page has its style',
-      (r.text.match(/<img src="stream\.php\?cam=[^"]*" alt="[^"]*"><div class="cam-offline" role="status" hidden>/g) || []).length === 3
+      (r.text.match(/<img alt="[^"]*"><div class="cam-offline" role="status" hidden>/g) || []).length === 3
       && (r.text.match(/CAMERA OFFLINE/g) || []).length === 3 && r.text.includes('.cam-offline[hidden] { display: none; }'), detail(r));
     check('list: loads camera-offline.js before simple-logic.js, then simple-list.js, no inline handler, nothing of the relay\'s address',
       r.text.indexOf('src="js/camera-offline.js"') !== -1 && r.text.indexOf('src="js/camera-offline.js"') < r.text.indexOf('src="js/simple-logic.js"') && r.text.includes('src="js/simple-list.js"') && !/\son[a-z]+\s*=\s*["']/i.test(r.text) && !r.text.includes(String(PHP_PORT + 1)));
 
+    const inOrder = (html, files) => { let at = -1; return files.every((f) => { const i = html.indexOf(`<script src="js/${f}"></script>`); const ok = i > at; at = i; return ok; }); };
+    check('list: the one connection\'s scripts (codec, client, pictures) load in that order before simple-list.js; nothing is polled (no relay-json.js)',
+      inOrder(r.text, ['mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'simple-list.js']) && !r.text.includes('relay-json.js'), detail(r));
+
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['camera-offline.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
+    for (const f of ['camera-offline.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }
@@ -218,7 +223,8 @@ async function main() {
     // ── the large view ──────────────────────────────────────────────
     r = await get('simple-view.php');
     let d = viewData(r.text);
-    check('view: no cam = the first camera, shown through stream.php', r.status === 200 && safe(r) && d !== null && d.current === 'cam-a' && r.text.includes('<img id="picture" src="stream.php?cam=cam-a"'), detail(r));
+    check('view: no cam = the first camera; its picture has no source (the mux connection paints it), no stream.php, scripts in order', r.status === 200 && safe(r) && d !== null && d.current === 'cam-a' && r.text.includes('<img id="picture" alt="Cam A"')
+      && !r.text.includes('stream.php') && inOrder(r.text, ['mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'fullscreen.js', 'simple-view.js']) && !r.text.includes('relay-json.js'), detail(r));
     check('view: the script gets the camera list (id, name and icon only) and the slideshow time from the setting (25)',
       d !== null && JSON.stringify(d.cameras) === JSON.stringify([{ id: 'cam-a', name: 'Cam A', icon: '🚪' }, { id: 'cam-b', name: 'Cam B', icon: '🚗' }, { id: 'cam-c', name: 'Cam C', icon: '📷' }]) && d.seconds === '25', JSON.stringify(d));
     check('view: pager, status line (time, camera name, recording) and slideshow button are there',
@@ -234,7 +240,7 @@ async function main() {
     check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture rec-frame" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);
-    check('view: ?cam=cam-c shows that camera (and the title names it)', r.status === 200 && d && d.current === 'cam-c' && r.text.includes('<img id="picture" src="stream.php?cam=cam-c"') && /<title>Cam C — /.test(r.text), detail(r));
+    check('view: ?cam=cam-c shows that camera (and the title names it)', r.status === 200 && d && d.current === 'cam-c' && r.text.includes('<img id="picture" alt="Cam C"') && /<title>Cam C — /.test(r.text), detail(r));
 
     // ── what is refused ─────────────────────────────────────────────
     for (const [label, p, status] of [

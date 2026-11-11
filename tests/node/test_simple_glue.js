@@ -1,9 +1,11 @@
 'use strict';
 
 // test_simple_glue.js — the page scripts of the simple camera pages (php/cameras/js/simple-view.js and
-// simple-list.js) run against a tiny hand-made DOM, a fake relay (fetch), fake timers and a fake clock:
-// no browser, no jsdom, nothing to install. The rules themselves are tested in test_simple_logic.js; this
-// checks that the pages are wired to them: pager, status line, recording indicator, slideshow, retry.
+// simple-list.js) run against a tiny hand-made DOM, a fake CamMuxPictures (the one mux.php connection: it records
+// what the page asks for and lets the test push what the relay would), fake timers and a fake clock: no
+// browser, no jsdom, nothing to install. The rules themselves are tested in test_simple_logic.js; this
+// checks that the pages are wired to them: pager, status line, recording indicator, slideshow, and that nothing
+// is polled and no picture has a connection of its own.
 
 const path = require('path');
 const { assertEqual, assertTrue } = require('./framework');
@@ -27,7 +29,6 @@ async function runAll() {
 const JS = path.join(__dirname, '../../php/cameras/js');
 const CamSimple = require(path.join(JS, 'simple-logic.js'));
 const CamOffline = require(path.join(JS, 'camera-offline.js'));   // the real one: the pages' cover rule and its way of showing it
-const CamRelayJson = require(path.join(JS, 'relay-json.js'));   // the real one: it asks the environment's fetch
 
 const CAMS = [{ id: 'a', name: 'Alpha', icon: '🚪' }, { id: 'b', name: 'Beta', icon: '🚗' }, { id: 'c', name: 'Gamma' }];   // c: an older page without icons
 const flush = () => new Promise((r) => setImmediate(r));
@@ -41,17 +42,60 @@ function makeEl(extra) {
     attrs: {}, children: [], offsetHeight: 40,
     classList: { add: (c) => classes.add(c), toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)), contains: (c) => classes.has(c) },
     setAttribute(k, v) { this.attrs[k] = v; },
+    removeAttribute(k) { if (k === 'src') this.src = ''; delete this.attrs[k]; },
     addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
     fire(type, event) { (listeners[type] || []).forEach((fn) => fn(event || {})); },
   }, extra);
 }
 
-// A page environment. `relay`: what status.php / detector-status.php answer (mutable by the test; null = failed).
-function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, relayJson = true, offlineHelper = true } = {}) {
+// The fake of js/mux-pictures.js: what the page asks the one connection for (cam / det pictures, the two kinds of
+// readings) and the callbacks it gave, so the test can push what the relay would send. The real parts are tested in
+// test_mux_pictures.js / test_mux_client.js.
+function makeMux() {
+  const mux = { created: [], opts: null, cam: new Set(), det: new Set(), watching: { status: false, cameraStatus: false }, log: [] };
+  mux.api = {
+    create(opts) {
+      mux.created.push(opts);
+      mux.opts = opts;
+      return {
+        show: (id) => { mux.log.push('show ' + id); mux.cam.add(id); },
+        // like the real one: a hidden camera's image is emptied
+        hide: (id) => { mux.log.push('hide ' + id); mux.cam.delete(id); const img = opts.imgFor('cam', id); if (img) img.removeAttribute('src'); },
+        showDetector: (id) => mux.det.add(id),
+        hideDetector: (id) => mux.det.delete(id),
+        watchStatus: (on) => { mux.watching.status = on; },
+        watchCameraStatus: (on) => { mux.watching.cameraStatus = on; },
+        reconnect() {},
+        close() {},
+      };
+    },
+  };
+  // A frame of camera `id` arrives: painted only if that camera is wanted and the page gives an image for it
+  // (what js/mux-pictures.js does).
+  mux.paint = (id, src = 'frame-of-' + id) => {
+    if (!mux.cam.has(id)) return;
+    const img = mux.opts.imgFor('cam', id);
+    if (img) img.src = src;
+  };
+  return mux;
+}
+
+// The one camera the page asks the connection for. The simple view shows ONE camera at a time: asking for
+// two (the old one not hidden) would put every other camera's pictures on the link for nothing.
+const shownId = (env) => {
+  const ids = [...env.mux.cam];
+  assertEqual(ids.length, 1, 'exactly one camera picture is asked for: ' + ids.join());
+  return ids[0];
+};
+
+// A page environment. `relay`: what the relay pushes (the recording state of the cameras, the detectors' readings;
+// mutable by the test, null / garbage = the connection is down: nothing is known).
+function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, muxHelper = true, offlineHelper = true } = {}) {
   const env = { now: 1000000, intervals: [], timeouts: [], urls: [], relay: { status: {}, detectors: {} }, clockWindow: {} };
   // js/fullscreen.js stand-in: records the elements it was asked to toggle (the real one is tested in test_fullscreen.js)
   env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
-  env.relayJson = relayJson;   // false: the helper script is not on the page
+  env.muxHelper = muxHelper;   // false: js/mux-pictures.js is not on the page
+  env.mux = makeMux();
   env.offlineHelper = offlineHelper;   // false: js/camera-offline.js is not on the page
   const els = {};
   for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline']) els[id] = makeEl();
@@ -68,12 +112,11 @@ function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, ful
   };
   env.key = (key) => (docListeners.keydown || []).forEach((fn) => fn({ key }));
   env.history = { replaced: [], replaceState(a, b, url) { this.replaced.push(url); } };
-  env.fetch = async (url) => {
+  // The only request a page still makes by itself is the one-shot detector-view.php (the live view of a detector).
+  env.fetch = async (url, options) => {
     env.urls.push(url);
-    const answer = url === 'status.php' ? env.relay.status : env.relay.detectors;
-    if (answer === 'http-error') return { ok: false, json: async () => ({}) };
-    if (answer === null) throw new Error('relay unreachable');
-    return { ok: true, json: async () => answer };
+    env.posted = (env.posted || []).concat([{ url, options }]);
+    return { ok: true, json: async () => ({}) };
   };
   return env;
 }
@@ -102,7 +145,7 @@ function install(env) {
 // until the test is over.
 function load(env, file) {
   env.windowListeners = {};
-  env.window = { CamSimple, CamOffline: env.offlineHelper ? CamOffline : undefined, CamRelayJson: env.relayJson ? CamRelayJson : undefined, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
+  env.window = { CamSimple, CamOffline: env.offlineHelper ? CamOffline : undefined, CamMuxPictures: env.muxHelper ? env.mux.api : undefined, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
   cleanups.push(install(env));
   delete require.cache[require.resolve(path.join(JS, file))];
   require(path.join(JS, file));
@@ -112,7 +155,16 @@ function load(env, file) {
   env.advance = (ms, ticks = 1) => env.run(async () => {
     for (let i = 0; i < ticks; i += 1) { env.now += ms; for (const t of env.interval(1000)) await t.fn(); }
   });
-  env.poll = () => env.run(async () => { for (const t of env.interval(2000)) await t.fn(); });
+  // What the relay pushes now: its state and its readings, to whatever the page watches. Anything that is not a
+  // plain map (null, an error text) stands for "the connection is down".
+  const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  env.poll = () => env.run(async () => {
+    const { opts, watching } = env.mux;
+    if (!isMap(env.relay.status) || !isMap(env.relay.detectors)) { opts.onDown([...env.mux.cam]); return; }
+    if (watching.status) opts.onStatus(env.relay.detectors);
+    if (watching.cameraStatus) opts.onCameraStatus(env.relay.status);
+  });
+  env.down = () => env.run(async () => env.mux.opts.onDown([...env.mux.cam]));
   return env;
 }
 
@@ -187,7 +239,7 @@ test('countdown: the seconds and the bar run down with the time, and start over 
   await env.advance(1000, 3);
   assertEqual([env.els.countdown.textContent, env.els['countdown-fill'].style.width], ['NEXT IN 1 s', '20%']);
   await env.advance(1000, 1);   // time is up: the picture changes and the next camera gets a full time
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   assertEqual([env.els.countdown.textContent, env.els['countdown-fill'].style.width], ['NEXT IN 5 s', '100%']);
 });
 
@@ -217,7 +269,7 @@ test('countdown: a camera that starts recording is shown at once and its time st
   await env.advance(1000, 4);
   env.relay.status = { c: { recording: true }, b: { recording: true } };
   await env.poll();
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   assertEqual(env.els.countdown.textContent, 'NEXT IN 10 s');
 });
 
@@ -275,8 +327,8 @@ test('view: the picture box has the red frame (class "recording") exactly while 
   assertEqual(framed(), false);
 });
 
-test('view: a page without the helper that asks the relay does nothing at all (it cannot know anything)', async () => {
-  const env = await started({ relayJson: false });
+test('view: a page without the mux scripts (js/mux-pictures.js) does nothing at all (it cannot show or know anything)', async () => {
+  const env = await started({ muxHelper: false });
   assertEqual(env.urls, []);
   assertEqual(env.intervals.length, 0);
 });
@@ -288,49 +340,119 @@ test('view: a page without the offline-cover script does nothing at all, and doe
   assertTrue(env.els.offline.hidden, 'nothing is covered');
 });
 
-test('view: asks status.php and detector-status.php, and an HTTP error answer is treated as unknown', async () => {
-  const env = await started();
-  assertTrue(env.urls.includes('status.php') && env.urls.includes('detector-status.php'), env.urls.join());
-  env.relay.status = 'http-error';
+test('view: asks the ONE connection for the picture of the camera on screen, the recording state and the readings — and nothing else', async () => {
+  const env = await started({ current: 'b' });
+  assertEqual(env.mux.created.length, 1, 'one connection object');
+  assertEqual(env.mux.created[0].url, 'mux.php');
+  assertEqual(shownId(env), 'b');
+  assertEqual([env.mux.watching.status, env.mux.watching.cameraStatus], [true, true]);
+  assertEqual(env.mux.det.size, 0, 'no detector picture is shown on this page');
+  assertEqual(env.urls, [], 'no request of its own: no stream.php, no status.php, no detector-status.php');
+  await env.advance(1000, 30);
+  assertEqual(env.urls, []);
+  assertEqual(env.intervals.map((i) => i.ms), [1000], 'the only timer is the clock / slideshow tick: nothing is polled');
+});
+
+test('view: what is pushed is shown at once; garbage or a lost connection is "not known", never "off"', async () => {
+  const env = await started({ current: 'a' });
+  env.relay.status = { a: { recording: true } };
   await env.poll();
+  assertEqual(env.els.rec.textContent, 'RECORDING: ON');
+  env.mux.opts.onCameraStatus([]);                 // not a map of cameras
   assertEqual(env.els.rec.textContent, 'RECORDING: –');
-  env.relay.status = { error: 'Could not reach relay' };   // an error-shaped answer is no status
+  env.mux.opts.onCameraStatus({ a: { recording: false } });
+  assertEqual(env.els.rec.textContent, 'RECORDING: off');
+  env.mux.opts.onCameraStatus('error');
+  assertEqual(env.els.rec.textContent, 'RECORDING: –');
+});
+
+test('view: while the connection is down the picture is blank (its alt text shows) and nothing is known; it all comes back with the push', async () => {
+  const env = await started({ current: 'b' });
+  env.els.picture.alt = 'Beta';   // (the server writes it into the page)
+  env.mux.paint('b');
+  assertEqual(env.els.picture.src, 'frame-of-b');
+  env.relay.status = { b: { recording: true, online: false } };
   await env.poll();
-  assertEqual(env.els.rec.textContent, 'RECORDING: –');
-  env.relay.status = [];                                   // neither is an array
+  assertEqual([env.els.rec.textContent, env.els['picture-box'].classList.contains('recording'), env.els.offline.hidden], ['RECORDING: ON', true, false]);
+  await env.down();
+  assertEqual(env.els.picture.src, '', 'no frozen picture posing as live');
+  assertEqual(env.els.picture.alt, 'Beta', 'the alt text stays and says which camera it is');
+  assertEqual([env.els.rec.textContent, env.els['picture-box'].classList.contains('recording'), env.els.offline.hidden], ['RECORDING: –', false, true], 'no state is known');
+  assertEqual(shownId(env), 'b', 'the camera is still wanted: the connection reopens by itself');
   await env.poll();
-  assertEqual(env.els.rec.textContent, 'RECORDING: –');
+  env.mux.paint('b');
+  assertEqual([env.els.picture.src, env.els.rec.textContent], ['frame-of-b', 'RECORDING: ON']);
+});
+
+test('view: only the camera on screen gets a picture; switching hides the old one first, and a late frame of it is dropped', async () => {
+  const env = await started({ current: 'a' });
+  assertEqual(env.mux.log, ['show a']);
+  env.mux.paint('a');
+  env.els.next.fire('click');
+  assertEqual(env.mux.log, ['show a', 'hide a', 'show b'], 'old out, new in');
+  assertEqual(env.els.picture.src, '', 'the old picture is gone at once');
+  env.mux.paint('a');   // a frame of a, still on its way
+  assertEqual(env.els.picture.src, '', 'not painted');
+  assertEqual(env.mux.opts.imgFor('cam', 'a'), null, 'the page has no image for a camera that is not on screen');
+  assertTrue(env.mux.opts.imgFor('cam', 'b') === env.els.picture);
+  assertEqual(env.mux.opts.imgFor('det', 'b'), null, 'no detector pictures on this page');
+  env.mux.paint('b');
+  assertEqual(env.els.picture.src, 'frame-of-b');
+  assertEqual(shownId(env), 'b');
+});
+
+test('view: showing the camera that is already on screen asks for nothing new', async () => {
+  const env = await started({ current: 'a' });
+  env.relay.status = { a: { recording: true } };
+  await env.poll();   // the slideshow stays on a: nothing to hide or show
+  await env.advance(1000, 3);
+  assertEqual(env.mux.log, ['show a']);
+});
+
+test('view: the detectors\' live views are switched on by the tick while the slideshow runs, and renewed every 20 s — nothing polls', async () => {
+  const env = await started({ seconds: 600 });
+  env.relay.detectors = { a: { online: true, view: { supported: true, wanted: false } }, b: { online: true } };
+  env.relay.status = {};
+  env.els.slideshow.fire('click');   // the slideshow starts
+  await env.poll();
+  const views = () => (env.posted || []).filter((r) => r.url.startsWith('detector-view.php'));
+  assertEqual(views().map((r) => r.url), ['detector-view.php?cam=a&action=on']);
+  await env.advance(1000, 19);
+  assertEqual(views().length, 1, 'not renewed before 20 s');
+  await env.advance(1000, 2);
+  assertEqual(views().length, 2, 'renewed by the tick, with no push needed');
+  assertEqual(views()[1].options.method, 'POST');
 });
 
 test('view: NEXT and PREV switch the picture, the name, the title and the address, wrapping around', async () => {
   const env = await started({ current: 'a' });
   env.els.next.fire('click');
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   assertEqual(env.els['cam-name'].textContent, 'Beta');
   assertEqual(env.document.title, 'Beta — ESP32-CAM Dashboard');
   assertEqual(env.history.replaced.pop(), 'simple-view.php?cam=b');
   env.els.prev.fire('click');
   env.els.prev.fire('click');
-  assertEqual(env.els.picture.src, 'stream.php?cam=c');   // wrapped from the first to the last
+  assertEqual(shownId(env), 'c');   // wrapped from the first to the last
   env.els.next.fire('click');
-  assertEqual(env.els.picture.src, 'stream.php?cam=a');
+  assertEqual(shownId(env), 'a');
   assertEqual(env.els.picture.alt, 'Alpha');
 });
 
 test('view: the arrow keys page too, other keys do nothing', async () => {
   const env = await started({ current: 'a' });
   env.key('ArrowRight');
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   env.key('ArrowLeft');
-  assertEqual(env.els.picture.src, 'stream.php?cam=a');
+  assertEqual(shownId(env), 'a');
   env.key('Enter');
-  assertEqual(env.els.picture.src, 'stream.php?cam=a');
+  assertEqual(shownId(env), 'a');
 });
 
-test('view: a camera id is URL-encoded in the stream address', async () => {
+test('view: a camera id goes to the connection as it is (js/mux-pictures.js encodes it in the address)', async () => {
   const env = await started({ cameras: [{ id: 'a', name: 'A' }, { id: 'x y&z', name: 'Z' }] });
   env.els.next.fire('click');
-  assertEqual(env.els.picture.src, 'stream.php?cam=x%20y%26z');
+  assertEqual(shownId(env), 'x y&z');
 });
 
 test('view: SLIDESHOW button turns the slideshow on and off and says so', async () => {
@@ -352,7 +474,7 @@ test('view: the slideshow is ON when the page opens (button pressed, running, co
   assertTrue(/ON/.test(env.els.slideshow.textContent), env.els.slideshow.textContent);
   assertTrue(env.els.countdown.hidden === false, 'the time-left indicator is shown');
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');   // moved on by itself, nothing was clicked
+  assertEqual(shownId(env), 'b');   // moved on by itself, nothing was clicked
 });
 
 test('view: the button stops the slideshow that started by itself, and again starts it', async () => {
@@ -360,7 +482,7 @@ test('view: the button stops the slideshow that started by itself, and again sta
   env.els.slideshow.fire('click');
   assertEqual(env.els.slideshow.attrs['aria-pressed'], 'false');
   await env.advance(1000, 30);
-  assertEqual(env.els.picture.src, '');
+  assertEqual(shownId(env), 'a');
   env.els.slideshow.fire('click');
   assertEqual(env.els.slideshow.attrs['aria-pressed'], 'true');
 });
@@ -370,28 +492,28 @@ test('view: without the slideshow the picture never changes by itself', async ()
   env.relay.status = { c: { recording: true } };
   await env.poll();
   await env.advance(1000, 60);
-  assertEqual(env.els.picture.src, '');   // never set: still the page's own first picture
+  assertEqual(shownId(env), 'a');   // never switched: still the first camera
 });
 
 test('view: the slideshow moves to the next camera after the time of the setting', async () => {
   const env = await started({ seconds: 5 });
   env.els.slideshow.fire('click');
   await env.advance(1000, 4);
-  assertEqual(env.els.picture.src, '');
+  assertEqual(shownId(env), 'a');
   await env.advance(1000, 1);
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, 'stream.php?cam=c');
+  assertEqual(shownId(env), 'c');
 });
 
 test('view: a camera that starts recording is shown at once, at the next look at the relay', async () => {
   const env = await started({ seconds: 60 });
   env.els.slideshow.fire('click');
   await env.advance(1000, 2);
-  assertEqual(env.els.picture.src, '');
+  assertEqual(shownId(env), 'a');
   env.relay.status = { c: { recording: true } };
   await env.poll();
-  assertEqual(env.els.picture.src, 'stream.php?cam=c');
+  assertEqual(shownId(env), 'c');
   assertEqual(env.els.rec.textContent, 'RECORDING: ON');
 });
 
@@ -400,47 +522,29 @@ test('view: motion from a paired person detector is shown at once, but not inste
   env.els.slideshow.fire('click');
   env.relay.detectors = { b: { online: true, report: { scene: { motion: 900, motionAtLeast: 300 } } } };
   await env.poll();
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   env.relay.status = { b: { recording: true } };
   env.relay.detectors = { b: { online: true, report: { scene: { motion: 900, motionAtLeast: 300 } } }, c: { online: true, report: { scene: { motion: 900, motionAtLeast: 300 } } } };
   await env.poll();
-  assertEqual(env.els.picture.src, 'stream.php?cam=b', 'motion on c does not pull the view away from the recording b');
+  assertEqual(shownId(env), 'b', 'motion on c does not pull the view away from the recording b');
 });
 
 const MOVING = { online: true, report: { scene: { motion: 900, motionAtLeast: 300 } } };
 
-test('view: one failed look at the relay does not take the view from a camera that records, whatever starts to move elsewhere', async () => {
+test('view: a lost connection does not take the view from a camera that records, whatever starts to move elsewhere (the human is held)', async () => {
   const env = await started({ seconds: 60, current: 'b' });
   env.els.slideshow.fire('click');
   env.relay.status = { b: { recording: true } };
   await env.poll();
-  env.relay.status = 'http-error';             // one look fails ...
-  env.relay.detectors = { c: MOVING };         // ... just as another camera starts to move
-  await env.poll();
-  assertEqual(env.els.picture.src, '', 'still on b');
+  await env.down();                            // the connection is lost ...
+  env.relay.detectors = { c: MOVING };         // ... just as another camera starts to move (the push that follows)
+  env.mux.opts.onStatus(env.relay.detectors);
+  assertEqual(shownId(env), 'b', 'still on b');
   await env.advance(1000, 3);
-  assertEqual(env.els.picture.src, '', 'still on b');
+  assertEqual(shownId(env), 'b', 'still on b');
   env.relay.status = { b: { recording: true } };
   await env.poll();
-  assertEqual(env.els.picture.src, '', 'and when the relay answers again');
-});
-
-test('view: an answer that arrives late does not replace a newer one', async () => {
-  const env = await started({ seconds: 60, current: 'b' });
-  env.els.slideshow.fire('click');
-  const pending = [];   // the requests the page makes, answered by hand
-  globalThis.fetch = (url) => new Promise((resolve) => pending.push({ url, answer: (body) => resolve({ ok: true, json: async () => body }) }));
-  const [look] = env.interval(2000);
-  const older = look.fn();                      // two looks at the relay: pending[0], [1] and pending[2], [3] ...
-  const newer = look.fn();
-  pending[2].answer({ b: { recording: true } });   // ... the newer one is answered first
-  pending[3].answer({});
-  await newer;
-  assertEqual(env.els.rec.textContent, 'RECORDING: ON');
-  pending[0].answer({ b: { recording: false } });  // the older answer comes in last
-  pending[1].answer({});
-  await older;
-  assertEqual(env.els.rec.textContent, 'RECORDING: ON', 'the older answer is old news');
+  assertEqual(shownId(env), 'b', 'and when the relay answers again');
 });
 
 test('view: a human on the screen keeps the view through every turn, and a missing look; only once he is gone for good the time moves it on', async () => {
@@ -449,14 +553,14 @@ test('view: a human on the screen keeps the view through every turn, and a missi
   env.relay.status = { b: { recording: true } };
   await env.poll();
   await env.advance(1000, 15);                 // the 10 s are up once: the human stays
-  assertEqual(env.els.picture.src, '', 'b stays');
+  assertEqual(shownId(env), 'b', 'b stays');
   env.relay.status = {};                       // the data lets go of the human (gone, or just a gap)
   env.relay.detectors = { c: MOVING };
   await env.poll();
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, '', 'held: 5 s later it is still b');
+  assertEqual(shownId(env), 'b', 'held: 5 s later it is still b');
   await env.advance(1000, 15);
-  assertEqual(env.els.picture.src, 'stream.php?cam=c', 'gone for good: on to the camera that moves');
+  assertEqual(shownId(env), 'c', 'gone for good: on to the camera that moves');
 });
 
 test('view: with cameras recording, the slideshow skips the ones that do not', async () => {
@@ -464,11 +568,11 @@ test('view: with cameras recording, the slideshow skips the ones that do not', a
   env.relay.status = { a: { recording: true }, c: { recording: true } };
   env.els.slideshow.fire('click');
   await env.poll();
-  assertEqual(env.els.picture.src, 'stream.php?cam=c');   // c has just started recording: shown at once
+  assertEqual(shownId(env), 'c');   // c has just started recording: shown at once
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, 'stream.php?cam=a');   // b is skipped
+  assertEqual(shownId(env), 'a');   // b is skipped
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, 'stream.php?cam=c');
+  assertEqual(shownId(env), 'c');
 });
 
 test('view: PREV / NEXT during a slideshow give that camera a full time', async () => {
@@ -476,22 +580,11 @@ test('view: PREV / NEXT during a slideshow give that camera a full time', async 
   env.els.slideshow.fire('click');
   await env.advance(1000, 4);
   env.els.next.fire('click');                  // the viewer goes to b with 1 s left on a
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   await env.advance(1000, 4);
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   await env.advance(1000, 1);
-  assertEqual(env.els.picture.src, 'stream.php?cam=c');
-});
-
-test('view: a broken picture stream is opened again a little later, once however often it fails', async () => {
-  const env = await started({ current: 'b' });
-  env.els.picture.fire('error');
-  env.els.picture.fire('error');
-  const live = env.timeouts.filter((t) => !t.cleared);
-  assertEqual(live.length, 1);
-  assertEqual(live[0].ms, 3000);
-  await env.run(async () => live[0].fn());
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'c');
 });
 
 test('view: garbage in the camera data, or no cameras, does not throw and does nothing', async () => {
@@ -501,7 +594,7 @@ test('view: garbage in the camera data, or no cameras, does not throw and does n
     env.els.prev.fire('click');
     env.els.slideshow.fire('click');
     await env.advance(1000, 30);
-    assertEqual(env.els.picture.src, '', `data: ${dataCameras}`);
+    assertEqual(env.mux.cam.size, 0, `data: ${dataCameras}: no picture is asked for`);
   }
 });
 
@@ -518,9 +611,9 @@ test('view: the slideshow time falls back to 10 s when the page does not give a 
   load(env, 'simple-view.js');
   await env.run(async () => {});   // the slideshow starts by itself
   await env.advance(1000, 9);
-  assertEqual(env.els.picture.src, '');
+  assertEqual(shownId(env), 'a');
   await env.advance(1000, 1);
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
 });
 
 // ── cameras that are not connected ───────────────────────────────────
@@ -532,7 +625,7 @@ test('view: the offline cover is over the picture of a camera that is not connec
   await env.poll();
   assertTrue(!env.els.offline.hidden, 'a is offline');
   env.els.next.fire('click');   // the pager still goes to b: the viewer picks by hand
-  assertEqual(env.els.picture.src, 'stream.php?cam=b');
+  assertEqual(shownId(env), 'b');
   assertTrue(env.els.offline.hidden, 'b is online');
   env.els.prev.fire('click');   // a again: offline, covered AT ONCE (no wait for the next poll)
   assertTrue(!env.els.offline.hidden);
@@ -552,22 +645,23 @@ test('view: the slideshow skips the cameras that are not connected, and the page
   await env.poll();
   env.els.slideshow.fire('click');
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, 'stream.php?cam=c', 'b is skipped');
+  assertEqual(shownId(env), 'c', 'b is skipped');
   env.relay.status = { a: { online: true }, b: { online: true }, c: { online: true } };
   await env.poll();
   await env.advance(1000, 5);
-  assertEqual(env.els.picture.src, 'stream.php?cam=a');
+  assertEqual(shownId(env), 'a');
 });
 
 // ── simple-list.js ───────────────────────────────────────────────────
 
 const THUMB_IDS = ['a', 'b', 'c', 'd', 'e', 'f'];
-function listEnv(count, { width = 1024, height = 768, relayJson = true, navHeight = 44, offlineHelper = true } = {}) {
-  const env = makeEnv({ relayJson, offlineHelper });
+function listEnv(count, { width = 1024, height = 768, muxHelper = true, navHeight = 44, offlineHelper = true } = {}) {
+  const env = makeEnv({ muxHelper, offlineHelper });
   // one thumbnail per camera, as the page has them: an element that carries its camera id in data-cam
   env.thumbs = Array.from({ length: count }, (_, i) => {
     const offline = makeEl(); offline.hidden = true;   // the cover inside the thumbnail, as the page delivers it
-    return makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i }, offline, querySelector: (sel) => (sel === '.cam-offline' ? offline : null) });
+    const img = makeEl();                              // its picture: no src until the connection paints it
+    return makeEl({ dataset: { cam: THUMB_IDS[i] || 'cam' + i }, offline, img, querySelector: (sel) => ({ '.cam-offline': offline, img }[sel] || null) });
   });
   const grid = makeEl({ dataset: { count: String(count) }, children: env.thumbs });
   env.document.getElementById = (id) => (id === 'thumbs' ? grid : null);
@@ -621,7 +715,7 @@ test('list: a thumbnail whose camera records gets the red frame class, the other
   const env = listEnv(3);
   env.relay.status = { a: { recording: true }, b: { recording: false } };   // c: unknown to the relay
   load(env, 'simple-list.js');
-  await env.run(async () => {});
+  await env.poll();   // the relay's first push
   const framed = () => env.thumbs.map((t) => t.classList.contains('recording'));
   assertEqual(framed(), [true, false, false]);
   env.relay.status = { a: { recording: false }, c: { recording: true } };
@@ -636,14 +730,14 @@ test('list: a thumbnail whose camera records gets the red frame class, the other
   env.relay.status = { a: { recording: true } };
   await env.poll();
   assertEqual(framed(), [true, false, false]);
-  assertTrue(env.urls.length >= 5 && env.urls.every((u) => u === 'status.php'), 'only status.php is asked: ' + env.urls.join());
+  assertEqual(env.urls, [], 'nothing is asked by the page itself: the state is pushed');
 });
 
 test('list: the offline cover is on the thumbnail of a camera that is not connected, and only on that one', async () => {
   const env = listEnv(3);
   env.relay.status = { a: { online: true }, b: { online: false }, c: {} };   // c: an older relay says nothing
   load(env, 'simple-list.js');
-  await env.run(async () => {});
+  await env.poll();   // the relay's first push
   const covered = () => env.thumbs.map((t) => !t.offline.hidden);
   assertEqual(covered(), [false, true, false]);
   env.relay.status = { a: { online: false }, b: { online: true } };
@@ -654,17 +748,48 @@ test('list: the offline cover is on the thumbnail of a camera that is not connec
   assertEqual(covered(), [false, false, false]);
 });
 
-test('list: the relay is asked once at once and then every 2 seconds, by one timer', async () => {
-  const env = listEnv(2);
-  load(env, 'simple-list.js');
-  await env.run(async () => {});
-  assertEqual(env.urls, ['status.php']);
-  assertEqual(env.interval(2000).length, 1);
-  assertEqual(env.intervals.length, 1);
+test('list: every thumbnail\'s picture and the recording state ride on ONE connection — no timer, no request, however many cameras', async () => {
+  for (const count of [2, 60]) {
+    const env = listEnv(count);
+    load(env, 'simple-list.js');
+    await env.run(async () => {});
+    assertEqual(env.mux.created.length, 1, 'one connection object for the whole page');
+    assertEqual(env.mux.created[0].url, 'mux.php');
+    assertEqual([...env.mux.cam].sort(), env.thumbs.map((t) => t.dataset.cam).sort(), 'every thumbnail is asked for, in one go');
+    assertEqual(env.mux.watching.cameraStatus, true);
+    assertEqual(env.mux.watching.status, false, 'the detectors\' readings are not needed here');
+    assertEqual(env.urls, [], 'no stream.php, no status.php');
+    assertEqual(env.intervals.length, 0, 'nothing is polled');
+  }
 });
 
-test('list: without the helper that asks the relay the thumbnails are still sized, and nothing is polled', async () => {
-  const env = listEnv(3, { relayJson: false });
+test('list: a frame is painted onto its own thumbnail only', async () => {
+  const env = listEnv(3);
+  load(env, 'simple-list.js');
+  env.mux.paint('b');
+  assertEqual(env.thumbs.map((t) => t.img.src), ['', 'frame-of-b', '']);
+  assertEqual(env.mux.opts.imgFor('cam', 'zzz'), null, 'a camera the page does not have');
+  assertEqual(env.mux.opts.imgFor('det', 'a'), null, 'no detector pictures on this page');
+});
+
+test('list: while the connection is down the pictures are blank, no frame and no cover is shown; it all comes back with the push', async () => {
+  const env = listEnv(3);
+  load(env, 'simple-list.js');
+  env.relay.status = { a: { recording: true }, b: { online: false } };
+  await env.poll();
+  for (const id of ['a', 'b', 'c']) env.mux.paint(id);
+  assertEqual(env.thumbs.map((t) => t.img.src), ['frame-of-a', 'frame-of-b', 'frame-of-c']);
+  await env.down();
+  assertEqual(env.thumbs.map((t) => t.img.src), ['', '', ''], 'no frozen picture posing as live');
+  assertEqual(env.thumbs.map((t) => t.classList.contains('recording')), [false, false, false]);
+  assertTrue(env.thumbs.every((t) => t.offline.hidden), 'not known to be offline');
+  assertEqual([...env.mux.cam].sort(), ['a', 'b', 'c'], 'all still wanted: the connection reopens by itself');
+  await env.poll();
+  assertEqual(env.thumbs.map((t) => t.classList.contains('recording')), [true, false, false]);
+});
+
+test('list: without the mux scripts the thumbnails are still sized, and nothing is asked for', async () => {
+  const env = listEnv(3, { muxHelper: false });
   load(env, 'simple-list.js');
   await env.run(async () => {});
   assertEqual(env.urls, []);
