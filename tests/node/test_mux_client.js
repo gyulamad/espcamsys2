@@ -2,8 +2,8 @@
 
 // test_mux_client.js — the connection manager of the dashboard's mux stream (php/cameras/js/mux-client.js) against a
 // fake fetch and fake timers: no browser, nothing to install. The wire format is test_muxcodec.js's business;
-// this checks the life of the connection: opening, reading, retrying with a growing pause, giving up after three
-// attempts that never produced a message (so the page can fall back), a silent link, and closing on purpose.
+// this checks the life of the connection: opening, reading, retrying with a growing pause for ever (it never gives up and
+// there is no fallback: whatever goes wrong, only stop() ends it), a silent link, and closing on purpose.
 
 const path = require('path');
 const { assertEqual, assertTrue } = require('./framework');
@@ -87,12 +87,11 @@ function fakeNetwork() {
 function setup(options = {}) {
   const clock = fakeClock();
   const net = fakeNetwork();
-  const seen = { messages: [], down: 0, giveUp: 0, urls: 0 };
+  const seen = { messages: [], down: 0, urls: 0 };
   const client = Client.create({
     buildUrl: () => { seen.urls += 1; return 'mux.php?cams=a,b'; },
     onMessage: (m) => seen.messages.push(m),
     onDown: () => { seen.down += 1; },
-    onGiveUp: () => { seen.giveUp += 1; },
     env: {
       fetch: net.fetch, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
       AbortController, codec,
@@ -141,22 +140,39 @@ test('a connection that ends after it was live is reopened after 1 s, and the pa
   assertEqual(net.calls.length, 1, 'not yet');
   await clock.advance(1);
   assertEqual(net.calls.length, 2);
-  assertEqual(seen.giveUp, 0);
 });
 
 test('the pause between attempts grows 1, 2, 4 ... up to 15 s', () => {
   assertEqual([0, 1, 2, 3, 4, 5, 9].map(Client.backoffMs), [1000, 2000, 4000, 8000, 15000, 15000, 15000]);
 });
 
-test('three attempts in a row that never produce a message: onGiveUp, and the client stops', async () => {
-  const { clock, net, seen, client } = setup({ answers: [{ ok: false, status: 502 }, { contentType: 'text/html' }, { reject: new Error('network') }] });
+test('attempts that never produce a message are retried for ever, with the pause growing to 15 s', async () => {
+  const failures = [{ ok: false, status: 502 }, { contentType: 'text/html' }, { reject: new Error('network') }];
+  const { clock, net, seen, client } = setup({ answers: Array.from({ length: 12 }, (_, i) => failures[i % failures.length]) });
   client.start();
   await flush();
-  await clock.advance(1000);
-  await clock.advance(2000);
-  assertEqual(net.calls.length, 3);
-  assertEqual([seen.giveUp, client.state(), seen.down], [1, 'idle', 3]);
-  assertEqual(clock.pending(), 0, 'nothing is left running');
+  const pauses = [];
+  for (let attempt = 1; attempt < 12; attempt++) {
+    assertEqual([net.calls.length, client.state(), seen.down], [attempt, 'waiting', attempt]);
+    const pause = Client.backoffMs(attempt - 1);
+    pauses.push(pause);
+    await clock.advance(pause - 1);
+    assertEqual(net.calls.length, attempt, 'not before the pause is over');
+    await clock.advance(1);
+  }
+  assertEqual(pauses.slice(0, 6), [1000, 2000, 4000, 8000, 15000, 15000]);
+  assertEqual([net.calls.length, clock.pending() > 0], [12, true], 'still trying, something is always scheduled');
+});
+
+test('the client has no give-up: nothing but stop() ends the retrying', async () => {
+  const { clock, net, client } = setup();
+  net.fetch = () => Promise.reject(new Error('refused'));
+  client.start();
+  await flush();
+  await clock.advance(24 * 3600 * 1000);
+  assertTrue(client.state() === 'waiting' || client.state() === 'connecting', 'still alive a day later: ' + client.state());
+  client.stop();
+  assertEqual([client.state(), clock.pending()], ['idle', 0]);
 });
 
 test('an attempt that answers with a type other than the mux type is refused, however it ends', async () => {
@@ -175,7 +191,7 @@ test('a stream of garbage counts as a failed attempt (the format is not the one 
   assertEqual([seen.messages.length, seen.down, client.state()], [0, 1, 'waiting']);
 });
 
-test('a connection that was live earlier does not count towards giving up', async () => {
+test('a connection that was live resets the pause to 1 s again', async () => {
   const { clock, net, seen, client } = setup();
   client.start();
   await flush();
@@ -187,7 +203,7 @@ test('a connection that was live earlier does not count towards giving up', asyn
     await flush();
     await clock.advance(1000);
   }
-  assertEqual([seen.giveUp, net.calls.length], [0, 6]);
+  assertEqual(net.calls.length, 6, 'every round was reopened after just 1 s');
 });
 
 test('a link that goes silent for 15 s is closed and reopened', async () => {
@@ -223,7 +239,7 @@ test('an attempt that is never answered is given up after 15 s too', async () =>
   net.fetch = (url, options) => new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(abortError())));
   const clock = fakeClock();
   const seen = { down: 0 };
-  const client = Client.create({ buildUrl: () => 'x', onMessage() {}, onDown: () => { seen.down += 1; }, onGiveUp() {},
+  const client = Client.create({ buildUrl: () => 'x', onMessage() {}, onDown: () => { seen.down += 1; },
     env: { fetch: net.fetch, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, AbortController, codec } });
   client.start();
   await flush();
