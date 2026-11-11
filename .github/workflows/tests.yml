@@ -1,0 +1,58 @@
+name: Run Project Tests
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Run All Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gdb \
+            python3-opencv \
+            python3-numpy \
+            ffmpeg \
+            apache2 \
+            libapache2-mod-php \
+            php-cli
+
+      - name: Install Arduino CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/arduino-cli"
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
+            | BINDIR="$RUNNER_TEMP/arduino-cli" sh
+          echo "$RUNNER_TEMP/arduino-cli" >> "$GITHUB_PATH"
+
+      - name: Install ESP32 Arduino core
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install ESP32 TensorFlow Lite library
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          git clone --depth 1 --branch v1.3.3 \
+            https://github.com/espressif/esp-tflite-micro.git \
+            "$HOME/Arduino/libraries/esp-tflite-micro"
+
+      - name: Run all tests
+        run: |
+          chmod +x ./run_tests.sh
+          ./run_tests.sh
