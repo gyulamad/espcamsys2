@@ -1,7 +1,7 @@
 <?php
 // mux.php — the live pictures of several cameras, of their person detectors, and the detectors' readings, on ONE
 // connection.
-// Usage: mux.php?cams=cam1,cam2[&dets=cam1][&status=1][&rec=1]
+// Usage: mux.php?[cams=cam1,cam2][&dets=cam1][&status=1][&rec=1]   (at least one of the four, else 400)
 //   cams    the cameras whose picture is wanted (every id must match a camera in config.php)
 //   dets    the cameras whose paired DETECTOR's picture is wanted too (ids of cameras that have a detector)
 //   status  1 = also the readings of the detectors, the { camId: status } map detector-status.php answers
@@ -45,6 +45,10 @@ if ($detectorCams === null) {
 $detectorByCamera = CamLogic::detectorIdsByCamera($cameras, $detectorCams);
 $status = ($_GET['status'] ?? '') === '1';
 $recording = ($_GET['rec'] ?? '') === '1';
+if (!CamLogic::muxWantsAnything($ids, $detectorCams, $status, $recording)) {
+    http_response_code(400);
+    exit('ask for at least one of cams, dets, status=1, rec=1');
+}
 
 // (no redirects: review F-08)
 $ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10, relay_read_headers($config))]);

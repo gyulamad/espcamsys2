@@ -1,7 +1,7 @@
 'use strict';
 
 // muxfeed.js — what GET /mux does for ONE viewer, kept out of server.js so it can be tested without sockets:
-//   parseRequest(query, rules)  the ?cams= ?dets= ?status= of the request, checked
+//   parseRequest(query, rules)  the ?cams= ?dets= ?status= ?rec= of the request, checked
 //   createFeed(write)           delivery that never queues: a viewer on a slow link (Tor) gets the NEWEST
 //                               picture of each camera and detector and the newest readings, so its delay stays
 //                               small and the relay's memory never grows with a slow viewer (the same rule as
@@ -35,17 +35,23 @@ function parseIdList(name, raw, { idPattern, max, optional }) {
 }
 
 // query: req.query. rules: { idPattern, maxCameras, maxDetectors }.
-//   cams    the cameras whose pictures are wanted (at least one)
+//   cams    the cameras whose pictures are wanted (none by default)
 //   dets    the detectors whose pictures are wanted (none by default)
-//   status  "1": the readings of every detector are wanted too
-//   rec     "1": the recording state of every camera (what GET /status answers) is wanted too
+//   status  "1": the readings of every detector are wanted
+//   rec     "1": the recording state of every camera (what GET /status answers) is wanted
+// At least one of the four must ask for something: a page that shows no picture (every camera hidden) still needs its
+// readings and recording state pushed, but a request for nothing is a mistake, not a connection worth holding open.
 // -> { cams, dets, status, rec } or { error } saying what is wrong.
 function parseRequest(query, { idPattern, maxCameras, maxDetectors }) {
-  const cams = parseIdList('cams', query.cams, { idPattern, max: maxCameras, optional: false });
+  const cams = parseIdList('cams', query.cams, { idPattern, max: maxCameras, optional: true });
   if (cams.error) return cams;
   const dets = parseIdList('dets', query.dets, { idPattern, max: maxDetectors, optional: true });
   if (dets.error) return dets;
-  return { cams: cams.ids, dets: dets.ids, status: query.status === '1', rec: query.rec === '1' };
+  const request = { cams: cams.ids, dets: dets.ids, status: query.status === '1', rec: query.rec === '1' };
+  if (!request.cams.length && !request.dets.length && !request.status && !request.rec) {
+    return { error: 'ask for at least one of cams, dets, status=1, rec=1' };
+  }
+  return request;
 }
 
 // write(buffer) -> false when the connection's buffer is full (Node's stream convention).

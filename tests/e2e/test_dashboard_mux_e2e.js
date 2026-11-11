@@ -12,7 +12,8 @@
 //   * what the page did not ask for is not passed on, whatever the relay sends: other cameras, other detectors,
 //     readings nobody asked for, message types it does not know
 //   * a browser that leaves frees the relay connection (no leaked PHP worker / relay subscription)
-//   * a bad ?cams= (missing, unknown camera, an array), no login, mux not switched on, a relay that is down or
+//   * cams is optional (a page with every picture hidden still wants the readings and recording state), but a request
+//     asking for nothing is a 400, as is a bad ?cams= (unknown camera, an array), no login, mux not switched on, a relay that is down or
 //     that answers with something other than the mux stream (JSON, text/html): each refused plainly, nothing of
 //     what the relay said reaches the browser (review F-14)
 // Core modules only; skips if php is missing.
@@ -61,7 +62,7 @@ const relay = nodeHttp.createServer((req, res) => {
   if (fake.mode === 'json') { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"error":"nope"}'); return; }
   if (fake.mode === 'html') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<script>window.__pwned=1</script>'); return; }
   const query = new URL(req.url, 'http://x').searchParams;
-  const cams = query.get('cams').split(',');
+  const cams = query.get('cams') ? query.get('cams').split(',') : [];
   const dets = query.get('dets') ? query.get('dets').split(',') : [];
   res.writeHead(200, { 'Content-Type': enc.CONTENT_TYPE });
   fake.open += 1;
@@ -179,6 +180,18 @@ async function main() {
     check('&rec=1: the recording state of the cameras arrives (shaped like status.php), and only that kind of readings',
       r.status === 200 && fake.urls[fake.urls.length - 1] === '/mux?cams=camA&rec=1' && recState.length >= 1
       && recState.every((m) => m.source === enc.STATE_CAMERAS && Buffer.from(m.payload).toString('utf8') === CAMERA_STATUS_SHAPED), JSON.stringify(recState.map((m) => m.source)));
+    // no cameras asked for: the readings and the recording state still flow, and the relay is asked for just those
+    r = await get('/mux.php?status=1&rec=1');
+    const noCams = r.messages || [];
+    check('&status=1&rec=1 without cams: 200, the relay is asked with no cams parameter, and no picture is sent',
+      r.status === 200 && fake.urls[fake.urls.length - 1] === '/mux?status=1&rec=1' && noCams.some((m) => m.source === enc.STATE_DETECTORS)
+      && noCams.some((m) => m.source === enc.STATE_CAMERAS) && noCams.every((m) => m.type !== enc.TYPE_FRAME), fake.urls[fake.urls.length - 1]);
+    r = await get('/mux.php?rec=1');
+    check('?rec=1 alone: 200 and only the recording state', r.status === 200 && fake.urls[fake.urls.length - 1] === '/mux?rec=1'
+      && (r.messages || []).some((m) => m.source === enc.STATE_CAMERAS) && (r.messages || []).every((m) => m.type !== enc.TYPE_FRAME && m.source !== enc.STATE_DETECTORS));
+    r = await get('/mux.php?dets=camA');
+    check('?dets=camA alone: 200 and the detector\'s picture (renamed to the camera)', r.status === 200 && fake.urls[fake.urls.length - 1] === '/mux?dets=detA'
+      && (r.messages || []).some((m) => m.source === 'det:camA'));
     r = await get('/mux.php?cams=camB,camA&dets=camA');
     check('readings only when asked for', (r.messages || []).every((m) => m.type !== enc.TYPE_STATE) && (r.messages || []).some((m) => m.source === 'det:camA'));
 
@@ -189,10 +202,10 @@ async function main() {
     r = await get('/mux.php?cams=camA', { auth: false });
     check('no login: 401, no pictures', r.status === 401 && r.messages !== null && r.messages.length === 0, `status ${r.status}`);
     const before = fake.urls.length;
-    for (const bad of ['', '?cams=', '?cams=nope', '?cams=camA,nope', '?cams=camA,', '?cams[]=camA',
+    for (const bad of ['', '?cams=', '?status=0', '?status=yes', '?rec=true', '?cams=nope', '?cams=camA,nope', '?cams=camA,', '?cams[]=camA',
       '?cams=camA&dets=camB', '?cams=camA&dets=detA', '?cams=camA&dets=nope', '?cams=camA&dets=camA,', '?cams=camA&dets[]=camA', '?cams=camA&status[]=1', '?cams=camA&rec[]=1']) {
       r = await get(`/mux.php${bad}`, { ms: 500 });
-      check(`mux.php${bad || ' (no cams)'}: 400, and the relay is not even asked`, r.status === 400 && fake.urls.length === before, `status ${r.status}`);
+      check(`mux.php${bad || ' (nothing asked for)'}: 400, and the relay is not even asked`, r.status === 400 && fake.urls.length === before, `status ${r.status}`);
     }
     for (const mode of ['json', 'html']) {
       fake.mode = mode;

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // test_relay_mux_e2e.js — GET /mux on a REAL server.js: the pictures of several cameras on one connection.
-//   * the cameras asked for are checked (missing, invalid, repeated, too many: 400 that says why)
+//   * the cameras asked for are checked (invalid, repeated, too many: 400 that says why); cams is optional, but a request
+//     that asks for nothing (no cams, dets, status=1 or rec=1) is a 400
 //   * a heartbeat comes at once and then on its own; a picture reaches the viewer within a fraction of a second,
 //     intact, tagged with its camera; cameras that were not asked for do not come
 //   * a viewer that connects later gets each camera's last picture at once
@@ -198,6 +199,28 @@ async function main() {
       let body = ''; res.on('data', (c) => { body += c; }); res.on('end', () => resolve(JSON.parse(body)));
     }));
     check('it is the same map GET /status answers', Object.keys(readings(recStates(rv)[0])).sort().join() === Object.keys(statusAnswer).sort().join());
+
+    // ── no cameras asked for: a page whose pictures are all hidden still gets its readings and recording state ──
+    const knownCameras = async () => new Promise((resolve) => nodeHttp.get({ host: '127.0.0.1', port: PORT, path: '/status' }, (res) => {
+      let body = ''; res.on('data', (c) => { body += c; }); res.on('end', () => resolve(Object.keys(JSON.parse(body)).sort().join()));
+    }));
+    const camerasBefore = await knownCameras();
+    const sOnly = await view(PORT, '?status=1');
+    const rOnly = await view(PORT, '?rec=1');
+    const dOnly = await view(PORT, '?dets=mux-det');
+    viewers.push(sOnly, rOnly, dOnly);
+    check('?status=1 alone: 200 and the readings arrive, and nothing else',
+      sOnly.status === 200 && await waitFor(() => states(sOnly).length >= 1) && sOnly.messages.every((m) => m.type !== codec.TYPE_FRAME), `status ${sOnly.status}`);
+    check('?rec=1 alone: 200 and the recording state arrives, and nothing else',
+      rOnly.status === 200 && await waitFor(() => recStates(rOnly).length >= 1) && rOnly.messages.every((m) => m.type !== codec.TYPE_FRAME), `status ${rOnly.status}`);
+    check('?dets= alone: 200, no readings unasked', dOnly.status === 200 && await waitFor(() => dOnly.messages.length >= 1) && states(dOnly).length === 0);
+    check('a request with no cams creates no camera on the relay', await knownCameras() === camerasBefore);
+    for (const [what, query] of [['nothing at all', ''], ['status=0', '?status=0'], ['status=yes', '?status=yes'], ['rec=true', '?rec=true']]) {
+      const none = await view(PORT, query);
+      let body = {}; try { body = JSON.parse(none.text); } catch (e) { /* not JSON */ }
+      check(`${what}: 400 that says what to ask for, nothing streamed`, none.status === 400 && /at least one/.test(body.error || '') && none.messages.length === 0, `status ${none.status} ${none.text}`);
+      none.close();
+    }
     check('a viewer that did not ask for it is not sent it', recStates(plain).length === 0);
 
     // ── a viewer that cannot keep up ──

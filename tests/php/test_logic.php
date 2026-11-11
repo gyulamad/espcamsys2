@@ -1822,10 +1822,23 @@ camtest_test('muxCameraIds: the cameras asked for, each once, in the order given
 });
 
 camtest_test('muxCameraIds: null for anything that is not a list of existing cameras', function () use ($muxCams) {
-    foreach (['', ',', 'cam1,', ',cam1', 'cam1,,cam2', 'cam1,nope', 'nope', 'CAM1', ' cam1', 'cam1 ', ['cam1'], null, 5] as $bad) {
+    foreach ([',', 'cam1,', ',cam1', 'cam1,,cam2', 'cam1,nope', 'nope', 'CAM1', ' cam1', 'cam1 ', ['cam1'], null, 5] as $bad) {
         camtest_assert_equal(CamLogic::muxCameraIds($muxCams, $bad), null, var_export($bad, true));
     }
     camtest_assert_equal(CamLogic::muxCameraIds([], 'cam1'), null, 'no cameras at all');
+});
+
+camtest_test('muxCameraIds: no cameras asked for is an empty list, not an error', function () use ($muxCams) {
+    camtest_assert_equal(CamLogic::muxCameraIds($muxCams, ''), []);
+    camtest_assert_equal(CamLogic::muxCameraIds([], ''), []);
+});
+
+camtest_test('muxWantsAnything: true when any of cameras, detectors, readings or recording state is asked for', function () {
+    camtest_assert_true(CamLogic::muxWantsAnything(['a'], [], false, false));
+    camtest_assert_true(CamLogic::muxWantsAnything([], ['a'], false, false));
+    camtest_assert_true(CamLogic::muxWantsAnything([], [], true, false));
+    camtest_assert_true(CamLogic::muxWantsAnything([], [], false, true));
+    camtest_assert_true(!CamLogic::muxWantsAnything([], [], false, false));
 });
 
 camtest_test('muxUrl: the relay address without a double slash, the list in one escaped parameter', function () {
@@ -1869,6 +1882,13 @@ camtest_test('muxUrl: detector pictures and readings are added only when asked f
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080/', ['a'], ['d1'], true), 'http://r:8080/mux?cams=a&dets=d1&status=1');
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a'], [], false, true), 'http://r:8080/mux?cams=a&rec=1');
     camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a', 'b'], ['d1'], true, true), 'http://r:8080/mux?cams=a%2Cb&dets=d1&status=1&rec=1');
+});
+
+camtest_test('muxUrl: without cameras there is no cams parameter, only what is asked for', function () {
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', [], [], true), 'http://r:8080/mux?status=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080/', [], [], false, true), 'http://r:8080/mux?rec=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', [], ['d1'], true, true), 'http://r:8080/mux?dets=d1&status=1&rec=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', []), 'http://r:8080/mux');
 });
 
 // ── Wi-Fi network and signal on the dashboard ────────────────────────

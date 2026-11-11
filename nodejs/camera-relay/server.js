@@ -772,7 +772,9 @@ app.get('/stream/:id', requireReadKey, (req, res) => {
 // about 6 connections per address over HTTP/1.1, so one MJPEG connection per camera left no room for the
 // dashboard's other requests. ?cams=cam1,cam2 names the cameras (the dashboard leaves out the ones its user hid),
 // ?dets=det1,det2 the detectors whose pictures are wanted too, ?status=1 the readings of every detector (what
-// /detectors/events pushes), ?rec=1 the recording state of every camera (what GET /status answers). Like /stream, a viewer that cannot keep up gets the newest picture of each camera and
+// /detectors/events pushes), ?rec=1 the recording state of every camera (what GET /status answers). Every one of
+// them is optional but at least one must be there (400 otherwise): a page whose cameras are all hidden still wants
+// its readings and recording state. Like /stream, a viewer that cannot keep up gets the newest picture of each camera and
 // detector and the newest readings instead of a backlog.
 // Reading needs the read key, like /stream — only the PHP layer should reach this port.
 let muxViewers = 0;
