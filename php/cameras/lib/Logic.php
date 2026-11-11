@@ -450,12 +450,16 @@ class CamLogic
         return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
     }
 
-    // The cameras a mux request asks for ("cam1,cam2"): each once, in the order given. Null when the list is not
-    // a string, is empty, has an empty entry, or names a camera config.php does not have.
+    // The cameras a mux request asks for ("cam1,cam2"): each once, in the order given; [] when it asks for none (a
+    // page whose cameras are all hidden still wants the readings and the recording state). Null when the list is not
+    // a string, has an empty entry, or names a camera config.php does not have.
     public static function muxCameraIds(array $cameras, $requested): ?array
     {
-        if (!is_string($requested) || $requested === '') {
+        if (!is_string($requested)) {
             return null;
+        }
+        if ($requested === '') {
+            return [];
         }
         $ids = array_values(array_unique(explode(',', $requested)));
         foreach ($ids as $id) {
@@ -497,18 +501,32 @@ class CamLogic
         return $out;
     }
 
-    // Where the relay serves the mux stream: the pictures of these cameras, of these detectors (their own ids), and
-    // when $status also the readings of the detectors, when $recording the recording state of the cameras.
+    // Whether a mux request asks for anything at all: pictures of cameras or detectors, the readings, or the
+    // recording state. The relay refuses a request for nothing; refusing it here too means no connection is opened.
+    public static function muxWantsAnything(array $ids, array $detectorCams, bool $status, bool $recording): bool
+    {
+        return $ids !== [] || $detectorCams !== [] || $status || $recording;
+    }
+
+    // Where the relay serves the mux stream: the pictures of these cameras (none is fine), of these detectors (their
+    // own ids), and when $status also the readings of the detectors, when $recording the recording state of the
+    // cameras. Only what is asked for is in the address.
     public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false, bool $recording = false): string
     {
-        $url = rtrim($relayUrl, '/') . '/mux?cams=' . rawurlencode(implode(',', $ids));
+        $params = [];
+        if ($ids) {
+            $params[] = 'cams=' . rawurlencode(implode(',', $ids));
+        }
         if ($detectorIds) {
-            $url .= '&dets=' . rawurlencode(implode(',', $detectorIds));
+            $params[] = 'dets=' . rawurlencode(implode(',', $detectorIds));
         }
         if ($status) {
-            $url .= '&status=1';
+            $params[] = 'status=1';
         }
-        return $recording ? $url . '&rec=1' : $url;
+        if ($recording) {
+            $params[] = 'rec=1';
+        }
+        return rtrim($relayUrl, '/') . '/mux' . ($params ? '?' . implode('&', $params) : '');
     }
 
     // Whether the relay's answer says it is the mux stream. Anything else (JSON saying why not, or text/html from

@@ -41,9 +41,11 @@ test('parseRequest: detectors and the readings are optional extras', () => {
 });
 
 test('parseRequest: everything else is an error that says why', () => {
-  for (const cams of [undefined, '', ',', 'a,', 'a,,b', ['a', 'b'], 'a b', '../x', 'a/b', 'a'.repeat(65), {}, 5]) {
+  for (const cams of ['', ',', 'a,', 'a,,b', ['a', 'b'], 'a b', '../x', 'a/b', 'a'.repeat(65), {}, 5]) {
     const r = feedLib.parseRequest({ cams }, RULES);
     assertTrue(typeof r.error === 'string' && r.cams === undefined, `cams ${JSON.stringify(cams)} must be refused`);
+    assertTrue(/cams/.test(r.error), `cams ${JSON.stringify(cams)} is refused for its own sake, even next to status=1`);
+    assertTrue(typeof feedLib.parseRequest({ cams, status: '1' }, RULES).error === 'string', `cams ${JSON.stringify(cams)} stays refused next to status=1`);
   }
   assertTrue(/cams.*more than 3/.test(feedLib.parseRequest({ cams: 'a,b,c,d' }, RULES).error));
   assertEqual(feedLib.parseRequest({ cams: 'a,a,a,b' }, RULES).cams, ['a', 'b'], 'the limit counts distinct cameras');
@@ -52,6 +54,17 @@ test('parseRequest: everything else is an error that says why', () => {
     assertTrue(typeof r.error === 'string' && /dets/.test(r.error), `dets ${JSON.stringify(dets)} must be refused`);
   }
   assertTrue(/dets.*more than 2/.test(feedLib.parseRequest({ cams: 'a', dets: 'x,y,z' }, RULES).error));
+});
+
+test('parseRequest: cams is optional, but a request must ask for something', () => {
+  assertEqual(feedLib.parseRequest({ status: '1' }, RULES), { cams: [], dets: [], status: true, rec: false });
+  assertEqual(feedLib.parseRequest({ rec: '1' }, RULES), { cams: [], dets: [], status: false, rec: true });
+  assertEqual(feedLib.parseRequest({ dets: 'd1' }, RULES), { cams: [], dets: ['d1'], status: false, rec: false });
+  assertEqual(feedLib.parseRequest({ status: '1', rec: '1' }, RULES), { cams: [], dets: [], status: true, rec: true });
+  for (const query of [{}, { status: '0' }, { status: 'yes' }, { rec: 'true' }, { rec: ['1', '1'] }, { status: '' }]) {
+    const r = feedLib.parseRequest(query, RULES);
+    assertTrue(typeof r.error === 'string' && /at least one/.test(r.error), `${JSON.stringify(query)} asks for nothing`);
+  }
 });
 
 test('createFeed: while the connection keeps up every picture is written at once', () => {
