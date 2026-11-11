@@ -118,7 +118,7 @@ sc_has tests/cpp/test_person_uplink_glue.cpp 'ex\*\*\*-1' \
 
 # The end-to-end tests that read from the relay send the control key ...
 for test in tests/e2e/test_detector_e2e.js tests/e2e/test_detector_firmware_e2e.js \
-            tests/e2e/test_relay_detector_events_e2e.js tests/e2e/test_logging_e2e.js \
+            tests/e2e/test_relay_mux_e2e.js tests/e2e/test_logging_e2e.js \
             tests/e2e/test_push_connection_e2e.js; do
     sc_has "$test" 'X-Control-Key' \
         "$(basename "$test"): sends X-Control-Key on reads"
