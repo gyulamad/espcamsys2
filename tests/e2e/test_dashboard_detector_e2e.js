@@ -6,10 +6,13 @@
 //     showing) ONLY for a camera that has a 'detector' in config.php
 //   * detector-status.php returns the detector's numbers keyed by CAMERA id — and for a detector that
 //     is not showing, a state and a reason in words
-//   * detector-stream.php pipes the detector's MJPEG picture, and when there is none it answers AT ONCE
-//     with why (it used to hang for 10 s and end in a bare 502 with nothing logged anywhere)
-//   * the web server's error log gets a line for it (throttled), so it is explainable from there too
-//   * both need the dashboard login
+//   * the detector's picture and its readings come on the mux (mux.php?dets=<camera>&status=1): the picture renamed to
+//     the CAMERA (det:<camId>, the detector's own id never reaches the browser), the readings the same map
+//     detector-status.php answers; a detector that has no picture is not an error there (frames just do not come:
+//     WHY is in the readings' `message`, which this test checks for every state)
+//   * mux.php, like detector-status.php, needs the dashboard login; a camera without a detector or an unknown one is a 400
+//   * a relay that is down, or older than this dashboard, is a quick 502 with one plain line, and a "mux.php:" line in
+//     the web server's error log says why
 // Skips (exit 0) when php is missing. Own ports, temp copy of the dashboard, core modules only.
 
 const fs = require('fs');
@@ -19,6 +22,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const fake = require('./fake_detector');
 const { JPEG, JPEG2, status, wire, heartbeat } = fake;
+const dec = require('../../php/cameras/js/mux-codec');
 
 const RELAY_DIR = path.join(__dirname, '../../nodejs/camera-relay');
 const DASH_SRC = path.join(__dirname, '../../php/cameras');
@@ -65,6 +69,13 @@ function get(port, p, { auth = true, until } = {}) {
   });
 }
 const dash = (p, o) => get(PHP_PORT, p, o);
+// The mux messages in the bytes read so far ({ type, source, payload }); a message cut in two waits for its rest.
+const muxMessages = (body) => dec.createParser().push(new Uint8Array(body));
+const frames = (body, source) => muxMessages(body).filter((m) => m.type === dec.TYPE_FRAME && m.source === source).map((m) => Buffer.from(m.payload));
+const readings = (body) => {
+  const m = muxMessages(body).filter((x) => x.type === dec.TYPE_STATE && x.source === dec.STATE_DETECTORS).pop();
+  return m ? JSON.parse(Buffer.from(m.payload).toString('utf8')) : null;
+};
 
 function writeDashboard(dir, relayPort) {
   fs.mkdirSync(dir);
@@ -121,7 +132,7 @@ async function main() {
     await waitUntilAnswers(`http://127.0.0.1:${PHP2_PORT}/`);
 
     check('detector-status.php needs the dashboard login', (await dash('/detector-status.php', { auth: false })).status === 401);
-    check('detector-stream.php needs the dashboard login', (await dash('/detector-stream.php?cam=camA', { auth: false })).status === 401);
+    check('mux.php needs the dashboard login', (await dash('/mux.php?dets=camA&status=1', { auth: false })).status === 401);
 
     const page = (await dash('/index.php')).text;
     check('camera with a detector gets the detector row, whose picture comes on the mux (no detector-stream.php address, no src)', page.includes('id="det-camA"') && /<img data-cam="camA" id="detimg-camA" alt="[^"]*">/.test(page) && !page.includes('detector-stream.php'));
@@ -131,18 +142,10 @@ async function main() {
     check('a camera without detector gets no row', !page.includes('id="det-camB"') && !page.includes('detector-stream.php?cam=camB'));
 
     // ── 1. what the dashboard saw in the field: no detector has ever connected ──────────────────
-    let r = await dash('/detector-stream.php?cam=camA');
-    check('the picture of a detector that never connected is a quick 404, not a 10 s hang ending in a bare 502',
-      r.status === 404 && r.ms < 3000, `${r.status} after ${r.ms} ms`);
-    check('...with a text saying why, naming the detector', /^text\/plain/.test(r.type || '') && r.text === "The person detector of A: no detector called 'det-A' has connected to the relay since it started (no detector has connected at all)", r.text);
-    check('...and the web server\'s error log has a line for it',
-      /camdash: detector-stream\.php: HTTP 404: The person detector of A: no detector called 'det-A' has connected/.test(phpErr), phpErr.slice(-500));
-    check('...and the relay\'s log says the dashboard asked',
-      await waitFor(() => /the dashboard asked for the picture of detector 'det-A' but there is none/.test(readRelayLog())), readRelayLog().slice(-400));
-    const logLines = (phpErr.match(/camdash: detector-stream\.php/g) || []).length;
-    await dash('/detector-stream.php?cam=camA');
-    await dash('/detector-stream.php?cam=camA');
-    check('asking again and again does not flood the error log (once per 5 minutes per detector)', (phpErr.match(/camdash: detector-stream\.php/g) || []).length === logLines, phpErr.slice(-600));
+    let r = await dash('/mux.php?dets=camA&status=1', { until: (b) => readings(b) !== null });
+    check('the picture of a detector that never connected is no error and no hang: the mux answers at once, with the readings', r.status === 200 && r.type === dec.CONTENT_TYPE && r.ms < 3000 && readings(r.body) !== null, `${r.status} ${r.type} after ${r.ms} ms`);
+    check('...the readings say "never" and why, naming the detector', readings(r.body).camA.state === 'never' && /has not heard from a detector called 'det-A'/.test(readings(r.body).camA.message), JSON.stringify(readings(r.body)));
+    check('...and no picture comes, of course', frames(r.body, 'det:camA').length === 0);
 
     r = await dash('/detector-status.php');
     let j = JSON.parse(r.text);
@@ -158,8 +161,6 @@ async function main() {
     await sleep(300);
     j = JSON.parse((await dash('/detector-status.php')).text);
     check('a detector connecting under another id is called out as a likely typo', j.camA.state === 'never' && /does hear 'det-a', which no camera here is paired with/.test(j.camA.message) && /mistyped/.test(j.camA.message), j.camA.message);
-    r = await dash('/detector-stream.php?cam=camA');
-    check('...and the stream error lists the detectors the relay does see', r.status === 404 && /detectors seen: det-a/.test(r.text), r.text);
     stopTypo(); typo.socket.destroy();
 
     // ── 3. the detector connects as it should and pushes pictures ─────────────────────────────
@@ -177,13 +178,17 @@ async function main() {
     check('...and the Wi-Fi network and signal it reported, as `wifi` (not twice in its readings)', j.camA.wifi && j.camA.wifi.ssid === 'e2e-net' && j.camA.wifi.rssi === -55 && typeof j.camA.wifi.ageMs === 'number' && !('rssi' in j.camA.report) && !('ssid' in j.camA.report), JSON.stringify(j.camA));
     check('the other paired camera is still "never"', j.camC.state === 'never' && j.camC.online === false);
 
-    const picture = dash('/detector-stream.php?cam=camA', { until: (b) => b.includes(JPEG) && b.includes(JPEG2) });
+    const bothPictures = (b) => { const f = frames(b, 'det:camA'); return f.some((x) => x.equals(JPEG)) && f.some((x) => x.equals(JPEG2)); };
+    const picture = dash('/mux.php?dets=camA&status=1', { until: bothPictures });
     await sleep(300);
     up.socket.write(wire(status(), JPEG2));
     r = await picture;
-    check('detector-stream.php pipes the detector pictures as MJPEG, the latest first and every new one after it', r.status === 200 && /multipart\/x-mixed-replace/.test(r.type || '') && r.body.includes(JPEG) && r.body.includes(JPEG2), `${r.status} ${r.type}`);
-    check('a camera without a detector gets 404 from detector-stream.php', (await dash('/detector-stream.php?cam=camB')).status === 404);
-    check('an unknown camera gets 404 from detector-stream.php', (await dash('/detector-stream.php?cam=nope')).status === 404);
+    check('mux.php carries the detector pictures, the latest first and every new one after it, intact', r.status === 200 && r.type === dec.CONTENT_TYPE && bothPictures(r.body), `${r.status} ${r.type}`);
+    check('...named after the CAMERA: the detector\'s own id never reaches the browser', muxMessages(r.body).every((m) => !m.source.includes('det-A')) && frames(r.body, 'det:camA').length >= 2);
+    const live = readings(r.body);
+    check('...and the readings on the same connection are the map detector-status.php answers: the paired cameras only, this one online', live !== null && Object.keys(live).sort().join() === 'camA,camC' && live.camA.state === 'online' && live.camA.online === true && live.camA.detector === 'det-A' && live.camC.state === 'never', JSON.stringify(live));
+    check('a camera without a detector is a 400 on mux.php', (await dash('/mux.php?dets=camB')).status === 400);
+    check('an unknown camera is a 400 on mux.php', (await dash('/mux.php?dets=nope')).status === 400);
 
     // ── 4. numbers arrive but no picture ───────────────────────────────────────────────────────
     const nopic = await fake.uplink(RELAY_PORT, 'det-C', { key: KEY });
@@ -194,8 +199,8 @@ async function main() {
     await sleep(300);
     j = JSON.parse((await dash('/detector-status.php')).text);
     check('numbers without a picture: state "no-picture", online, with the board\'s own count of failures', j.camC.state === 'no-picture' && j.camC.online === true && j.camC.hasPicture === false && /30 failed JPEG encodings/.test(j.camC.message), JSON.stringify(j.camC));
-    r = await dash('/detector-stream.php?cam=camC');
-    check('...and its picture request is a quick 503 with the same reason', r.status === 503 && r.ms < 3000 && /The person detector of C: .*30 failed JPEG encodings/.test(r.text), `${r.status} ${r.text}`);
+    r = await dash('/mux.php?dets=camC&status=1', { until: (b) => readings(b) !== null });
+    check('...and on the mux its readings come at once with the same reason, and no picture', r.status === 200 && r.ms < 3000 && readings(r.body).camC.state === 'no-picture' && /30 failed JPEG encodings/.test(readings(r.body).camC.message) && frames(r.body, 'det:camC').length === 0, `${r.status} ${r.ms} ms ${JSON.stringify(readings(r.body))}`);
     stopC(); nopic.socket.destroy();
 
     // ── 5. the board goes away ─────────────────────────────────────────────────────────────────
@@ -204,8 +209,8 @@ async function main() {
     j = JSON.parse((await dash('/detector-status.php')).text);
     check('after a few seconds of silence it is offline, saying for how long and how its connection ended', j.camA.state === 'offline' && j.camA.online === false && /last heard \d+ s ago; its connection ended \(the board closed the connection\)/.test(j.camA.message), j.camA.message);
     check('...and the numbers on the dashboard are still the last ones received, for the stale display', j.camA.report && j.camA.report.scene.brightness === 130);
-    r = await dash('/detector-stream.php?cam=camA');
-    check('...and its picture request is a quick 503 carrying that reason', r.status === 503 && r.ms < 3000 && /The person detector of A: detector 'det-A' has no picture to show: last heard/.test(r.text), `${r.status} ${r.text}`);
+    r = await dash('/mux.php?dets=camA&status=1', { until: (b) => readings(b) !== null });
+    check('...and on the mux the readings say so at once: offline, with that reason', r.status === 200 && r.ms < 3000 && readings(r.body).camA.state === 'offline' && /last heard \d+ s ago/.test(readings(r.body).camA.message), `${r.status} ${r.ms} ms ${JSON.stringify(readings(r.body))}`);
 
     // ── 6. the relay itself is down ─────────────────────────────────────────────────────────────
     relay.kill('SIGTERM');
@@ -213,12 +218,14 @@ async function main() {
     r = await dash('/detector-status.php');
     check('relay down: detector-status.php is a 502 JSON that says so', r.status === 502 && /cannot reach the relay/.test(JSON.parse(r.text).error), `${r.status} ${r.text}`);
     check('...and the error log has the reason PHP got', /camdash: detector-status\.php: could not reach the relay for GET \/detectors \(.*refused/i.test(phpErr), phpErr.slice(-500));
-    r = await dash('/detector-stream.php?cam=camA');
-    check('relay down: detector-stream.php is a quick 502 with the reason', r.status === 502 && r.ms < 3000 && /^Could not reach the relay to get the picture of the person detector of A \(.*refused/i.test(r.text), `${r.status} ${r.text}`);
+    r = await dash('/mux.php?dets=camA&status=1');
+    check('relay down: mux.php is a quick 502 with one plain line (no reason, no address)', r.status === 502 && r.ms < 3000 && r.text === 'Could not connect to the relay', `${r.status} ${r.text}`);
+    check('...and the error log has the reason PHP got, in a "mux.php:" line', /camdash: mux\.php: could not reach the relay for GET \/mux \(.*refused/i.test(phpErr), phpErr.slice(-500));
 
     // ── 7. a relay that is older than this dashboard ────────────────────────────────────────────
-    r = await get(PHP2_PORT, '/detector-stream.php?cam=camA');
-    check('an old relay (HTML 404): the stream request says the relay is probably too old', r.status === 502 && /HTTP 404 without a reason/.test(r.text) && /older than this dashboard/.test(r.text), `${r.status} ${r.text}`);
+    r = await get(PHP2_PORT, '/mux.php?dets=camA&status=1');
+    check('an old relay (HTML 404): mux.php is a 502 with one plain line, nothing of what the relay said', r.status === 502 && r.text === 'Could not connect to the relay', `${r.status} ${r.text}`);
+    check('...and that web server\'s error log says the relay is probably too old, and to update the relay first', /camdash: mux\.php: the relay answered GET \/mux with HTTP 404 and not the mux stream: is the relay .*older than this dashboard.*relay first/.test(php2Err), php2Err.slice(-500));
     r = await get(PHP2_PORT, '/detector-status.php');
     check('...and so does the status request', r.status === 502 && /may be older than this dashboard/.test(JSON.parse(r.text).error), `${r.status} ${r.text}`);
     check('...with a line in that web server\'s error log', /detector-status\.php: the relay answered GET \/detectors with HTTP 404 and something that is not JSON/.test(php2Err), php2Err.slice(-500));

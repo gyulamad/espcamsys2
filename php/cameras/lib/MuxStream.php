@@ -6,12 +6,11 @@
 //   [length u32][version u8][type u8][source length u8][source][payload]      (big-endian)
 // The relay speaks in ITS names (a detector's own id); the browser gets the dashboard's: a detector's picture
 // arrives as "det:<id of the camera it is paired with>", the readings as the { camId: status } map that
-// detector-status.php answers, and the cameras' recording state as the map status.php answers. So the browser never needs to know a detector's id, and the shaping of the
-// readings (CamLogic::buildDetectorStatus) stays in PHP, as it is for detector-events.php. Only what the page
-// asked for is passed on, whatever the relay sends.
+// detector-status.php answers, and the cameras' recording state as the map status.php answers. So the browser never
+// needs to know a detector's id, and the shaping of the readings (CamLogic::buildDetectorStatus) stays in PHP. Only
+// what the page asked for is passed on, whatever the relay sends.
 
 require_once __DIR__ . '/Logic.php';
-require_once __DIR__ . '/EventStream.php';
 
 final class CamMuxStream
 {
@@ -98,6 +97,19 @@ final class CamMuxStream
         return array_merge($detectors ? [self::STATE_DETECTORS] : [], $cameras ? [self::STATE_CAMERAS] : []);
     }
 
+    // The readings of the detectors for one relay message: the { camId: status } map detector-status.php answers
+    // (CamLogic::buildDetectorStatus), as JSON. Null when the relay's data is not a JSON object (it is then skipped,
+    // not forwarded).
+    public static function detectorReadingsJson(string $relayData, array $cameras): ?string
+    {
+        $relayDetectors = json_decode($relayData, true);
+        if (!is_array($relayDetectors)) {
+            return null;
+        }
+        $json = json_encode((object) CamLogic::buildDetectorStatus($cameras, $relayDetectors));
+        return $json === false ? null : $json;
+    }
+
     // The recording state of the cameras as the relay sends it, if it is a JSON object: the map GET /status answers,
     // shaped like status.php's answer (CamLogic::shapeCameraStatuses: the Wi-Fi readings are checked).
     // Null otherwise.
@@ -124,7 +136,7 @@ final class CamMuxStream
             }
         }
         foreach ($newest as $source => $payload) {
-            $json = $source === self::STATE_DETECTORS ? CamEventStream::statusJson($payload, $cameras) : self::cameraStatusJson($payload);
+            $json = $source === self::STATE_DETECTORS ? self::detectorReadingsJson($payload, $cameras) : self::cameraStatusJson($payload);
             if ($json !== null) {
                 $out .= self::encode(self::TYPE_STATE, $source, $json);
             }

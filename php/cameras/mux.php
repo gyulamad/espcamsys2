@@ -7,13 +7,16 @@
 //   status  1 = also the readings of the detectors, the { camId: status } map detector-status.php answers
 //   rec     1 = also the recording state of the cameras, the map status.php answers
 //
-// stream.php opens one connection per camera, and a browser allows only about 6 per address over HTTP/1.1: with a
-// few cameras every other request of the dashboard waited in the browser's queue for ever. This page passes the
-// relay's /mux stream on instead (format: nodejs/camera-relay/lib/muxcodec.js, read by js/mux-client.js). The relay
-// speaks in its own names; what the browser gets is renamed and shaped in lib/MuxStream.php, and only what it asked for.
-// On unless 'mux_enabled' => false is in config.php: then the dashboard uses stream.php as before.
+// This is the only long-lived request of every page: a browser allows only about 6 connections per address over
+// HTTP/1.1, so a connection per camera would leave no room for anything else. This page passes the relay's /mux stream
+// on (format: nodejs/camera-relay/lib/muxcodec.js, read by js/mux-client.js). The relay speaks in its own names; what
+// the browser gets is renamed and shaped in lib/MuxStream.php, and only what it asked for.
 //
-// The decisions (is it on, which cameras, is the answer the mux stream) live in lib/Logic.php (CamLogic) so they
+// When the relay cannot give the stream (down, a redirect, or - after an update - older than this dashboard) the browser
+// only gets 502 "Could not connect to the relay"; the reason goes to the web server's error log as a "mux.php:" line,
+// at most once per 5 minutes per kind of problem (the browser retries every few seconds, for ever).
+//
+// The decisions (which cameras, is the answer the mux stream, what to log) live in lib/Logic.php (CamLogic) so they
 // can be unit tested without a web server — see tests/php/test_logic.php.
 
 require_once __DIR__ . '/auth.php';
@@ -22,9 +25,12 @@ require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/lib/MuxStream.php';
 require_once __DIR__ . '/relay.php';
 
-if (!CamLogic::muxEnabled($config)) {
-    http_response_code(404);
-    exit('mux is switched off in config.php');
+// Ends the request for a relay that cannot give the mux stream: the browser gets one plain line, the log the reason.
+function mux_refuse(string $logKey, string $problem): void
+{
+    log_throttled('mux:' . $logKey, 'mux.php: ' . $problem);
+    http_response_code(502);
+    exit('Could not connect to the relay');
 }
 
 // ?cams[]=x is an array, not a list: refuse it plainly instead of crashing (review F-16)
@@ -54,16 +60,14 @@ if (!CamLogic::muxWantsAnything($ids, $detectorCams, $status, $recording)) {
 $ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10, relay_read_headers($config))]);
 $stream = @fopen(CamLogic::muxUrl($config['relay_url'], $ids, array_values($detectorByCamera), $status, $recording), 'rb', false, $ctx);
 if (!$stream) {
-    http_response_code(502);
-    exit('Could not connect to the relay');
+    mux_refuse('unreachable', CamLogic::muxRelayProblem(null, last_php_error()));
 }
 
 $wrapperData = stream_get_meta_data($stream)['wrapper_data'] ?? [];
-if (CamLogic::isRedirectStatus(CamLogic::extractStatusCode($wrapperData)) || !CamLogic::isMuxContentType($wrapperData)) {
+$relayStatus = CamLogic::extractStatusCode($wrapperData);
+if (CamLogic::isRedirectStatus($relayStatus) || !CamLogic::isMuxContentType($wrapperData)) {
     fclose($stream);
-    error_log('camdash: mux.php: the relay did not answer with the mux stream — refused');
-    http_response_code(502);
-    exit('Could not connect to the relay');
+    mux_refuse('answer:' . ($relayStatus ?? 0), CamLogic::muxRelayProblem($relayStatus ?? 0));
 }
 
 // Disable output buffering so pictures reach the browser immediately

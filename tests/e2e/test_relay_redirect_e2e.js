@@ -4,8 +4,8 @@
 // A REAL PHP dashboard in front of a hostile "relay" that answers EVERY request with a redirect to a
 // second server (the "thief"). Checks that:
 //   - no dashboard page follows the redirect: the thief never receives a single request, not even with
-//     the control key — for the status, recordings, record, delete, switch, settings, live-stream and
-//     detector-stream calls, and the video player
+//     the control key — for the status, recordings, record, delete, switch, settings and live-stream (mux.php)
+//     calls, and the video player
 //   - the dashboard answers 502 instead of passing the redirect's body on
 //   - the hostile relay DID get the key on the calls that carry it (so the test really sent it)
 //   - the SETTINGS page refuses a new relay_url that is public, link-local (cloud metadata), a public name or a
@@ -63,6 +63,7 @@ function listen(port, name, handler) {
 }
 
 let docroot;
+let phpTmp;
 let phpLog = '';
 const cfgFile = () => path.join(docroot, 'config.php');
 function makeDashboard() {
@@ -75,7 +76,7 @@ function makeDashboard() {
 }
 function startPhp(dir) {
   return new Promise((resolve, reject) => {
-    const child = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4' } });
+    const child = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4', TMPDIR: phpTmp } });
     child.stdout.on('data', (d) => { phpLog += d; });
     child.stderr.on('data', (d) => { phpLog += d; });
     child.on('exit', (code) => reject(new Error(`php -S exited early (code ${code})`)));
@@ -139,13 +140,15 @@ async function main() {
     servers.push(await listen(HTML_PORT, 'html', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<html>router login page</html>'); }));
     servers.push(await listen(REAL_PORT, 'real', (req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{}'); }));
     docroot = makeDashboard();
+    // PHP's own temp folder for this run: the 'log once per 5 minutes' markers of log_throttled() live there, so an
+    // earlier run's marker files can never hide the "mux.php:" line this test looks for
+    phpTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-redirect-tmp-'));
     php = await startPhp(docroot);
 
     // ── a redirecting relay is never followed, by any call ──
     const calls = [
       ['status.php', 'GET', 'status.php'],
       ['detector-status.php', 'GET', 'detector-status.php'],
-      ['detector-events.php', 'GET', 'detector-events.php'],
       ['detector-view.php', 'POST', 'detector-view.php?cam=cam-a&action=on'],
       ['recordings.php (the list)', 'GET', 'recordings.php?cam=cam-a'],
       ['recordings.php (the video player)', 'GET', `recordings.php?cam=cam-a&play=${FILE}`],
@@ -158,8 +161,7 @@ async function main() {
       ['recordings.php (mark seen)', 'POST', `recordings.php?cam=cam-a&seen=${FILE}`],
       ['system-settings.php (read)', 'GET', 'system-settings.php'],
       ['settings.php', 'GET', 'settings.php'],
-      ['stream.php (live view)', 'GET', 'stream.php?cam=cam-a'],
-      ['detector-stream.php', 'GET', 'detector-stream.php?cam=cam-a'],
+      ['mux.php (live pictures, readings, recording state)', 'GET', 'mux.php?cams=cam-a&dets=cam-a&status=1&rec=1'],
     ];
     for (const [name, method, q] of calls) {
       const r = await dash(method, q);
@@ -169,6 +171,8 @@ async function main() {
     check('recording-switch.php: the redirect is not followed either', sw.status >= 400 && !/leaked|moved/.test(sw.text), `status=${sw.status} ${sw.text.slice(0, 120)}`);
     await sleep(300);
     check('(control) the switch call really reached the hostile relay, with the key', log.hostile.some((x) => x.url.startsWith('/recording/camera/cam-a/off') && x.headers['x-control-key'] === KEY), JSON.stringify(log.hostile.slice(-3).map((x) => x.url)));
+    check('(control) the live stream call really reached the hostile relay, with the key', log.hostile.some((x) => x.url.startsWith('/mux?') && x.headers['x-control-key'] === KEY), JSON.stringify(log.hostile.slice(-5).map((x) => x.url)));
+    check('a redirect on the live stream is written to the error log as a "mux.php:" line', /camdash: mux\.php: the relay answered GET \/mux with a redirect/.test(phpLog), phpLog.slice(-300));
     check('the thief received NOTHING (no request at all, so no control key, no actor)', log.thief.length === 0, JSON.stringify(log.thief.slice(0, 2)));
     const withKey = log.hostile.filter((x) => x.headers['x-control-key'] === KEY);
     check('(control) the hostile relay itself did get the key on the calls that carry it', withKey.length >= 5, `with key: ${withKey.length} of ${log.hostile.length}`);
@@ -208,6 +212,7 @@ async function main() {
     await stopProc(php);
     for (const s of servers) s.close();
     if (docroot) fs.rmSync(docroot, { recursive: true, force: true });
+    if (phpTmp) fs.rmSync(phpTmp, { recursive: true, force: true });
   }
   summarize();
 }

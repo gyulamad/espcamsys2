@@ -3,8 +3,9 @@
 // test_dashboard_mux_e2e.js — mux.php: the pictures of SEVERAL cameras, of their detectors, and the detectors'
 // readings on ONE connection, through a real php -S in front of a fake relay that speaks the mux format
 // (nodejs/camera-relay/lib/muxcodec.js).
-//   * on unless 'mux_enabled' => false (also when the key is left out), one request carries every camera asked for, pictures intact, as the mux type,
-//     and the relay is asked for exactly those cameras, with the relay key
+//   * always on (the old 'mux_enabled' switch is gone: a leftover 'mux_enabled' => false in config.php changes nothing),
+//     one request carries every camera asked for, pictures intact, as the mux type, and the relay is asked for exactly
+//     those cameras, with the relay key
 //   * &dets=<camera> brings the picture of the detector paired with it, renamed to the camera (det:<camId>), and
 //     &status=1 the readings shaped like detector-status.php ({ camId: status }); the detector's own id never
 //     reaches the browser
@@ -13,9 +14,11 @@
 //     readings nobody asked for, message types it does not know
 //   * a browser that leaves frees the relay connection (no leaked PHP worker / relay subscription)
 //   * cams is optional (a page with every picture hidden still wants the readings and recording state), but a request
-//     asking for nothing is a 400, as is a bad ?cams= (unknown camera, an array), no login, mux not switched on, a relay that is down or
-//     that answers with something other than the mux stream (JSON, text/html): each refused plainly, nothing of
-//     what the relay said reaches the browser (review F-14)
+//     asking for nothing is a 400, as is a bad ?cams= (unknown camera, an array), no login, a relay that is down, that
+//     redirects, that predates GET /mux or that answers with something other than the mux stream (JSON, text/html): each
+//     refused plainly with 502, nothing of what the relay said reaches the browser (review F-14)
+//   * every such 502 leaves a "mux.php:" line in the web server's error log saying why (unreachable / redirect / old
+//     relay), at most once per kind of problem however often the browser retries, and never with the relay key in it
 // Core modules only; skips if php is missing.
 //   node tests/e2e/test_dashboard_mux_e2e.js
 
@@ -55,10 +58,13 @@ async function waitFor(fn, ms = 3000) {
 const picture = (camIndex, n) => Buffer.from([0xff, 0xd8, camIndex, n, 0xff, 0xd9]);
 
 const fake = { mode: 'mux', urls: [], keys: [], open: 0, closed: 0 };
+let phpLog = '';   // what php -S wrote to its error log (stderr)
 const relay = nodeHttp.createServer((req, res) => {
   fake.urls.push(req.url);
   fake.keys.push(req.headers['x-control-key']);
   if (!req.url.startsWith('/mux?')) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
+  if (fake.mode === 'old') { res.writeHead(404, { 'Content-Type': 'text/html' }); res.end('<pre>Cannot GET /mux</pre>'); return; }   // a relay that predates GET /mux
+  if (fake.mode === 'redirect') { res.writeHead(302, { Location: 'http://127.0.0.1:1/elsewhere' }); res.end(); return; }
   if (fake.mode === 'json') { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"error":"nope"}'); return; }
   if (fake.mode === 'html') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<script>window.__pwned=1</script>'); return; }
   const query = new URL(req.url, 'http://x').searchParams;
@@ -86,10 +92,9 @@ const relay = nodeHttp.createServer((req, res) => {
 });
 
 let phpTmp, docroot;
-function writeConfig(dir, { mux, relayPort = RELAY_PORT }) {
-  const muxLine = mux === undefined ? '' : `'mux_enabled' => ${mux ? 'true' : 'false'}, `;
+function writeConfig(dir, { relayPort = RELAY_PORT, extra = '' } = {}) {
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${relayPort}', 'relay_control_key' => '${KEY}', ${muxLine}`
+    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${relayPort}', 'relay_control_key' => '${KEY}', ${extra}`
     + `'cameras' => [['id' => 'camA', 'name' => 'A', 'detector' => 'detA'], ['id' => 'camB', 'name' => 'B']]];\n`);
 }
 function makeDashboard() {
@@ -100,7 +105,8 @@ function makeDashboard() {
 }
 function startPhp(dir) {
   return new Promise((resolve, reject) => {
-    const child = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dir], { stdio: 'ignore', env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4', TMPDIR: phpTmp } });
+    const child = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dir], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4', TMPDIR: phpTmp } });
+    child.stderr.on('data', (c) => { phpLog += c.toString(); });
     child.on('exit', (code) => reject(new Error(`php -S exited early (code ${code})`)));
     (async () => {
       const started = Date.now();
@@ -144,7 +150,7 @@ async function main() {
     await new Promise((r) => relay.listen(RELAY_PORT, '127.0.0.1', r));
     phpTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-mux-tmp-'));
     docroot = makeDashboard();
-    writeConfig(docroot, { mux: true });
+    writeConfig(docroot);
     php = await startPhp(docroot);
 
     // ── one connection, several cameras ──
@@ -207,21 +213,36 @@ async function main() {
       r = await get(`/mux.php${bad}`, { ms: 500 });
       check(`mux.php${bad || ' (nothing asked for)'}: 400, and the relay is not even asked`, r.status === 400 && fake.urls.length === before, `status ${r.status}`);
     }
-    for (const mode of ['json', 'html']) {
+    // ── a relay that cannot give the mux stream: 502 for the browser, the reason in the error log ──
+    const muxLines = (what) => phpLog.split('\n').filter((l) => l.includes('camdash: mux.php: ') && l.includes(what));
+    const refusals = [
+      ['json', 'HTTP 400 and not the mux stream'],
+      ['html', 'HTTP 200 and not the mux stream'],
+      ['old', 'HTTP 404 and not the mux stream'],
+      ['redirect', 'redirect (HTTP 302)'],
+    ];
+    for (const [mode, line] of refusals) {
       fake.mode = mode;
       r = await get('/mux.php?cams=camA', { ms: 500 });
-      check(`a relay answering ${mode} instead of the mux stream: 502, none of its words reach the browser`, r.status === 502 && !r.text.includes('__pwned') && !r.text.includes('nope'), `status ${r.status}: ${r.text.slice(0, 80)}`);
+      check(`a relay answering ${mode} instead of the mux stream: 502, none of its words reach the browser`, r.status === 502 && !r.text.includes('__pwned') && !r.text.includes('nope') && !r.text.includes('Cannot GET'), `status ${r.status}: ${r.text.slice(0, 80)}`);
+      check(`...and the error log says why (${mode})`, await waitFor(() => muxLines(line).length === 1), phpLog.slice(-400));
     }
+    check('the redirect was not followed (the relay key is never sent elsewhere): the relay was asked once', fake.urls.filter((u) => u.startsWith('/mux?cams=camA')).length >= 1 && !fake.urls.some((u) => u.includes('elsewhere')));
+    fake.mode = 'old';
+    for (let k = 0; k < 3; k++) await get('/mux.php?cams=camA', { ms: 300 });
+    check('asking again and again does not flood the error log (once per 5 minutes per kind of problem)', muxLines('HTTP 404 and not the mux stream').length === 1, String(muxLines('HTTP 404 and not the mux stream').length));
+    check('...and an old relay is told to be updated first', muxLines('HTTP 404')[0].includes('older than this dashboard') && muxLines('HTTP 404')[0].includes('relay first'));
     fake.mode = 'mux';
-    writeConfig(docroot, { mux: true, relayPort: DEAD_PORT });
+    writeConfig(docroot, { relayPort: DEAD_PORT });
     r = await get('/mux.php?cams=camA', { ms: 500 });
-    check('a relay that is down: 502', r.status === 502, `status ${r.status}`);
-    writeConfig(docroot, { mux: false });
+    check('a relay that is down: 502', r.status === 502 && r.text === 'Could not connect to the relay', `status ${r.status}: ${r.text}`);
+    check('...and the error log says it could not be reached (with PHP\'s reason, for the log only)', await waitFor(() => muxLines('could not reach the relay for GET /mux').length === 1) && !r.text.includes('127.0.0.1'), phpLog.slice(-400));
+    check('no line of the error log carries the relay key', !phpLog.includes(KEY));
+
+    // ── the old switch is gone: a leftover 'mux_enabled' => false in config.php changes nothing ──
+    writeConfig(docroot, { extra: "'mux_enabled' => false, " });
     r = await get('/mux.php?cams=camA', { ms: 500 });
-    check('mux_enabled false: 404 (the dashboard uses stream.php)', r.status === 404, `status ${r.status}`);
-    writeConfig(docroot, { mux: undefined });
-    r = await get('/mux.php?cams=camA', { ms: 500 });
-    check('mux_enabled left out: ON, the stream is served', r.status === 200 && r.headers['content-type'] === enc.CONTENT_TYPE, `status ${r.status}`);
+    check("a leftover 'mux_enabled' => false is ignored: the stream is served", r.status === 200 && r.headers['content-type'] === enc.CONTENT_TYPE, `status ${r.status}`);
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
   } finally {

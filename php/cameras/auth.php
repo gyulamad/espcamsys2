@@ -1,7 +1,7 @@
 <?php
 // auth.php — HTTP Basic Auth gate for the Tor-facing camera dashboard.
 // require_once this at the very top of any page reachable over Tor
-// (index.php, stream.php) before any other output.
+// (index.php, mux.php) before any other output.
 // Credentials come from config.php — see example.config.php for the template.
 //
 // What it does, in order:
