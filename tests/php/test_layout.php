@@ -175,12 +175,28 @@ $SIMPLE_CAMS = [
 ];
 $HOSTILE = [['id' => 'cam1', 'name' => '"><script>window.__pwned=1</script>'], ['id' => 'a.b-c', 'name' => "x' onerror='alert(1)"]];
 
+// The mux scripts the simple pages need, in the order they need them (the client uses the codec, the pictures the client).
+function layout_mux_scripts_before(string $html, string $glue): bool
+{
+    $last = -1;
+    foreach (['js/mux-codec.js', 'js/mux-client.js', 'js/mux-pictures.js', $glue] as $file) {
+        $at = strpos($html, '<script src="' . $file . '">');
+        if ($at === false || $at < $last) {
+            return false;
+        }
+        $last = $at;
+    }
+    return true;
+}
+
 camtest_test('simpleListPage: one thumbnail per camera, a live picture that links to its large view', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleListPage($SIMPLE_CAMS);
     camtest_assert_true(strpos($html, '<!DOCTYPE html>') === 0);
     camtest_assert_equal(substr_count($html, 'class="thumb rec-frame"'), 2);
     camtest_assert_true(strpos($html, 'href="simple-view.php?cam=cam1"') !== false);
-    camtest_assert_true(strpos($html, 'src="stream.php?cam=cam-2"') !== false);
+    camtest_assert_equal(substr_count($html, '<img alt="'), 2, 'one picture per camera ...');
+    camtest_assert_equal(preg_match_all('/<img\b[^>]*\bsrc=/i', $html), 0, '... without a source: the mux connection paints it');
+    camtest_assert_true(strpos($html, 'stream.php') === false, 'no connection of its own per camera');
     camtest_assert_true(strpos($html, 'Front Door') !== false && strpos($html, 'Garage') !== false);
     camtest_assert_true(strpos($html, 'data-count="2"') !== false);
     camtest_assert_true(strpos($html, '2 CAMERAS') !== false);
@@ -237,6 +253,8 @@ camtest_test('simpleListPage: loads the logic and the list script, links the sto
     $html = CamLayout::simpleListPage($SIMPLE_CAMS);
     camtest_assert_true(strpos($html, '<script src="js/simple-logic.js">') !== false);
     camtest_assert_true(strpos($html, '<script src="js/simple-list.js">') !== false);
+    camtest_assert_true(layout_mux_scripts_before($html, 'js/simple-list.js'), 'the mux scripts, in order, before the list script');
+    camtest_assert_true(strpos($html, 'js/relay-json.js') === false, 'nothing is polled: the helper that asks the relay is not loaded');
     camtest_assert_true(strpos($html, "fetch('storage.php'") !== false);
     camtest_assert_true(strpos($html, 'secret-relay') === false, 'the relay address is not the browser\'s business');
     camtest_assert_true(strpos($html, 'href="fonts/fonts.css"') !== false && !preg_match('/googleapis|gstatic/', $html));
@@ -254,18 +272,19 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 6, 'only our five script files and the storage warning');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 8, 'only our seven script files and the storage warning');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
     $html = CamLayout::simpleListPage([['id' => 'a b&c', 'name' => 'x']]);
     camtest_assert_true(strpos($html, 'simple-view.php?cam=a%20b%26c') !== false);
-    camtest_assert_true(strpos($html, 'stream.php?cam=a%20b%26c') !== false);
+    camtest_assert_true(strpos($html, 'stream.php') === false);
 });
 
 camtest_test('simpleViewPage: the picture, pager, status line and slideshow button for the chosen camera', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[1], 15);
-    camtest_assert_true(strpos($html, '<img id="picture" src="stream.php?cam=cam-2"') !== false);
+    camtest_assert_true(strpos($html, '<img id="picture" alt="Garage"') !== false, 'the picture has no source: the mux connection paints it');
+    camtest_assert_true(strpos($html, 'stream.php') === false);
     foreach (['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Garage<', 'id="rec"', 'id="slideshow"'] as $needle) {
         camtest_assert_true(strpos($html, $needle) !== false, $needle);
     }
@@ -274,6 +293,8 @@ camtest_test('simpleViewPage: the picture, pager, status line and slideshow butt
     camtest_assert_true(strpos($html, 'class="nav-link" href="simple-list.php"') !== false && strpos($html, 'class="nav-link" href="./?layout=grid"') !== false, 'the navigation bar leads to the other pages');
     camtest_assert_true(strpos($html, '>▦ LIST<') === false && strpos($html, '>DASHBOARD<') === false, 'no second copy of those links in the status line');
     camtest_assert_true(strpos($html, '<script src="js/simple-view.js">') !== false && strpos($html, 'js/simple-logic.js') !== false);
+    camtest_assert_true(layout_mux_scripts_before($html, 'js/simple-view.js'), 'the mux scripts, in order, before the view script');
+    camtest_assert_true(strpos($html, 'js/relay-json.js') === false, 'nothing is polled: the helper that asks the relay is not loaded');
 });
 
 camtest_test('simpleViewPage: the scripts get the camera list, the current camera and the slideshow time as data attributes', function () use ($SIMPLE_CAMS) {
@@ -289,7 +310,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 8);   // busy.js, camera-offline.js, simple-logic.js, relay-json.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 10);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);

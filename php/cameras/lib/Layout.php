@@ -280,7 +280,8 @@ HTML;
 
     // ── The two simple camera pages (simple-list.php, simple-view.php) ──
     // Whole pages as text. Their behaviour lives in js/simple-logic.js (the rules, unit tested) and
-    // js/simple-list.js / js/simple-view.js (the page glue); nothing here is script, and everything that
+    // js/simple-list.js / js/simple-view.js (the page glue); the mux scripts (js/mux-*.js) load BEFORE the glue, which
+    // needs them to exist; nothing here is script, and everything that
     // comes from config.php is escaped. Camera data reaches the scripts as one data-* attribute.
 
     private static function esc($s): string
@@ -288,12 +289,8 @@ HTML;
         return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
-    // The URL of a camera's live picture / of its large view.
-    private static function streamUrl(string $id): string
-    {
-        return 'stream.php?cam=' . rawurlencode($id);
-    }
-
+    // The URL of a camera's large view. (There is no URL of a live picture: the pictures arrive on the page's one
+    // mux.php connection and are put onto the <img> elements, which therefore have no src when the page is sent.)
     // Public: the dashboard's pictures link to it too, so the address is built in one place.
     public static function simpleViewUrl(string $id): string
     {
@@ -451,13 +448,13 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
         $items = '';
         foreach (CamLogic::cameraSummaries($cameras) as $cam) {
             $items .= '<a class="thumb rec-frame" data-cam="' . self::esc($cam['id']) . '" href="' . self::esc(self::simpleViewUrl($cam['id'])) . '"' . self::pageLoadAttr() . ' title="' . self::esc($cam['name']) . '">'
-                . '<img src="' . self::esc(self::streamUrl($cam['id'])) . '" alt="' . self::esc($cam['name']) . '">'
+                . '<img alt="' . self::esc($cam['name']) . '">'
                 . self::offlineCover()
                 . '<span class="cap">' . self::iconSpan($cam['icon']) . self::esc($cam['name']) . '</span></a>';
         }
         $body = '<div class="bar"><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
-        return self::simplePage('Cameras', 'simple-list', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'relay-json.js', 'simple-list.js']);
+        return self::simplePage('Cameras', 'simple-list', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'simple-list.js']);
     }
 
     // simple-view.php: one camera large (a click on it shows it full screen), the pager, the status line and
@@ -472,7 +469,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             . ' data-current="' . self::esc($summary['id']) . '"'
             . ' data-slideshow-seconds="' . $slideshowSeconds . '"';
         $body = '<div class="simple-view-root" id="view"' . $data . '>'
-            . '<div class="picture rec-frame" id="picture-box"><img id="picture" src="' . self::esc(self::streamUrl($summary['id'])) . '" alt="' . self::esc($summary['name']) . '" title="Click to view full screen">' . self::offlineCover('offline') . '</div>'
+            . '<div class="picture rec-frame" id="picture-box"><img id="picture" alt="' . self::esc($summary['name']) . '" title="Click to view full screen">' . self::offlineCover('offline') . '</div>'
             . '<div class="countdown-bar" id="countdown-bar" aria-hidden="true" hidden><div class="countdown-fill" id="countdown-fill"></div></div>'
             . '<div class="status" role="status">'
             . '<button class="btn" type="button" id="prev" title="Previous camera">← PREV</button>'
@@ -485,7 +482,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'relay-json.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser
