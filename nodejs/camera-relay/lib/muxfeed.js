@@ -4,8 +4,7 @@
 //   parseRequest(query, rules)  the ?cams= ?dets= ?status= ?rec= of the request, checked
 //   createFeed(write)           delivery that never queues: a viewer on a slow link (Tor) gets the NEWEST
 //                               picture of each camera and detector and the newest readings, so its delay stays
-//                               small and the relay's memory never grows with a slow viewer (the same rule as
-//                               the per-camera MJPEG stream and the detectors' Server-Sent Events)
+//                               small and the relay's memory never grows with a slow viewer
 //   openSession(...)            connects a feed to the cameras', detectors' and readings' events, and undoes it
 // The bytes themselves are made by lib/muxcodec.js.
 

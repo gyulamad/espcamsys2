@@ -693,15 +693,6 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
-heading "End-to-end (live push of the detector numbers, relay) test"
-if ! command -v node >/dev/null 2>&1; then
-    echo "FAIL: node not found on PATH"
-    overall_status=1
-else
-    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_detector_events_e2e.js"
-    [ $? -ne 0 ] && overall_status=1
-fi
-
 heading "End-to-end (small live pictures reach the browser one by one, dashboard) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"

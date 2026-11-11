@@ -52,6 +52,7 @@ const nodeHttp = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const muxViewer = require('./mux_viewer');
 
 const RELAY_DIR = path.join(__dirname, '../../nodejs/camera-relay');
 const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
@@ -259,30 +260,16 @@ class FakeCamera {
   }
 }
 
-// A live viewer of /stream/<id> (what the dashboard is). Counts the video
-// frames it receives and how many were not valid JPEGs.
-function openViewer(id) {
-  const v = { frames: 0, bad: 0, req: null };
-  let buf = Buffer.alloc(0);
-  v.req = nodeHttp.get(`${BASE}/stream/${id}`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
-    res.on('data', (d) => {
-      buf = Buffer.concat([buf, d]);
-      for (;;) {
-        const end = buf.indexOf('\r\n\r\n');
-        if (end < 0) break;
-        const m = /Content-Length: (\d+)/.exec(buf.slice(0, end).toString());
-        if (!m) break;
-        const n = Number(m[1]);
-        if (buf.length < end + 4 + n + 2) break;
-        v.frames += 1;
-        if (buf[end + 4] !== 0xff || buf[end + 5] !== 0xd8) v.bad += 1;
-        buf = buf.slice(end + 4 + n + 2);
-      }
-    });
-  });
-  v.req.on('error', () => {});
-  v.close = () => v.req.destroy();
-  return v;
+// A live viewer of /mux?cams=<id> (what the dashboard is). `frames` counts the pictures it has received so far
+// and `bad` how many of them were not valid JPEGs.
+async function openViewer(id) {
+  const mux = await muxViewer.view(PORT, `?cams=${id}`, { 'X-Control-Key': CONTROL_KEY });
+  const pictures = () => muxViewer.framesOf(mux, id);
+  return {
+    get frames() { return pictures().length; },
+    get bad() { return pictures().filter((m) => m.payload[0] !== 0xff || m.payload[1] !== 0xd8).length; },
+    close: () => mux.close(),
+  };
 }
 
 async function waitFor(fn, timeoutMs, stepMs = 250) {
@@ -526,7 +513,7 @@ async function main() {
     const fail = new FakeCamera(CAM_FAIL);
     await fail.connect();
     fail.start();
-    const viewer = openViewer(CAM_FAIL);
+    const viewer = await openViewer(CAM_FAIL);
     await sleep(1500);
     const framesBefore = viewer.frames;
     check('(setup) a live viewer is receiving the camera\'s frames', framesBefore >= 5, `frames=${framesBefore}`);

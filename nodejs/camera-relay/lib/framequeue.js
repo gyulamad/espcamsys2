@@ -9,7 +9,7 @@
 // the camera's socket 'data' handler. A single ~30 KB write can take 5-50 ms on a Pi, so
 // three cameras recording at 5 fps each kept the event loop blocked for hundreds of
 // milliseconds out of every second — and everything the relay does for EVERY camera stops
-// with it: no frame is ingested, no /mux or /stream viewer gets a picture, /status answers
+// with it: no frame is ingested, no /mux viewer gets a picture, /status answers
 // late, detector uplinks are not read. The pre-roll frames were already written
 // asynchronously for exactly this reason (see writePreRollFrames in server.js); this module
 // gives the live frames the same treatment, with the same "never rejects" rule.

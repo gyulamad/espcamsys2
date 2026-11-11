@@ -3,12 +3,13 @@
 // test_relay_read_auth_e2e.js — end-to-end check that what the cameras SEE needs the control key (security review
 // follow-up R-08: live video, snapshots, recordings and the lists were readable by anyone who could reach port 8080),
 // against a REAL `server.js` process, real HTTP:
-//   - GET /stream, /snapshot, /status, /settings, /detectors, /detector/<id>/stream, /record/<id>, /recordings/<id>,
+//   - GET /mux (the live pictures, readings and recording state: asked for cameras, detectors, and status+rec),
+//     /snapshot, /status, /settings, /detectors, /record/<id>, /recordings/<id>,
 //     /recordings/<id>/<file> and /recording/state answer 401 with no key, a wrong key, an empty key, the CAMERA key
 //     (as X-Control-Key and as X-Api-Key) and the control key in the query string — and say NOTHING about the
 //     cameras: no picture bytes, no file names, no camera ids, in the refusal;
 //   - with the control key every one of them answers, and answers with the real thing (the exact picture, the exact
-//     recording bytes, the list, the live stream's first frame);
+//     recording bytes, the list, the live mux's first picture);
 //   - what the boards use: POST /alarm now needs the camera key (review NODE-H1 / COMBINED-H3;
 //     the firmware sends X-Api-Key on the alarm POST). POST /upload and the push port still
 //     use the camera key, GET /device-settings uses the camera key;
@@ -32,6 +33,7 @@ const nodeHttp = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const muxViewer = require('./mux_viewer');
 
 const RELAY_DIR = path.join(__dirname, '../../nodejs/camera-relay');
 const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
@@ -162,19 +164,6 @@ const errorLines = () => readLog().split('\n').filter((l) => / ERROR /.test(l) &
 let logFile_ = '';
 const withKey = (key) => ({ headers: { 'X-Control-Key': key } });
 
-// A live stream: resolves to { status, type, body } once the first part has arrived (or { status } at once on a refusal).
-function readStream(urlPath, headers) {
-  return new Promise((resolve) => {
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}${urlPath}`, { headers }, (res) => {
-      if (res.statusCode !== 200) { let t = ''; res.on('data', (c) => { t += c; }); res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'], body: t })); return; }
-      const chunks = [];
-      res.on('data', (c) => { chunks.push(c); if (Buffer.concat(chunks).includes(PICTURE)) { req.destroy(); resolve({ status: 200, type: res.headers['content-type'], body: Buffer.concat(chunks) }); } });
-    });
-    req.on('error', () => {});
-    setTimeout(() => { req.destroy(); resolve({ status: 0 }); }, 4000);
-  });
-}
-
 (async () => {
   const preexisting = fs.existsSync(CAM_DIR);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-relay-readauth-'));
@@ -184,19 +173,19 @@ function readStream(urlPath, headers) {
 
   // every read route, what it must answer to the key, and what a refusal must NOT contain
   const reads = [
-    ['/stream/' + CAM, null],
+    ['/mux?cams=' + CAM, null],
     ['/snapshot/' + CAM, null],
     ['/status', null],
     ['/settings', null],
     ['/detectors', null],
-    ['/detector/' + DET + '/stream', null],
+    ['/mux?dets=' + DET, null],
+    ['/mux?status=1&rec=1', null],
     ['/record/' + CAM, null],
     ['/recordings/' + CAM, null],
     ['/recordings/' + CAM + '/' + CLIP, null],
     ['/recording/state', null],
   ];
-  const isStream = (u) => /^\/(stream\/|detector\/[^/]+\/stream)/.test(u);
-  const ask = (u, headers) => (isStream(u) ? readStream(u, headers).then((r) => ({ status: r.status, text: String(r.body || ''), headers: {} })) : request('GET', u, { headers }));
+  const ask = (u, headers) => request('GET', u, { headers });
   const leaks = (text) => PICTURE.toString('latin1').slice(4, 20) && (text.includes('the-exact-picture') || text.includes(CLIP) || text.includes(CAM) || text.includes('the exact bytes') || text.includes('alarmRecordSeconds') || text.includes('"off"'));
 
   try {
@@ -244,13 +233,19 @@ function readStream(urlPath, headers) {
     check('...and the clip downloads byte for byte', r.status === 200 && Buffer.compare(r.raw, CLIP_BYTES) === 0, `got ${r.status}`);
     r = await request('GET', '/recordings/' + CAM + '/' + CLIP, { headers: { 'X-Control-Key': CONTROL_KEY, Range: 'bytes=4-8' } });
     check('...and a ranged request still works with the key (206, the right bytes)', r.status === 206 && r.raw.toString() === CLIP_BYTES.slice(4, 9).toString(), `got ${r.status} ${r.raw && r.raw.toString()}`);
-    const live = readStream('/stream/' + CAM, { 'X-Control-Key': CONTROL_KEY });
+    const live = await muxViewer.view(PORT, `?cams=${CAM}`, { 'X-Control-Key': CONTROL_KEY });
     await sleep(200);
     await request('POST', `/upload/${CAM}?key=${CAM_KEY}`, { headers: { 'Content-Type': 'image/jpeg' }, body: PICTURE });
-    const lr = await live;
-    check('the live stream, with the key, delivers the camera\'s frame as multipart video', lr.status === 200 && /multipart\/x-mixed-replace/.test(lr.type || '') && Buffer.from(lr.body).includes(PICTURE), `status=${lr.status} type=${lr.type}`);
-    r = await readStream('/stream/' + CAM, {});
-    check('the same live stream without the key is a 401, not a stream', r.status === 401, `got ${r.status}`);
+    const pictured = await waitFor(() => muxViewer.framesOf(live, CAM).some((m) => muxViewer.sameBytes(m, PICTURE)), 2000);
+    check('the live mux, with the key, delivers the camera\'s picture, byte for byte', live.status === 200 && live.headers['content-type'] === muxViewer.CONTENT_TYPE && pictured !== null, `status=${live.status} type=${live.headers['content-type']}`);
+    live.close();
+    const everything = await muxViewer.view(PORT, `?dets=${DET}&status=1&rec=1`, { 'X-Control-Key': CONTROL_KEY });
+    const bothStates = await waitFor(() => muxViewer.states(everything).length > 0 && muxViewer.cameraStates(everything).length > 0, 3000);
+    check('...and with the key it also carries the detectors\' readings and the cameras\' recording state', everything.status === 200 && bothStates !== null, `status=${everything.status}`);
+    check('...the recording state names the camera: it is what the key protects', bothStates !== null && muxViewer.cameraStates(everything).some((m) => muxViewer.readings(m)[CAM] !== undefined), JSON.stringify(muxViewer.cameraStates(everything).map((m) => Buffer.from(m.payload).toString().slice(0, 80))));
+    everything.close();
+    r = await request('GET', '/mux?cams=' + CAM);
+    check('the same live mux without the key is a 401, not a stream', r.status === 401 && r.headers['content-type'] !== muxViewer.CONTENT_TYPE, `got ${r.status}`);
 
     // ── 3. what the boards use is unchanged ───────────────────────────
     // (review NODE-H1 / COMBINED-H3): POST /alarm is no longer keyless by
@@ -281,12 +276,10 @@ function readStream(urlPath, headers) {
     // operator must set controlKey; READ_KEY_REQUIRED=0 re-enables the old
     // fail-open behaviour for trusted LANs with no Tor exposure.
     relay = await startRelay(Object.assign({ CONTROL_KEY: '' }, files));
-    for (const [u] of reads.filter(([x]) => !isStream(x))) {
+    for (const [u] of reads) {
       r = await request('GET', u);
       check(`with no controlKey set, GET ${u.replace(CAM, '<cam>').replace(CLIP, '<clip>')} is REFUSED (503) until controlKey is configured`, r.status === 503, `got ${r.status}`);
     }
-    r = await readStream('/stream/' + CAM, {});
-    check('...and so is the live stream', r.status === 503 || r.status === 0, `got ${r.status}`);
     check('the relay says at startup that reads are refused because no controlKey is set', await waitFor(() => /WARN .*controlKey is not set: live video, snapshots, recordings/.test(readLog()), 3000) !== null);
     r = await request('DELETE', `/recordings/${CAM}/${CLIP}`);
     check('...what CHANGES things is still refused (503), and the clip is still there', r.status === 503 && fs.existsSync(path.join(CAM_DIR, CLIP)), `got ${r.status}`);

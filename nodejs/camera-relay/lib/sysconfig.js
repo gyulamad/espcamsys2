@@ -45,7 +45,7 @@ const FIELDS = [
     label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check above is ON. Applies to the next clip checked — no restart.' },
 
   { key: 'port', type: 'int', min: 1, max: 65535, default: 8080, env: 'PORT', group: 'Network', restart: true,
-    label: 'HTTP port', help: 'The relay\'s HTTP port (/stream, /snapshot, /status ...). The dashboard\'s relay address is updated to match when you change it here.' },
+    label: 'HTTP port', help: 'The relay\'s HTTP port (/mux, /snapshot, /status ...). The dashboard\'s relay address is updated to match when you change it here.' },
   { key: 'pushPort', type: 'int', min: 1, max: 65535, default: 8081, env: 'PUSH_PORT', group: 'Network', restart: true,
     label: 'Camera push port', help: 'The raw TCP port the cameras push their frames to. It is flashed into every camera (their relay port setting) — change it and the cameras can no longer connect until they are updated.' },
 
