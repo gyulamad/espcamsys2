@@ -1,0 +1,24 @@
+name: Run Project Tests
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Run All Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make test script executable
+        run: chmod +x ./run_tests.sh
+
+      - name: Run all tests
+        run: ./run_tests.sh
