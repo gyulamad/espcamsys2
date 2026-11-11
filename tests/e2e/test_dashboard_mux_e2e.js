@@ -35,6 +35,9 @@ const AUTH = { user: 'owner', pass: 'a-good-long-password' };
 const KEY = 'a-long-secret-control-key-0123456789';
 const PERIOD_MS = 100;
 const CAMERA_STATUS = JSON.stringify({ camA: { recording: true, recordingEndAt: 1234, recordingCount: 7, recordingOff: null } });
+// What the browser gets: the same map, shaped by CamLogic::shapeCameraStatuses, which adds the checked Wi-Fi and device
+// readings (null for a camera that sent none).
+const CAMERA_STATUS_SHAPED = JSON.stringify({ camA: { recording: true, recordingEndAt: 1234, recordingCount: 7, recordingOff: null, wifi: null, device: null } });
 
 let pass = 0, fail = 0, finished = false;
 process.on('exit', () => { if (!finished) { console.error('[FAIL] the test ended without finishing'); process.exitCode = 1; } });
@@ -173,9 +176,9 @@ async function main() {
       all.every((m) => m.source !== 'det:detA' && m.source !== 'det:rogue' && m.source !== 'cam:camZ' && m.type !== 99), JSON.stringify([...new Set(all.map((m) => `${m.type} ${m.source}`))]));
     r = await get('/mux.php?cams=camA&rec=1');
     const recState = (r.messages || []).filter((m) => m.type === enc.TYPE_STATE);
-    check('&rec=1: the recording state of the cameras arrives untouched, and only that kind of readings',
+    check('&rec=1: the recording state of the cameras arrives (shaped like status.php), and only that kind of readings',
       r.status === 200 && fake.urls[fake.urls.length - 1] === '/mux?cams=camA&rec=1' && recState.length >= 1
-      && recState.every((m) => m.source === enc.STATE_CAMERAS && Buffer.from(m.payload).toString('utf8') === CAMERA_STATUS), JSON.stringify(recState.map((m) => m.source)));
+      && recState.every((m) => m.source === enc.STATE_CAMERAS && Buffer.from(m.payload).toString('utf8') === CAMERA_STATUS_SHAPED), JSON.stringify(recState.map((m) => m.source)));
     r = await get('/mux.php?cams=camB,camA&dets=camA');
     check('readings only when asked for', (r.messages || []).every((m) => m.type !== enc.TYPE_STATE) && (r.messages || []).some((m) => m.source === 'det:camA'));
 
