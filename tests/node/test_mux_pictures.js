@@ -21,7 +21,7 @@ function setup() {
     imgs[id] = makeImg();
     detImgs[id] = makeImg();
   }
-  const page = { down: [], fallbacks: 0, status: [], cameraStatus: [] };
+  const page = { down: [], status: [], cameraStatus: [] };
   let clientOptions = null;
   let state = 'idle';
   const fakeClient = {
@@ -36,7 +36,6 @@ function setup() {
     onStatus: (data) => page.status.push(data),
     onCameraStatus: (data) => page.cameraStatus.push(data),
     onDown: (ids) => page.down.push(ids),
-    onFallback: () => { page.fallbacks += 1; },
     env: {
       createClient: (options) => { clientOptions = options; return fakeClient; },
       codec,
@@ -148,11 +147,10 @@ test('the page is told which cameras were being shown when the connection goes d
   assertEqual(t.page.down, [['a', 'b']]);
 });
 
-test('onFallback is passed on when the client gives up', () => {
+test('the client is given no way to give up: there is nothing to fall back on', () => {
   const t = setup();
   t.pictures.show('a'); t.settle();
-  t.options().onGiveUp();
-  assertEqual(t.page.fallbacks, 1);
+  assertEqual(Object.keys(t.options()).sort(), ['buildUrl', 'onDown', 'onMessage']);
 });
 
 test('reconnect opens the connection again even though it looks open (a locked phone drops it without a sound)', () => {

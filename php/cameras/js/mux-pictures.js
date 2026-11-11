@@ -5,7 +5,7 @@
 // styling work as they did with one MJPEG stream per image. The page says what it wants to see; this keeps the
 // connection open for exactly that and paints each arriving picture onto its image.
 //
-//   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onStatus, onCameraStatus, onDown, onFallback });
+//   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onStatus, onCameraStatus, onDown });
 //   pictures.show('cam1');           pictures.hide('cam1');            the camera's picture
 //   pictures.showDetector('cam1');   pictures.hideDetector('cam1');    the picture of the detector paired with that camera
 //   pictures.watchStatus(true);      the detectors' readings (onStatus gets { camId: status }, as detector-status.php)
@@ -15,17 +15,17 @@
 //   imgFor(kind, id)  the <img> of a camera ('cam') or of the detector paired with it ('det'), or null
 //   onStatus(data)    the newest readings of the detectors
 //   onCameraStatus(data)  the newest recording state of the cameras
-//   onDown(ids)       the connection ended (it is reopened by itself): the cameras that were being shown
-//   onFallback()      mux.php is unusable from here (see js/mux-client.js): the page must show the pictures another way
+//   onDown(ids)       the connection ended (it is reopened by itself, for ever, see js/mux-client.js): the cameras that were being shown
 //
-// The connection exists while at least one camera is shown; detector pictures and readings ride along on it. Calls
+// The connection exists while at least one camera is shown (the recording's pre-roll needs every camera's
+// stream all the time; only the page's ALL OFF hides them all); detector pictures and readings ride along on it. Calls
 // that arrive together (the page restarts every camera in a loop) become ONE (re)connection, and the connection
 // is reopened only when what is wanted changes.
 
 (function (root) {
   const KINDS = ['cam', 'det'];
 
-  function create({ url, imgFor, onStatus, onCameraStatus, onDown, onFallback, env = {} }) {
+  function create({ url, imgFor, onStatus, onCameraStatus, onDown, env = {} }) {
     const io = Object.assign({
       createClient: (options) => root.CamMuxClient.create(options),
       codec: root.CamMuxCodec,
@@ -92,7 +92,6 @@
       buildUrl,
       onMessage,
       onDown: () => onDown(idsOf('cam')),
-      onGiveUp: () => onFallback(),
     });
 
     function sync() {
