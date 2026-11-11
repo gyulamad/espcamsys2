@@ -22,6 +22,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { closeWindow, pageScriptLoader } = require('./dom_helpers');
+const { installFakeMux } = require('./fake_mux');
 
 let JSDOM, jsdomModule;
 try { jsdomModule = require('jsdom'); ({ JSDOM } = jsdomModule); } catch (e) { JSDOM = null; }
@@ -96,7 +97,7 @@ function makeDashboard() {
     { id: EVIL_ID, name: 'evil id', icon: '📷' },
   ];
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ${'['}'auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'mux_enabled' => false, 'cameras' => json_decode(${JSON.stringify(JSON.stringify(cams))}, true)${']'};\n`);
+    `<?php return ${'['}'auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'cameras' => json_decode(${JSON.stringify(JSON.stringify(cams))}, true)${']'};\n`);
   return dir;
 }
 function startPhp(dir) {
@@ -163,6 +164,7 @@ async function main() {
       url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'busy.js', 'device-info.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
+        installFakeMux(window);
         window.confirm = () => false;
         window.alert = () => {};
         window.fetch = (u, opts = {}) => {

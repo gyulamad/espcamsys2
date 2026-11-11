@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { closeWindow, pageScriptLoader } = require('./dom_helpers');
+const { installFakeMux } = require('./fake_mux');
 
 let JSDOM, jsdomModule;
 try { jsdomModule = require('jsdom'); ({ JSDOM } = jsdomModule); } catch (e) { JSDOM = null; }
@@ -66,7 +67,7 @@ function nodeFetch(url, opts = {}) {
   });
 }
 
-// What the fake relay says. The page asks status.php and detector-status.php, which ask this.
+// What the relay pushes on the mux.php connection (the test plays the connection: see fake_mux.js).
 const device = (over) => Object.assign({ ip: '192.168.1.50', connectedForMs: 125000, fw: 'abc123', uptimeMs: 7200000, heapBytes: 81920 }, over);
 const relayStatus = {
   cam1: { lastSeen: null, recording: false, recordingCount: 0, device: device() },
@@ -85,10 +86,7 @@ function startRelay() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       res.setHeader('Content-Type', 'application/json');
-      const url = req.url.split('?')[0];
-      if (url === '/status') res.end(JSON.stringify(relayStatus));
-      else if (url === '/detectors') res.end(JSON.stringify(relayDetectors));
-      else res.end('{}');
+      res.end('{}');   // (all the page asks of it at load is the recording counts)
     });
     server.listen(RELAY_PORT, '127.0.0.1', () => resolve(server));
   });
@@ -104,7 +102,7 @@ function makeDashboard() {
     { id: 'cam4', name: 'Attic', icon: '📷', detector: 'det-4' },   // a detector the relay never heard from
   ];
   fs.writeFileSync(path.join(dir, 'config.php'),
-    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'mux_enabled' => false, 'cameras' => json_decode(${JSON.stringify(JSON.stringify(cams))}, true)];\n`);
+    `<?php return ['auth_user' => '${AUTH.user}', 'auth_pass' => '${AUTH.pass}', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'cameras' => json_decode(${JSON.stringify(JSON.stringify(cams))}, true)];\n`);
   return dir;
 }
 function startPhp(dir) {
@@ -144,10 +142,12 @@ async function main() {
     php = await startPhp(dir);
     const html = await (await nodeFetch(`${BASE}/index.php`, { headers: { Authorization: basic } })).text();
 
+    let mux;
     dom = new JSDOM(html, {
       url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'busy.js', 'device-info.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
+        mux = installFakeMux(window);
         window.confirm = () => false;
         window.alert = () => {};
         window.fetch = (u, opts = {}) => nodeFetch(new URL(u, `${BASE}/index.php`).toString(), { method: opts.method, body: opts.body, headers: { ...(opts.headers || {}), Authorization: basic } });
@@ -156,6 +156,11 @@ async function main() {
     const { window } = dom;
     const doc = window.document;
     const $ = (id) => doc.getElementById(id);
+
+    // The page's script has run (its external scripts are loaded before it): now the relay's pushes can arrive.
+    check('the page opens its one mux connection', !!(await waitFor(() => mux.options)));
+    mux.pushCameraStatus(relayStatus);
+    mux.pushStatus({ cam1: relayDetectors['det-1'] });   // the readings, keyed by camera as mux.php shapes them
 
     const loaded = await waitFor(() => window.CamDeviceInfo && $('dev-cam1') && !$('dev-cam1').hidden);
     check('the page loads js/device-info.js and a camera the relay knows facts about gets a line', !!loaded, 'dev-cam1 hidden or CamDeviceInfo missing');
