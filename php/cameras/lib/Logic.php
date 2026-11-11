@@ -1458,8 +1458,51 @@ class CamLogic
         return ['ssid' => $ssid, 'rssi' => $rssi, 'ageMs' => $ageMs];
     }
 
-    // The relay's GET /status answer (JSON text) made fit for the browser: every camera's `wifi` is checked (a reading
-    // that is not one becomes null). Everything else is passed on as it is. Text that is not a JSON object is returned
+    // ── The board of a camera on the dashboard ──
+    // Besides its Wi-Fi the relay knows the address a camera connects from, how long the connection has been up, the
+    // firmware it runs, its uptime and its free memory (lib/deviceinfo.js there); the dashboard shows it on the camera's
+    // card like a detector's report. Checked here once more, so the browser only gets this strict shape.
+
+    public const DEVICE_MAX_FW_CHARS = 80;
+    public const DEVICE_MAX_COUNT = 1000000000000;   // a duration (ms) or size (bytes) beyond this is nonsense
+
+    // A non-negative whole number within DEVICE_MAX_COUNT, else null.
+    private static function deviceCount($raw): ?int
+    {
+        return is_int($raw) && $raw >= 0 && $raw <= self::DEVICE_MAX_COUNT ? $raw : null;
+    }
+
+    // A firmware name that is safe to show: a non-empty UTF-8 string of at most DEVICE_MAX_FW_CHARS characters without
+    // control characters, else null.
+    private static function deviceFirmware($raw): ?string
+    {
+        if (!is_string($raw) || $raw === '' || !mb_check_encoding($raw, 'UTF-8') || preg_match('/[\x00-\x1f\x7f]/', $raw)) {
+            return null;
+        }
+        return mb_strlen($raw, 'UTF-8') <= self::DEVICE_MAX_FW_CHARS ? $raw : null;
+    }
+
+    // What the browser may be told about a camera's board: { ip, connectedForMs, fw, uptimeMs, heapBytes }
+    // with every value checked on its own (one that is not valid becomes null and the rest stay), or null when the
+    // relay sent none or nothing in it is valid. Nothing but those keys ever passes.
+    public static function sanitizeDevice($raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+        $ip = $raw['ip'] ?? null;
+        $device = [
+            'ip' => is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP) !== false ? $ip : null,
+            'connectedForMs' => self::deviceCount($raw['connectedForMs'] ?? null),
+            'fw' => self::deviceFirmware($raw['fw'] ?? null),
+            'uptimeMs' => self::deviceCount($raw['uptimeMs'] ?? null),
+            'heapBytes' => self::deviceCount($raw['heapBytes'] ?? null),
+        ];
+        return array_filter($device, function ($v) { return $v !== null; }) === [] ? null : $device;
+    }
+
+    // The relay's GET /status answer (JSON text) made fit for the browser: every camera's `wifi` and `device` are checked (a
+    // value that is not valid becomes null). Everything else is passed on as it is. Text that is not a JSON object is returned
     // unchanged.
     public static function shapeCameraStatuses(string $json): string
     {
@@ -1470,6 +1513,7 @@ class CamLogic
         foreach ($statuses as $id => $status) {
             if (is_array($status)) {
                 $statuses[$id]['wifi'] = self::sanitizeWifi($status['wifi'] ?? null);
+                $statuses[$id]['device'] = self::sanitizeDevice($status['device'] ?? null);
             }
         }
         return (string) json_encode((object) $statuses);

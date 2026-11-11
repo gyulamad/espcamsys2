@@ -1909,13 +1909,65 @@ camtest_test('shapeCameraStatuses: the Wi-Fi of a camera passes, checked; everyt
 
 camtest_test('shapeCameraStatuses: a camera without a reading (an older firmware) gets null', function () {
     $out = json_decode(CamLogic::shapeCameraStatuses('{"cam1":{"recording":false}}'), true);
-    camtest_assert_equal($out['cam1'], ['recording' => false, 'wifi' => null]);
+    camtest_assert_equal($out['cam1'], ['recording' => false, 'wifi' => null, 'device' => null]);
 });
 
 camtest_test('shapeCameraStatuses: a reading the relay got wrong never reaches the browser', function () {
     $in = json_encode(['cam1' => ['wifi' => ['ssid' => "evil\nname", 'rssi' => -50, 'ageMs' => 1]], 'cam2' => ['wifi' => 'HomeNet']]);
     $out = json_decode(CamLogic::shapeCameraStatuses($in), true);
     camtest_assert_equal([$out['cam1']['wifi'], $out['cam2']['wifi']], [null, null]);
+});
+
+// ── The board of a camera on the dashboard ───────────────────────────
+
+$deviceGood = ['ip' => '192.168.1.50', 'connectedForMs' => 5000, 'fw' => 'abc123', 'uptimeMs' => 9000, 'heapBytes' => 81920];
+
+camtest_test('sanitizeDevice: a good device passes, with exactly its five keys', function () use ($deviceGood) {
+    camtest_assert_equal(CamLogic::sanitizeDevice($deviceGood), $deviceGood);
+    camtest_assert_equal(CamLogic::sanitizeDevice($deviceGood + ['extra' => '<script>', 'apiKey' => 'x']), $deviceGood);
+    camtest_assert_equal(CamLogic::sanitizeDevice(array_merge($deviceGood, ['ip' => '::1']))['ip'], '::1');
+});
+
+camtest_test('sanitizeDevice: a value that is not valid becomes null and the rest stay', function () use ($deviceGood) {
+    $bad = [
+        'ip' => ['not an ip', '999.1.1.1', '<b>', 5, "1.2.3.4\n", ''],
+        'connectedForMs' => [-1, '5', 1.5, null, 2000000000000],
+        'uptimeMs' => [-1, '5', 1.5, true],
+        'heapBytes' => [-1, '5', 1.5, []],
+        'fw' => ['', 5, "a\nb", "a\0b", "a\x7fb", "\xff\xfe", str_repeat('a', 81)],
+    ];
+    foreach ($bad as $key => $values) {
+        foreach ($values as $i => $v) {
+            $out = CamLogic::sanitizeDevice(array_merge($deviceGood, [$key => $v]));
+            camtest_assert_equal($out[$key], null, $key . ' case ' . $i . ': ' . json_encode($v));
+            foreach (array_diff(array_keys($deviceGood), [$key]) as $other) {
+                camtest_assert_equal($out[$other], $deviceGood[$other], $key . ' case ' . $i . ' must not touch ' . $other);
+            }
+        }
+    }
+});
+
+camtest_test('sanitizeDevice: the longest firmware name and zero values are believed', function () {
+    $out = CamLogic::sanitizeDevice(['uptimeMs' => 0, 'heapBytes' => 0, 'fw' => str_repeat('é', 80)]);
+    camtest_assert_equal([$out['uptimeMs'], $out['heapBytes'], mb_strlen($out['fw'], 'UTF-8')], [0, 0, 80]);
+});
+
+camtest_test('sanitizeDevice: anything that is not a device, or has nothing valid in it, is null', function () {
+    foreach ([null, 'x', 5, [], ['ip' => 'bad'], ['fw' => "a\nb", 'uptimeMs' => -1], ['unknown' => 1]] as $i => $raw) {
+        camtest_assert_equal(CamLogic::sanitizeDevice($raw), null, 'case ' . $i . ': ' . json_encode($raw));
+    }
+});
+
+camtest_test('sanitizeDevice: markup stays plain text for the page to show with textContent', function () {
+    camtest_assert_equal(CamLogic::sanitizeDevice(['fw' => '<img src=x onerror=1>'])['fw'], '<img src=x onerror=1>');
+});
+
+camtest_test('shapeCameraStatuses: the device of a camera passes, checked; what the relay got wrong never reaches the browser', function () use ($deviceGood) {
+    $in = json_encode(['cam1' => ['recording' => true, 'device' => $deviceGood], 'cam2' => ['device' => 'x'], 'cam3' => ['device' => ['fw' => "evil\nline"]]]);
+    $out = json_decode(CamLogic::shapeCameraStatuses($in), true);
+    camtest_assert_equal($out['cam1']['device'], $deviceGood);
+    camtest_assert_equal($out['cam1']['recording'], true);
+    camtest_assert_equal([$out['cam2']['device'], $out['cam3']['device']], [null, null]);
 });
 
 camtest_test('shapeCameraStatuses: an answer that is not a status map (an error, empty, garbage) is returned unchanged', function () {

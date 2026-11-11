@@ -24,17 +24,22 @@ function isOnline(lastSeen, now) {
 // `wifi` is the Wi-Fi network the camera reported and its signal ({ ssid, rssi, ageMs }, see lib/wifiinfo.js), null when
 // the camera has not reported one lately (an older firmware never does).
 const wifiinfo = require('./wifiinfo');
+// `device` is what the relay knows about the camera's board besides its Wi-Fi ({ ip, connectedForMs, fw, uptimeMs,
+// heapBytes }, see lib/deviceinfo.js); null when nothing is known. The dashboard shows it like a detector's report.
+const deviceinfo = require('./deviceinfo');
 
 function buildCameraStatusView(cam, recordingCount = null, recordingOff = null, now = Date.now()) {
+  const online = isOnline(cam.lastSeen, now);
   return {
     lastSeen: cam.lastSeen,
-    online: isOnline(cam.lastSeen, now),
+    online,
     recording: !!cam.recording,
     recordingStartedAt: cam.recording ? cam.recording.startedAt : null,
     recordingEndAt: cam.recording ? cam.recording.endAt : null,
     preRoll: cam.preRoll ? cam.preRoll.stats : { frames: 0, bytes: 0, bufferedSeconds: 0, windowSeconds: 0 },
     recordingCount,
     wifi: wifiinfo.describe(cam.wifi, now),
+    device: deviceinfo.describe(cam, online, now),
     recordingOff, // null = this camera may record; otherwise { forever, until, remainingMs } — it is switched OFF
   };
 }

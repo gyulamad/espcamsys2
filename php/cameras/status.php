@@ -10,6 +10,7 @@
 //
 // GET status.php -> relay's { camId: { recording, recordingEndAt, preRoll, recordingCount, wifi, ... } } JSON
 //   `wifi` is { ssid, rssi, ageMs } or null (not reported, or stale)
+//   `device` is { ip, connectedForMs, fw, uptimeMs, heapBytes } or null (see CamLogic::sanitizeDevice)
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/cameras.php';

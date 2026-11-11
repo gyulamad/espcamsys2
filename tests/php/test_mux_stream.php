@@ -170,20 +170,20 @@ camtest_test('wantedStates: the detectors\' readings and the cameras\' recording
 
 camtest_test('cameraStatusJson: a JSON object is shaped like status.php\'s answer, anything else is null', function () {
     $shaped = json_decode((string) CamMuxStream::cameraStatusJson('{"cam1":{"recording":true}}'), true);
-    camtest_assert_equal($shaped, ['cam1' => ['recording' => true, 'wifi' => null]]);
+    camtest_assert_equal($shaped, ['cam1' => ['recording' => true, 'wifi' => null, 'device' => null]]);
     camtest_assert_equal(CamMuxStream::cameraStatusJson('{}'), '{}');
     foreach (['not json', '5', 'null', '"x"', ''] as $bad) {
         camtest_assert_equal(CamMuxStream::cameraStatusJson($bad), null, var_export($bad, true));
     }
 });
 
-camtest_test('forward: the cameras\' recording state goes through when asked for (only the Wi-Fi is checked), and only then', function () use ($allowed, $cams) {
+camtest_test('forward: the cameras\' recording state goes through when asked for (only the Wi-Fi and the board are checked), and only then', function () use ($allowed, $cams) {
     $json = '{"cam1":{"recording":true,"recordingEndAt":123,"recordingCount":4}}';
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
     $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_CAMERAS], $cams));
     camtest_assert_equal(count($read), 1);
     camtest_assert_equal([$read[0][0], $read[0][1]], [CamMuxStream::TYPE_STATE, 'state:cameras']);
-    camtest_assert_equal(json_decode($read[0][2], true), ['cam1' => ['recording' => true, 'recordingEndAt' => 123, 'recordingCount' => 4, 'wifi' => null]]);
+    camtest_assert_equal(json_decode($read[0][2], true), ['cam1' => ['recording' => true, 'recordingEndAt' => 123, 'recordingCount' => 4, 'wifi' => null, 'device' => null]]);
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);
     camtest_assert_equal(CamMuxStream::forward(CamMuxStream::takeMessages($buffer), $allowed, [CamMuxStream::STATE_DETECTORS], $cams), '', 'only the detectors\' readings were asked for');
     $buffer = CamMuxStream::encode(CamMuxStream::TYPE_STATE, CamMuxStream::STATE_CAMERAS, $json);

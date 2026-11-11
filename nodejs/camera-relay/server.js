@@ -29,6 +29,7 @@ const detectorlink = require('./lib/detectorlink');
 const detectorevents = require('./lib/detectorevents');
 const detectorview = require('./lib/detectorview');
 const wifiinfo = require('./lib/wifiinfo');
+const deviceinfo = require('./lib/deviceinfo');
 const muxfeed = require('./lib/muxfeed');
 const { createFrameWriter } = require('./lib/framequeue');
 const { createLoopWatch } = require('./lib/loopwatch');
@@ -300,6 +301,8 @@ function getCamera(id) {
       lastSeen: null,
       socket: null,             // the camera's live push-connection socket, if connected right now
       ip: null,                 // that camera's address, as of its last push connection
+      connectedAt: 0,           // when that push connection was accepted (ms since the epoch; 0 = never)
+      device: null,             // { fw, uptimeMs, heap, at }: what the camera's /log batches said about its board (lib/deviceinfo.js)
       recording: null,          // in-progress recording, if any — see startRecording()
       preRoll: new preroll.PreRollBuffer({ seconds: preRollCfg.seconds, maxBytes: preRollCfg.maxBytes }),
       lastRecordedUntil: null,  // timestamp of the last frame the previous recording contained — see startRecording()
@@ -1583,6 +1586,14 @@ function formatCameraLogBatch(batch, rejected, ip, receivedAt) {
   return text;
 }
 
+// Keeps what a camera's log batch says about its board (firmware, uptime, free memory) for the dashboard's camera card.
+// Only for a camera the relay already knows: a log request must not be able to add cameras to the dashboard.
+function noteCameraDevice(batch, now) {
+  const cam = cameras[batch.camera];
+  if (!cam) return;
+  cam.device = deviceinfo.remember(cam.device, deviceinfo.fromLogBatch(batch), now);
+}
+
 // Echo to the console too (journalctl / pm2 logs), one short line each.
 function echoCameraLogBatch(batch) {
   for (const e of batch.entries) {
@@ -1614,6 +1625,7 @@ app.post('/log',
       return res.status(500).json({ error: 'could not write the log file' });
     }
     echoCameraLogBatch(batch);
+    noteCameraDevice(batch, Date.now());
     return res.json({ ok: true, accepted: batch.entries.length, rejected: parsed.rejected });
   });
 
@@ -2568,6 +2580,7 @@ function acceptPushCamera(socket, camId, peerIp) {
   cam.socket = socket;
   cam.ip = peerIp;
   const now = Date.now();
+  cam.connectedAt = now;
   const t = eventThrottle.check(`${camId}:connect`, now);
   if (t.allow) camLog('INFO', camId, `camera connected${suppressedNote(t.suppressed)}`);
   if (previous) handlePreviousConnection(previous, camId, now);

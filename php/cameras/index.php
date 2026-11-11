@@ -404,6 +404,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .wifi-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; font-family: var(--mono); font-size: .65rem; letter-spacing: 0; text-transform: none; color: var(--muted); }
   .wifi-chip[hidden] { display: none; }
   .cam-wifi { display: flex; padding: 5px 14px; border-bottom: 1px solid var(--border); }
+  .cam-device { padding: 5px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: .65rem; color: var(--muted); overflow-wrap: anywhere; }
+  .cam-device[hidden] { display: none; }
   .wifi-chip .wifi-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wifi-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; flex: none; }
   .wifi-bars i { display: block; width: 3px; background: var(--border-light); opacity: .45; border-radius: 1px; }
@@ -524,6 +526,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
       <!-- The Wi-Fi network this camera is on and its signal strength (js/wifi-info.js); hidden until the relay has a reading. -->
       <span class="wifi-chip cam-wifi" id="wifi-<?= $camId ?>" hidden></span>
+
+      <!-- The rest of what the relay knows about the camera's board (js/device-info.js): its address, how long it has been
+           connected and running, its free memory and its firmware, like the detector's line below. Hidden until there is something. -->
+      <div class="cam-device" id="dev-<?= $camId ?>" hidden></div>
 
       <!-- Recording + its file list live together: start/stop a recording,
            browse and download what's already been saved, all in one place. -->
@@ -646,6 +652,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <?php endif; ?>
 <script src="js/wifi-info.js"></script>
 <script src="js/camera-offline.js"></script>
+<script src="js/device-info.js"></script>
 <script>
   // ── Clock ──
   function tick() {
@@ -1358,6 +1365,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       const s = data[id];
       CamWifi.render(document.getElementById('wifi-' + id), s && s.wifi);   // the network and signal the camera reported (or nothing)
       CamOffline.render(document.getElementById('offline-' + id), data, id);   // a camera that is not connected: its last picture is dimmed and says so
+      CamDeviceInfo.render(document.getElementById('dev-' + id), s && s.device);   // address, uptime, memory, firmware (or nothing)
       if (!s) {
         // Neither connected to the relay yet nor any footage on disk for it.
         setFilesCount(id, 0);
@@ -1402,12 +1410,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function placeMark(e, frac) {
     if (frac === null) { e.style.display = 'none'; return; }
     e.style.display = ''; e.style.left = 'calc(' + Math.max(0, Math.min(1, frac)) * 100 + '% - 1px)';
-  }
-  function fmtUptime(ms) {
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return s + ' s';
-    const m = Math.floor(s / 60);
-    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
   }
 
   // What is printed over the picture while it is not showing: a title and, below it, the reason.
@@ -1797,15 +1799,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
     // The board itself, for tracking down trouble: where it is, how long it has run (its Wi-Fi has a line of its own),
     // its memory, which firmware it runs (did the update reach it?), and the trouble it counted.
-    const info = [];
-    if (r.ip) info.push(r.ip);
-    if (r.uptimeMs !== null && r.uptimeMs !== undefined) info.push('up ' + fmtUptime(r.uptimeMs));
     const lk = r.link || {};
-    if (lk.heap !== null && lk.heap !== undefined) info.push(Math.round(lk.heap / 1024) + ' KB free');
-    if (lk.reconnects) info.push(lk.reconnects + ' reconnects');
-    if (lk.jpegFails) info.push(lk.jpegFails + ' JPEG failures');
-    if (r.fw) info.push('fw ' + r.fw);
-    detEl('info', id).textContent = info.join(' · ');
+    CamDeviceInfo.render(detEl('info', id), {
+      ip: r.ip, uptimeMs: r.uptimeMs, heapBytes: lk.heap, reconnects: lk.reconnects, jpegFails: lk.jpegFails, fw: r.fw,
+    });
   }
 
   // The WATCH button: the detector streams its sensor values and small picture only while somebody wants to

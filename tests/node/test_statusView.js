@@ -17,8 +17,23 @@ test('buildCameraStatusView: idle camera that has never recorded', () => {
     preRoll: EMPTY_PREROLL,
     recordingCount: null, // not known unless the caller says
     wifi: null,           // the camera has not reported its Wi-Fi network
+    device: null,         // nothing is known about the camera's board
     recordingOff: null,   // may record, unless the caller says it is switched OFF
   });
+});
+
+test('buildCameraStatusView: the camera\'s board (address, connection, firmware, uptime, memory) is part of the view', () => {
+  const now = 100000;
+  const cam = { lastSeen: new Date(now - 1000), recording: null, ip: '192.168.1.50', socket: { destroyed: false }, connectedAt: now - 30000,
+    device: { fw: 'abc', uptimeMs: 60000, heap: 81920, at: now - 10000 } };
+  assertEqual(buildCameraStatusView(cam, null, null, now).device, { ip: '192.168.1.50', connectedForMs: 30000, fw: 'abc', uptimeMs: 70000, heapBytes: 81920 });
+});
+
+test('buildCameraStatusView: an offline camera has no uptime or memory now, only what stays true', () => {
+  const now = 100000;
+  const cam = { lastSeen: new Date(now - 60000), recording: null, ip: '192.168.1.50', socket: null, connectedAt: 1,
+    device: { fw: 'abc', uptimeMs: 60000, heap: 81920, at: now - 61000 } };
+  assertEqual(buildCameraStatusView(cam, null, null, now).device, { ip: '192.168.1.50', connectedForMs: null, fw: 'abc', uptimeMs: null, heapBytes: null });
 });
 
 test('isOnline: a frame within the window counts, an older one or none does not', () => {

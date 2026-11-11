@@ -505,6 +505,13 @@ fi
 #     (the version-skew regression), while a board that has the keys must still give the range when it switches
 #     the drop on; what the page posts is what the relay is handed. Needs php and jsdom. Override the port with
 #     E2E_CAMSETDOM_PORT (and the next one up).
+#   - tests/e2e/test_camera_device_e2e.js: what the dashboard may know about a camera's board through a real relay —
+#     its address and connection time in GET /status, the firmware, uptime and free memory taken from the camera's
+#     POST /log batches, hostile values dropped, no camera added by a log request, nothing invented for a camera that
+#     never logs or stopped sending. Override the ports with E2E_DEVINFO_PORT / E2E_DEVINFO_PUSH_PORT.
+#   - tests/dom/test_device_info_dom.js: the board line of a camera's card on the real dashboard page in jsdom (and the
+#     detector's info line, built by the same code) — shown, following the data, a hostile firmware name as text only.
+#     Needs php and jsdom. Override the port with E2E_DEVDOM_PORT (and the next one up).
 #   - tests/e2e/test_logging_e2e.js: the relay's log file and POST /log — key
 #     authentication, entries filed under the time they HAPPENED with the
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
@@ -661,6 +668,15 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_wifi_info_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (the board of a camera: address, firmware, uptime, memory) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_camera_device_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -923,6 +939,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_camera_settings_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the board line of a camera's card on the dashboard page) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_device_info_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
