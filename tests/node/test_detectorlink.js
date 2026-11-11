@@ -17,7 +17,7 @@ function req(over = {}) {
 test('matchPath: the id of an uplink address, nothing else', () => {
   assertEqual(dl.matchPath('/detector/detector-1/uplink'), 'detector-1');
   assertEqual(dl.matchPath('/detector/a.b_C-9/uplink?x=1'), 'a.b_C-9');
-  assertEqual(dl.matchPath('/detector/x/stream'), null);
+  assertEqual(dl.matchPath('/detector/x/view'), null);
   assertEqual(dl.matchPath('/detector//uplink'), null);
   assertEqual(dl.matchPath('/detector/bad%20id/uplink'), null);
   assertEqual(dl.matchPath('/detector/' + 'a'.repeat(65) + '/uplink'), null);

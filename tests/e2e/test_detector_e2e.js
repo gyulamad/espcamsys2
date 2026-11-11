@@ -2,12 +2,13 @@
 'use strict';
 // test_detector_e2e.js — a person detector talks to a REAL server.js over real sockets:
 //   the uplink (HTTP Upgrade on the relay's normal port, then length-prefixed messages) ->
-//   GET /detectors (numbers, state, reason) and GET /detector/:id/stream (the 96x96 picture as MJPEG).
+//   GET /detectors (numbers, state, reason) and GET /mux?dets= (the 96x96 picture, on the one live connection).
 //
 // The failure modes get as much attention as the happy path, because a detector that "does not show
 // up" must be explainable without a serial cable: every refusal is an HTTP answer that says why, a
-// stream request is answered AT ONCE (it used to hang until the picture came, so PHP timed out with a
-// 502 after 10 s and nothing was logged anywhere), and every event lands in the relay's log.
+// viewer asking for a picture is answered AT ONCE (it used to hang until the picture came, so PHP timed out
+// with a 502 after 10 s and nothing was logged anywhere; the mux answers with a heartbeat, and the relay's log
+// says why no picture comes), and every event lands in the relay's log.
 //
 // Own ports (never 8080/8081), throwaway log/settings files, core modules only.
 //   node tests/e2e/test_detector_e2e.js        (exit 0 = all passed)
@@ -18,6 +19,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const dl = require('../../nodejs/camera-relay/lib/detectorlink');
+const muxViewer = require('./mux_viewer');
 
 const RELAY_DIR = path.join(__dirname, '../../nodejs/camera-relay');
 const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
@@ -91,20 +93,16 @@ function startRelay(extraEnv = {}) {
   });
 }
 
-// Opens the MJPEG stream; resolves with the head (status + headers) as soon as it arrives, and keeps collecting.
-function openStream(id) {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const chunks = [];
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detector/${id}/stream`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
-      const out = { status: res.statusCode, type: res.headers['content-type'], headMs: Date.now() - started, body: () => Buffer.concat(chunks), close: () => req.destroy() };
-      res.on('data', (c) => chunks.push(c));
-      resolve(out);
-    });
-    req.on('error', (e) => { if (e.code !== 'ECONNRESET') reject(e); });
-    req.setTimeout(6000, () => req.destroy(new Error('no answer within 6 s')));
-  });
+// Opens the mux for the pictures of the detectors `ids` (a comma-separated list): resolves as soon as the head
+// arrives (headMs says how long that took), and keeps collecting what comes.
+async function openPicture(ids) {
+  const started = Date.now();
+  const v = await muxViewer.view(PORT, `?dets=${ids}`, { 'X-Control-Key': CONTROL_KEY });
+  v.headMs = Date.now() - started;
+  return v;
 }
+const hasPicture = (v, id, jpeg) => muxViewer.detFrames(v, id).some((m) => muxViewer.sameBytes(m, jpeg));
+const countInLog = (re) => (readLog().match(new RegExp(re.source, 'g')) || []).length;
 
 // Ends a connection the way a power cut or a crashed router does: with a TCP RST, not a FIN. Node 16.17+
 // has socket.resetAndDestroy(), but this has to run on older Node too, so it uses what works everywhere:
@@ -140,16 +138,18 @@ async function main() {
     let r = await request('GET', '/detectors');
     check('no detector known at first', r.status === 200 && Object.keys(r.json).length === 0);
 
-    r = await request('GET', `/detector/${ID}/stream`);
-    check('asking for the picture of a detector that never connected is a quick 404, not a hang',
-      r.status === 404 && r.ms < 1500, `status ${r.status} after ${r.ms} ms`);
-    check('...whose JSON says why, and that no detector has connected at all',
-      !!r.json && r.json.state === 'never' && /no detector called 'e2e-detector-1' has connected/.test(r.json.error) && /no detector has connected at all/.test(r.json.error), JSON.stringify(r.json));
-    check('...and the relay logs that the dashboard asked, with what to check',
-      !!(await waitFor(() => /WARN  e2e-detector-1@?\S* ?\[relay\]: the dashboard asked for the picture of detector 'e2e-detector-1' but there is none/.test(readLog()), 2000)) &&
+    let v = await openPicture(ID);
+    check('asking for the picture of a detector that never connected is answered at once with the mux, not a hang',
+      v.status === 200 && v.headers['content-type'] === muxViewer.CONTENT_TYPE && v.headMs < 1500 && !!(await waitFor(() => v.messages.length > 0, 1500)) && v.messages[0].type === muxViewer.codec.TYPE_HEARTBEAT,
+      `status ${v.status} after ${v.headMs} ms`);
+    check('...and no picture comes', muxViewer.detFrames(v, ID).length === 0);
+    check('...and the relay logs that somebody asked, saying that no detector has connected at all and what to check',
+      !!(await waitFor(() => /WARN  e2e-detector-1@?\S* ?\[relay\]: the dashboard asked for the picture of detector 'e2e-detector-1' but there is none: no detector called 'e2e-detector-1' has connected to the relay since it started \(no detector has connected at all\)/.test(readLog()), 2000)) &&
       /DETECTOR_ID on the board equals the detector paired with the camera/.test(readLog()), readLog().slice(-600));
-    r = await request('GET', '/detector/bad%20id/stream');
-    check('an invalid detector id is a 400', r.status === 400);
+    v.close();
+    v = await openPicture('bad%20id');
+    check('an invalid detector id is a 400 that says why, nothing streamed', v.status === 400 && /invalid id/.test(v.text) && v.messages.length === 0, `${v.status} ${v.text}`);
+    v.close();
 
     // ── 1. the board's first request, when something is wrong: every refusal says why ─────
     let u = await uplink(ID, { key: 'wrong-key-123' });
@@ -183,9 +183,16 @@ async function main() {
     check('connected but silent so far: listed, not online, with a reason',
       !!d && d.connected === true && d.online === false && d.state === 'offline' && /connected but has not sent anything yet/.test(d.message), JSON.stringify(d));
 
-    r = await request('GET', `/detector/${ID}/stream`);
-    check('a stream request now is a quick 503 that says the detector has sent nothing yet',
-      r.status === 503 && r.ms < 1500 && /has no picture to show/.test(r.json.error) && /not sent anything yet/.test(r.json.error), `${r.status} ${r.text}`);
+    const early = await openPicture(ID);   // asks before the first picture: it must get that picture the moment it exists
+    check('a viewer of its picture is still answered at once, with nothing to show yet',
+      early.status === 200 && early.headMs < 1500 && muxViewer.detFrames(early, ID).length === 0, `${early.status} after ${early.headMs} ms`);
+    check('...and the relay logs the reason: the detector has sent nothing yet',
+      !!(await waitFor(() => /WARN  e2e-detector-1@127\.0\.0\.1 \[relay\]: the dashboard asked for the picture of detector 'e2e-detector-1' but there is none: detector 'e2e-detector-1' has no picture to show: the detector connected but has not sent anything yet/.test(readLog()), 2000)), readLog().slice(-600));
+    const asked = countInLog(/there is none: detector 'e2e-detector-1' has no picture to show/);
+    (await openPicture(ID)).close();
+    await sleep(200);
+    check('...but asking again in the same state is not logged again (once per 5 minutes per detector and state)',
+      asked === 1 && countInLog(/there is none: detector 'e2e-detector-1' has no picture to show/) === 1, `logged ${countInLog(/there is none: detector 'e2e-detector-1' has no picture to show/)} times`);
 
     // ── 3. frames flow ──────────────────────────────────────────────────────────────────
     det.write(wire(status(), JPEG));
@@ -203,12 +210,15 @@ async function main() {
     r = await request('POST', '/alarm/all', { headers: { 'X-Api-Key': KEY, 'X-Control-Key': '' } });
     check('"alarm all" does not touch the detector', r.status === 200 && !JSON.stringify(r.json).includes(ID), JSON.stringify(r.json));
 
-    const stream = await openStream(ID);
-    check('the stream is multipart MJPEG and its head arrives at once', stream.status === 200 && /multipart\/x-mixed-replace/.test(stream.type || '') && stream.headMs < 1500, `${stream.status} ${stream.type} ${stream.headMs} ms`);
-    check('it starts with the latest picture', !!(await waitFor(() => stream.body().includes(JPEG), 2000)));
+    check('the viewer that asked BEFORE the first picture gets it the moment it arrives', !!(await waitFor(() => hasPicture(early, ID, JPEG), 2000)));
+    early.close();
+    const stream = await openPicture(ID);
+    check('the mux head arrives at once', stream.status === 200 && stream.headers['content-type'] === muxViewer.CONTENT_TYPE && stream.headMs < 1500, `${stream.status} ${stream.headMs} ms`);
+    check('it starts with the latest picture', !!(await waitFor(() => hasPicture(stream, ID, JPEG), 2000)));
     det.write(wire(status({ scene: { state: 'still', brightness: 131, motion: 2, darkBelow: 40, motionAtLeast: 300, holdS: 10 } }), JPEG2));
-    check('...and every picture pushed afterwards follows', !!(await waitFor(() => stream.body().includes(JPEG2), 2000)));
-    check('...each framed as an image/jpeg part', /Content-Type: image\/jpeg\r\nContent-Length: 12\r\n\r\n/.test(stream.body().toString('latin1')));
+    check('...and every picture pushed afterwards follows, byte for byte', !!(await waitFor(() => hasPicture(stream, ID, JPEG2), 2000)));
+    check('...each a whole picture tagged with the detector (det:<id>), and nothing else but heartbeats',
+      stream.messages.every((m) => m.type === muxViewer.codec.TYPE_HEARTBEAT || (m.type === muxViewer.codec.TYPE_FRAME && m.source === `det:${ID}`)), JSON.stringify(stream.messages.map((m) => [m.type, m.source])));
     stream.close();
 
     // ── 4. what a board on a weak link does to the stream ───────────────────────────────
@@ -245,15 +255,18 @@ async function main() {
       r.json['e2e-nopic'].state === 'no-picture' && r.json['e2e-nopic'].online === true && /10 failed JPEG encodings/.test(r.json['e2e-nopic'].message), JSON.stringify(r.json['e2e-nopic']));
     check('the relay warns that the detector sends no picture, with its own failure count',
       !!(await waitFor(() => /WARN  e2e-nopic@127\.0\.0\.1 \[relay\]: the detector has been connected for \d+s and reports its numbers, but has sent no picture \(it reports 10 failed JPEG encodings/.test(readLog()), 2000)), readLog().slice(-700));
-    r = await request('GET', '/detector/e2e-nopic/stream');
-    check('and its stream request is a quick 503 with that same reason', r.status === 503 && r.ms < 1500 && /failed JPEG encodings/.test(r.json.error), `${r.status} ${r.text}`);
+    v = await openPicture('e2e-nopic');
+    check('and a viewer of its picture is answered at once with nothing to show', v.status === 200 && v.headMs < 1500 && muxViewer.detFrames(v, 'e2e-nopic').length === 0, `${v.status} after ${v.headMs} ms`);
+    check('...the relay log carrying that same reason',
+      !!(await waitFor(() => /WARN  e2e-nopic@127\.0\.0\.1 \[relay\]: the dashboard asked for the picture of detector 'e2e-nopic' but there is none: detector 'e2e-nopic' has no picture to show: the numbers arrive but there is no picture: the board reports 10 failed JPEG encodings/.test(readLog()), 2000)), readLog().slice(-600));
+    v.close();
 
     // ── 7. a detector id that is NOT the one the dashboard asks for (the classic pairing mistake) ──
-    r = await request('GET', '/detector/detector-1/stream');
-    check('asking for an id that does not exist lists the detectors that DO',
-      r.status === 404 && /detectors seen: e2e-detector-1, e2e-nopic/.test(r.json.error) && JSON.stringify(r.json.known) === JSON.stringify(['e2e-detector-1', 'e2e-nopic']), JSON.stringify(r.json));
-    check('...and the relay log carries the same hint',
+    v = await openPicture('detector-1');
+    check('asking for an id that does not exist is answered at once too', v.status === 200 && v.headMs < 1500, `${v.status} after ${v.headMs} ms`);
+    check('...and the relay log lists the detectors that DO exist',
       !!(await waitFor(() => /the dashboard asked for the picture of detector 'detector-1' but there is none: no detector called 'detector-1' has connected to the relay since it started \(detectors seen: e2e-detector-1, e2e-nopic\)/.test(readLog()), 2000)), readLog().slice(-600));
+    v.close();
     r = await request('GET', '/detectors');
     check('asking for a missing detector does not create it', r.json['detector-1'] === undefined);
 
@@ -271,8 +284,9 @@ async function main() {
     d = r.json[ID];
     check('after a few seconds of silence it is offline, with the time it was last heard',
       d.state === 'offline' && d.online === false && /last heard \d+ s ago; its connection ended \(the board closed the connection\)/.test(d.message), JSON.stringify(d));
-    r = await request('GET', `/detector/${ID}/stream`);
-    check('and its stream request is a quick 503 carrying that reason', r.status === 503 && r.ms < 1500 && /last heard/.test(r.json.error), `${r.status} ${r.text}`);
+    v = await openPicture(ID);
+    check('and a viewer of its picture is still answered at once', v.status === 200 && v.headMs < 1500, `${v.status} after ${v.headMs} ms`);
+    v.close();
 
     // ── 9. it comes back ────────────────────────────────────────────────────────────────
     const back = await uplink(ID);

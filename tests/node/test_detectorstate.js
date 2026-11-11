@@ -289,4 +289,28 @@ test('buildView: a reading older than two minutes is no longer shown', () => {
   assertEqual(ds.buildView(rec({ wifi: { ssid: 'HomeNet', rssi: -61, at: 0 } }), 200000).wifi, null);
 });
 
+// ── missingPictureNotice ────────────────────────────────────────────────
+
+test('missingPictureNotice: a detector never heard from lists the ones that do exist, sorted, and what to check', () => {
+  const text = ds.missingPictureNotice('det-A', ds.buildView(undefined, 1000), ['zed', 'alpha']);
+  assertTrue(text.startsWith("the dashboard asked for the picture of detector 'det-A' but there is none: no detector called 'det-A' has connected to the relay since it started"), text);
+  assertTrue(text.includes('(detectors seen: alpha, zed)'), text);
+  assertTrue(text.includes('DETECTOR_ID on the board equals the detector paired with the camera'), text);
+});
+
+test('missingPictureNotice: with no detector at all it says so, and does not mutate the list it was given', () => {
+  assertTrue(ds.missingPictureNotice('det-A', ds.buildView(undefined, 1000), []).includes('(no detector has connected at all)'));
+  const known = ['b', 'a'];
+  ds.missingPictureNotice('det-A', ds.buildView(undefined, 1000), known);
+  assertEqual(known, ['b', 'a']);
+});
+
+test('missingPictureNotice: any other state carries the reason from the view, without the DETECTOR_ID hint', () => {
+  const connectedSilent = ds.buildView(rec({ connected: true, receivedAt: 0, frameAt: 0 }), 1000);
+  assertEqual(connectedSilent.state, 'offline');
+  const text = ds.missingPictureNotice('det-A', connectedSilent, ['det-A']);
+  assertEqual(text, `the dashboard asked for the picture of detector 'det-A' but there is none: detector 'det-A' has no picture to show: ${connectedSilent.message}`);
+  assertTrue(!text.includes('DETECTOR_ID'));
+});
+
 summarize();
