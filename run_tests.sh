@@ -576,6 +576,10 @@ fi
 #     LOCKED OUT line per lock, no key in the log. Also: POST /system-settings refuses folder settings that
 #     point outside the relay's folder. Takes about 20 seconds. Override the ports with E2E_LOCKOUT_PORT /
 #     E2E_LOCKOUT_PUSH_PORT.
+#   - tests/e2e/test_relay_mux_e2e.js: GET /mux on a real relay — the one live connection that carries every camera's
+#     and detector's pictures and readings (framing, limits, heartbeat, slow viewers, read key).
+#   - tests/e2e/test_dashboard_mux_e2e.js: mux.php (real php -S) in front of a fake relay — only what was asked for
+#     passes, detectors are renamed to their camera, nothing of a misbehaving relay leaks.
 #   - tests/e2e/test_relay_read_auth_e2e.js: what the cameras SEE needs the control key — /stream, /snapshot,
 #     /status, /settings, /detectors, /detector/<id>/stream, /record/<id>, /recordings/..., /recording/state
 #     answer 401 to no key, a wrong or empty key, the camera key or the key in the query string, and say
@@ -1030,6 +1034,24 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_read_auth_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (the relay's one multiplexed live connection, GET /mux) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_mux_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (the dashboard's mux.php in front of a fake relay) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_mux_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

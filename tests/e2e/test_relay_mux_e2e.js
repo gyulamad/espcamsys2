@@ -104,7 +104,7 @@ async function main() {
     check('relay dependencies are installed', false, 'run "npm install" in nodejs/camera-relay');
     return;
   }
-  const relay = await startRelay(PORT);
+  const relay = await startRelay(PORT, { READ_KEY_REQUIRED: '0' });  // no controlKey here: reads are refused unless this opts out
   const keyed = await startRelay(PORT + 2, { CONTROL_KEY });
   const viewers = [];
   try {
@@ -174,9 +174,14 @@ async function main() {
       check(`${what}: 400`, bad.status === 400, `status ${bad.status}`);
       bad.close();
     }
-    const ghosts = await view(PORT, '?cams=mux-a&dets=__proto__,constructor');
+    // __proto__ is refused by the id check (400); the other names every object has (constructor, toString) pass it and
+    // must be just detectors nobody has heard of: no crash, the stream runs.
+    const proto = await view(PORT, '?cams=mux-a&dets=__proto__');
+    check('a detector id __proto__ is refused: 400', proto.status === 400, `status ${proto.status}`);
+    proto.close();
+    const ghosts = await view(PORT, '?cams=mux-a&dets=constructor,toString');
     viewers.push(ghosts);
-    check('a detector id like __proto__ is just a detector nobody has heard of (no crash, the stream runs)', ghosts.status === 200 && await waitFor(() => ghosts.messages.length >= 1));
+    check('a detector id like constructor is just a detector nobody has heard of (no crash, the stream runs)', ghosts.status === 200 && await waitFor(() => ghosts.messages.length >= 1));
     up.socket.destroy();
     lateUp.socket.destroy();
 
