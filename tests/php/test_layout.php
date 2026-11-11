@@ -395,7 +395,7 @@ camtest_test('simple view and simple list: the frame style is on the page, and t
     $list = CamLayout::simpleListPage($SIMPLE_CAMS);
     foreach ([$view, $list] as $html) {
         camtest_assert_true(strpos($html, '.rec-frame.recording') !== false, 'the frame style is in the page');
-        camtest_assert_true(strpos($html, '<script src="js/relay-json.js">') !== false, 'relay-json.js is loaded');
+        camtest_assert_true(strpos($html, '<script src="js/mux-pictures.js">') !== false, 'the one connection\'s script is loaded');
     }
     camtest_assert_true(strpos($view, '<div class="picture rec-frame" id="picture-box">') !== false);
     camtest_assert_equal(substr_count($list, 'class="thumb rec-frame" data-cam="'), count($SIMPLE_CAMS));
@@ -404,9 +404,9 @@ camtest_test('simple view and simple list: the frame style is on the page, and t
     }
 });
 
-camtest_test('simple pages: relay-json.js is loaded before the script that uses it', function () use ($SIMPLE_CAMS) {
+camtest_test('simple pages: the mux scripts (the last of them, mux-pictures.js) are loaded before the script that uses them', function () use ($SIMPLE_CAMS) {
     foreach ([['simple-view.js', CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10)], ['simple-list.js', CamLayout::simpleListPage($SIMPLE_CAMS)]] as [$script, $html]) {
-        $helper = strpos($html, '<script src="js/relay-json.js">');
+        $helper = strpos($html, '<script src="js/mux-pictures.js">');
         $logic = strpos($html, '<script src="js/simple-logic.js">');
         $page = strpos($html, '<script src="js/' . $script . '">');
         camtest_assert_true($helper !== false && $page !== false && $helper < $page, $script);
