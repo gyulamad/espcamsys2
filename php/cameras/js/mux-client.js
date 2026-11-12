@@ -3,19 +3,18 @@
 // Only the connection lives here: what the messages mean is the caller's business (js/mux-pictures.js), what
 // they look like is js/mux-codec.js.
 //
-//   const client = CamMuxClient.create({ buildUrl, onMessage, onDown, onGiveUp });
+//   const client = CamMuxClient.create({ buildUrl, onMessage, onDown });
 //   client.start();     // opens it (does nothing while it is open or waiting to retry)
 //   client.restart();   // closes it and opens it again at once (the URL is asked for again: the camera list may have changed)
 //   client.stop();      // closes it
 //
-// When the connection ends, onDown() is called and it is opened again after a pause that grows to 15 s. Three
-// attempts in a row that end before ANY message arrived (refused, not a mux stream, a dead link) mean mux.php
-// is not usable from here: onGiveUp() is called and the client stops, so the page can go back to one MJPEG
-// connection per camera. A connection that stays silent for 15 s (the relay sends a heartbeat every 5 s) is
-// closed and counted as ended: over Tor a stalled link would otherwise stay "open" for ever.
+// When the connection ends, for whatever reason (refused, not a mux stream, garbage, a dead link), onDown() is
+// called and it is opened again after a pause that grows to 15 s. The client NEVER gives up and has no other way
+// to show the pictures to fall back on: it retries until stop() is called. A connection that stays silent for
+// 15 s (the relay sends a heartbeat every 5 s) is closed and counted as ended: over Tor a stalled link would
+// otherwise stay "open" for ever.
 
 (function (root) {
-  const MAX_FAILURES = 3;
   const BACKOFF_BASE_MS = 1000;
   const BACKOFF_MAX_MS = 15000;
   const SILENCE_MS = 15000;
@@ -25,7 +24,7 @@
   }
 
   // env: what the browser provides, replaceable by tests ({ fetch, setTimeout, clearTimeout, AbortController, codec }).
-  function create({ buildUrl, onMessage, onDown, onGiveUp, env = {} }) {
+  function create({ buildUrl, onMessage, onDown, env = {} }) {
     const io = Object.assign({
       fetch: (...args) => root.fetch(...args),
       setTimeout: (...args) => root.setTimeout(...args),
@@ -36,8 +35,7 @@
 
     let state = 'idle';        // idle | connecting | live | waiting (to retry)
     let generation = 0;        // changes whenever the connection is closed on purpose: a late result of the old one is ignored
-    let failures = 0;          // attempts in a row that ended before any message arrived
-    let retries = 0;
+    let retries = 0;           // attempts in a row that ended before any message arrived: the pause grows with it
     let controller = null;
     let silenceTimer = null;
     let retryTimer = null;
@@ -60,18 +58,10 @@
       }, SILENCE_MS);
     }
 
-    function ended(mine, wasLive) {
+    function ended(mine) {
       release();
       state = 'waiting';
-      if (!wasLive) failures += 1;
       onDown();
-      if (failures >= MAX_FAILURES) {
-        state = 'idle';
-        failures = 0;
-        retries = 0;
-        onGiveUp();
-        return;
-      }
       const delay = backoffMs(retries);
       retries += 1;
       retryTimer = io.setTimeout(() => {
@@ -97,14 +87,13 @@
             if (!live) {
               live = true;
               state = 'live';
-              failures = 0;
               retries = 0;
             }
             onMessage(message);
           }
         }
       } catch (err) {
-        if (mine === generation) ended(mine, live);
+        if (mine === generation) ended(mine);
       }
     }
 
@@ -119,7 +108,6 @@
       generation += 1;
       release();
       state = 'idle';
-      failures = 0;
       retries = 0;
     }
 
@@ -131,7 +119,7 @@
     };
   }
 
-  const api = { create, backoffMs, MAX_FAILURES, SILENCE_MS };
+  const api = { create, backoffMs, SILENCE_MS };
   root.CamMuxClient = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
