@@ -88,13 +88,19 @@ test('a different list of cameras reopens the connection for the new list', () =
   assertEqual(t.options().buildUrl(), 'mux.php?cams=a%2Cb');
 });
 
-test('no camera shown any more closes the connection', () => {
+test('nothing wanted any more closes the connection', () => {
   const t = setup();
   t.pictures.show('a'); t.settle();
   t.pictures.hide('a'); t.settle();
   assertEqual(t.calls, ['restart', 'stop']);
   t.pictures.show('a'); t.settle();
   assertEqual(t.calls, ['restart', 'stop', 'restart'], 'and showing it again opens it again');
+});
+
+test('a camera shown alone is asked for with cams= and nothing else', () => {
+  const t = setup();
+  t.pictures.show('a'); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a');
 });
 
 test('a picture becomes the source of its camera\'s image, as a JPEG blob', () => {
@@ -163,10 +169,18 @@ test('reconnect opens the connection again even though it looks open (a locked p
   assertEqual(t.calls, ['restart', 'restart'], 'a sync scheduled before it does not open a third');
 });
 
-test('reconnect with no camera shown does nothing', () => {
+test('reconnect with nothing wanted does nothing', () => {
   const t = setup();
   t.pictures.reconnect();
   assertEqual(t.calls, []);
+});
+
+test('reconnect with only readings wanted opens the connection again, without cams=', () => {
+  const t = setup();
+  t.pictures.watchStatus(true); t.pictures.watchCameraStatus(true); t.settle();
+  t.pictures.reconnect();
+  assertEqual(t.calls, ['restart', 'restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?rec=1&status=1');
 });
 
 test('detector pictures: asked for with dets=, painted on the detector\'s image, never on the camera\'s', () => {
@@ -253,11 +267,31 @@ test('the cameras\' recording state: not asked for, not JSON, or turned off agai
   assertEqual(t.calls, ['restart', 'restart', 'restart'], 'each change of what is asked for reopens the connection once');
 });
 
-test('no camera shown closes the connection even if readings and detector pictures are wanted (the footage needs the room)', () => {
+test('hiding the last camera keeps the connection while readings or detector pictures are wanted: reopened without cams=', () => {
   const t = setup();
   t.pictures.show('a'); t.pictures.showDetector('a'); t.pictures.watchStatus(true); t.settle();
   t.pictures.hide('a'); t.settle();
-  assertEqual(t.calls, ['restart', 'stop']);
+  assertEqual(t.calls, ['restart', 'restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?dets=a&status=1');
+});
+
+test('hiding every camera keeps the recording state and the readings coming (no picture, no cams=)', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.watchCameraStatus(true); t.pictures.watchStatus(true); t.settle();
+  t.pictures.hide('a'); t.settle();
+  assertEqual(t.calls, ['restart', 'restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?rec=1&status=1');
+  t.sendState('{"a":1}', 'state:cameras');
+  assertEqual(t.page.cameraStatus, [{ a: 1 }], 'the recording state still reaches the page');
+});
+
+test('a page that only watches readings (no picture ever) opens the connection', () => {
+  const t = setup();
+  t.pictures.watchCameraStatus(true); t.settle();
+  assertEqual(t.calls, ['restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?rec=1');
+  t.pictures.watchCameraStatus(false); t.settle();
+  assertEqual(t.calls, ['restart', 'stop'], 'and nothing wanted closes it');
 });
 
 test('close forgets detector pictures and readings too', () => {
