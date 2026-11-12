@@ -1,29 +1,28 @@
 'use strict';
 
-// test_index_pictures.js — where the dashboard page (php/cameras/index.php) gets its live pictures from: ONE mux.php
-// connection, or one stream.php per camera. Runs exactly the block between its <pictures-source> markers against
-// stand-ins for the page (no PHP, no browser): the old per-camera behaviour must be unchanged when mux is off, and
-// with mux on the page must hand the cameras to js/mux-pictures.js, start them, and go back to one connection per
-// camera when mux.php cannot be used (or its scripts did not load).
+// test_index_pictures.js — where the dashboard page (php/cameras/index.php) gets its live data from: ONE mux.php
+// connection, and nothing else. Runs exactly the block between its <pictures-source> markers against stand-ins for the
+// page (no PHP, no browser): the page must hand every camera, every detector and the readings to js/mux-pictures.js,
+// start them at load, say so when the connection is down (also when no camera picture is wanted), and never fall
+// back to a connection of its own per picture (no stream.php, no detector-stream.php, no src on any image).
 
 const fs = require('fs');
 const path = require('path');
-const { test, assertEqual, assertTrue, summarize } = require('./framework');
+const { test, assertEqual, assertTrue, assertThrows, summarize } = require('./framework');
 
 const page = fs.readFileSync(path.join(__dirname, '../../php/cameras/index.php'), 'utf8');
 const m = /\/\/ <pictures-source>\n([\s\S]*?)\/\/ <\/pictures-source>/.exec(page);
 assertTrue(!!m, 'the page has a <pictures-source> block');
 const SOURCE = m[1];
-const PLACEHOLDER = "<?= $muxEnabled ? 'true' : 'false' ?>";
-assertTrue(SOURCE.includes(PLACEHOLDER), 'the block gets its on/off switch from PHP in the one expected place');
+assertTrue(!/<\?/.test(SOURCE), 'the block has no PHP in it: it is the same for every page');
 
-// Runs the block as the page would, with mux on or off, and `withScripts` = whether js/mux-pictures.js was loaded.
-function run({ mux, withScripts = true, ids = ['a', 'b'], detectorRows = [] }) {
+// Runs the block as the page would, with `withScripts` = whether js/mux-pictures.js was loaded.
+function run({ withScripts = true, ids = ['a', 'b'], detectorRows = [] } = {}) {
   const log = [];
   const imgs = {};
-  for (const id of ids) imgs[id] = { src: '', dataset: { src: `stream.php?cam=${id}` } };
+  for (const id of ids) imgs[id] = { src: '' };
   const detImgs = {};
-  for (const id of detectorRows) detImgs[id] = { src: '', dataset: { src: `detector-stream.php?cam=${id}` } };
+  for (const id of detectorRows) detImgs[id] = { src: '' };
   const created = [];
   const fakePictures = {
     show: (id) => log.push(`show ${id}`),
@@ -34,113 +33,79 @@ function run({ mux, withScripts = true, ids = ['a', 'b'], detectorRows = [] }) {
     watchCameraStatus: (on) => log.push(`watchCameraStatus ${on}`),
     close: () => log.push('close'),
   };
-  const win = withScripts ? { CamMuxPictures: { create: (options) => { created.push(options); return fakePictures; } } } : {};
   const env = {
-    window: win,
-    CamMuxPictures: win.CamMuxPictures,
     document: {
       getElementById: (name) => (name.startsWith('detimg-') ? detImgs[name.slice('detimg-'.length)] : imgs[name.replace('img-', '')]) || null,
       querySelectorAll: () => detectorRows.map((id) => ({ dataset: { cam: id } })),
     },
     onLiveDetectorData: (data) => log.push(`status ${JSON.stringify(data)}`),
     onLiveCameraStatus: (data) => log.push(`cameraStatus ${JSON.stringify(data)}`),
-    reconnectDetectorImg: (id) => log.push(`reconnectDetector ${id}`),
-    openDetectorEvents: () => log.push('openDetectorEvents'),
+    onLiveDataDown: () => log.push('dataDown'),
     getAllCameraIds: () => ids,
     reloadStream: (id) => log.push(`reload ${id}`),
-    armStreamWatchdog: (id) => log.push(`watchdog ${id}`),
     onStreamError: (id) => log.push(`error ${id}`),
-    console: { warn: (text) => log.push(`warn ${text.split(' ')[0]}`) },
   };
+  if (withScripts) env.CamMuxPictures = { create: (options) => { created.push(options); return fakePictures; } };
   const names = Object.keys(env);
-  const body = SOURCE.replace(PLACEHOLDER, mux ? 'true' : 'false');
-  const api = new Function(...names, `${body}\nreturn { openPicture, closePicture, closeDetectorPicture, fallBackToStreams, pictures: () => pictures };`)(...names.map((n) => env[n]));
-  return { api, log, imgs, detImgs, created, env };
+  // (CamMuxPictures is a global of the page: without its script the name is simply not defined)
+  const api = new Function(...names, `${SOURCE}\nreturn { openPicture, closePicture, closeDetectorPicture, pictures };`)(...names.map((n) => env[n]));
+  return { api, log, imgs, detImgs, created };
 }
 
-test('mux off: nothing is started by this block, no mux object exists', () => {
-  const t = run({ mux: false });
-  assertEqual(t.log, []);
-  assertEqual(t.created.length, 0);
-  assertEqual(t.api.pictures(), null);
-});
-
-test('mux off: opening a picture is the old stream.php request, cache-busted, with its watchdog', () => {
-  const t = run({ mux: false });
-  t.api.openPicture('a');
-  assertTrue(/^stream\.php\?cam=a&_=\d+$/.test(t.imgs.a.src), t.imgs.a.src);
-  assertEqual(t.log, ['watchdog a']);
-});
-
-test('mux off: closing a picture empties its source, as before', () => {
-  const t = run({ mux: false });
-  t.imgs.a.src = 'stream.php?cam=a&_=1';
-  t.api.closePicture('a');
-  assertEqual(t.imgs.a.src, '');
-});
-
-test('mux on: one mux object for the whole page, pointed at mux.php, finding each camera\'s image', () => {
-  const t = run({ mux: true });
+test('one mux object for the whole page, pointed at mux.php, finding each camera\'s image', () => {
+  const t = run();
   assertEqual(t.created.length, 1);
   assertEqual(t.created[0].url, 'mux.php');
   assertEqual(t.created[0].imgFor('cam', 'b'), t.imgs.b);
   assertEqual(t.created[0].imgFor('cam', 'nope'), null);
 });
 
-test('mux on: the images have no source yet, so every camera is started at load, and their recording state is asked for', () => {
-  const t = run({ mux: true });
+test('there is no fallback: the mux object is given no way to give up, and the page has no other source', () => {
+  const t = run();
+  assertEqual(Object.keys(t.created[0]).sort(), ['imgFor', 'onCameraStatus', 'onDown', 'onStatus', 'url']);
+  assertTrue(!/stream\.php|detector-stream|detector-events|EventSource|fallBack|onFallback|muxEnabled|MUX_ENABLED/.test(page), 'the page still mentions an old source');
+});
+
+test('the images have no source yet, so every camera is started at load, and their recording state is asked for', () => {
+  const t = run();
   assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true']);
 });
 
-test('mux on: opening and closing a picture go to the mux object, never to the image', () => {
-  const t = run({ mux: true });
+test('opening and closing a picture go to the mux object, never to the image', () => {
+  const t = run();
   t.log.length = 0;
   t.api.openPicture('a');
   t.api.closePicture('b');
   assertEqual(t.log, ['show a', 'hide b']);
-  assertEqual([t.imgs.a.src, t.imgs.b.src], ['', ''], 'no stream.php request was made');
+  assertEqual([t.imgs.a.src, t.imgs.b.src], ['', ''], 'no request of its own was made');
 });
 
-test('mux on: when the connection goes down every shown camera is marked as in error', () => {
-  const t = run({ mux: true });
+test('when the connection goes down every shown camera is marked as in error, and the numbers say there is no data', () => {
+  const t = run();
   t.log.length = 0;
   t.created[0].onDown(['a', 'b']);
-  assertEqual(t.log, ['error a', 'error b']);
+  assertEqual(t.log, ['error a', 'error b', 'dataDown']);
 });
 
-test('mux on: when mux.php cannot be used it is closed and every camera gets its own stream.php', () => {
-  const t = run({ mux: true });
+test('when the connection goes down with NO camera picture wanted (all hidden), the numbers still say there is no data', () => {
+  const t = run();
   t.log.length = 0;
-  t.created[0].onFallback();
-  assertEqual(t.log, ['warn mux.php', 'close', 'reload a', 'reload b']);
-  assertEqual(t.api.pictures(), null);
-  t.log.length = 0;
-  t.api.openPicture('a');
-  assertTrue(/^stream\.php\?cam=a&_=\d+$/.test(t.imgs.a.src), 'the old way from now on');
-  assertEqual(t.log, ['watchdog a']);
+  t.created[0].onDown([]);
+  assertEqual(t.log, ['dataDown']);
 });
 
-test('mux on but its scripts did not load: the same old way, started at load', () => {
-  const t = run({ mux: true, withScripts: false });
-  assertEqual(t.api.pictures(), null);
-  assertEqual(t.log, ['reload a', 'reload b'], 'every camera is started (reloadStream then opens stream.php)');
-  t.log.length = 0;
-  t.api.openPicture('b');
-  assertTrue(/^stream\.php\?cam=b&_=\d+$/.test(t.imgs.b.src));
-});
-
-test('mux on, with detectors: their pictures and readings are asked for at load, after the cameras are started', () => {
-  const t = run({ mux: true, detectorRows: ['a', 'b'] });
+test('with detectors: their pictures and readings are asked for at load, after the cameras are started', () => {
+  const t = run({ detectorRows: ['a', 'b'] });
   assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true', 'showDetector a', 'showDetector b', 'watchStatus true']);
 });
 
-test('mux on, no detectors: the readings are not asked for', () => {
-  const t = run({ mux: true });
+test('no detectors: the readings are not asked for', () => {
+  const t = run();
   assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true'], 'no detector picture, no detector readings');
 });
 
-test('mux on: a detector image is found by its own id, and the readings go to the page\'s handler', () => {
-  const t = run({ mux: true, detectorRows: ['a'] });
+test('a detector image is found by its own id, and the readings go to the page\'s handler', () => {
+  const t = run({ detectorRows: ['a'] });
   assertEqual(t.created[0].imgFor('det', 'a'), t.detImgs.a);
   assertEqual(t.created[0].imgFor('det', 'b'), null);
   t.log.length = 0;
@@ -148,37 +113,35 @@ test('mux on: a detector image is found by its own id, and the readings go to th
   assertEqual(t.log, ['status {"a":{"state":"online"}}']);
 });
 
-test('mux on: the cameras\' recording state goes to the page\'s handler', () => {
-  const t = run({ mux: true });
+test('the cameras\' recording state goes to the page\'s handler', () => {
+  const t = run();
   t.log.length = 0;
   t.created[0].onCameraStatus({ a: { recording: true } });
   assertEqual(t.log, ['cameraStatus {"a":{"recording":true}}']);
 });
 
-test('mux on: closing a detector picture goes to the mux object; mux off it empties the image as before', () => {
-  const on = run({ mux: true, detectorRows: ['a'] });
-  on.log.length = 0;
-  on.api.closeDetectorPicture('a');
-  assertEqual(on.log, ['hideDetector a']);
-  const off = run({ mux: false, detectorRows: ['a'] });
-  off.detImgs.a.src = 'detector-stream.php?cam=a&_=1';
-  off.api.closeDetectorPicture('a');
-  assertEqual(off.detImgs.a.src, '');
-  off.api.closeDetectorPicture('nope');   // a camera without a detector: nothing to close, no crash
+test('closing a detector picture goes to the mux object', () => {
+  const t = run({ detectorRows: ['a'] });
+  t.log.length = 0;
+  t.api.closeDetectorPicture('a');
+  assertEqual(t.log, ['hideDetector a']);
 });
 
-test('mux on, falling back: the detectors\' pictures and the readings stream come back the old way too', () => {
-  const t = run({ mux: true, detectorRows: ['a', 'b'] });
-  t.log.length = 0;
-  t.created[0].onFallback();
-  assertEqual(t.log, ['warn mux.php', 'close', 'reload a', 'reload b', 'reconnectDetector a', 'reconnectDetector b', 'openDetectorEvents']);
+test('the only timers of the page are clocks, countdowns and the "still looking" keep-alive: none asks for live data', () => {
+  const timers = page.split('\n').filter((line) => /\b(setInterval|setTimeout)\(/.test(line)).map((line) => line.trim());
+  const allowed = [
+    /^tick\(\); setInterval\(tick, 1000\);/,                                   // the clock
+    /^setInterval\(\(\) => \{ getAllCameraIds\(\)\.forEach\(renderSwitch\); \}, 1000\);/,   // "REC OFF · 5 min left"
+    /^recordCountdowns\[id\] = setInterval\(/,                                  // "REC 12s"
+    /^if \(document\.querySelector\('\.det-row'\)\) setInterval\(keepDetectorViewsAlive, WATCH_KEEP_MS\);/,   // the POST that says a person is here
+  ];
+  const stray = timers.filter((line) => !allowed.some((re) => re.test(line)));
+  assertEqual(stray, [], 'a timer that is not a clock, a countdown or the keep-alive');
+  assertEqual(timers.length, allowed.length, 'every allowed timer is there exactly once');
 });
 
-test('mux on, falling back, no detectors: the readings stream is not opened', () => {
-  const t = run({ mux: true });
-  t.log.length = 0;
-  t.created[0].onFallback();
-  assertEqual(t.log.includes('openDetectorEvents'), false);
+test('without js/mux-pictures.js the page does not quietly fall back: it fails at once, where the cause is', () => {
+  assertThrows(() => run({ withScripts: false }), 'expected the missing script to be an error');
 });
 
 summarize();

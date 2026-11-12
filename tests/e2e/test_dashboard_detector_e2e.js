@@ -124,7 +124,7 @@ async function main() {
     check('detector-stream.php needs the dashboard login', (await dash('/detector-stream.php?cam=camA', { auth: false })).status === 401);
 
     const page = (await dash('/index.php')).text;
-    check('camera with a detector gets the detector row', page.includes('id="det-camA"') && page.includes('detector-stream.php?cam=camA'));
+    check('camera with a detector gets the detector row, whose picture comes on the mux (no detector-stream.php address, no src)', page.includes('id="det-camA"') && /<img data-cam="camA" id="detimg-camA" alt="[^"]*">/.test(page) && !page.includes('detector-stream.php'));
     check('the row has the value fields (brightness, motion, human, alarm pin, board info)',
       ['detbright-camA', 'detmotion-camA', 'detperson-camA', 'detpin-camA', 'detgate-camA', 'detinfo-camA'].every((i) => page.includes(`id="${i}"`)));
     check('...and the overlay that says why the picture is not showing', page.includes('id="dettitle-camA"') && page.includes('id="detwhy-camA"'));
