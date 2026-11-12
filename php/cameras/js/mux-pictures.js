@@ -17,8 +17,9 @@
 //   onCameraStatus(data)  the newest recording state of the cameras
 //   onDown(ids)       the connection ended (it is reopened by itself, for ever, see js/mux-client.js): the cameras that were being shown
 //
-// The connection exists while at least one camera is shown (the recording's pre-roll needs every camera's
-// stream all the time; only the page's ALL OFF hides them all); detector pictures and readings ride along on it. Calls
+// The connection exists while ANYTHING is wanted: a camera picture, a detector picture, the detectors' readings or the
+// cameras' recording state. So a page that hides every picture still gets its REC pills and detector bars pushed
+// (nothing polls for them); the address then has no cams= (the relay and mux.php accept that). Calls
 // that arrive together (the page restarts every camera in a loop) become ONE (re)connection, and the connection
 // is reopened only when what is wanted changes.
 
@@ -51,7 +52,8 @@
     };
 
     function buildUrl() {
-      const parts = ['cams=' + encodeURIComponent(idsOf('cam').join(','))];
+      const parts = [];
+      if (wanted.cam.size > 0) parts.push('cams=' + encodeURIComponent(idsOf('cam').join(',')));
       if (wanted.det.size > 0) parts.push('dets=' + encodeURIComponent(idsOf('det').join(',')));
       for (const source of [...wantedStates].sort()) parts.push(states[source].param);
       return url + '?' + parts.join('&');
@@ -94,9 +96,11 @@
       onDown: () => onDown(idsOf('cam')),
     });
 
+    const wantsAnything = () => wanted.cam.size > 0 || wanted.det.size > 0 || wantedStates.size > 0;
+
     function sync() {
       syncScheduled = false;
-      if (wanted.cam.size === 0) {
+      if (!wantsAnything()) {
         client.stop();
         subscribed = '';
         return;
@@ -147,7 +151,7 @@
       watchCameraStatus: (on) => watch(io.codec.STATE_CAMERAS, on),
       // Opens the connection again even if it looks open (a locked phone drops it without a sound).
       reconnect() {
-        if (wanted.cam.size === 0) return;
+        if (!wantsAnything()) return;
         subscribed = requestKey();
         client.restart();
       },
