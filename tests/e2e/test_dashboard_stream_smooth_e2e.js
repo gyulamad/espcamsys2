@@ -4,8 +4,8 @@
 // PHP's blocking fread() on the relay's stream waits for a whole 8 KB buffer, so the detector's tiny
 // 96x96 JPEGs (1-3 KB) used to come out in bursts about once a second even though the board sent ten a
 // second: "less than a frame per second" on screen. Real php -S in front of a fake relay that sends a
-// small picture every 100 ms through detector-stream.php and stream.php; each picture must arrive
-// as its own separate delivery. Core modules only; skips if php is missing.
+// small picture every 100 ms on the mux stream, through mux.php, once for a camera's picture and once for the
+// detector's; each picture must arrive as its own separate delivery. Core modules only; skips if php is missing.
 //   node tests/e2e/test_dashboard_stream_smooth_e2e.js
 
 const fs = require('fs');
@@ -28,14 +28,16 @@ process.on('exit', () => { if (!finished) { console.error('[FAIL] the test ended
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`[PASS] ${name}`); } else { fail++; console.error(`[FAIL] ${name}${detail ? ' -- ' + detail : ''}`); }
 }
+const enc = require('../../nodejs/camera-relay/lib/muxcodec');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const picture = (n) => Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(n - 4, 1), Buffer.from([0xff, 0xd9])]);
 const relay = nodeHttp.createServer((req, res) => {
-  if (!/^\/(stream\/camA|detector\/detA\/stream)$/.test(req.url)) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
-  const jpg = picture(1200);
-  res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', Connection: 'close' });
-  const t = setInterval(() => { res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpg.length}\r\n\r\n`); res.write(jpg); res.write('\r\n'); }, PERIOD_MS);
+  const source = { '/mux?cams=camA': enc.cameraSource('camA'), '/mux?dets=detA': enc.detectorSource('detA') }[req.url];
+  if (source === undefined) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
+  const message = enc.encodeFrame(source, picture(1200));
+  res.writeHead(200, { 'Content-Type': enc.CONTENT_TYPE, Connection: 'close' });
+  const t = setInterval(() => res.write(message), PERIOD_MS);
   req.on('close', () => clearInterval(t));
 });
 
@@ -92,7 +94,7 @@ async function main() {
     docroot = makeDashboard();
     php = await startPhp(docroot);
     const expected = RUN_MS / PERIOD_MS;
-    for (const page of ['/detector-stream.php?cam=camA', '/stream.php?cam=camA']) {
+    for (const page of ['/mux.php?dets=camA', '/mux.php?cams=camA']) {
       const r = await deliveries(page);
       check(`${page}: 200 and pictures flow`, r.status === 200 && r.bytes > 0, `status ${r.status}, ${r.bytes} bytes`);
       check(`${page}: ten small pictures a second arrive as ~ten separate deliveries, not in bursts (${r.groups} of ${expected})`, r.groups >= expected * 0.8, `${r.groups} deliveries`);

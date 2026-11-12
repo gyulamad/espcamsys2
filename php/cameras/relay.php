@@ -9,7 +9,7 @@
 // Header for POSTs that carry no body, the way the relay expects them.
 const RELAY_EMPTY_POST_HEADER = "Content-Length: 0\r\n";
 
-// Reading a LIVE stream from the relay (pictures, pushed numbers).
+// Reading the LIVE stream from the relay (mux.php: pictures, readings).
 // A blocking fread() on the relay's stream does not return what has arrived: it waits until it has a whole
 // buffer (8 KB). A small picture — the detector's 96x96 JPEG is 1-3 KB — then sits in PHP until three or
 // four more have followed, and the browser gets them in bursts about once a second instead of one by one.
@@ -51,9 +51,10 @@ function relay_read_available($stream, float &$lastDataAt, int $silenceSeconds =
 // Passes a live stream from the relay on to the browser until the browser leaves or the relay stops (or goes
 // silent). Runs for as long as the browser stays: no time limit. The relay's heartbeats mean PHP writes (and so
 // notices a browser that has gone) at least every few seconds, even when no camera has a picture.
-// $filter, if given, turns each chunk read into what is sent ('' = nothing yet) or null = stop (not the stream
-// it should be); without it the bytes are passed on as they are.
-function relay_pipe_stream($stream, ?callable $filter = null): void
+// $filter turns each chunk read into what is sent ('' = nothing yet) or null = stop (not the stream it should be).
+// It is not optional: nothing the relay sends reaches the browser unchecked (a spoofed relay must not be able to put
+// its own bytes on the dashboard's origin).
+function relay_pipe_stream($stream, callable $filter): void
 {
     set_time_limit(0);
     ignore_user_abort(false);
@@ -63,7 +64,7 @@ function relay_pipe_stream($stream, ?callable $filter = null): void
         if ($chunk === '') {
             continue;
         }
-        $out = $filter === null ? $chunk : $filter($chunk);
+        $out = $filter($chunk);
         if ($out === null) {
             return;
         }

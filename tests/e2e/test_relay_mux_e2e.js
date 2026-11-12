@@ -24,7 +24,7 @@ const { spawn } = require('child_process');
 const codec = require('../../nodejs/camera-relay/lib/muxcodec');
 const feed = require('../../nodejs/camera-relay/lib/muxfeed');
 const fakeDetector = require('./fake_detector');
-const decoder = require('../../php/cameras/js/mux-codec');
+const muxViewer = require('./mux_viewer');
 
 const RELAY_DIR = path.join(__dirname, '../../nodejs/camera-relay');
 const CONFIG_PATH = path.join(RELAY_DIR, 'config.js');
@@ -76,29 +76,8 @@ function upload(port, cam, jpeg) {
   });
 }
 
-// A /mux viewer: messages as they are decoded, with arrival times; pause() stops reading (a stalled link).
-function view(port, query, headers = {}) {
-  return new Promise((resolve, reject) => {
-    const v = { status: 0, headers: {}, text: '', messages: [], times: [], pause: () => {}, resume: () => {}, close: () => {} };
-    const parser = decoder.createParser();
-    const req = nodeHttp.get({ host: '127.0.0.1', port, path: `/mux${query}`, headers }, (res) => {
-      v.status = res.statusCode; v.headers = res.headers;
-      const isMux = res.headers['content-type'] === codec.CONTENT_TYPE;
-      res.on('data', (c) => {
-        if (!isMux) { v.text += c.toString('utf8'); return; }
-        for (const m of parser.push(new Uint8Array(c))) { v.messages.push(m); v.times.push(Date.now()); }
-      });
-      v.pause = () => res.pause(); v.resume = () => res.resume(); v.close = () => req.destroy();
-      resolve(v);
-    });
-    req.on('error', (e) => { if (!v.status) reject(e); });
-  });
-}
-const framesOf = (v, id) => v.messages.filter((m) => m.type === codec.TYPE_FRAME && m.source === `cam:${id}`);
+const { view, framesOf, detFrames, states, cameraStates, readings } = muxViewer;
 const numberOf = (m) => (m.payload[3] << 8) | m.payload[4];
-const detFrames = (v, id) => v.messages.filter((m) => m.type === codec.TYPE_FRAME && m.source === `det:${id}`);
-const states = (v) => v.messages.filter((m) => m.type === codec.TYPE_STATE && m.source === codec.STATE_DETECTORS);
-const readings = (m) => JSON.parse(Buffer.from(m.payload).toString('utf8'));
 
 async function main() {
   if (!fs.existsSync(path.join(RELAY_DIR, 'node_modules', 'express'))) {
@@ -189,7 +168,7 @@ async function main() {
     // ── the cameras' recording state ──
     const rv = await view(PORT, '?cams=mux-a&rec=1');
     viewers.push(rv);
-    const recStates = (x) => x.messages.filter((m) => m.type === codec.TYPE_STATE && m.source === codec.STATE_CAMERAS);
+    const recStates = cameraStates;
     check('the recording state arrives at once: every camera the relay knows, as GET /status answers it',
       await waitFor(() => recStates(rv).length >= 1, 4000) && readings(recStates(rv)[0])['mux-a'] !== undefined
       && typeof readings(recStates(rv)[0])['mux-a'].recording === 'boolean' && typeof readings(recStates(rv)[0])['mux-a'].recordingCount === 'number',

@@ -2,8 +2,8 @@
 'use strict';
 // test_relay_trust_e2e.js — F-12 / F-14 / F-15 / F-16 / F-20: the small input and output checks of the
 // dashboard, on a REAL PHP server in front of a hostile fake relay that says whatever it likes.
-//   F-14  live streams: only a picture stream is passed on — a relay saying text/html, svg or a made-up
-//         boundary gets a 502 and none of its text; a real MJPEG stream passes with its boundary intact
+//   F-14  the live stream (mux.php): only the mux stream is passed on — a relay saying text/html, svg, a made-up
+//         type, or the old motion-JPEG type gets a 502 and none of its text; a real mux stream passes as the mux type
 //   F-14  recordings: only ONE plain byte range is passed to the relay; Content-Range / Content-Length /
 //         Accept-Ranges are passed back only if they look right; a made-up status (600, 204 with a body
 //         type...) is not repeated to the browser
@@ -30,6 +30,7 @@ const RELAY_PORT = BASE + 1;
 const AUTH = { user: 'owner', pass: 'a-good-long-password' };
 const KEY = 'a-long-secret-control-key-0123456789';
 const FILE = 'cam-a-20260101-000000.mp4';
+const MUX_HEARTBEAT = Buffer.from([0, 0, 0, 3, 1, 2, 0]);   // one heartbeat message, as nodejs/camera-relay/lib/muxcodec.js writes it
 
 let passCount = 0;
 let failCount = 0;
@@ -54,9 +55,9 @@ let mode = {};                         // what it answers right now
 function relayHandler(req, res) {
   seen.push({ method: req.method, url: req.url, headers: req.headers });
   const u = req.url.split('?')[0];
-  if (u.startsWith('/stream/') || /^\/detector\/[^/]+\/stream$/.test(u)) {
-    res.writeHead(200, { 'Content-Type': mode.streamType || 'multipart/x-mixed-replace; boundary=frame' });
-    res.end(mode.streamBody || '--frame\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA\r\n');
+  if (u === '/mux') {
+    res.writeHead(200, { 'Content-Type': mode.streamType || 'application/x-espcam-mux' });
+    res.end(mode.streamBody || MUX_HEARTBEAT);
     return;
   }
   if (/^\/recordings\/[^/]+\/[^/]+\.mp4$/.test(u) && req.method === 'GET') {
@@ -151,26 +152,22 @@ async function main() {
     phpTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-trust-tmp-'));
     php = await startPhp(docroot);
 
-    // ── F-14: live streams ──
-    for (const [label, url] of [['stream.php', 'stream.php?cam=cam-a'], ['detector-stream.php', 'detector-stream.php?cam=cam-a']]) {
-      mode = {};
-      let r = await dash('GET', url);
-      check(`${label}: a real motion-JPEG stream passes, with its boundary intact`, r.status === 200 && r.headers['content-type'] === 'multipart/x-mixed-replace; boundary=frame' && r.text.includes('JPEGDATA'), `status=${r.status} ct=${r.headers['content-type']} ${r.text.slice(0, 80)}`);
-      mode = { streamType: 'multipart/x-mixed-replace;boundary="my-boundary_1"' };
-      r = await dash('GET', url);
-      check(`${label}: a quoted boundary is passed on rebuilt, plain`, r.status === 200 && r.headers['content-type'] === 'multipart/x-mixed-replace; boundary=my-boundary_1', r.headers['content-type']);
-      for (const bad of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'application/javascript', 'application/xhtml+xml', 'multipart/x-mixed-replace; boundary=<script>alert(1)</script>']) {
-        mode = { streamType: bad, streamBody: '<html><script>window.__pwned=1</script>RELAYTEXT</html>' };
-        r = await dash('GET', url);
-        check(`${label}: a relay that says "${bad.slice(0, 40)}" is refused (502), none of its text or type is passed on`, r.status === 502 && !/RELAYTEXT|__pwned|<script/.test(r.text) && !/svg|javascript|xhtml|multipart/.test(r.headers['content-type'] || ''), `status=${r.status} ct=${r.headers['content-type']} ${r.text.slice(0, 100)}`);
-      }
+    // ── F-14: the live stream ──
+    mode = {};
+    let r = await dash('GET', 'mux.php?cams=cam-a&dets=cam-a&status=1&rec=1');
+    check('mux.php: a real mux stream passes, as exactly the mux type', r.status === 200 && r.headers['content-type'] === 'application/x-espcam-mux' && r.text.length === MUX_HEARTBEAT.length, `status=${r.status} ct=${r.headers['content-type']} ${r.text.length} bytes`);
+    for (const bad of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'application/javascript', 'application/xhtml+xml', 'application/x-espcam-mux2',
+      'multipart/x-mixed-replace; boundary=frame', 'image/jpeg']) {
+      mode = { streamType: bad, streamBody: '<html><script>window.__pwned=1</script>RELAYTEXT</html>' };
+      r = await dash('GET', 'mux.php?cams=cam-a');
+      check(`mux.php: a relay that says "${bad.slice(0, 40)}" is refused (502), none of its text or type is passed on`, r.status === 502 && !/RELAYTEXT|__pwned|<script/.test(r.text) && !/svg|javascript|xhtml|multipart|jpeg|espcam/.test(r.headers['content-type'] || '') && r.text === 'Could not connect to the relay', `status=${r.status} ct=${r.headers['content-type']} ${r.text.slice(0, 100)}`);
     }
     mode = {};
 
     // ── F-14: recordings — Range, headers, status ──
     const play = `recordings.php?cam=cam-a&play=${FILE}`;
     let before = relayCalls();
-    let r = await dash('GET', play, { Range: 'bytes=0-3' });
+    r = await dash('GET', play, { Range: 'bytes=0-3' });
     check('a plain byte range is passed on to the relay', r.status === 200 && lastSeen().headers.range === 'bytes=0-3', JSON.stringify(lastSeen().headers));
     for (const bad of ['bytes=0-1,5-9', 'bytes=abc', 'bytes=-', 'bytes=5-2', 'items=0-5', 'bytes=0-99999999999999999', 'bytes=0-5; evil']) {
       before = relayCalls();
@@ -200,7 +197,7 @@ async function main() {
     // ── F-16: array parameters ──
     before = relayCalls();
     const arrays = [
-      ['stream.php?cam[]=x', 'GET'], ['stream.php?cam[a]=x', 'GET'], ['detector-stream.php?cam[]=x', 'GET'],
+      ['mux.php?cams[]=x', 'GET'], ['mux.php?cams[a]=x', 'GET'], ['mux.php?cams=cam-a&dets[]=cam-a', 'GET'], ['mux.php?status[]=1', 'GET'], ['mux.php?rec[]=1', 'GET'],
       ['recordings.php?cam[]=x', 'GET'], [`recordings.php?cam=cam-a&play[]=${FILE}`, 'GET'], [`recordings.php?cam=cam-a&download[]=${FILE}`, 'GET'],
       [`recordings.php?cam=cam-a&delete[]=${FILE}`, 'POST'], [`recordings.php?cam=cam-a&seen[]=${FILE}`, 'POST'], ['recordings.php?cam=cam-a&deleteAll[]=1', 'POST'],
       ['record.php?cam[]=x', 'GET'], ['record.php?cam=cam-a&stop[]=1', 'POST'], ['record.php?cam=cam-a&seconds[]=5', 'POST'],
@@ -220,8 +217,10 @@ async function main() {
       r = await dash(method, url);
       check(`${method} ${url.replace('%0A', '<newline>')} is refused (400)`, r.status === 400, `status=${r.status} ${r.text.slice(0, 80)}`);
     }
-    r = await dash('GET', 'stream.php?cam=cam-a%0A');
-    check('a camera id with a trailing newline is not found (404)', r.status === 404, `status=${r.status}`);
+    for (const url of ['mux.php?cams=cam-a%0A', 'mux.php?dets=cam-a%0A']) {
+      r = await dash('GET', url);
+      check(`${url.replace('%0A', '<newline>')}: a camera id with a trailing newline is refused (400)`, r.status === 400, `status=${r.status}`);
+    }
     check('...and none of it reached the relay', relayCalls() === before);
 
     // ── F-12: recording OFF for at most a week ──
@@ -246,12 +245,10 @@ async function main() {
     // key, so each page that reads from it has to send it — and send nothing else along (no other secret).
     mode = {};
     const reads = [
-      ['stream.php?cam=cam-a', '/stream/cam-a'],
-      ['detector-stream.php?cam=cam-a', '/detector/det-a/stream'],
+      ['mux.php?cams=cam-a&dets=cam-a&status=1&rec=1', '/mux'],
       ['status.php', '/status'],
       ['settings.php', '/settings'],
       ['detector-status.php', '/detectors'],
-      ['detector-events.php', '/detectors/events'],
       ['record.php?cam=cam-a', '/record/cam-a'],
       ['recordings.php?cam=cam-a', '/recordings/cam-a'],
       [`recordings.php?cam=cam-a&play=${FILE}`, `/recordings/cam-a/${FILE}`],
@@ -277,14 +274,15 @@ async function main() {
     for (const f of fs.readdirSync(phpTmp)) if (f.startsWith('camdash-log-')) fs.rmSync(path.join(phpTmp, f), { force: true });
     phpLog = '';
     const addr = `127.0.0.1:${RELAY_PORT}`;
-    for (const url of ['detector-stream.php?cam=cam-a', 'stream.php?cam=cam-a', 'recordings.php?cam=cam-a', 'status.php', 'record.php?cam=cam-a']) {
+    for (const url of ['mux.php?cams=cam-a', 'recordings.php?cam=cam-a', 'status.php', 'record.php?cam=cam-a']) {
       r = await dash('GET', url);
       check(`${url}: relay down -> an error, and the page never mentions the relay's address or PHP's internals`, r.status >= 500 && !r.text.includes(addr) && !r.text.includes(String(RELAY_PORT)) && !/fopen|failed to open stream|http:\/\//i.test(r.text), `status=${r.status} ${r.text.slice(0, 160)}`);
     }
-    r = await dash('GET', 'detector-stream.php?cam=cam-a');
-    check('...but the detector page still says WHY in words (the reason, not the address)', r.status === 502 && /\(Connection refused\)/.test(r.text), `status=${r.status} ${r.text}`);
+    r = await dash('GET', 'mux.php?cams=cam-a');
+    check('mux.php: the browser gets one plain line, nothing of the reason', r.status === 502 && r.text === 'Could not connect to the relay', `status=${r.status} ${r.text}`);
     await sleep(200);
-    check('...but the details are in the error log, where the owner looks', phpLog.includes(addr) || /Connection refused/i.test(phpLog), phpLog.slice(-400));
+    check('...but the details are in the error log, where the owner looks (a "mux.php:" line with the reason)', /camdash: mux\.php: could not reach the relay for GET \/mux/.test(phpLog) && (phpLog.includes(addr) || /Connection refused/i.test(phpLog)), phpLog.slice(-400));
+    check('...and the control key is not in it', !phpLog.includes(KEY));
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
   } finally {

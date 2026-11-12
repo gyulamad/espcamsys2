@@ -181,4 +181,16 @@ function buildView(det, now) {
   };
 }
 
-module.exports = { parseStatus, parseArea, buildView, describeAge, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };
+// The relay-log line for "the dashboard asked for the picture of detector `id` but there is none": view is
+// buildView()'s answer for it (any state but 'online'), knownIds the detectors the relay has heard from. It is the
+// only trace of the problem, because the mux connection just stays open without that picture: a detector that
+// "does not show up" must be explainable from the log alone. The usual cause of 'never' is a DETECTOR_ID on the
+// board that differs from the one paired with the camera in the dashboard's config.php, hence the hint.
+function missingPictureNotice(id, view, knownIds) {
+  if (view.state !== 'never') return `the dashboard asked for the picture of detector '${id}' but there is none: detector '${id}' has no picture to show: ${view.message}`;
+  const seen = knownIds.length ? ` (detectors seen: ${[...knownIds].sort().join(', ')})` : ' (no detector has connected at all)';
+  return `the dashboard asked for the picture of detector '${id}' but there is none: no detector called '${id}' has connected to the relay since it started${seen}`
+    + ' — check that DETECTOR_ID on the board equals the detector paired with the camera in the dashboard\'s config.php';
+}
+
+module.exports = { parseStatus, parseArea, buildView, describeAge, missingPictureNotice, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };

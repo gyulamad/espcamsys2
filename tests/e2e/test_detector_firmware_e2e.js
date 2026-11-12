@@ -20,6 +20,7 @@ const nodeHttp = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const muxViewer = require('./mux_viewer');
 
 const ROOT = path.join(__dirname, '../..');
 const RELAY_DIR = path.join(ROOT, 'nodejs/camera-relay');
@@ -68,32 +69,13 @@ function getJson(p, port = PORT) {
   });
 }
 
-// Collects the MJPEG stream for `ms` and returns the pictures (Buffers) it carried.
-function collectPictures(id, ms) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/detector/${id}/stream`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => {
-      res.on('data', (c) => chunks.push(c));
-      setTimeout(() => {
-        req.destroy();
-        const body = Buffer.concat(chunks);
-        const pics = [];
-        let pos = 0;
-        for (;;) {
-          const h = body.indexOf('Content-Length: ', pos, 'latin1');
-          if (h < 0) break;
-          const eol = body.indexOf('\r\n\r\n', h, 'latin1');
-          if (eol < 0) break;
-          const len = Number(body.toString('latin1', h + 16, body.indexOf('\r\n', h, 'latin1')));
-          if (eol + 4 + len > body.length) break;
-          pics.push(body.slice(eol + 4, eol + 4 + len));
-          pos = eol + 4 + len;
-        }
-        resolve({ status: res.statusCode, pictures: pics });
-      }, ms);
-    });
-    req.on('error', () => resolve({ status: 0, pictures: [] }));
-  });
+// Watches the detector's picture on the mux for `ms` and returns the pictures (Buffers) it carried.
+async function collectPictures(id, ms) {
+  let v;
+  try { v = await muxViewer.view(PORT, `?dets=${id}`, { 'X-Control-Key': CONTROL_KEY }); } catch (e) { return { status: 0, pictures: [] }; }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  v.close();
+  return { status: v.status, pictures: muxViewer.detFrames(v, id).map((m) => Buffer.from(m.payload)) };
 }
 
 let relayLogFile = null;
@@ -193,7 +175,7 @@ async function main() {
     check('the brightness / motion / score vary frame to frame (a synthetic loop, so tests can tell frames apart)', !!d1 && !!d2 && (d1.report.scene.brightness !== d2.report.scene.brightness || d1.report.scene.motion !== d2.report.scene.motion));
 
     const stream = await collectPictures('fw-good', 1500);
-    check('the MJPEG stream carries pictures at about the rate the firmware was told (10 per second)', stream.status === 200 && stream.pictures.length >= 6 && stream.pictures.length <= 20, `${stream.status}, ${stream.pictures.length} pictures`);
+    check('the mux carries the pictures at about the rate the firmware was told (10 per second)', stream.status === 200 && stream.pictures.length >= 6 && stream.pictures.length <= 20, `${stream.status}, ${stream.pictures.length} pictures`);
     check('every picture is the firmware\'s JPEG, byte for byte', stream.pictures.length > 0 && stream.pictures.every((p) => Buffer.compare(p, expectedJpeg) === 0), `${stream.pictures.length} pictures, first ${stream.pictures[0] && stream.pictures[0].length} bytes`);
 
     // ── the board with the wrong key ──
@@ -212,8 +194,10 @@ async function main() {
     // (read the relay's view while the board is still connected: it has just exited, so ask it quickly — the view stays for a few seconds)
     const np = (await getJson('/detectors')).json['fw-nopic'];
     check('JPEG failure: the relay lists it as "no-picture" and says how many encodings failed', !!np && np.state === 'no-picture' && np.online === true && /failed JPEG encodings/.test(np.message), JSON.stringify(np));
-    const npStream = await getJson('/detector/fw-nopic/stream');
-    check('...and the picture request is a quick 503 with that reason, not a hang', npStream.status === 503 && /failed JPEG encodings/.test(npStream.json.error), JSON.stringify(npStream));
+    const npView = await muxViewer.view(PORT, '?dets=fw-nopic', { 'X-Control-Key': CONTROL_KEY });
+    check('...and a viewer of its picture is answered at once with nothing to show, not a hang', npView.status === 200 && muxViewer.detFrames(npView, 'fw-nopic').length === 0, String(npView.status));
+    npView.close();
+    check('...the relay\'s log saying why there is no picture', !!(await waitFor(() => /WARN  fw-nopic@127\.0\.0\.1 \[relay\]: the dashboard asked for the picture of detector 'fw-nopic' but there is none: detector 'fw-nopic' has no picture to show: .*failed JPEG encodings/.test(readRelayLog()), 2000)), readRelayLog().slice(-700));
     check('...and the relay\'s log warns that the detector sends numbers but no picture', !!(await waitFor(() => /WARN  fw-nopic@127\.0\.0\.1 \[relay\]: the detector has been connected for \d+s and reports its numbers, but has sent no picture \(it reports \d+ failed JPEG encodings/.test(readRelayLog()), 2000)), readRelayLog().slice(-700));
 
     // ── the boards that reach something that is not the relay ──

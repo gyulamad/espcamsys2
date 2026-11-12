@@ -11,7 +11,7 @@
 //   - a camera that authenticates on the push port with a traversal id is disconnected, and the
 //     relay stays up.
 //   - R-02: the relay remembers at most 64 distinct camera ids; the 65th is refused (503) on every
-//     way in (live stream, alarm, record, push), cameras it already knows keep working, and
+//     way in (the live mux, alarm, record, push), cameras it already knows keep working, and
 //     read-only routes (GET /record/:id, stop) never register a camera.
 //
 // Independent client (no require() of lib/ or server.js), own ports, throwaway log/settings/switch
@@ -27,6 +27,7 @@
 const fs = require('fs');
 const net = require('net');
 const nodeHttp = require('http');
+const muxViewer = require('./mux_viewer');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
@@ -110,7 +111,7 @@ function stopRelay(relay) {
 // test that wants to be REFUSED sends its own headers ({ noKey: true } sends none).
 const needsDashboardKey = (method, p) => (method === 'POST' && /^\/(record\/|settings)/.test(p)) || ((method === 'DELETE' || method === 'POST') && /^\/recordings\//.test(p))
   // ...and, since review R-08, everything that READS what the cameras see
-  || (method === 'GET' && /^\/(stream\/|snapshot\/|status|settings|detectors|detector\/[^/]+\/stream|record\/|recording\/state|recordings\/)/.test(p));
+  || (method === 'GET' && /^\/(mux|snapshot\/|status|settings|detectors|record\/|recording\/state|recordings\/)/.test(p));
 function request(method, urlPath, { headers = {}, body, noKey = false } = {}) {
   return new Promise((resolve, reject) => {
     const h = Object.assign({}, !noKey && needsDashboardKey(method, urlPath) ? { 'X-Control-Key': CONTROL_KEY } : {}, headers);
@@ -171,17 +172,13 @@ function removeOwnRecordingFolders() {
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('not a real picture, but it starts like one'), Buffer.from([0xff, 0xd9])]);
 
 
-// Opens a live stream and hangs up. Resolves to the HTTP status. An accepted stream sends no headers until
-// the camera's first frame, so "no answer for 300 ms" means it was accepted (200); a refusal (400/503) is
-// answered at once.
-function openStream(id) {
-  return new Promise((resolve, reject) => {
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(timer); req.destroy(); resolve(v); } };
-    const req = nodeHttp.get(`http://127.0.0.1:${PORT}/stream/${id}`, { headers: { 'X-Control-Key': CONTROL_KEY } }, (res) => finish(res.statusCode));
-    const timer = setTimeout(() => finish(200), 300);
-    req.on('error', (e) => { if (!done) { done = true; clearTimeout(timer); reject(e); } });
-  });
+// Opens the mux for one camera's picture and hangs up. Resolves to the HTTP status: 200 when it was accepted (the
+// head and a heartbeat come at once, picture or not) or the refusal's (400/503), also answered at once. One at a
+// time on purpose: the mux holds at most 16 viewers, and what is tested here is the cap on camera ids, not that one.
+async function openStream(id) {
+  const v = await muxViewer.view(PORT, `?cams=${id}`, { 'X-Control-Key': CONTROL_KEY });
+  v.close();
+  return v.status;
 }
 // /status is an object keyed by camera id (cameras the relay knows PLUS folders found on disk). The ids
 // this test uses all start with e2e-camid-, so counting those counts what the test registered.
@@ -221,11 +218,12 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
       ['POST', `/record/${traversal}/stop`],
       ['GET', `/record/${traversal}`],
       ['POST', `/alarm/${traversal}`],
-      ['GET', `/stream/${traversal}`],
+      ['GET', `/mux?cams=${traversal}`],
+      ['GET', `/mux?dets=${traversal}`],
       ['GET', `/snapshot/${traversal}`],
     ];
     for (const [method, url] of attacks) {
-      const r = method === 'GET' && url.startsWith('/stream/') ? { status: await openStream(traversal) } : await request(method, url);
+      const r = await request(method, url);
       check(`${method} ${url.replace(traversal, '<traversal>')} is refused (400)`, r.status === 400, `got ${r.status}`);
     }
     check('...and the decoy folder outside the recordings folder is untouched (no clip lost, nothing created)', decoyUntouched(), fs.readdirSync(decoy).join(','));
@@ -281,7 +279,8 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
     // ── 6. R-02: the cap on distinct camera ids ───────────────────────
     const known = 1; // OK_CAM, which the alarm and the push connection above registered; nothing else (checked next)
     check('the only camera the relay knows before the flood is the ordinary one', (await ourIds()).join(',') === OK_CAM, (await ourIds()).join(','));
-    const statuses = await Promise.all(Array.from({ length: MAX_CAMERAS - known + 3 }, (_, i) => openStream(`e2e-camid-flood-${i}`)));
+    const statuses = [];
+    for (let i = 0; i < MAX_CAMERAS - known + 3; i += 1) statuses.push(await openStream(`e2e-camid-flood-${i}`));
     const accepted = statuses.filter((s) => s === 200).length;
     const refused = statuses.filter((s) => s === 503).length;
     check(`only as many new ids as fit under the cap are accepted (${MAX_CAMERAS - known})`, accepted === MAX_CAMERAS - known, `accepted ${accepted}, refused ${refused}`);
@@ -300,7 +299,7 @@ const ourIds = async () => (await statusIds()).filter((id) => id.startsWith('e2e
     check('...and the relay logs the refusal', await waitFor(() => /already knows 64 cameras/.test(readFile(logFile)), 3000) !== null);
     r = await postCamKey(`/alarm/${OK_CAM}`);
     check('a camera the relay already knows still works at the cap (alarm 200)', r.status === 200, `got ${r.status}`);
-    check('...and can still stream', (await openStream(OK_CAM)) === 200);
+    check('...and can still be watched on the mux', (await openStream(OK_CAM)) === 200);
     const again = await pushConnect(OK_CAM, CAM_KEY);
     socks.push(again);
     check('...and can still connect on the push port', !(await waitClosed(again, 700)));
