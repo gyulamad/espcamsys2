@@ -73,7 +73,7 @@ const PUSH_PORT = process.env.PUSH_PORT || config.pushPort; // raw TCP, continuo
 const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in each camera's sketch
 
 // (review NODE-006) baseline security headers on every response. The relay
-// mostly serves non-HTML (JPEG/MJPEG/JSON/firmware binaries), so CSP and
+// mostly serves non-HTML (JPEG/mux stream/JSON/firmware binaries), so CSP and
 // X-Frame-Options are less critical than for a browser app, but MIME-sniffing
 // a firmware download as HTML and rendering it is still a real risk on old
 // browsers. nosniff must be universal. HSTS is set only when the operator
