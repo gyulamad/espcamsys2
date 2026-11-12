@@ -94,6 +94,46 @@ test('toggle: a refused request is logged, never thrown', () => {
   assertTrue(logged.every((args) => args[0] === 'Fullscreen failed:' && args[1].message === 'not allowed'));
 });
 
+test('supported: an element the browser can show full screen — by the standard or the WebKit name', () => {
+  assertEqual(CamFullscreen.supported(makeElement('standard')), true);
+  assertEqual(CamFullscreen.supported(makeElement('webkit')), true);
+});
+
+test('supported: no feature, or no element, is not supported (and never throws)', () => {
+  assertEqual(CamFullscreen.supported(makeElement('none')), false);
+  assertEqual(CamFullscreen.supported(null), false);
+  assertEqual(CamFullscreen.supported(undefined), false);
+});
+
+// A document that records who listens for what.
+function makeListeningDocument() {
+  const doc = { listeners: {} };
+  doc.addEventListener = (type, fn) => { (doc.listeners[type] = doc.listeners[type] || []).push(fn); };
+  doc.fire = (type) => (doc.listeners[type] || []).forEach((fn) => fn({ type }));
+  return doc;
+}
+
+test('watch: the handler runs on every change of the full-screen element, standard and WebKit event alike', () => {
+  const doc = makeListeningDocument();
+  const seen = [];
+  assertEqual(CamFullscreen.watch((e) => seen.push(e.type), doc), true);
+  doc.fire('fullscreenchange');
+  doc.fire('webkitfullscreenchange');
+  doc.fire('fullscreenchange');
+  assertEqual(seen, ['fullscreenchange', 'webkitfullscreenchange', 'fullscreenchange']);
+});
+
+test('watch: listens for the two change events only, nothing else', () => {
+  const doc = makeListeningDocument();
+  CamFullscreen.watch(() => {}, doc);
+  assertEqual(Object.keys(doc.listeners).sort(), ['fullscreenchange', 'webkitfullscreenchange']);
+});
+
+test('watch: no document to listen to (node, or one without events) says so and does not throw', () => {
+  assertEqual(CamFullscreen.watch(() => {}, null), false);   // no browser document either (node)
+  assertEqual(CamFullscreen.watch(() => {}, {}), false);
+});
+
 test('current: the standard name wins, the WebKit one is the fallback, nothing is null', () => {
   const a = makeElement();
   const b = makeElement();

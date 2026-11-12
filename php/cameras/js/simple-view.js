@@ -6,8 +6,9 @@
 // (the status line and the red frame around the picture) and the detectors' readings (motion). Nothing is
 // polled. While the connection is down the picture is blank (its alt text shows) and nothing is known: the
 // status line says so. A camera that is not connected is skipped by the slideshow and, when picked
-// by hand, has its stale last picture covered with an "offline" message (js/camera-offline.js). A click on the picture toggles full
-// screen (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
+// by hand, has its stale last picture covered with an "offline" message (js/camera-offline.js). A click on the picture
+// toggles full screen of the picture alone, the FULL SCREEN button toggles it for the whole page with the status line
+// (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
 // under the picture show the time left before the next camera.
 
 (function () {
@@ -165,8 +166,30 @@
     },
   });
 
-  // A click on the picture shows it full screen, another one leaves (the page works without the helper).
-  if (window.CamFullscreen && pictureBox) picture.addEventListener('click', () => window.CamFullscreen.toggle(pictureBox));
+  // Two ways into full screen, both toggles (the page works without the helper: no listener, the button stays hidden):
+  // a click on the picture shows the picture alone (its box: no status line), the FULL SCREEN button shows the whole
+  // page, status line (camera name, clock, recording, countdown) included.
+  function wireFullscreen() {
+    const fullscreen = window.CamFullscreen;
+    if (!fullscreen) return;
+    const toggleOnClick = (trigger, target) => trigger.addEventListener('click', () => fullscreen.toggle(target));
+    if (pictureBox) toggleOnClick(picture, pictureBox);
+    const button = el('fullscreen');
+    const page = document.documentElement;
+    if (!button || !fullscreen.supported(page)) return;   // nothing the button could do here: it stays hidden
+    toggleOnClick(button, page);
+    // Pressed while the whole page is full screen. (While the picture alone is, its box covers the button.)
+    const renderPressed = () => {
+      const on = fullscreen.current(document) === page;
+      button.classList.toggle('on', on);
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+    fullscreen.watch(renderPressed);   // also when the browser ends it (Esc)
+    renderPressed();
+    button.hidden = false;
+  }
+
+  wireFullscreen();
   el('prev').addEventListener('click', () => step(-1));
   el('next').addEventListener('click', () => step(1));
   el('slideshow').addEventListener('click', () => setSlideshow(slideshow === null));

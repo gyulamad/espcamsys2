@@ -364,6 +364,28 @@ camtest_test('simple view: the picture sits in its own box — the thing that go
     camtest_assert_true(strpos($html, 'title="Click to view full screen"') !== false, 'the picture says what a click does');
 });
 
+camtest_test('simple view: a FULL SCREEN button sits next to the slideshow button in the status line — outside the picture box — hidden until the script shows it', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_equal(preg_match_all('/id="fullscreen"/', $html), 1, 'one button');
+    camtest_assert_equal(preg_match('/<button class="btn" type="button" id="fullscreen" aria-pressed="false" title="[^"]*" hidden>⛶ FULL SCREEN<\/button>/u', $html), 1, 'a plain button, not pressed, hidden at first');
+    camtest_assert_equal(preg_match('/<div class="status" role="status">.*id="slideshow".*?<\/button><button class="btn" type="button" id="fullscreen".*?<\/button><\/div><\/div>/su', $html), 1, 'in the status line, right after the slideshow button');
+    $box = substr($html, strpos($html, 'id="picture-box"'), strpos($html, 'id="countdown-bar"') - strpos($html, 'id="picture-box"'));
+    camtest_assert_true(strpos($box, 'id="fullscreen"') === false, 'not inside the picture box: that is what a click on the picture shows alone, and the button would go with the status line');
+    camtest_assert_true(strpos(layout_css_rule($html, '.btn[hidden]'), 'display: none') !== false, 'a .btn has its own display, which would beat the hidden attribute');
+});
+
+camtest_test('simple view: the picture still says that a click shows it full screen, and its box is still what goes full screen — the button does not change that', function () use ($SIMPLE_CAMS) {
+    $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
+    camtest_assert_true(strpos($html, 'title="Click to view full screen"') !== false);
+    camtest_assert_true(strpos($html, '<div class="picture rec-frame" id="picture-box"><img id="picture"') !== false);
+    camtest_assert_true(strpos($html, 'id="fullscreen"') < strpos($html, '<script src="js/fullscreen.js">'), 'the markup comes before the scripts that wire it');
+});
+
+camtest_test('simple view: no cameras, no FULL SCREEN button; the list has none either', function () use ($SIMPLE_CAMS) {
+    camtest_assert_true(strpos(CamLayout::simpleViewPage([], null, 10), 'id="fullscreen"') === false);
+    camtest_assert_true(strpos(CamLayout::simpleListPage($SIMPLE_CAMS), 'id="fullscreen"') === false);
+});
+
 camtest_test('simple view: a full-screen picture box is black with a zoom-out cursor, in the standard and the WebKit spelling', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
     camtest_assert_true(strpos(layout_css_rule($html, '.picture img'), 'cursor: zoom-in') !== false, 'a click enlarges');

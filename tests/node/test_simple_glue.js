@@ -90,16 +90,25 @@ const shownId = (env) => {
 
 // A page environment. `relay`: what the relay pushes (the recording state of the cameras, the detectors' readings;
 // mutable by the test, null / garbage = the connection is down: nothing is known).
-function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, muxHelper = true, offlineHelper = true } = {}) {
+function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, fullscreen = true, fullscreenSupported = true, muxHelper = true, offlineHelper = true } = {}) {
   const env = { now: 1000000, intervals: [], timeouts: [], urls: [], relay: { status: {}, detectors: {} }, clockWindow: {} };
-  // js/fullscreen.js stand-in: records the elements it was asked to toggle (the real one is tested in test_fullscreen.js)
-  env.fullscreen = fullscreen ? { toggled: [], toggle(el) { this.toggled.push(el); } } : undefined;
+  // js/fullscreen.js stand-in: records the elements it was asked to toggle (the real one is tested in test_fullscreen.js).
+  // `fullscreenSupported`: false = a browser that cannot do full screen. change(el) is the browser reporting that `el`
+  // is the full-screen element now (null: none, e.g. after Esc) to whoever watches.
+  env.fullscreen = fullscreen ? {
+    toggled: [], on: null, watchers: [],
+    toggle(el) { this.toggled.push(el); },
+    current() { return this.on; },
+    supported() { return fullscreenSupported; },
+    watch(fn) { this.watchers.push(fn); return true; },
+    change(el) { this.on = el; this.watchers.forEach((fn) => fn()); },
+  } : undefined;
   env.muxHelper = muxHelper;   // false: js/mux-pictures.js is not on the page
   env.mux = makeMux();
   env.offlineHelper = offlineHelper;   // false: js/camera-offline.js is not on the page
   const els = {};
-  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline']) els[id] = makeEl();
-  for (const id of ['countdown', 'countdown-bar', 'offline']) els[id].hidden = true;   // as the page is delivered
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'fullscreen', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline']) els[id] = makeEl();
+  for (const id of ['countdown', 'countdown-bar', 'offline', 'fullscreen']) els[id].hidden = true;   // as the page is delivered
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -303,6 +312,69 @@ test('view: without the full-screen helper (script not loaded) the page still wo
   env.els.picture.fire('click');   // no listener, no crash
   env.els.next.fire('click');
   assertEqual(env.els['cam-name'].textContent, 'Beta');
+  assertEqual(env.els.fullscreen.hidden, true, 'and the FULL SCREEN button, which could do nothing, stays hidden');
+});
+
+// ── the FULL SCREEN button: the whole page, status line included ─────────
+// (a click on the picture, tested above, shows the picture box alone: no status line)
+
+test('full screen button: delivered hidden, shown once the browser can do full screen', async () => {
+  const env = makeEnv();
+  assertEqual(env.els.fullscreen.hidden, true, 'as the page is delivered');
+  load(env, 'simple-view.js');
+  assertEqual(env.els.fullscreen.hidden, false);
+});
+
+test('full screen button: stays hidden where the browser cannot do full screen, and nothing is wired to it', async () => {
+  const env = await started({ fullscreenSupported: false });
+  assertEqual(env.els.fullscreen.hidden, true);
+  env.els.fullscreen.fire('click');   // never reachable, but must not do anything either
+  assertEqual(env.fullscreen.toggled.length, 0);
+  assertEqual(env.fullscreen.watchers.length, 0, 'nothing is watched for a button that is not there');
+});
+
+test('full screen button: a click toggles the WHOLE page (document element) — never the picture box, which leaves the status line out', async () => {
+  const env = await started();
+  env.els.fullscreen.fire('click');
+  assertEqual(env.fullscreen.toggled.length, 1);
+  assertTrue(env.fullscreen.toggled[0] === env.document.documentElement, 'the page goes full screen, so the status line stays in view');
+  assertTrue(env.fullscreen.toggled[0] !== env.els['picture-box']);
+  env.els.fullscreen.fire('click');   // the same click leaves again (the helper decides): no state kept here
+  assertEqual(env.fullscreen.toggled.length, 2);
+  assertTrue(env.fullscreen.toggled[1] === env.document.documentElement);
+});
+
+test('full screen button and picture: each toggles its own target, and neither disturbs the other\'s wiring', async () => {
+  const env = await started();
+  env.els.picture.fire('click');
+  env.els.fullscreen.fire('click');
+  env.els.picture.fire('click');
+  assertTrue(env.fullscreen.toggled[0] === env.els['picture-box']);
+  assertTrue(env.fullscreen.toggled[1] === env.document.documentElement);
+  assertTrue(env.fullscreen.toggled[2] === env.els['picture-box']);
+  assertEqual(env.fullscreen.toggled.length, 3);
+});
+
+test('full screen button: pressed exactly while the whole page is full screen, also when the browser ends it by itself', async () => {
+  const env = await started();
+  const button = env.els.fullscreen;
+  const pressed = () => [button.attrs['aria-pressed'], button.classList.contains('on')];
+  assertEqual(pressed(), ['false', false], 'not full screen when the page opens');
+  env.fullscreen.change(env.document.documentElement);
+  assertEqual(pressed(), ['true', true]);
+  env.fullscreen.change(env.els['picture-box']);   // the picture alone is full screen now: the page is not
+  assertEqual(pressed(), ['false', false]);
+  env.fullscreen.change(env.document.documentElement);
+  env.fullscreen.change(null);   // Esc
+  assertEqual(pressed(), ['false', false]);
+});
+
+test('full screen button: pressing it does not touch the slideshow or the camera', async () => {
+  const env = await started({ slideshowOn: true, seconds: 5 });
+  env.els.fullscreen.fire('click');
+  env.fullscreen.change(env.document.documentElement);
+  assertEqual(env.els.slideshow.attrs['aria-pressed'], 'true', 'the slideshow keeps running');
+  assertEqual(shownId(env), 'a', 'and the camera on screen is still the same one');
 });
 
 test('view: the picture box has the red frame (class "recording") exactly while the CURRENT camera records', async () => {

@@ -405,6 +405,7 @@ CSS . "\n";
          border: 1px solid var(--border-light); border-radius: 6px; cursor: pointer; text-decoration: none; display: inline-block; }
   .btn:hover, .btn:focus-visible { border-color: var(--accent); color: var(--accent); }
   .btn.on { border-color: var(--accent); color: var(--accent); }
+  .btn[hidden] { display: none; }   /* .btn's own display would otherwise beat the hidden attribute */
   .empty { padding: 48px 24px; font-family: var(--mono); color: var(--muted); }
 
   /* the list: every camera as a thumbnail; js/simple-list.js sets --thumb-w so they fit the screen */
@@ -466,8 +467,9 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
         return self::simplePage('Cameras', 'simple-list', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'simple-list.js']);
     }
 
-    // simple-view.php: one camera large (a click on it shows it full screen), the pager, the status line and
-    // the slideshow button. $current: the camera shown first (one of $cameras, or null when there are none).
+    // simple-view.php: one camera large (a click on it shows the picture alone full screen), the pager, the status line,
+    // the slideshow button and the FULL SCREEN button (the whole page, status line included). $current: the camera
+    // shown first (one of $cameras, or null when there are none).
     public static function simpleViewPage(array $cameras, ?array $current, int $slideshowSeconds): string
     {
         if ($current === null) {
@@ -490,6 +492,8 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             . '<span class="countdown" id="countdown" title="Time left before the slideshow shows the next camera" hidden></span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
+            // hidden until js/simple-view.js knows the browser can do it (the status line is part of what goes full screen here)
+            . '<button class="btn" type="button" id="fullscreen" aria-pressed="false" title="Show the whole page full screen, with this status line (a click on the picture shows the picture alone)" hidden>⛶ FULL SCREEN</button>'
             . '</div></div>';
         return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
     }

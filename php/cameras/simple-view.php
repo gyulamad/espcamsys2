@@ -1,7 +1,8 @@
 <?php
 // simple-view.php — one camera in large, for a big screen: the picture, a PREV / NEXT pager, a status
-// line (time, camera name, recording ON/off) and a SLIDESHOW button (the time per camera is the slideshow_seconds
-// setting). Usage: simple-view.php?cam=cam1 (no cam = the first camera).
+// line (time, camera name, recording ON/off), a SLIDESHOW button (the time per camera is the slideshow_seconds
+// setting) and a FULL SCREEN button (the whole page, status line included; a click on the picture shows the picture
+// alone full screen). Usage: simple-view.php?cam=cam1 (no cam = the first camera).
 //
 // The cam parameter must match an 'id' in config.php, as for mux.php's cams. Markup: CamLayout::simpleViewPage();
 // the pager, the status line and the slideshow rules are in js/simple-logic.js and js/simple-view.js; the "camera

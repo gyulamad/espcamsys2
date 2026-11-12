@@ -238,6 +238,9 @@ async function main() {
       d !== null && JSON.stringify(d.cameras) === JSON.stringify([{ id: 'cam-a', name: 'Cam A', icon: '🚪' }, { id: 'cam-b', name: 'Cam B', icon: '🚗' }, { id: 'cam-c', name: 'Cam C', icon: '📷' }]) && d.seconds === '25', JSON.stringify(d));
     check('view: pager, status line (time, camera name, recording) and slideshow button are there',
       ['id="prev"', 'id="next"', 'id="clock"', 'id="cam-name">Cam A<', 'id="rec"', 'id="slideshow"'].every((s) => r.text.includes(s)));
+    check('view: the FULL SCREEN button follows the slideshow button in the status line (outside the picture box), hidden until the script shows it',
+      /id="slideshow"[^>]*>[^<]*<\/button><button class="btn" type="button" id="fullscreen" aria-pressed="false"[^>]*\shidden>⛶ FULL SCREEN<\/button><\/div><\/div>/.test(r.text)
+      && !/id="picture-box"[\s\S]*?id="countdown-bar"/.exec(r.text)[0].includes('id="fullscreen"') && /\.btn\[hidden\]\s*\{\s*display:\s*none/.test(r.text), r.text.slice(0, 200));
     check('view: the "camera offline" cover is inside the picture box (it goes full screen with it), hidden at first',
       /<div class="picture rec-frame" id="picture-box"><img id="picture"[^>]*><div class="cam-offline" id="offline" role="status" hidden>[\s\S]*?CAMERA OFFLINE[\s\S]*?<\/div><\/div>/.test(r.text), r.text.slice(0, 200));
     check('view: loads camera-offline.js before simple-logic.js, fullscreen.js and simple-view.js', r.text.indexOf('src="js/camera-offline.js"') !== -1 && r.text.indexOf('src="js/camera-offline.js"') < r.text.indexOf('src="js/simple-logic.js"') && r.text.includes('src="js/simple-logic.js"') && r.text.includes('src="js/fullscreen.js"') && r.text.includes('src="js/simple-view.js"'));
