@@ -1,0 +1,222 @@
+{
+ "_about": "Golden vectors of the GET /mux wire format, written by an independent encoder (not the relay's) so that every implementation is checked against the same bytes: nodejs/camera-relay/lib/muxcodec.js (encoder), php/cameras/js/mux-codec.js (browser parser), php/cameras/lib/MuxStream.php (PHP parser/encoder). valid: the bytes and the messages they hold; invalid: bytes every parser must refuse; incomplete: the start of a message, which must produce nothing and be neither accepted nor refused.",
+ "valid": [
+  {
+   "name": "heartbeat",
+   "hex": "00000003010200",
+   "messages": [
+    {
+     "type": 2,
+     "source": "",
+     "payloadHex": ""
+    }
+   ]
+  },
+  {
+   "name": "picture with a tiny jpeg",
+   "hex": "0000000a01010563616d3a61ffd8",
+   "messages": [
+    {
+     "type": 1,
+     "source": "cam:a",
+     "payloadHex": "ffd8"
+    }
+   ]
+  },
+  {
+   "name": "picture with an empty payload",
+   "hex": "0000000801010563616d3a61",
+   "messages": [
+    {
+     "type": 1,
+     "source": "cam:a",
+     "payloadHex": ""
+    }
+   ]
+  },
+  {
+   "name": "readings of the detectors",
+   "hex": "0000001901030f73746174653a6465746563746f72737b2261223a317d",
+   "messages": [
+    {
+     "type": 3,
+     "source": "state:detectors",
+     "payloadHex": "7b2261223a317d"
+    }
+   ]
+  },
+  {
+   "name": "recording state of the cameras",
+   "hex": "0000001201030d73746174653a63616d657261737b7d",
+   "messages": [
+    {
+     "type": 3,
+     "source": "state:cameras",
+     "payloadHex": "7b7d"
+    }
+   ]
+  },
+  {
+   "name": "detector picture",
+   "hex": "000000100101086465743a63616d31ffd809ffd9",
+   "messages": [
+    {
+     "type": 1,
+     "source": "det:cam1",
+     "payloadHex": "ffd809ffd9"
+    }
+   ]
+  },
+  {
+   "name": "non-ASCII source (length counts bytes)",
+   "hex": "0000000a01010663616d3ac3a1ff",
+   "messages": [
+    {
+     "type": 1,
+     "source": "cam:á",
+     "payloadHex": "ff"
+    }
+   ]
+  },
+  {
+   "name": "payload with every byte value",
+   "hex": "0000010c01010963616d3a6279746573000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+   "messages": [
+    {
+     "type": 1,
+     "source": "cam:bytes",
+     "payloadHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    }
+   ]
+  },
+  {
+   "name": "unknown type is still returned",
+   "hex": "00000008016303783a797a7a",
+   "messages": [
+    {
+     "type": 99,
+     "source": "x:y",
+     "payloadHex": "7a7a"
+    }
+   ]
+  },
+  {
+   "name": "longest allowed source (80 bytes)",
+   "hex": "000000530101506161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+   "messages": [
+    {
+     "type": 1,
+     "source": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "payloadHex": ""
+    }
+   ]
+  },
+  {
+   "name": "several messages in a row",
+   "hex": "000000030102000000000a01010563616d3a61ffd80000001901030f73746174653a6465746563746f72737b2261223a317d00000008016303783a797a7a000000100101086465743a63616d31ffd809ffd9",
+   "messages": [
+    {
+     "type": 2,
+     "source": "",
+     "payloadHex": ""
+    },
+    {
+     "type": 1,
+     "source": "cam:a",
+     "payloadHex": "ffd8"
+    },
+    {
+     "type": 3,
+     "source": "state:detectors",
+     "payloadHex": "7b2261223a317d"
+    },
+    {
+     "type": 99,
+     "source": "x:y",
+     "payloadHex": "7a7a"
+    },
+    {
+     "type": 1,
+     "source": "det:cam1",
+     "payloadHex": "ffd809ffd9"
+    }
+   ]
+  }
+ ],
+ "invalid": [
+  {
+   "name": "unknown version 2",
+   "hex": "00000003020200"
+  },
+  {
+   "name": "unknown version 0",
+   "hex": "00000003000200"
+  },
+  {
+   "name": "unknown version 255",
+   "hex": "00000003ff0200"
+  },
+  {
+   "name": "length zero",
+   "hex": "00000000"
+  },
+  {
+   "name": "length smaller than the fixed part",
+   "hex": "000000020101"
+  },
+  {
+   "name": "absurd length, refused before waiting for it",
+   "hex": "ffffffff0101"
+  },
+  {
+   "name": "length one over the largest possible message",
+   "hex": "005000540101"
+  },
+  {
+   "name": "source longer than its message",
+   "hex": "0000000401010900"
+  },
+  {
+   "name": "source over the 80 byte limit but inside its message",
+   "hex": "00000054010151616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+  },
+  {
+   "name": "source length 255",
+   "hex": "000001020101ff616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+  },
+  {
+   "name": "text from something that is not the relay",
+   "hex": "3c68746d6c3e3c626f64793e6e6f70653c2f626f64793e3c2f68746d6c3e"
+  },
+  {
+   "name": "HTTP error text",
+   "hex": "485454502f312e31203530322042616420476174657761790d0a0d0a"
+  },
+  {
+   "name": "a good message, then a bad one",
+   "hex": "0000000301020000000003020200"
+  }
+ ],
+ "incomplete": [
+  {
+   "name": "nothing",
+   "hex": ""
+  },
+  {
+   "name": "half a length field",
+   "hex": "0000"
+  },
+  {
+   "name": "a length field and nothing more",
+   "hex": "0000000a"
+  },
+  {
+   "name": "a message without its last byte",
+   "hex": "0000000a01010563616d3a61ff"
+  },
+  {
+   "name": "the largest possible length, waiting for the rest",
+   "hex": "005000530101"
+  }
+ ]
+}

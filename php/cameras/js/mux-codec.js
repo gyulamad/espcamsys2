@@ -22,7 +22,8 @@
 
   const LENGTH_BYTES = 4;
   const FIXED_BODY_BYTES = 3;                  // version + type + source length
-  const MAX_BODY_BYTES = FIXED_BODY_BYTES + 80 + 5 * 1024 * 1024;   // fixed part + longest source + largest picture
+  const MAX_SOURCE_BYTES = 80;                 // the same limit the relay's encoder and MuxStream.php enforce
+  const MAX_BODY_BYTES = FIXED_BODY_BYTES + MAX_SOURCE_BYTES + 5 * 1024 * 1024;   // fixed part + longest source + largest picture
 
   class ProtocolError extends Error {}
 
@@ -39,6 +40,8 @@
     const body = buffer.subarray(LENGTH_BYTES, LENGTH_BYTES + bodyLength);
     if (body[0] !== VERSION) throw new ProtocolError('unknown version ' + body[0]);
     const sourceLength = body[2];
+    // refused like PHP does: all three implementations must agree on what a valid message is (tests/fixtures/mux_codec_vectors.json)
+    if (sourceLength > MAX_SOURCE_BYTES) throw new ProtocolError('source is longer than any source');
     if (FIXED_BODY_BYTES + sourceLength > bodyLength) throw new ProtocolError('source is longer than its message');
     return {
       type: body[1],
