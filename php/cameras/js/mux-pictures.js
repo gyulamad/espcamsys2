@@ -2,7 +2,7 @@
 // mux-pictures.js — shows the live pictures of the cameras and of their person detectors, and delivers the
 // detectors' readings and the cameras' recording state, from ONE mux.php connection. The pictures go onto the page's existing <img> elements: an
 // image whose source is replaced for every picture, so the page's load / error handling, fullscreen and
-// styling work as they did with one MJPEG stream per image. The page says what it wants to see; this keeps the
+// styling work as they would with a plain picture per image. The page says what it wants to see; this keeps the
 // connection open for exactly that and paints each arriving picture onto its image.
 //
 //   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onStatus, onCameraStatus, onDown });

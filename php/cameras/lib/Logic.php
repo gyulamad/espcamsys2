@@ -565,7 +565,7 @@ class CamLogic
         return $disposition . '; filename="' . $filename . '"';
     }
 
-    // Picks the Content-Type to forward for a proxied MJPEG stream:
+    // Picks the Content-Type to forward for a proxied stream:
     // whatever the relay actually sent, or a sane fallback if it didn't say
     // (or said something empty).
     public static function extractContentType(array $wrapperData, string $fallback): string
