@@ -615,7 +615,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </main>
 
 <footer>
-  <span>ESP32-CAM DASHBOARD · <?= date('Y') ?> · PHP MJPEG PROXY</span>
+  <span>ESP32-CAM DASHBOARD · <?= date('Y') ?> · PHP MUX PROXY</span>
   <span id="footer-time"></span>
 </footer>
 
