@@ -27,7 +27,9 @@ return json_decode(<<<'JSON'
       {"name": "LOG_FLUSH_SEC", "kind": "int", "min": 1, "max": 3600, "cond": "equals", "condKey": "LOG_ENABLED", "condValue": "1", "locked": false, "help": "routine entries wait this long so they go out together"},
       {"name": "LOG_REPEAT_SEC", "kind": "int", "min": 0, "max": 3600, "cond": "equals", "condKey": "LOG_ENABLED", "condValue": "1", "locked": false, "help": "an identical message inside this window is counted, not repeated"},
       {"name": "LOG_HEARTBEAT", "kind": "int", "min": 1, "max": 86400, "cond": "equals", "condKey": "LOG_ENABLED", "condValue": "1", "locked": false, "help": "seconds between status lines in the relay's log"},
-      {"name": "LOG_LOW_HEAP", "kind": "int", "min": 0, "max": 400000, "cond": "equals", "condKey": "LOG_ENABLED", "condValue": "1", "locked": false, "help": "warn when free heap falls below this many bytes"}
+      {"name": "LOG_LOW_HEAP", "kind": "int", "min": 0, "max": 400000, "cond": "equals", "condKey": "LOG_ENABLED", "condValue": "1", "locked": false, "help": "warn when free heap falls below this many bytes"},
+      {"name": "SETUP_MODE", "kind": "bool", "min": 0, "max": 0, "cond": "optional", "condKey": null, "condValue": null, "locked": false, "help": "1 = at the next restart this board opens its own setup WiFi and waits there, not working normally, until it is configured or exited; it switches itself off after use (absent or 0 = off)"},
+      {"name": "SETUP_PASSWORD", "kind": "secret", "min": 8, "max": 63, "cond": "optional", "condKey": null, "condValue": null, "locked": true, "help": "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace"}
     ],
     "gpios": [2, 4, 13, 14, 15]
   },
@@ -56,7 +58,9 @@ return json_decode(<<<'JSON'
       {"name": "STREAM_JPEG_Q", "kind": "int", "min": 1, "max": 100, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "JPEG quality of the picture, higher = better picture"},
       {"name": "STREAM_WR_TMO_S", "kind": "int", "min": 1, "max": 60, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "a relay connection that accepts nothing for this many seconds is dropped and opened again"},
       {"name": "ANN_HEARTBEAT", "kind": "int", "min": 1, "max": 86400, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "seconds between status lines (Wi-Fi, link, memory) in the relay's log"},
-      {"name": "ANN_RETRY", "kind": "int", "min": 1, "max": 3600, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)"}
+      {"name": "ANN_RETRY", "kind": "int", "min": 1, "max": 3600, "cond": "equals", "condKey": "STREAM_ENABLED", "condValue": "1", "locked": false, "help": "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)"},
+      {"name": "SETUP_MODE", "kind": "bool", "min": 0, "max": 0, "cond": "optional", "condKey": null, "condValue": null, "locked": false, "help": "1 = at the next restart this board opens its own setup WiFi and waits there, not working normally, until it is configured or exited; it switches itself off after use (absent or 0 = off)"},
+      {"name": "SETUP_PASSWORD", "kind": "secret", "min": 8, "max": 63, "cond": "optional", "condKey": null, "condValue": null, "locked": true, "help": "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace"}
     ],
     "gpios": [2, 4, 13, 14, 15],
     "rules": {"motionArea": {"frame": 96, "minSide": 10}}

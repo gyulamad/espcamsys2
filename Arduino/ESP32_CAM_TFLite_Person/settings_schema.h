@@ -137,6 +137,12 @@ static const KeyDef PERSON_KEYS[] = {
       "seconds between status lines (Wi-Fi, link, memory) in the relay's log" },
     { "ANN_RETRY",       Kind::Int,       1,    3600,    Cond::WhenEquals, "STREAM_ENABLED", "1",
       "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)" },
+    // F-21, the cable-free first setup (see the setup mode of the sketch). Both settings are OPTIONAL: a board
+    // that has neither is still complete, so boards deployed before this feature keep working untouched.
+    { "SETUP_MODE",      Kind::Bool,      0,    0,       Cond::Optional,    nullptr,          nullptr,
+      "1 = at the next restart this board opens its own setup WiFi and waits there, not working normally, until it is configured or exited; it switches itself off after use (absent or 0 = off)" },
+    { "SETUP_PASSWORD",  Kind::Secret,    8,    63,      Cond::Optional,    nullptr,          nullptr,
+      "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
 };
 
 static const Schema PERSON_SCHEMA = {
@@ -187,8 +193,11 @@ inline std::vector<std::string> personRemotePrerequisites() {
 // the thresholds and the stream tuning - is what the dashboard's CALIBRATE page edits. Keep in sync
 // with the schema above.
 inline std::vector<std::string> personLockedKeys() {
+    // F-21: SETUP_PASSWORD (the setup WiFi's master password) is serial-only / setup-form-only, like API_KEY: over
+    // plain HTTP a man-in-the-middle could otherwise choose the password of the next setup session. SETUP_MODE is
+    // NOT locked: switching it on from the dashboard is the point of the feature.
     static const char* const keys[] = { "PERSON_GPIO", "STREAM_ENABLED", "WIFI", "SERVER_HOST", "HTTP_PORT",
-                                        "API_KEY", "DETECTOR_ID" };
+                                        "API_KEY", "DETECTOR_ID", "SETUP_PASSWORD" };
     return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
 }
 

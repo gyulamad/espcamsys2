@@ -427,6 +427,62 @@ TEST(the_poller_survives_the_millis_counter_wrapping_around) {
     TEST_ASSERT_EQ(link.fetches, 1, "due across the wrap");
 }
 
+// ── the setup settings (F-21) ───────────────────────────────────────────
+// fill() is a board deployed BEFORE the feature: it has neither SETUP_MODE nor SETUP_PASSWORD.
+
+TEST(the_dashboard_can_switch_the_setup_mode_on_a_board_that_never_had_the_setting) {
+    MemoryStore st; fill(st);
+    TEST_ASSERT(!st.has("SETUP_MODE"), "precondition: not stored");
+    ChangeResult r = changeLine(st, "SETUP_MODE=yes");
+    TEST_ASSERT(r.ok(), "accepted");
+    TEST_ASSERT(r.changed.size() == 1 && r.changed[0] == "SETUP_MODE", "named");
+    TEST_ASSERT_EQ(st.m["SETUP_MODE"], std::string("1"), "stored in its canonical form");
+    TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "and the board is still complete");
+    ChangeResult off = changeLine(st, "SETUP_MODE=0");
+    TEST_ASSERT(off.ok() && st.m["SETUP_MODE"] == "0", "and it can be switched off again");
+}
+
+TEST(a_setup_mode_value_that_is_not_a_switch_is_refused_and_nothing_is_stored) {
+    MemoryStore st; fill(st);
+    std::map<std::string, std::string> before = st.m;
+    ChangeResult r = changeLine(st, "LOG_HEARTBEAT=900;SETUP_MODE=maybe");
+    TEST_ASSERT(!r.ok() && mentions(r, "SETUP_MODE"), "refused, says which");
+    TEST_ASSERT(st.m == before, "all or nothing");
+}
+
+TEST(the_setup_password_can_not_be_set_or_changed_from_the_dashboard) {
+    MemoryStore st; fill(st);
+    std::map<std::string, std::string> before = st.m;
+    ChangeResult r = changeLine(st, "LOG_HEARTBEAT=900;SETUP_PASSWORD=attacker-chosen-pw");
+    TEST_ASSERT(!r.ok() && mentions(r, "serial port"), "refused as serial-only");
+    TEST_ASSERT(st.m == before, "nothing at all was stored");
+    st.m["SETUP_PASSWORD"] = "the-real-master-pw";
+    before = st.m;
+    TEST_ASSERT(!changeLine(st, "SETUP_PASSWORD=attacker-chosen-pw").ok() && st.m == before, "nor replaced once there is one");
+    TEST_ASSERT(changeLine(st, "SETUP_PASSWORD=the-real-master-pw;LOG_HEARTBEAT=900").ok(), "giving the current value again is just ignored");
+}
+
+TEST(the_setup_form_may_set_the_password_because_it_passes_no_locked_keys) {
+    MemoryStore st; fill(st);
+    ChangeResult r = applyChangeLine(RECORDER_SCHEMA, st, "SETUP_PASSWORD=my-own-master-pw", std::vector<std::string>());
+    TEST_ASSERT(r.ok(), "accepted");
+    TEST_ASSERT_EQ(st.m["SETUP_PASSWORD"], std::string("my-own-master-pw"), "stored");
+    std::map<std::string, std::string> before = st.m;
+    TEST_ASSERT(!applyChangeLine(RECORDER_SCHEMA, st, "SETUP_PASSWORD=short", std::vector<std::string>()).ok(), "7 characters or fewer: refused");
+    TEST_ASSERT(!applyChangeLine(RECORDER_SCHEMA, st, "SETUP_PASSWORD=" + std::string(64, 'p'), std::vector<std::string>()).ok(), "64 characters: refused");
+    TEST_ASSERT(st.m == before, "a refused password stores nothing");
+}
+
+TEST(the_report_to_the_relay_shows_the_setup_switch_and_masks_the_password) {
+    MemoryStore st; fill(st);
+    st.m["SETUP_MODE"] = "1";
+    st.m["SETUP_PASSWORD"] = "the-real-master-pw";
+    std::string rep = renderReport(RECORDER_SCHEMA, st);
+    TEST_ASSERT(rep.find("SETUP_MODE=1") != std::string::npos, "the relay (and the dashboard banner) learns the board is armed");
+    TEST_ASSERT(rep.find("SETUP_PASSWORD=********") != std::string::npos, "the password is masked");
+    TEST_ASSERT(rep.find("the-real-master-pw") == std::string::npos, "and never sent");
+}
+
 int main() {
     RUN_TEST(a_valid_change_is_stored_and_named);
     RUN_TEST(a_change_is_all_or_nothing);
@@ -462,5 +518,10 @@ int main() {
     RUN_TEST(a_settings_restart_after_a_reboot_is_not_taken_for_one);
     RUN_TEST(the_relays_reply_for_a_reboot_parses_like_any_change);
     RUN_TEST(the_poller_survives_the_millis_counter_wrapping_around);
+    RUN_TEST(the_dashboard_can_switch_the_setup_mode_on_a_board_that_never_had_the_setting);
+    RUN_TEST(a_setup_mode_value_that_is_not_a_switch_is_refused_and_nothing_is_stored);
+    RUN_TEST(the_setup_password_can_not_be_set_or_changed_from_the_dashboard);
+    RUN_TEST(the_setup_form_may_set_the_password_because_it_passes_no_locked_keys);
+    RUN_TEST(the_report_to_the_relay_shows_the_setup_switch_and_masks_the_password);
     return test::summarize();
 }
