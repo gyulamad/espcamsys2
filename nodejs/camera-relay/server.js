@@ -1724,7 +1724,7 @@ app.get('/device-settings/:type/:id/state', requireControlKeyForDevice, checkDev
 });
 
 // GET /setup-mode  control key: { devices: [ { type, id, reportedAt } ] } — the boards whose last report said
-// SETUP_MODE=1 (open to anyone on the public setup Wi-Fi). The dashboard shows a banner while the list is not
+// SETUP_MODE=1 (armed: it opens its own setup Wi-Fi and waits there). The dashboard shows a banner while the list is not
 // empty. Read from the state files on each ask: it is one small request a minute, and a file that cannot be
 // read or understood is skipped (parseState turns damage into an empty state) rather than failing the answer.
 function listSetupModeDevices() {

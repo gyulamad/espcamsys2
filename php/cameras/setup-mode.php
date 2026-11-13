@@ -1,7 +1,7 @@
 <?php
-// setup-mode.php — is any board open to anyone on the public 'setup' WiFi? A board with SETUP_MODE=1 joins that
-// publicly known network at boot and accepts new settings from whoever is on it, so the operator has to be
-// reminded to switch it off. The boards report their stored settings to the relay (server.js), which knows which
+// setup-mode.php — is any board armed for setup? A board with SETUP_MODE=1 opens its own setup WiFi at boot and
+// waits there, not working normally, until someone saves its settings or exits setup; anyone in range who knows
+// the master password can reconfigure it meanwhile, so the operator has to be reminded to finish or exit it. The boards report their stored settings to the relay (server.js), which knows which
 // ones say SETUP_MODE=1; this asks it and passes on only what the browser needs.
 //
 // GET setup-mode.php -> { "on": false }

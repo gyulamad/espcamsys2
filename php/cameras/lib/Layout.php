@@ -242,8 +242,9 @@ HTML;
     }
 
     // The setup-mode alert: a PERSISTENT banner (role="alert") at the top of the page while any board reports
-    // SETUP_MODE=1 — such a board joins the publicly known 'setup' WiFi and takes new settings from anybody on it,
-    // so the operator must not be able to click it away and forget. Not an alert() box and not dismissible: it
+    // SETUP_MODE=1 — such a board opens its own setup WiFi and waits there (not working normally) until it is
+    // configured or exited, and anyone in range who knows the master password can reconfigure it, so the
+    // operator must not be able to click it away and forget. Not an alert() box and not dismissible: it
     // goes away only when setup-mode.php says no board has it on any more. Asked on page load and then every
     // 60 s, so the banner also disappears by itself after the operator switched the setting off. Put once at the
     // end of <body> of each page that has storageWarningScript.

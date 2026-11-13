@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // test_setup_mode_e2e.js — end-to-end check of GET /setup-mode against a REAL `server.js` process,
-// real HTTP and real state files: which boards last reported SETUP_MODE=1 (open to anyone on the
-// public setup Wi-Fi), so the dashboard can show a persistent warning.
+// real HTTP and real state files: which boards last reported SETUP_MODE=1 (armed: they open their own
+// setup Wi-Fi and wait there), so the dashboard can show a persistent warning.
 //   - the CONTROL key is needed (none / wrong / the camera key -> 401; no control key configured -> 503)
 //   - nothing reported -> { devices: [] }; boards report over the real POST .../report route
 //   - only SETUP_MODE exactly "1" counts; the answer is sorted by type, then id, with reportedAt

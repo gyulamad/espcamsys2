@@ -899,7 +899,7 @@ camtest_test('escapeSettingValue: ; and \\ are escaped so a value can not become
     camtest_assert_equal(CamLogic::escapeSettingValue('plain'), 'plain');
 });
 
-// ── Setup mode (boards open to anyone on the public setup WiFi) ──────
+// ── Setup mode (boards armed for setup: own setup WiFi, waiting for settings) ──────
 
 camtest_test('sanitizeSetupModeStatus: lists valid devices with OUR message', function () {
     $r = CamLogic::sanitizeSetupModeStatus(['devices' => [
@@ -909,17 +909,33 @@ camtest_test('sanitizeSetupModeStatus: lists valid devices with OUR message', fu
     camtest_assert_equal($r, [
         'on' => true,
         'devices' => [['type' => 'recorder', 'id' => 'cam2'], ['type' => 'detector', 'id' => 'det-1']],
-        'message' => 'SETUP MODE is ON for cam2 (camera), det-1 (detector). Anyone who knows the public setup WiFi password can reconfigure those devices. Switch SETUP_MODE off on each device\'s settings page.',
+        'message' => 'SETUP MODE is ON for cam2 (camera), det-1 (detector). Each of those devices opens its own setup WiFi and stays in setup, not working normally, until someone saves its settings or presses Exit setup mode on its setup page. Anyone in range who knows the master password can reconfigure them. Finish or exit setup on each device itself; a device that is still online can also be switched off with SETUP_MODE on its settings page.',
     ]);
 });
 
 camtest_test('setupModeMessage: singular for one device, and "and N more" when the list was cut', function () {
     camtest_assert_equal(
         CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'cam2']]),
-        'SETUP MODE is ON for cam2 (camera). Anyone who knows the public setup WiFi password can reconfigure this device. Switch SETUP_MODE off on the device\'s settings page.'
+        'SETUP MODE is ON for cam2 (camera). This device opens its own setup WiFi and stays in setup, not working normally, until someone saves its settings or presses Exit setup mode on its setup page. Anyone in range who knows the master password can reconfigure it. Finish or exit setup on the device itself; a device that is still online can also be switched off with SETUP_MODE on its settings page.'
     );
     camtest_assert_true(strpos(CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'a']], 3), 'a (camera) and 3 more.') !== false);
-    camtest_assert_true(strpos(CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'a']], 3), 'those devices') !== false);
+    camtest_assert_true(strpos(CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'a']], 3), 'Each of those devices') !== false);
+});
+
+camtest_test('setupModeMessage: describes the own-WiFi design, names both ways out, and never carries a password or markup', function () {
+    foreach ([1, 3] as $count) {
+        $devices = [];
+        for ($i = 0; $i < $count; $i++) {
+            $devices[] = ['type' => $i % 2 ? 'detector' : 'recorder', 'id' => 'dev' . $i];
+        }
+        $m = CamLogic::setupModeMessage($devices);
+        camtest_assert_true(strpos($m, 'own setup WiFi') !== false, 'says the board opens its own setup WiFi');
+        camtest_assert_true(strpos($m, 'Exit setup mode') !== false, 'names the exit button (a waiting board is offline: the dashboard cannot switch it off)');
+        camtest_assert_true(strpos($m, 'SETUP_MODE') !== false, 'names the switch for a board that is still online');
+        camtest_assert_true(strpos($m, 'master password') !== false, 'says who can reconfigure it');
+        camtest_assert_true(stripos($m, 'public') === false && stripos($m, 'Admin1234') === false, 'no talk of a shared public network, and the default password is never printed');
+        camtest_assert_true(preg_match('/[<>&"]/', $m) === 0, 'plain text only');
+    }
 });
 
 camtest_test('sanitizeSetupModeStatus: no warning for an empty list, an error body or anything that is not what the relay sends', function () {

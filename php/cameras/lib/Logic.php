@@ -271,7 +271,7 @@ class CamLogic
     // The most devices SETUP_MODE warning names; a longer list says "and N more" (the banner must stay readable).
     const SETUP_MODE_MAX_DEVICES = 20;
 
-    // What the relay says about boards that are open to anyone on the public 'setup' Wi-Fi (GET /setup-mode:
+    // What the relay says about boards that are armed for setup (SETUP_MODE=1: GET /setup-mode:
     // { devices: [ { type, id, reportedAt } ] }), cut down to what the browser needs. PHP is the trust
     // boundary: only valid types and ids go on, and the message text is OURS (device ids reach the page as
     // plain text, and the page sets them with textContent only).
@@ -311,13 +311,26 @@ class CamLogic
     }
 
     // The text of the setup-mode warning. $devices are checked [type, id] pairs; $more counts the ones not listed.
+    //
+    // What it has to say follows how the firmware behaves: an armed board restarts, opens its OWN setup WiFi and
+    // waits there (no timeout, normal work paused) until someone saves its settings or presses "Exit setup mode"
+    // on its setup page; anyone in range who knows the master password can reconfigure it meanwhile. The
+    // dashboard only sees the board's last report, so it cannot tell "armed, about to restart" from "already
+    // waiting in setup" (and a waiting board is offline: the dashboard cannot switch it off) — hence the advice
+    // names both ways out. The master password itself is never part of the text.
     public static function setupModeMessage(array $devices, int $more = 0): string
     {
         $names = array_map(static fn(array $d): string => $d['id'] . ($d['type'] === 'detector' ? ' (detector)' : ' (camera)'), $devices);
         $list = implode(', ', $names) . ($more > 0 ? ' and ' . $more . ' more' : '');
         $many = count($devices) + $more > 1;
-        return 'SETUP MODE is ON for ' . $list . '. Anyone who knows the public setup WiFi password can reconfigure ' . ($many ? 'those devices' : 'this device')
-            . '. Switch SETUP_MODE off on ' . ($many ? "each device's" : "the device's") . ' settings page.';
+        $subject = $many ? 'Each of those devices' : 'This device';
+        $them = $many ? 'them' : 'it';
+        $each = $many ? 'each device' : 'the device';
+        return 'SETUP MODE is ON for ' . $list . '. ' . $subject . ' opens its own setup WiFi and stays in setup, not working normally,'
+            . ' until someone saves its settings or presses Exit setup mode on its setup page.'
+            . ' Anyone in range who knows the master password can reconfigure ' . $them . '.'
+            . ' Finish or exit setup on ' . $each . ' itself; a device that is still online can also be switched off'
+            . ' with SETUP_MODE on its settings page.';
     }
 
     // Finds one camera by its 'id' in the $cameras array built above.

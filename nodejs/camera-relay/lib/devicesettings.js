@@ -317,10 +317,11 @@ function viewState(state, nowMs) {
   };
 }
 
-// ── SETUP_MODE: boards that are open to anyone on the public 'setup' Wi-Fi ──
+// ── SETUP_MODE: boards that are armed for setup ──
 //
-// A board with SETUP_MODE=1 joins a publicly known Wi-Fi at boot and takes new settings from anybody
-// on it, so the operator must be told to switch it off again. The boards already report their stored
+// A board with SETUP_MODE=1 opens its own setup Wi-Fi at boot and waits there until it is configured or
+// exited; anyone in range who knows the master password can reconfigure it meanwhile, so the operator must
+// be told to finish or exit it. The boards already report their stored
 // settings (secrets masked), so the relay only has to read what they last said. Exactly "1" counts:
 // the setting is optional (absent = off) and anything else ("0", "", "true") is not on.
 
