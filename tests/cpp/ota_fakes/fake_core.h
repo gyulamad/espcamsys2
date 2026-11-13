@@ -12,6 +12,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,6 +26,18 @@ struct Route {            // what the "relay" answers for a URL that contains `p
   std::string image;      // for the firmware download
   int declaredLength = -2;   // the Content-Length the relay announces: -2 = the real size of the body, -1 = unknown (chunked),
                              // anything else = that number (a body that stops short of it never completes)
+};
+
+// One TCP connection as the setup server sees it (setup_mode.h): the test fills `in` with what the
+// phone sends and reads `out` for what the board answered. `maxWrite` plays a socket that takes only a
+// few bytes at a time; `remoteLeft` is the phone going away.
+struct Conn {
+  std::string in, out;
+  size_t inPos = 0;
+  bool open = true;
+  bool remoteLeft = false;
+  size_t maxWrite = (size_t)-1;
+  bool writeFails = false;
 };
 
 struct State {
@@ -65,6 +78,24 @@ struct State {
   uint32_t pollsSinceDelay = 0;
   bool spun = false;
 
+  // the soft access point, its DNS and TCP servers (setup_mode.h). `wifiCalls` is the order in which
+  // the radio was told things, for the tests that care about it.
+  int wifiMode = 0;                       // WIFI_OFF
+  bool wifiPersistent = true;             // the Arduino core's default: settings go to flash
+  bool softApOk = true;                   // false: softAP() fails
+  bool softApUp = false;
+  std::string softApSsid, softApPass, apIp = "192.168.4.1";
+  int softApChannel = -1, softApHidden = -1, softApMax = -1;
+  bool dnsOk = true;                      // false: DNSServer::start() fails
+  bool dnsRunning = false;
+  int dnsPolls = 0;
+  std::string dnsDomain, dnsAnswer;
+  bool tcpListening = false;
+  int tcpPort = 0;
+  std::deque<std::shared_ptr<Conn> > incoming;   // connections waiting to be accepted
+  uint64_t efuseMac = 0x0000f6e5d4ccbbaaULL;     // AA:BB:CC:D4:E5:F6, first byte lowest
+  std::vector<std::string> wifiCalls;
+
   // how the flash behaves
   bool beginOk = true;
   bool shortWrite = false;
@@ -79,6 +110,9 @@ inline State& g() { static State s; return s; }
 #define UPDATE_ERROR_OK 0
 #define UPDATE_ERROR_MD5 7
 #define UPDATE_ERROR_NO_PARTITION 12
+#define WIFI_OFF 0
+#define WIFI_STA 1
+#define WIFI_AP 2
 #define WL_CONNECTED 3
 #define WL_DISCONNECTED 6
 
@@ -120,6 +154,19 @@ class IPAddress {
 struct FakeWiFi {
   int status() { return fake::g().wifiUp ? WL_CONNECTED : WL_DISCONNECTED; }
   IPAddress localIP() { IPAddress a; a.s_ = fake::g().ownIp; return a; }
+  // the soft AP (setup_mode.h): the fake records what it was told and answers as scripted
+  bool mode(int m) { fake::g().wifiMode = m; fake::g().wifiCalls.push_back("mode:" + std::to_string(m)); return true; }
+  int getMode() { return fake::g().wifiMode; }
+  bool persistent(bool p) { fake::g().wifiPersistent = p; fake::g().wifiCalls.push_back(p ? "persistent:1" : "persistent:0"); return true; }
+  bool softAP(const char* ssid, const char* pass, int channel, int hidden, int maxConn) {
+    fake::g().wifiCalls.push_back("softAP");
+    fake::g().softApSsid = ssid; fake::g().softApPass = pass;
+    fake::g().softApChannel = channel; fake::g().softApHidden = hidden; fake::g().softApMax = maxConn;
+    fake::g().softApUp = fake::g().softApOk;
+    return fake::g().softApOk;
+  }
+  IPAddress softAPIP() { IPAddress a; a.s_ = fake::g().apIp; return a; }
+  bool softAPdisconnect(bool wifioff) { fake::g().wifiCalls.push_back(wifioff ? "softAPdisconnect:1" : "softAPdisconnect:0"); fake::g().softApUp = false; return true; }
   bool hostByName(const char* name, IPAddress& out) {
     std::map<std::string, std::string>::const_iterator it = fake::g().dns.find(name);
     if (it == fake::g().dns.end()) return false;
@@ -157,7 +204,10 @@ class WiFiUDP {
   IPAddress from_;
 };
 
-struct FakeEsp { void restart() { fake::g().restarted = true; } };
+struct FakeEsp {
+  void restart() { fake::g().restarted = true; }
+  uint64_t getEfuseMac() { return fake::g().efuseMac; }
+};
 inline FakeEsp ESP;
 
 class Stream {
@@ -171,13 +221,50 @@ class Stream {
 // test compiles unchanged. We model only the two methods readBounded() uses.
 class WiFiClient : public Stream {
  public:
+  WiFiClient() {}
+  explicit WiFiClient(std::shared_ptr<fake::Conn> c) : conn_(c) {}   // an accepted connection (WiFiServer)
   int read(uint8_t* buf, size_t len) {
+    if (conn_) {
+      size_t left = conn_->in.size() - conn_->inPos;
+      size_t n = left < len ? left : len;
+      for (size_t i = 0; i < n; ++i) buf[i] = (uint8_t)conn_->in[conn_->inPos + i];
+      conn_->inPos += n;
+      return (int)n;
+    }
     size_t n = bytes.size() < len ? bytes.size() : len;
     for (size_t i = 0; i < n; ++i) buf[i] = (uint8_t)bytes[i];
     bytes.erase(0, n);
     return (int)n;
   }
-  int available() { return (int)bytes.size(); }
+  int available() { return conn_ ? (int)(conn_->in.size() - conn_->inPos) : (int)bytes.size(); }
+  // like the real one: the socket counts as connected while the peer is there OR unread data is left
+  uint8_t connected() { return conn_ && conn_->open && (!conn_->remoteLeft || available() > 0); }
+  size_t write(const uint8_t* d, size_t n) {
+    if (!conn_ || !conn_->open || conn_->writeFails) return 0;
+    size_t k = n < conn_->maxWrite ? n : conn_->maxWrite;
+    conn_->out.append(reinterpret_cast<const char*>(d), k);
+    return k;
+  }
+  void stop() { if (conn_) conn_->open = false; }
+  operator bool() const { return (bool)conn_; }
+ private:
+  std::shared_ptr<fake::Conn> conn_;
+};
+
+// The listening socket: the test queues connections in fake::g().incoming, the board accepts them.
+class WiFiServer {
+ public:
+  explicit WiFiServer(uint16_t port = 80, uint8_t = 4) : port_(port) {}
+  void begin() { fake::g().tcpListening = true; fake::g().tcpPort = port_; }
+  void end() { fake::g().tcpListening = false; }
+  WiFiClient available() {
+    if (!fake::g().tcpListening || fake::g().incoming.empty()) return WiFiClient();
+    std::shared_ptr<fake::Conn> c = fake::g().incoming.front();
+    fake::g().incoming.pop_front();
+    return WiFiClient(c);
+  }
+ private:
+  uint16_t port_;
 };
 
 class HTTPClient {
