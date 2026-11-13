@@ -317,8 +317,38 @@ function viewState(state, nowMs) {
   };
 }
 
+// ── SETUP_MODE: boards that are open to anyone on the public 'setup' Wi-Fi ──
+//
+// A board with SETUP_MODE=1 joins a publicly known Wi-Fi at boot and takes new settings from anybody
+// on it, so the operator must be told to switch it off again. The boards already report their stored
+// settings (secrets masked), so the relay only has to read what they last said. Exactly "1" counts:
+// the setting is optional (absent = off) and anything else ("0", "", "true") is not on.
+
+// The id a state file name stands for ("cam2.json" -> "cam2"), or null when the name is not one the
+// relay wrote (a stray file, a temp file of an atomic write, an id that is not valid).
+function stateIdFromFileName(name) {
+  if (typeof name !== 'string' || !name.endsWith('.json')) return null;
+  const id = name.slice(0, -'.json'.length);
+  return isId(id) ? id : null;
+}
+
+// Which devices last reported SETUP_MODE=1.
+//   entries: [{ type, id, state }] — states already loaded (parseState), so no files are read here
+//   -> [{ type, id, reportedAt }] sorted by type, then id (a stable answer the dashboard can compare)
+function setupModeDevices(entries) {
+  const found = [];
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (!e || !isType(e.type) || !isId(e.id) || !e.state || !e.state.reported) continue;
+    if (parseSettingsLine(e.state.reported.line).SETUP_MODE !== '1') continue;
+    found.push({ type: e.type, id: e.id, reportedAt: e.state.reported.at });
+  }
+  const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return found.sort((a, b) => byText(a.type, b.type) || byText(a.id, b.id));
+}
+
 module.exports = {
   TYPES, MAX_LINE, isType, isId, parseNeed, checkStagedLine, keyNames, fileFor, pickStaged, FetchLogGate,
   MAX_REPORT_LINE, stateFile, emptyState, parseState, parseSettingsLine, parseReportBody, nextRev, queueChange, applyReport, changeReply, viewState,
   COMMAND_LINES, COMMAND_TTL_MS, commandOf, livePending, queueCommand, commandRefusal,
+  stateIdFromFileName, setupModeDevices,
 };

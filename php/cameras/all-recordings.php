@@ -96,5 +96,6 @@ $cameraLabelsJson = json_encode(
   list.refresh().then(() => { if (wanted) list.playClip(wanted.cam, wanted.filename); });
 </script>
 <?= CamLayout::storageWarningScript() ?>
+<?= CamLayout::setupModeAlertScript() ?>
 </body>
 </html>

@@ -241,6 +241,52 @@ CSS . "\n";
 HTML;
     }
 
+    // The setup-mode alert: a PERSISTENT banner (role="alert") at the top of the page while any board reports
+    // SETUP_MODE=1 — such a board joins the publicly known 'setup' WiFi and takes new settings from anybody on it,
+    // so the operator must not be able to click it away and forget. Not an alert() box and not dismissible: it
+    // goes away only when setup-mode.php says no board has it on any more. Asked on page load and then every
+    // 60 s, so the banner also disappears by itself after the operator switched the setting off. Put once at the
+    // end of <body> of each page that has storageWarningScript.
+    // The text comes from the server and is set with textContent only (device ids come from the relay, so
+    // nothing here may ever be read as HTML). A failed request keeps what is shown and says nothing: a
+    // warning that cannot be read must not become an error box, and one already shown must not flicker away.
+    public static function setupModeAlertScript(): string
+    {
+        return <<<'HTML'
+<style>
+  #setup-mode-alert { position: sticky; top: 0; z-index: 2147483000; margin: 0; padding: 10px 16px; background: #b00020; color: #fff;
+    font: 600 14px/1.4 system-ui, sans-serif; text-align: center; border-bottom: 2px solid #5c0010; }
+</style>
+<script>
+  (function () {
+    var banner = null;
+    function check() {
+      fetch('setup-mode.php', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d) return;
+          if (d.on === true && typeof d.message === 'string' && d.message !== '') {
+            if (!banner) {
+              banner = document.createElement('div');
+              banner.id = 'setup-mode-alert';
+              banner.setAttribute('role', 'alert');
+              document.body.insertBefore(banner, document.body.firstChild);
+            }
+            if (banner.textContent !== d.message) banner.textContent = d.message;
+          } else if (d.on === false && banner) {
+            banner.remove();
+            banner = null;
+          }
+        })
+        .catch(function () {});
+    }
+    check();
+    setInterval(check, 60000);
+  })();
+</script>
+HTML;
+    }
+
     // A reboot / reset drop-down: a split button. The main button runs the menu's default target at
     // once (after the page's confirmation); the arrow opens a list with every target. $menu comes from
     // CamLogic::rebootMenu(); $btnClass is the page's button style ('btn' in the header, 'cam-btn' on a
@@ -391,7 +437,7 @@ CSS . "\n";
             . '<link rel="stylesheet" href="fonts/fonts.css">' . "\n"
             . "<style>\n" . self::simpleCss() . "</style>\n</head>\n"
             . '<body class="' . self::esc($bodyClass) . "\">\n" . self::navBar($bodyClass) . $body . "\n" . $tags
-            . self::storageWarningScript() . "\n</body>\n</html>\n";
+            . self::storageWarningScript() . "\n" . self::setupModeAlertScript() . "\n</body>\n</html>\n";
     }
 
     private static function simpleCss(): string

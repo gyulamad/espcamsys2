@@ -133,11 +133,14 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 
   // Is this setting needed, given the values? (same rule as the firmware and camera-settings.php)
   function required(def, vals) {
+    if (def.cond === 'optional') return false;
     if (def.cond === 'always' || def.condKey === null) return true;
     if (vals[def.condKey] === undefined || vals[def.condKey] === '') return true;
     const eq = vals[def.condKey] === def.condValue;
     return def.cond === 'equals' ? eq : !eq;
   }
+  // An optional setting (SETUP_MODE) may be absent from a board; absent means off. It is always shown, so it can be turned on.
+  const isOptional = (d) => d.cond === 'optional';
   const isFixed = (d) => d.locked || d.kind === 'secret' || d.kind === 'wifi';
 
   function makeInput(d, value) {
@@ -177,7 +180,8 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     const fs = el('fieldset', {}, el('legend', { textContent: 'Stored in the ' + WHO }));
     for (const d of keys) {
       const id = 'f-' + d.name, fixed = isFixed(d);
-      const value = reported[d.name];
+      // an absent optional on/off setting reads as Off (and is not a change until it is switched On)
+      const value = reported[d.name] === undefined && isOptional(d) && d.kind === 'bool' ? '0' : reported[d.name];
       const input = makeInput(d, value);
       input.id = id; input.name = d.name;
       if (fixed) input.disabled = true;
@@ -187,7 +191,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       input.addEventListener('change', () => { refresh(); });
       const tags = el('span', { className: 'tags' });
       if (fixed) tags.append(el('span', { className: 'tag lock', textContent: 'serial only' }));
-      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name }), tags), input, el('div', { className: 'help', textContent: d.help + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '') }));
+      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name }), tags), input, el('div', { className: 'help', textContent: d.help + (reported[d.name] === undefined && isOptional(d) ? ' — not set on this ' + WHO + ' (treated as off)' : '') + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '') }));
       fs.append(row);
     }
     form.append(fs);
@@ -209,8 +213,8 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     for (const d of keys) {
       const row = $('r-' + d.name), i = $('f-' + d.name);
       const need = required(d, vals), has = reported[d.name] !== undefined;
-      row.hidden = !need && !has;
-      row.classList.toggle('unused', !need);
+      row.hidden = !need && !has && !isOptional(d);
+      row.classList.toggle('unused', !need && !isOptional(d));
       i.classList.toggle('changed', !isFixed(d) && i.value !== original[d.name]);
     }
     const n = Object.keys(changes().values).length;
@@ -226,7 +230,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     for (const d of keys) {
       if (isFixed(d)) continue;
       const need = required(d, vals), neededBefore = required(d, reported);
-      if (!need && reported[d.name] === undefined) continue;
+      if (!need && reported[d.name] === undefined && !isOptional(d)) continue;
       if (vals[d.name] === '') { if (need && !neededBefore) missing = missing || d.name; continue; }
       if (vals[d.name] !== original[d.name]) out[d.name] = vals[d.name];
     }
@@ -309,5 +313,6 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   load();
 </script>
 <?= CamLayout::storageWarningScript() ?>
+<?= CamLayout::setupModeAlertScript() ?>
 </body>
 </html>

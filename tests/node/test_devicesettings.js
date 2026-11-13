@@ -299,4 +299,48 @@ test('stateFile: under the type, in its own folder, so it can never collide with
   assertTrue(ds.stateFile('/d', 'recorder', 'cam1') !== ds.fileFor('/d', 'recorder', 'cam1'));
 });
 
+// ── SETUP_MODE ──────────────────────────────────────────────────────────
+
+const stateReporting = (line, at) => ({ ...ds.emptyState(), reported: { line, at } });
+
+test('setupModeDevices: lists only boards whose last report has SETUP_MODE exactly "1", sorted by type then id', () => {
+  const list = ds.setupModeDevices([
+    { type: 'recorder', id: 'cam2', state: stateReporting('A=1;SETUP_MODE=1', 20) },
+    { type: 'detector', id: 'det9', state: stateReporting('SETUP_MODE=1', 30) },
+    { type: 'recorder', id: 'cam1', state: stateReporting('SETUP_MODE=1;A=2', 10) },
+    { type: 'recorder', id: 'off', state: stateReporting('SETUP_MODE=0', 5) },
+    { type: 'recorder', id: 'absent', state: stateReporting('A=1', 5) },
+    { type: 'recorder', id: 'odd', state: stateReporting('SETUP_MODE=true', 5) },
+    { type: 'recorder', id: 'empty', state: stateReporting('SETUP_MODE=', 5) },
+    { type: 'recorder', id: 'never', state: ds.emptyState() },
+  ]);
+  assertEqual(list, [
+    { type: 'detector', id: 'det9', reportedAt: 30 },
+    { type: 'recorder', id: 'cam1', reportedAt: 10 },
+    { type: 'recorder', id: 'cam2', reportedAt: 20 },
+  ]);
+});
+
+test('setupModeDevices: junk entries and bad types/ids are skipped, never thrown on', () => {
+  assertEqual(ds.setupModeDevices(null), []);
+  assertEqual(ds.setupModeDevices([]), []);
+  assertEqual(ds.setupModeDevices([null, 5, {}, { type: 'x', id: 'a', state: stateReporting('SETUP_MODE=1', 1) },
+    { type: 'recorder', id: '../a', state: stateReporting('SETUP_MODE=1', 1) },
+    { type: 'recorder', id: 'a' }]), []);
+});
+
+test('setupModeDevices: the first SETUP_MODE of a line wins, and an escaped separator in another value cannot fake one', () => {
+  assertEqual(ds.setupModeDevices([{ type: 'recorder', id: 'a', state: stateReporting('SETUP_MODE=0;SETUP_MODE=1', 1) }]), []);
+  assertEqual(ds.setupModeDevices([{ type: 'recorder', id: 'b', state: stateReporting('NAME=x\\;SETUP_MODE=1', 1) }]), []);
+});
+
+test('stateIdFromFileName: only <valid id>.json counts', () => {
+  assertEqual(ds.stateIdFromFileName('cam2.json'), 'cam2');
+  assertEqual(ds.stateIdFromFileName('cam2.json.tmp'), null);
+  assertEqual(ds.stateIdFromFileName('.json'), null);
+  assertEqual(ds.stateIdFromFileName('_x.json'), null);
+  assertEqual(ds.stateIdFromFileName('a b.json'), null);
+  assertEqual(ds.stateIdFromFileName(undefined), null);
+});
+
 summarize();

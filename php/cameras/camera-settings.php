@@ -3,7 +3,7 @@
 // board reports it holds, and queueing a change for it. The page is camera-settings-page.php.
 //
 //   GET  camera-settings.php?cam=ID[&type=detector]
-//        -> { camera: {id, name, icon, detector, type, deviceId}, keys: [ {name, kind, min, max, cond, condKey, condValue, locked, help} ],
+//        -> { camera: {id, name, icon, detector, type, deviceId}, keys: [ {name, kind, min, max, cond, condKey, condValue, locked, help} ]   (cond: always | equals | not_equals | optional),
 //             gpios: [...], state: { reported: {settings, at} | null, pending: {rev, keys, at, by} | null,
 //                                    last: {rev, result, message, at} | null, now } }
 //   POST camera-settings.php?cam=ID[&type=detector]   body: { "values": { "LOG_HEARTBEAT": "900", ... } }   queue a change

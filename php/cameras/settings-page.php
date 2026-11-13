@@ -290,5 +290,6 @@ require_once __DIR__ . '/lib/Layout.php';
   load();
 </script>
 <?= CamLayout::storageWarningScript() ?>
+<?= CamLayout::setupModeAlertScript() ?>
 </body>
 </html>

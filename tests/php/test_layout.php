@@ -52,6 +52,35 @@ camtest_test('storageWarningScript asks with the login, never from cache, and wr
     camtest_assert_true(!preg_match('/innerHTML|document\.write|eval\(|localStorage/', $html), 'the message goes to alert() only');
 });
 
+// ── setupModeAlertScript ─────────────────────────────────────────────
+
+camtest_test('setupModeAlertScript asks setup-mode.php on load and then every 60 seconds, with the login and never from cache', function () {
+    $html = CamLayout::setupModeAlertScript();
+    camtest_assert_equal(substr_count($html, '<script'), 1);
+    camtest_assert_true(strpos($html, "fetch('setup-mode.php'") !== false, 'asks setup-mode.php');
+    camtest_assert_true(strpos($html, "credentials: 'same-origin'") !== false);
+    camtest_assert_true(strpos($html, "cache: 'no-store'") !== false);
+    camtest_assert_true(strpos($html, 'setInterval(check, 60000)') !== false, 're-checked every 60 s');
+    camtest_assert_true(preg_match('/\n\s*check\(\);/', $html) === 1, 'and once at once');
+});
+
+camtest_test('setupModeAlertScript shows a persistent role=alert banner (no alert() box, no close button) and removes it when the answer is off', function () {
+    $html = CamLayout::setupModeAlertScript();
+    camtest_assert_true(strpos($html, "setAttribute('role', 'alert')") !== false, 'role=alert');
+    camtest_assert_true(strpos($html, 'position: sticky') !== false && strpos($html, 'top: 0') !== false, 'stays at the top of the page');
+    camtest_assert_true(!preg_match('/\balert\(|<button|addEventListener|onclick/i', $html), 'no alert() box and nothing to dismiss it with');
+    camtest_assert_true(strpos($html, 'd.on === true') !== false && strpos($html, "typeof d.message === 'string'") !== false, 'strict: only a real true with a text message');
+    camtest_assert_true(strpos($html, 'd.on === false') !== false && strpos($html, 'banner.remove()') !== false, 'goes away by itself');
+});
+
+camtest_test('setupModeAlertScript sets the text with textContent only and never reports its own failure', function () {
+    $html = CamLayout::setupModeAlertScript();
+    camtest_assert_true(strpos($html, 'banner.textContent') !== false);
+    camtest_assert_true(!preg_match('/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|localStorage/', $html), 'device ids come from the relay: never HTML');
+    camtest_assert_true(strpos($html, '.catch(function () {})') !== false, 'a failed request is silent');
+    camtest_assert_true(strpos($html, 'r.ok ?') !== false, 'an error status is not read as an answer');
+});
+
 // ── rebootMenu ───────────────────────────────────────────────────────
 
 require_once __DIR__ . '/../../php/cameras/lib/Logic.php';
@@ -273,7 +302,7 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 8, 'only our seven script files and the storage warning');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 9, 'only our seven script files, the storage warning and the setup-mode alert');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
@@ -311,7 +340,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 10);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, fullscreen.js, screen-keeper.js, simple-view.js and the storage warning
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 11);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, fullscreen.js, screen-keeper.js, simple-view.js, the storage warning and the setup-mode alert
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
@@ -329,6 +358,8 @@ camtest_test('simpleViewPage: no cameras gives a plain notice and no scripts; a 
 camtest_test('the simple pages carry the storage warning like every other page with the dashboard look', function () use ($SIMPLE_CAMS) {
     camtest_assert_true(strpos(CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), "fetch('storage.php'") !== false);
     camtest_assert_true(strpos(CamLayout::simpleListPage([]), "fetch('storage.php'") !== false);
+    camtest_assert_true(strpos(CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), "fetch('setup-mode.php'") !== false);
+    camtest_assert_true(strpos(CamLayout::simpleListPage([]), "fetch('setup-mode.php'") !== false);
 });
 
 // The look of the simple pages is pinned where a regression was reported: a link's caption took the browser's

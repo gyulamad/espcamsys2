@@ -899,6 +899,64 @@ camtest_test('escapeSettingValue: ; and \\ are escaped so a value can not become
     camtest_assert_equal(CamLogic::escapeSettingValue('plain'), 'plain');
 });
 
+// ── Setup mode (boards open to anyone on the public setup WiFi) ──────
+
+camtest_test('sanitizeSetupModeStatus: lists valid devices with OUR message', function () {
+    $r = CamLogic::sanitizeSetupModeStatus(['devices' => [
+        ['type' => 'recorder', 'id' => 'cam2', 'reportedAt' => 1700000000000],
+        ['type' => 'detector', 'id' => 'det-1', 'reportedAt' => 5, 'extra' => '<b>x</b>'],
+    ]]);
+    camtest_assert_equal($r, [
+        'on' => true,
+        'devices' => [['type' => 'recorder', 'id' => 'cam2'], ['type' => 'detector', 'id' => 'det-1']],
+        'message' => 'SETUP MODE is ON for cam2 (camera), det-1 (detector). Anyone who knows the public setup WiFi password can reconfigure those devices. Switch SETUP_MODE off on each device\'s settings page.',
+    ]);
+});
+
+camtest_test('setupModeMessage: singular for one device, and "and N more" when the list was cut', function () {
+    camtest_assert_equal(
+        CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'cam2']]),
+        'SETUP MODE is ON for cam2 (camera). Anyone who knows the public setup WiFi password can reconfigure this device. Switch SETUP_MODE off on the device\'s settings page.'
+    );
+    camtest_assert_true(strpos(CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'a']], 3), 'a (camera) and 3 more.') !== false);
+    camtest_assert_true(strpos(CamLogic::setupModeMessage([['type' => 'recorder', 'id' => 'a']], 3), 'those devices') !== false);
+});
+
+camtest_test('sanitizeSetupModeStatus: no warning for an empty list, an error body or anything that is not what the relay sends', function () {
+    foreach ([
+        null, 'on', 7, [], ['error' => 'missing or wrong control key'], ['devices' => []], ['devices' => 'cam1'],
+        ['devices' => [null, 'cam1', 5, [], ['type' => 'recorder'], ['id' => 'cam1']]],
+    ] as $answer) {
+        camtest_assert_equal(CamLogic::sanitizeSetupModeStatus($answer), ['on' => false], json_encode($answer));
+    }
+});
+
+camtest_test('sanitizeSetupModeStatus: bad types and ids are dropped (never reach the page), good ones stay, duplicates are listed once', function () {
+    $r = CamLogic::sanitizeSetupModeStatus(['devices' => [
+        ['type' => 'recorder', 'id' => '<script>alert(1)</script>'],
+        ['type' => 'camera', 'id' => 'cam1'],
+        ['type' => 'recorder', 'id' => "cam1\nx"],
+        ['type' => 'recorder', 'id' => ['cam1']],
+        ['type' => 'recorder', 'id' => str_repeat('a', 65)],
+        ['type' => 'recorder', 'id' => 'cam1'],
+        ['type' => 'recorder', 'id' => 'cam1'],
+        ['type' => 'detector', 'id' => 'cam1'],
+    ]]);
+    camtest_assert_equal($r['devices'], [['type' => 'recorder', 'id' => 'cam1'], ['type' => 'detector', 'id' => 'cam1']]);
+    camtest_assert_true(strpos($r['message'], '<') === false);
+    camtest_assert_equal(CamLogic::sanitizeSetupModeStatus(['devices' => [['type' => 'recorder', 'id' => '<b>']]]), ['on' => false]);
+});
+
+camtest_test('sanitizeSetupModeStatus: a long list is cut to the cap and the message counts the rest', function () {
+    $devices = [];
+    for ($i = 0; $i < 30; $i++) {
+        $devices[] = ['type' => 'recorder', 'id' => 'cam' . $i];
+    }
+    $r = CamLogic::sanitizeSetupModeStatus(['devices' => $devices]);
+    camtest_assert_equal(count($r['devices']), CamLogic::SETUP_MODE_MAX_DEVICES);
+    camtest_assert_true(strpos($r['message'], 'and 10 more.') !== false, $r['message']);
+});
+
 camtest_test('isDeviceSettingRequired: always / equals / not_equals, and "needed" when the controlling value is missing', function () {
     $eq = ['cond' => 'equals', 'condKey' => 'A', 'condValue' => '1'];
     $ne = ['cond' => 'not_equals', 'condKey' => 'A', 'condValue' => '-1'];
@@ -908,6 +966,28 @@ camtest_test('isDeviceSettingRequired: always / equals / not_equals, and "needed
     camtest_assert_true(CamLogic::isDeviceSettingRequired($ne, ['A' => '5']));
     camtest_assert_true(!CamLogic::isDeviceSettingRequired($ne, ['A' => '-1']));
     camtest_assert_true(CamLogic::isDeviceSettingRequired($eq, []));
+});
+
+camtest_test('isDeviceSettingRequired: an "optional" setting is never needed, with or without the other values', function () {
+    $opt = ['cond' => 'optional', 'condKey' => null, 'condValue' => null];
+    camtest_assert_true(!CamLogic::isDeviceSettingRequired($opt, []));
+    camtest_assert_true(!CamLogic::isDeviceSettingRequired($opt, ['SETUP_MODE' => '1', 'A' => '1']));
+    camtest_assert_true(!CamLogic::isDeviceSettingRequired(['cond' => 'optional', 'condKey' => 'A', 'condValue' => '1'], ['A' => '1']));
+});
+
+camtest_test('buildDeviceChange: an optional setting may be absent, and switching it on does not demand anything else', function () {
+    $keys = [
+        ['name' => 'A', 'kind' => 'int', 'min' => 0, 'max' => 10, 'cond' => 'always', 'condKey' => null, 'condValue' => null, 'locked' => false, 'help' => ''],
+        ['name' => 'SETUP_MODE', 'kind' => 'bool', 'min' => 0, 'max' => 0, 'cond' => 'optional', 'condKey' => null, 'condValue' => null, 'locked' => false, 'help' => ''],
+    ];
+    // the board never reported SETUP_MODE: changing A must not be refused for the missing optional setting
+    $r = CamLogic::buildDeviceChange($keys, [], ['A' => '1'], ['A' => '2']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'A=2']);
+    // ... and it can be turned on from the dashboard, and off again
+    $r = CamLogic::buildDeviceChange($keys, [], ['A' => '1'], ['SETUP_MODE' => '1']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'SETUP_MODE=1']);
+    $r = CamLogic::buildDeviceChange($keys, [], ['A' => '1', 'SETUP_MODE' => '1'], ['SETUP_MODE' => '0']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'SETUP_MODE=0']);
 });
 
 camtest_test('detectorIdOf: only a well-formed string counts', function () {

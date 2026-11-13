@@ -1759,5 +1759,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
 </script>
 <?= CamLayout::storageWarningScript() ?>
+<?= CamLayout::setupModeAlertScript() ?>
 </body>
 </html>

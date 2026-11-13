@@ -1723,6 +1723,35 @@ app.get('/device-settings/:type/:id/state', requireControlKeyForDevice, checkDev
   }
 });
 
+// GET /setup-mode  control key: { devices: [ { type, id, reportedAt } ] } — the boards whose last report said
+// SETUP_MODE=1 (open to anyone on the public setup Wi-Fi). The dashboard shows a banner while the list is not
+// empty. Read from the state files on each ask: it is one small request a minute, and a file that cannot be
+// read or understood is skipped (parseState turns damage into an empty state) rather than failing the answer.
+function listSetupModeDevices() {
+  const entries = [];
+  for (const type of devicesettings.TYPES) {
+    const dir = path.dirname(devicesettings.stateFile(DEVICE_SETTINGS_DIR, type, 'x'));
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch (err) {
+      if (err.code !== 'ENOENT') relayLog('WARN', `could not list ${dir}: ${errorMessage(err)}`);
+      continue;
+    }
+    for (const name of names) {
+      const id = devicesettings.stateIdFromFileName(name);
+      if (id === null) continue;
+      try {
+        entries.push({ type, id, state: loadDeviceState(type, id) });
+      } catch (err) {
+        relayLog('WARN', `could not read the settings state of ${id} (${type}): ${errorMessage(err)}`);
+      }
+    }
+  }
+  return devicesettings.setupModeDevices(entries);
+}
+app.get('/setup-mode', requireControlKeyForDevice, (req, res) => res.json({ devices: listSetupModeDevices() }));
+
 app.put('/device-settings/:type/:id/change', requireControlKeyForDevice, checkDeviceParams, express.text({ type: '*/*', limit: '4kb' }), (req, res) => {
   const { type, id } = req.params;
   const text = typeof req.body === 'string' ? req.body.trim() : '';

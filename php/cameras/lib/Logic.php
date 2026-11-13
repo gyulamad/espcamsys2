@@ -268,6 +268,58 @@ class CamLogic
         return ['low' => true, 'freeMB' => $freeMB, 'message' => self::storageWarningMessage($freeMB)];
     }
 
+    // The most devices SETUP_MODE warning names; a longer list says "and N more" (the banner must stay readable).
+    const SETUP_MODE_MAX_DEVICES = 20;
+
+    // What the relay says about boards that are open to anyone on the public 'setup' Wi-Fi (GET /setup-mode:
+    // { devices: [ { type, id, reportedAt } ] }), cut down to what the browser needs. PHP is the trust
+    // boundary: only valid types and ids go on, and the message text is OURS (device ids reach the page as
+    // plain text, and the page sets them with textContent only).
+    //   on => true, devices [ {type, id} ], message   when at least one valid device is listed
+    //   on => false                                   in every other case, including an answer that is not
+    //                                                 what the relay sends (an error body, junk)
+    public static function sanitizeSetupModeStatus($decoded): array
+    {
+        $off = ['on' => false];
+        if (!is_array($decoded) || !isset($decoded['devices']) || !is_array($decoded['devices'])) {
+            return $off;
+        }
+        $devices = [];
+        $seen = [];
+        foreach ($decoded['devices'] as $d) {
+            if (!is_array($d) || !isset($d['type'], $d['id']) || !is_string($d['type']) || !is_string($d['id'])) {
+                continue;
+            }
+            if (!in_array($d['type'], ['recorder', 'detector'], true) || preg_match(self::CAMERA_ID_PATTERN, $d['id']) !== 1) {
+                continue;
+            }
+            if (isset($seen[$d['type'] . '/' . $d['id']])) {
+                continue;
+            }
+            $seen[$d['type'] . '/' . $d['id']] = true;
+            $devices[] = ['type' => $d['type'], 'id' => $d['id']];
+        }
+        if (!$devices) {
+            return $off;
+        }
+        $shown = array_slice($devices, 0, self::SETUP_MODE_MAX_DEVICES);
+        return [
+            'on' => true,
+            'devices' => $shown,
+            'message' => self::setupModeMessage($shown, count($devices) - count($shown)),
+        ];
+    }
+
+    // The text of the setup-mode warning. $devices are checked [type, id] pairs; $more counts the ones not listed.
+    public static function setupModeMessage(array $devices, int $more = 0): string
+    {
+        $names = array_map(static fn(array $d): string => $d['id'] . ($d['type'] === 'detector' ? ' (detector)' : ' (camera)'), $devices);
+        $list = implode(', ', $names) . ($more > 0 ? ' and ' . $more . ' more' : '');
+        $many = count($devices) + $more > 1;
+        return 'SETUP MODE is ON for ' . $list . '. Anyone who knows the public setup WiFi password can reconfigure ' . ($many ? 'those devices' : 'this device')
+            . '. Switch SETUP_MODE off on ' . ($many ? "each device's" : "the device's") . ' settings page.';
+    }
+
     // Finds one camera by its 'id' in the $cameras array built above.
     // Returns null if there's no match — the "camera not found" case every
     // proxying endpoint checks before doing anything else.
@@ -1646,8 +1698,13 @@ class CamLogic
     }
 
     // Is this setting needed, given the values the camera would hold?
+    // 'optional' (a setting such as SETUP_MODE that a board may simply not have, absent = off) is never needed,
+    // whatever the other values are — so a board without it stays complete and no change has to bring it along.
     public static function isDeviceSettingRequired(array $def, array $values): bool
     {
+        if ($def['cond'] === 'optional') {
+            return false;
+        }
         if ($def['cond'] === 'always' || $def['condKey'] === null) {
             return true;
         }
