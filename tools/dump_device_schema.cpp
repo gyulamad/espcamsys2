@@ -55,7 +55,13 @@ static const char* kindName(Kind k) {
 }
 
 static const char* condName(Cond c) {
-    return c == Cond::Always ? "always" : (c == Cond::WhenEquals ? "equals" : "not_equals");
+    switch (c) {
+        case Cond::Always: return "always";
+        case Cond::WhenEquals: return "equals";
+        case Cond::WhenNotEquals: return "not_equals";
+        case Cond::Optional: return "optional";
+    }
+    return "always";
 }
 
 int main() {

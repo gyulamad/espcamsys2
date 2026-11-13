@@ -21,6 +21,7 @@
 // ── the sketch's own pieces the block depends on ────────────────────────
 
 #include "../../Arduino/ESP32_CAM_Recorder/settings_schema.h"
+#include "schema_counts.h"
 using esp32cam_settings::RecorderSettings;
 static RecorderSettings g_cfg;
 
@@ -54,7 +55,7 @@ TEST(the_first_boot_of_a_blank_board_stores_what_is_typed_in_flash_and_restarts)
     TEST_ASSERT_EQ(g_restarts, 1, "restarted once, after the settings were stored");
     TEST_ASSERT(g_flushes >= 1 && g_now >= 500, "the serial port was flushed and given time before the restart");
     TEST_ASSERT(g_flash["CAMERA_ID"] == "cam2" && g_flash["PUSH_PORT"] == "8081", "values are in (fake) flash");
-    TEST_ASSERT_EQ((int)g_flash.size(), (int)esp32cam_settings::RECORDER_SCHEMA.count, "all of them");
+    TEST_ASSERT_EQ((int)g_flash.size(), (int)requiredKeyCount(esp32cam_settings::RECORDER_SCHEMA), "all of them (an optional setting is only stored when typed)");
     TEST_ASSERT(said("These settings need a value") && said("All settings are stored. Restarting"), "the conversation happened on serial");
     TEST_ASSERT_EQ(g_prefsOpen, 0, "the flash was closed again");
     TEST_ASSERT(g_prefsNamespace == "espcam" && !g_prefsReadOnly, "the espcam namespace, opened read-write");

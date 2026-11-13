@@ -14,6 +14,7 @@
 
 #include "../../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
 #include "settings_fakes.h"
+#include "schema_counts.h"
 
 static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
 
@@ -61,8 +62,8 @@ TEST(the_person_schema_is_consistent) {
         for (size_t j = 0; j < i; ++j) TEST_ASSERT(name != PERSON_SCHEMA.keys[j].name, (name + ": names are unique").c_str());
         TEST_ASSERT(d.help && d.help[0], (name + ": has help text").c_str());
         if (d.kind == Kind::Int || d.kind == Kind::Float) TEST_ASSERT(d.min < d.max, (name + ": range is sane").c_str());
-        if (d.cond == Cond::Always) {
-            TEST_ASSERT(d.condKey == nullptr, (name + ": no controller").c_str());
+        if (d.cond == Cond::Always || d.cond == Cond::Optional) {
+            TEST_ASSERT(d.condKey == nullptr && d.condValue == nullptr, (name + ": no controller").c_str());
         } else {
             const KeyDef* ctl = d.condKey ? findKey(PERSON_SCHEMA, d.condKey) : nullptr;
             TEST_ASSERT(ctl != nullptr && d.condValue != nullptr, (name + ": its controlling setting exists").c_str());
@@ -78,9 +79,10 @@ TEST(the_two_example_templates_are_valid_complete_configurations) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
     const char* files[] = { "example.person.template.txt", "example.person-no-wifi.template.txt" };
-    // Every setting except MOTION_EMA_PCT: the templates keep the motion auto-calibration off (MOTION_EMA_LEN=0),
-    // and then its percentage is not asked for.
-    const size_t expected[] = { PERSON_SCHEMA.count - 1, 13 };
+    // Every required setting except MOTION_EMA_PCT: the templates keep the motion auto-calibration off
+    // (MOTION_EMA_LEN=0), and then its percentage is not asked for. The optional settings (SETUP_MODE,
+    // SETUP_PASSWORD) are left out on purpose: a password placeholder in a template would become a real one.
+    const size_t expected[] = { requiredKeyCount(PERSON_SCHEMA) - 1, 13 };
     for (size_t i = 0; i < 2; ++i) {
         std::ifstream f(dir + "../../Arduino/templates/" + files[i]);
         std::string line;
@@ -98,7 +100,7 @@ TEST(the_two_example_templates_are_valid_complete_configurations) {
 
 TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists) {
     MemoryStore st;
-    TEST_ASSERT_EQ((int)findProblems(PERSON_SCHEMA, st).size(), (int)PERSON_SCHEMA.count, "everything is listed on a blank board");
+    TEST_ASSERT_EQ((int)findProblems(PERSON_SCHEMA, st).size(), (int)requiredKeyCount(PERSON_SCHEMA), "everything required is listed on a blank board (the optional settings may stay absent)");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
@@ -382,7 +384,7 @@ TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (uint32_t t = 0; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
     TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the thirteen settings");
-    TEST_ASSERT(con.said("These settings need a value (" + std::to_string(PERSON_SCHEMA.count) + ")"), "first it asked for all of them");
+    TEST_ASSERT(con.said("These settings need a value (" + std::to_string(requiredKeyCount(PERSON_SCHEMA)) + ")"), "first it asked for all of them");
     TEST_ASSERT(con.said("STREAM_ENABLED - ") && con.said("DETECT_THRESH - "), "with their help text");
 }
 
@@ -455,6 +457,31 @@ TEST(loading_refuses_missing_or_invalid_settings_and_says_which) {
     TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "STREAM_MAX_FPS is invalid"), "an invalid stored value");
 }
 
+// ── the setup settings (F-21): the same two as the recorder ─────────────
+
+TEST(the_detector_defines_the_two_setup_settings_as_designed) {
+    const KeyDef* mode = findKey(PERSON_SCHEMA, "SETUP_MODE");
+    const KeyDef* pw = findKey(PERSON_SCHEMA, "SETUP_PASSWORD");
+    TEST_ASSERT(mode && mode->kind == Kind::Bool && mode->cond == Cond::Optional, "SETUP_MODE: an optional switch");
+    TEST_ASSERT(pw && pw->kind == Kind::Secret && pw->cond == Cond::Optional && pw->min == 8 && pw->max == 63, "SETUP_PASSWORD: an optional secret, 8 to 63 characters");
+    std::vector<std::string> locked = personLockedKeys();
+    bool modeLocked = false, pwLocked = false;
+    for (size_t i = 0; i < locked.size(); ++i) { if (locked[i] == "SETUP_MODE") modeLocked = true; if (locked[i] == "SETUP_PASSWORD") pwLocked = true; }
+    TEST_ASSERT(!modeLocked, "SETUP_MODE can be switched from the dashboard");
+    TEST_ASSERT(pwLocked, "SETUP_PASSWORD is serial-only / setup-form-only");
+}
+
+TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, WITH_STREAM), "a configuration without the setup settings");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete");
+    TEST_ASSERT_EQ(st.badGets, 0, "the absent optional settings are never read");
+    ChangeResult r = applyChangeLine(PERSON_SCHEMA, st, "SETUP_MODE=1", personLockedKeys());
+    TEST_ASSERT(r.ok() && st.m["SETUP_MODE"] == "1", "the dashboard may arm it");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "still complete");
+    TEST_ASSERT(!applyChangeLine(PERSON_SCHEMA, st, "SETUP_PASSWORD=attacker-chosen-pw", personLockedKeys()).ok(), "but not choose the password");
+}
+
 int main() {
     RUN_TEST(the_person_schema_is_consistent);
     RUN_TEST(the_two_example_templates_are_valid_complete_configurations);
@@ -487,5 +514,7 @@ int main() {
     RUN_TEST(with_the_live_view_off_the_stream_fields_keep_neutral_values);
     RUN_TEST(the_documented_typical_values_are_the_defaults_of_the_struct_the_glue_test_relies_on);
     RUN_TEST(loading_refuses_missing_or_invalid_settings_and_says_which);
+    RUN_TEST(the_detector_defines_the_two_setup_settings_as_designed);
+    RUN_TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed);
     return test::summarize();
 }

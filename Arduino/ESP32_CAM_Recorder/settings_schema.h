@@ -74,6 +74,12 @@ static const KeyDef RECORDER_KEYS[] = {
       "seconds between status lines in the relay's log" },
     { "LOG_LOW_HEAP",    Kind::Int,       0,    400000,  Cond::WhenEquals,    "LOG_ENABLED",     "1",
       "warn when free heap falls below this many bytes" },
+    // F-21, the cable-free first setup (see the setup mode of the sketch). Both settings are OPTIONAL: a board
+    // that has neither is still complete, so boards deployed before this feature keep working untouched.
+    { "SETUP_MODE",      Kind::Bool,      0,    0,       Cond::Optional,      nullptr,           nullptr,
+      "1 = at the next restart this board opens its own setup WiFi and waits there, not working normally, until it is configured or exited; it switches itself off after use (absent or 0 = off)" },
+    { "SETUP_PASSWORD",  Kind::Secret,    8,    63,      Cond::Optional,      nullptr,           nullptr,
+      "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
 };
 
 // JPEG_Q_MIN (the finest quality) must not be above JPEG_Q_MAX (the coarsest):
@@ -162,6 +168,10 @@ inline std::vector<std::string> recorderRemotePrerequisites() {
 inline std::vector<std::string> recorderLockedKeys() {
     static const char* const keys[] = {
         "WIFI", "SERVER_HOST", "PUSH_PORT", "HTTP_PORT", "CAMERA_ID", "API_KEY",
+        // F-21: the setup WiFi's master password is changed in the setup form or over the serial port only. If the
+        // dashboard could set it (plain HTTP), a man-in-the-middle could choose the password of the next setup
+        // session. SETUP_MODE itself is NOT locked: switching it on from the dashboard is the point of the feature.
+        "SETUP_PASSWORD",
         // Operational safety: see comment above (review ARD-009)
         "ALARM_GPIO_PIN", "ALARM_ACTIVE", "ALARM_ALL_CAMS",
         "LOG_ENABLED",

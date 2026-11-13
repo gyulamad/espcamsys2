@@ -595,7 +595,7 @@ camtest_test('the generated schema is complete and the connection settings are t
     // plain-HTTP control plane could otherwise disable the alarm feature,
     // invert its level, force all-cameras recording on every alarm, or
     // silence the remote log so the operator never sees the manipulation.
-    camtest_assert_equal($locked, ['ALARM_ACTIVE', 'ALARM_ALL_CAMS', 'ALARM_GPIO_PIN', 'API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'LOG_ENABLED', 'PUSH_PORT', 'SERVER_HOST', 'WIFI']);
+    camtest_assert_equal($locked, ['ALARM_ACTIVE', 'ALARM_ALL_CAMS', 'ALARM_GPIO_PIN', 'API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'LOG_ENABLED', 'PUSH_PORT', 'SERVER_HOST', 'SETUP_PASSWORD', 'WIFI']);
 });
 
 function camtest_detector_reported(): array {
@@ -611,6 +611,21 @@ function camtest_detector_change(array $values): array {
     return CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], camtest_detector_reported(), $values, $sc['rules'] ?? []);
 }
 
+camtest_test('both sketches define the two setup settings identically: SETUP_MODE optional and dashboard-switchable, SETUP_PASSWORD optional and serial-only', function () {
+    $all = camtest_schema();
+    foreach (['recorder', 'detector'] as $type) {
+        $byName = [];
+        foreach ($all[$type]['keys'] as $k) { $byName[$k['name']] = $k; }
+        camtest_assert_true(isset($byName['SETUP_MODE']) && isset($byName['SETUP_PASSWORD']), $type . ' has both');
+        camtest_assert_equal($byName['SETUP_MODE']['cond'], 'optional');
+        camtest_assert_equal($byName['SETUP_PASSWORD']['cond'], 'optional');
+        camtest_assert_equal($byName['SETUP_MODE']['locked'], false);
+        camtest_assert_equal($byName['SETUP_PASSWORD']['locked'], true);
+        camtest_assert_equal(CamLogic::isDeviceSettingRequired($byName['SETUP_MODE'], []), false);
+        camtest_assert_equal(CamLogic::isDeviceSettingRequired($byName['SETUP_PASSWORD'], []), false);
+    }
+});
+
 camtest_test('the generated schema has the person detector: the calibration settings are open, the connection and the alarm pin are locked', function () {
     $sc = camtest_schema()['detector'];
     $locked = [];
@@ -620,7 +635,7 @@ camtest_test('the generated schema has the person detector: the calibration sett
         if ($k['locked']) { $locked[] = $k['name']; }
     }
     sort($locked);
-    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'STREAM_ENABLED', 'WIFI']);
+    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'SETUP_PASSWORD', 'STREAM_ENABLED', 'WIFI']);
     foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1', 'MOTION_EMA_LEN', 'MOTION_EMA_PCT', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
         camtest_assert_true(in_array($n, $names, true), $n);
     }

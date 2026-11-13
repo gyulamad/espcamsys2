@@ -399,6 +399,17 @@ TEST(after_the_fix_the_next_boot_is_normal) {
     TEST_ASSERT_EQ(link2.connects, 0, "no relay needed any more");
 }
 
+// ── optional settings are never filled in by the relay (F-21) ───────────
+
+TEST(the_relay_can_not_switch_on_the_setup_mode_or_set_the_setup_password) {
+    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "SETUP_MODE=1;SETUP_PASSWORD=evil-master-pw;LOG_HEARTBEAT=900");
+    TEST_ASSERT_EQ((int)r.stored, 1, "only the missing setting is filled");
+    TEST_ASSERT(r.errors.empty(), "no error");
+    TEST_ASSERT_EQ((int)r.ignored.size(), 2, "the optional ones are ignored, and named");
+    TEST_ASSERT(!st.has("SETUP_MODE") && !st.has("SETUP_PASSWORD"), "an absent optional setting is not a gap: nothing was stored");
+}
+
 int main() {
     RUN_TEST(possible_when_everything_needed_to_reach_the_relay_is_stored_and_valid);
     RUN_TEST(not_possible_when_any_prerequisite_is_missing);
@@ -434,5 +445,6 @@ int main() {
     RUN_TEST(a_board_without_a_remote_attached_behaves_exactly_as_before);
     RUN_TEST(an_invalid_stored_value_is_fixed_from_the_relay_too);
     RUN_TEST(after_the_fix_the_next_boot_is_normal);
+    RUN_TEST(the_relay_can_not_switch_on_the_setup_mode_or_set_the_setup_password);
     return test::summarize();
 }

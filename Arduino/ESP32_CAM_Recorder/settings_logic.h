@@ -192,13 +192,14 @@ enum class Kind : uint8_t {
 enum class Cond : uint8_t {
     Always,        // always required
     WhenEquals,    // required only while condKey == condValue
-    WhenNotEquals  // required only while condKey != condValue
+    WhenNotEquals, // required only while condKey != condValue
+    Optional       // never required: may be absent (absent = off / the default); if stored it must be valid
 };
 
 struct KeyDef {
     const char* name;       // also the flash key: at most NVS_KEY_MAX_LENGTH characters
     Kind kind;
-    double min;             // Int / Float limits (ignored for other kinds)
+    double min;             // Int / Float limits; a Secret's length limits when max > 0 (ignored for other kinds)
     double max;
     Cond cond;
     const char* condKey;    // the controlling setting (nullptr for Always)
@@ -357,11 +358,18 @@ inline bool validateValue(const KeyDef& def, const std::string& raw, std::string
             norm = v;
             return true;
 
-        case Kind::Secret:
-            if (v.empty() || v.size() > 128) { err = "must be 1 to 128 characters"; return false; }
+        case Kind::Secret: {
+            // 1 to 128 characters, unless the setting sets its own length limits (a WPA2 passphrase: 8 to 63).
+            size_t lo = 1, hi = 128;
+            if (def.max > 0) { lo = static_cast<size_t>(def.min); hi = static_cast<size_t>(def.max); }
+            if (v.size() < lo || v.size() > hi) {
+                err = "must be " + numText(static_cast<double>(lo)) + " to " + numText(static_cast<double>(hi)) + " characters";
+                return false;
+            }
             if (v == "change-me") { err = "is still the placeholder 'change-me' - use the real value"; return false; }
             norm = v;
             return true;
+        }
 
         case Kind::Int: {
             long long n = 0;
@@ -556,10 +564,19 @@ inline void checkCrossRules(const Schema& schema, ISettingsStore& store, const s
 // unless that one is set AND says "off"; so on a blank board everything is
 // listed, and the user switches a feature off by answering its switch.
 inline bool isRequired(const KeyDef& def, ISettingsStore& store) {
+    if (def.cond == Cond::Optional) return false;
     if (def.cond == Cond::Always || !def.condKey) return true;
     if (!store.has(def.condKey)) return true;
     bool equal = store.get(def.condKey) == def.condValue;
     return def.cond == Cond::WhenEquals ? equal : !equal;
+}
+
+// Must `def` be looked at (missing / invalid) right now? A required setting always. An optional one only
+// when it is stored: being absent is fine, but a damaged stored value is reported rather than trusted.
+// (A setting whose feature is switched off is skipped even when stored: nothing reads it.)
+inline bool needsCheck(const KeyDef& def, ISettingsStore& store) {
+    if (isRequired(def, store)) return true;
+    return def.cond == Cond::Optional && store.has(def.name);
 }
 
 struct Problem {
@@ -572,7 +589,7 @@ inline std::vector<Problem> findProblems(const Schema& schema, ISettingsStore& s
     std::vector<Problem> out;
     for (size_t i = 0; i < schema.count; ++i) {
         const KeyDef& def = schema.keys[i];
-        if (!isRequired(def, store)) continue;
+        if (!needsCheck(def, store)) continue;
         Problem p;
         p.key = def.name;
         if (!store.has(def.name)) {
@@ -619,12 +636,13 @@ inline std::string displayValue(const KeyDef& def, const std::string& stored, bo
 }
 
 // "KEY=value" for one setting, with a note when it's required-but-unset,
-// invalid, or not used (its feature is switched off).
+// invalid, optional-and-unset, or not used (its feature is switched off).
 inline std::string renderSetting(const KeyDef& def, ISettingsStore& store, bool mask) {
     std::string line = def.name;
     line += '=';
     bool has = store.has(def.name);
     bool required = isRequired(def, store);
+    bool optional = def.cond == Cond::Optional;
     if (!has) {
         line += "<not set>";
         if (required) line += "   <-- required";
@@ -632,9 +650,14 @@ inline std::string renderSetting(const KeyDef& def, ISettingsStore& store, bool 
         std::string stored = store.get(def.name);
         line += displayValue(def, stored, mask);
         std::string err;
-        if (required && !validateStored(def, stored, err)) line += "   <-- INVALID: " + err;
+        if (needsCheck(def, store) && !validateStored(def, stored, err)) line += "   <-- INVALID: " + err;
     }
-    if (!required) line += "   (not used)";
+    // An optional setting is not "not used": it is simply allowed to be absent.
+    if (optional) {
+        if (!has) line += "   (optional)";
+    } else if (!required) {
+        line += "   (not used)";
+    }
     return line;
 }
 
@@ -665,7 +688,9 @@ inline std::string kindText(const KeyDef& def) {
         case Kind::Text:     return "text";
         case Kind::Host:     return "hostname or IP address";
         case Kind::Id:       return "1-64 characters of A-Z a-z 0-9 _ . -";
-        case Kind::Secret:   return "secret text";
+        case Kind::Secret:
+            if (def.max > 0) return "secret text, " + numText(def.min) + " to " + numText(def.max) + " characters";
+            return "secret text";
         case Kind::Int:      return "whole number " + numText(def.min) + " to " + numText(def.max);
         case Kind::Float:    return "number " + numText(def.min) + " to " + numText(def.max);
         case Kind::Bool:     return "1 or 0 (also yes/no, true/false, on/off)";
@@ -683,7 +708,9 @@ inline std::string describeKey(const KeyDef& def) {
     s += " - ";
     s += def.help;
     s += "  [" + kindText(def) + "]";
-    if (def.cond != Cond::Always && def.condKey) {
+    if (def.cond == Cond::Optional) {
+        s += "  (optional)";
+    } else if (def.cond != Cond::Always && def.condKey) {
         s += std::string("  (only needed when ") + def.condKey +
              (def.cond == Cond::WhenEquals ? " is " : " is not ") + def.condValue + ")";
     }

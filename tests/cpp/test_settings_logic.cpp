@@ -21,6 +21,7 @@
 using namespace esp32cam_settings;
 
 #include "settings_fakes.h"
+#include "schema_counts.h"
 
 static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
 
@@ -30,7 +31,8 @@ static const char* TYPICAL =
     "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;SIZE_DROP=1;"
     "ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;"
     "LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;"
-    "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000";
+    "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000;"
+    "SETUP_MODE=0;SETUP_PASSWORD=master-pw-1234";
 
 // Stores a line the way the conversation would; returns whether it was valid.
 static bool store(MemoryStore& st, const std::string& line) {
@@ -331,7 +333,8 @@ static bool notListed(const std::vector<Problem>& ps, const char* key) {
 TEST(a_blank_board_is_missing_every_setting_and_the_flash_is_only_read_where_a_value_exists) {
     MemoryStore st;
     std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), (int)RECORDER_SCHEMA.count, "everything is listed (switches are unset, so their dependents are needed)");
+    TEST_ASSERT_EQ((int)ps.size(), (int)requiredKeyCount(RECORDER_SCHEMA), "everything required is listed (switches are unset, so their dependents are needed)");
+    TEST_ASSERT(notListed(ps, "SETUP_MODE") && notListed(ps, "SETUP_PASSWORD"), "the optional settings are not listed: they may stay absent");
     TEST_ASSERT(listed(ps, "WIFI", true) && listed(ps, "LOG_HEARTBEAT", true) && listed(ps, "ALARM_ACTIVE", true), "including dependents");
     TEST_ASSERT_EQ(st.badGets, 0, "get() was never called for a key that isn't there");
 }
@@ -572,8 +575,8 @@ TEST(the_recorder_schema_is_consistent) {
         for (size_t j = 0; j < i; ++j) TEST_ASSERT(name != RECORDER_SCHEMA.keys[j].name, (name + ": names are unique").c_str());
         TEST_ASSERT(d.help && d.help[0], (name + ": has help text").c_str());
         if (d.kind == Kind::Int || d.kind == Kind::Float) TEST_ASSERT(d.min < d.max, (name + ": range is sane").c_str());
-        if (d.cond == Cond::Always) {
-            TEST_ASSERT(d.condKey == nullptr, (name + ": no controller").c_str());
+        if (d.cond == Cond::Always || d.cond == Cond::Optional) {
+            TEST_ASSERT(d.condKey == nullptr && d.condValue == nullptr, (name + ": no controller").c_str());
         } else {
             const KeyDef* ctl = d.condKey ? findKey(RECORDER_SCHEMA, d.condKey) : nullptr;
             TEST_ASSERT(ctl != nullptr && d.condValue != nullptr, (name + ": its controlling setting exists").c_str());
@@ -601,7 +604,8 @@ TEST(the_committed_example_template_is_a_valid_complete_configuration) {
     CheckedLine c = checkLine(RECORDER_SCHEMA, line);
     for (size_t i = 0; i < c.errors.size(); ++i) TEST_ASSERT(false, c.errors[i].c_str());
     TEST_ASSERT(c.ok(), "it is valid input");
-    TEST_ASSERT_EQ((int)c.pairs.size(), (int)RECORDER_SCHEMA.count, "and covers every setting");
+    TEST_ASSERT_EQ((int)c.pairs.size(), (int)requiredKeyCount(RECORDER_SCHEMA), "and covers every required setting (the optional ones are left out on purpose)");
+    for (size_t i = 0; i < c.pairs.size(); ++i) TEST_ASSERT(c.pairs[i].key != "SETUP_MODE" && c.pairs[i].key != "SETUP_PASSWORD", "no optional setting in the template: a password placeholder there would become a real password");
 }
 
 // ── typed settings ──────────────────────────────────────────────────────
@@ -695,7 +699,7 @@ TEST(a_blank_board_lists_what_is_missing_and_waits_for_ever) {
     Rig r;
     BootConfigFlow::Status s = r.run(60000);   // a minute of silence
     TEST_ASSERT(s == BootConfigFlow::Running, "no timeout when settings are missing: it waits for the user");
-    TEST_ASSERT(r.con.said("These settings need a value (" + std::to_string(RECORDER_SCHEMA.count) + ")"), "says how many");
+    TEST_ASSERT(r.con.said("These settings need a value (" + std::to_string(requiredKeyCount(RECORDER_SCHEMA)) + ")"), "says how many");
     TEST_ASSERT(r.con.said("WIFI - ") && r.con.said("CAMERA_ID - ") && r.con.said("LOG_LOW_HEAP - "), "lists them with their help");
     TEST_ASSERT(r.con.said("KEY=value, several at once separated by ;"), "explains the format");
     TEST_ASSERT(!r.con.said("Change settings?"), "does not offer the y/N window");
@@ -718,7 +722,7 @@ TEST(a_partial_line_is_stored_and_the_rest_is_asked_for_without_restarting) {
     TEST_ASSERT(s == BootConfigFlow::Running, "not complete yet, so no restart");
     TEST_ASSERT(r.con.said("Stored 2 of 2:") && r.con.said("  CAMERA_ID=cam3"), "confirms what was stored");
     TEST_ASSERT(r.st.m.size() == 2, "both are in flash already");
-    TEST_ASSERT(r.con.said("These settings need a value (" + std::to_string(RECORDER_SCHEMA.count - 2) + ")"), "and all the others are listed");
+    TEST_ASSERT(r.con.said("These settings need a value (" + std::to_string(requiredKeyCount(RECORDER_SCHEMA) - 2) + ")"), "and all the others are listed");
     r.con.clear();
     s = r.send("WIFI=home:password1;PUSH_PORT=8081;HTTP_PORT=8080;API_KEY=k;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=0;SIZE_DROP=0;ALARM_GPIO_PIN=-1;LOG_ENABLED=0\n");
     TEST_ASSERT(s == BootConfigFlow::Restart, "the second line completes it (the switches turned two features off): restart");
@@ -959,7 +963,7 @@ TEST(erase_needs_confirmation_and_then_asks_for_everything_again) {
     TEST_ASSERT(r.st.clears == 0, "another command in between cancelled it: this ERASE only asks again");
     BootConfigFlow::Status s = r.send("ERASE\n");
     TEST_ASSERT(s == BootConfigFlow::Running && r.st.clears == 1 && r.st.m.empty(), "confirmed: everything deleted");
-    TEST_ASSERT(r.con.said("All settings erased") && r.con.said("These settings need a value (" + std::to_string(RECORDER_SCHEMA.count) + ")"), "and it asks for everything again");
+    TEST_ASSERT(r.con.said("All settings erased") && r.con.said("These settings need a value (" + std::to_string(requiredKeyCount(RECORDER_SCHEMA)) + ")"), "and it asks for everything again");
     TEST_ASSERT(r.send("\n") == BootConfigFlow::Running, "can't leave until complete");
     TEST_ASSERT(r.send(std::string(TYPICAL) + "\n") == BootConfigFlow::Restart, "re-entering everything restarts");
 }
@@ -989,6 +993,79 @@ TEST(a_blank_store_with_failing_flash_still_reports_instead_of_hanging_silently)
     r.st.failWrites = true;
     TEST_ASSERT(r.send(std::string(TYPICAL) + "\n") == BootConfigFlow::Running, "nothing could be stored, so it can't finish");
     TEST_ASSERT(r.con.count("ERROR: could not write") == (int)RECORDER_SCHEMA.count, "each write failure is reported");
+}
+
+// ── optional settings (F-21: SETUP_MODE, SETUP_PASSWORD) ────────────────
+
+TEST(optional_settings_may_be_absent_so_a_board_without_them_stays_complete) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, TYPICAL), "the typical line is valid");
+    st.m.erase("SETUP_MODE");
+    st.m.erase("SETUP_PASSWORD");
+    TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "a board deployed before the feature has nothing missing");
+    TEST_ASSERT_EQ(st.badGets, 0, "an absent optional setting is never read");
+    TEST_ASSERT(!isRequired(*findKey(RECORDER_SCHEMA, "SETUP_MODE"), st) && !isRequired(*findKey(RECORDER_SCHEMA, "SETUP_PASSWORD"), st), "never required");
+}
+
+TEST(a_stored_optional_setting_must_still_be_valid) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, TYPICAL), "valid");
+    TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "valid optional values are fine");
+    st.m["SETUP_MODE"] = "banana";
+    st.m["SETUP_PASSWORD"] = "short";
+    std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
+    TEST_ASSERT_EQ((int)ps.size(), 2, "both damaged values are reported, not trusted");
+    TEST_ASSERT(listed(ps, "SETUP_MODE", false) && listed(ps, "SETUP_PASSWORD", false), "as invalid (stored), not as missing");
+    bool why = false;
+    for (size_t i = 0; i < ps.size(); ++i) if (ps[i].key == "SETUP_PASSWORD" && has(ps[i].reason, "8 to 63 characters")) why = true;
+    TEST_ASSERT(why, "and says what is wrong with the password");
+    st.m.erase("SETUP_MODE");
+    st.m.erase("SETUP_PASSWORD");
+    TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "erasing them is the way back");
+}
+
+TEST(a_secret_may_set_its_own_length_limits_and_the_others_keep_theirs) {
+    const KeyDef& pw = *findKey(RECORDER_SCHEMA, "SETUP_PASSWORD");
+    std::string norm, err;
+    TEST_ASSERT(!validateValue(pw, std::string(7, 'a'), norm, err) && has(err, "8 to 63 characters"), "7 is too short for a WPA2 passphrase");
+    TEST_ASSERT(validateValue(pw, std::string(8, 'a'), norm, err), "8 is the shortest");
+    TEST_ASSERT(validateValue(pw, std::string(63, 'a'), norm, err), "63 is the longest");
+    TEST_ASSERT(!validateValue(pw, std::string(64, 'a'), norm, err), "64 is too long");
+    TEST_ASSERT(!validateValue(pw, "", norm, err), "empty is refused");
+    TEST_ASSERT(!validateValue(pw, "change-me", norm, err) && has(err, "placeholder"), "the placeholder is still refused");
+    const KeyDef& key = *findKey(RECORDER_SCHEMA, "API_KEY");   // no limits of its own: 1 to 128, as before
+    TEST_ASSERT(validateValue(key, "x", norm, err) && validateValue(key, std::string(128, 'k'), norm, err), "an API key may be 1 to 128 characters");
+    TEST_ASSERT(!validateValue(key, std::string(129, 'k'), norm, err) && has(err, "1 to 128 characters"), "129 is refused, with the old message");
+    TEST_ASSERT(!validateValue(key, "", norm, err), "empty is refused");
+}
+
+TEST(an_optional_setting_is_shown_as_optional_and_never_as_unused_or_required) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, TYPICAL), "valid");
+    st.m.erase("SETUP_MODE");
+    std::string line = renderSetting(*findKey(RECORDER_SCHEMA, "SETUP_MODE"), st, true);
+    TEST_ASSERT(has(line, "SETUP_MODE=<not set>") && has(line, "(optional)"), "absent: says it is optional");
+    TEST_ASSERT(!has(line, "(not used)") && !has(line, "required"), "not 'not used', not 'required'");
+    TEST_ASSERT_EQ(renderSetting(*findKey(RECORDER_SCHEMA, "SETUP_PASSWORD"), st, true), std::string("SETUP_PASSWORD=********"), "stored: no note, and the password is masked");
+    st.m["SETUP_MODE"] = "banana";
+    TEST_ASSERT(has(renderSetting(*findKey(RECORDER_SCHEMA, "SETUP_MODE"), st, true), "<-- INVALID"), "a damaged stored value is flagged");
+    std::vector<std::string> all = renderAll(RECORDER_SCHEMA, st, true);
+    for (size_t i = 0; i < all.size(); ++i) TEST_ASSERT(!has(all[i], "master-pw-1234"), "the password never appears in what is shown");
+    TEST_ASSERT(has(describeKey(*findKey(RECORDER_SCHEMA, "SETUP_MODE")), "(optional)"), "the key help says it is optional");
+    TEST_ASSERT_EQ(kindText(*findKey(RECORDER_SCHEMA, "SETUP_PASSWORD")), std::string("secret text, 8 to 63 characters"), "and the password's limits");
+    TEST_ASSERT_EQ(kindText(*findKey(RECORDER_SCHEMA, "API_KEY")), std::string("secret text"), "other secrets are described as before");
+}
+
+TEST(the_recorder_defines_the_two_setup_settings_as_designed) {
+    const KeyDef* mode = findKey(RECORDER_SCHEMA, "SETUP_MODE");
+    const KeyDef* pw = findKey(RECORDER_SCHEMA, "SETUP_PASSWORD");
+    TEST_ASSERT(mode && mode->kind == Kind::Bool && mode->cond == Cond::Optional, "SETUP_MODE: an optional switch");
+    TEST_ASSERT(pw && pw->kind == Kind::Secret && pw->cond == Cond::Optional && pw->min == 8 && pw->max == 63, "SETUP_PASSWORD: an optional secret, 8 to 63 characters");
+    std::vector<std::string> locked = recorderLockedKeys();
+    bool modeLocked = false, pwLocked = false;
+    for (size_t i = 0; i < locked.size(); ++i) { if (locked[i] == "SETUP_MODE") modeLocked = true; if (locked[i] == "SETUP_PASSWORD") pwLocked = true; }
+    TEST_ASSERT(!modeLocked, "SETUP_MODE can be switched from the dashboard: that is the point of it");
+    TEST_ASSERT(pwLocked, "SETUP_PASSWORD can not: over plain HTTP it would let a man-in-the-middle choose the next setup password");
 }
 
 int main() {
@@ -1073,5 +1150,10 @@ int main() {
     RUN_TEST(a_setting_line_in_between_also_cancels_a_pending_erase);
     RUN_TEST(a_stored_invalid_value_forces_the_ask_it_again_path_at_boot);
     RUN_TEST(a_blank_store_with_failing_flash_still_reports_instead_of_hanging_silently);
+    RUN_TEST(optional_settings_may_be_absent_so_a_board_without_them_stays_complete);
+    RUN_TEST(a_stored_optional_setting_must_still_be_valid);
+    RUN_TEST(a_secret_may_set_its_own_length_limits_and_the_others_keep_theirs);
+    RUN_TEST(an_optional_setting_is_shown_as_optional_and_never_as_unused_or_required);
+    RUN_TEST(the_recorder_defines_the_two_setup_settings_as_designed);
     return test::summarize();
 }
