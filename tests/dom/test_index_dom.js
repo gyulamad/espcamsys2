@@ -161,7 +161,7 @@ async function main() {
     // The browser side: scripts run, fetch goes to the real PHP; raw=true skips PHP's list filter on purpose.
     let bypassFilter = false;
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'busy.js', 'device-info.js']), pretendToBeVisual: true,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'alarm-chain.js', 'busy.js', 'device-info.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
         installFakeMux(window);

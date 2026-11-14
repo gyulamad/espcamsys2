@@ -146,7 +146,7 @@ async function main() {
     virtualConsole.on('jsdomError', (e) => pageErrors.push(String(e && e.message || e)));
     let mux;
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'busy.js', 'device-info.js']), pretendToBeVisual: true, virtualConsole,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'alarm-chain.js', 'busy.js', 'device-info.js']), pretendToBeVisual: true, virtualConsole,
       beforeParse(window) {
         mux = installFakeMux(window);
         window.confirm = () => false;
