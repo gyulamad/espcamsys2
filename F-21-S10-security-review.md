@@ -14,7 +14,7 @@ handling, WPA2 association limits, real TCP behaviour, power loss during a flash
 
 No way was found to change a board's settings, skip the master-password rule or read a secret without the
 master password plus the page's CSRF token. Two small defects in the HTTP reader were found by the fuzzer and
-**fixed** in this patch. Two points are **open** and need the ticket owner's decision (F3) or a real board (F4).
+**fixed** in this patch. F3 (DNS rebinding) was **fixed** in a follow-up patch after the ticket owner approved it. One point remains **open** and needs a real board (F4).
 
 ## Findings
 
@@ -22,7 +22,7 @@ master password plus the page's CSRF token. Two small defects in the HTTP reader
 |---|---|---|---|
 | F1 | Low | **Fixed** | A request head of 2045–2048 bytes was accepted or refused (431) depending on how TCP cut it |
 | F2 | Low | **Fixed** | The request target could contain a TAB |
-| F3 | Low–Medium | **Open: needs a decision** | No `Host` check: DNS rebinding against the board's own catch-all DNS |
+| F3 | Low–Medium | **Fixed (follow-up patch)** | No `Host` check: DNS rebinding against the board's own catch-all DNS |
 | F4 | Low | **Open: verify on a board (S11)** | The CSRF token is generated before the radio runs |
 | F5 | Info | Accepted, document | Limits that follow from the design |
 
@@ -41,25 +41,22 @@ followed from it, but a request target must not contain control characters. Fix:
 target (`parseRequestLine`, both copies). A TAB in a header value is still accepted.
 Test: `a_tab_or_other_control_character_in_the_request_target_is_refused_but_a_tab_in_a_header_value_is_fine`.
 
-### F3 — no `Host` check; DNS rebinding (OPEN — decision needed)
-The board's DNS answers **every** name with 192.168.4.1 (needed for the captive portal), and nothing checks the
-`Host` header. A web page that was open in the phone's browser before it joined the setup WiFi (origin
-`evil.example`) can, once the browser's cached address for that name expires, fetch `http://evil.example/` from the
-board *as its own origin*, read the page — including the CSRF token — and POST `/save`: new settings (for
-example another relay address) and a master password chosen by the attacker. Needs: the board in setup mode, a
-phone joined to it, a page of the attacker's still running in that phone's browser, and the attacker's script
-timing the cache expiry. Unlikely, but the consequence is a takeover, and the fix is cheap.
+### F3 — no `Host` check; DNS rebinding (fixed in follow-up patch)
+The board's DNS answers **every** name with 192.168.4.1 (needed for the captive portal), and without a `Host`
+check, a web page that was open in the phone's browser before it joined the setup WiFi (origin `evil.example`)
+can, once the browser's cached address for that name expires, fetch `http://evil.example/` from the board as its
+own origin, read the page — including the CSRF token — and POST `/save`: new settings (for example another relay
+address) and a master password chosen by the attacker. Unlikely, but the consequence is a takeover.
 
-Recommended fix: answer a request whose `Host` is not `192.168.4.1` (or has no Host) with a redirect to
-`http://192.168.4.1/` for GET and `403` for POST. Captive-portal probes keep working (they get the redirect they
-get today); a user who types any other name lands on the form. It belongs in the glue (`ArduinoSetupNet::serve`) so
-the pure form stays untouched.
+**Fix (in `setup_mode.h`, `ArduinoSetupNet::serve`):** `HttpRequestReader` now stores the `Host` header
+(lowercase). Before the handler is called, `serve()` checks it: `192.168.4.1` and `192.168.4.1:80` are allowed;
+an empty host (HTTP/1.0, no `Host` header) is let through; anything else gets a `302` redirect to
+`http://192.168.4.1/`. Captive-portal probes keep working because they were already redirected by the form; they
+now get the redirect one layer earlier instead.
 
-**Why it is not in this patch:** several existing glue tests send requests with no `Host` header at all (HTTP/1.0
-and HTTP/1.1) and expect them to reach the handler — for example `the_request_target_reaches_the_handler_whole_query_included`,
-`the_headers_the_handler_chose_are_sent_as_they_are` and `a_post_without_the_token_is_refused_and_the_board_stays_in_setup_for_days`.
-The fix would change what those tests expect, and the ticket's rule is to stop and ask rather than edit a test. Decide: (a) implement it as above
-(existing tests are adjusted by the owner's say-so), (b) accept the risk, document it.
+Test: `a_request_with_a_wrong_host_is_redirected_to_the_board_and_never_reaches_the_handler` in
+`test_setup_mode_glue.cpp`. Checks that a wrong-host request is redirected, that the Location header points to
+the board, and that the handler was never called for it, while correct-host and no-host requests are served.
 
 ### F4 — CSRF token entropy (OPEN — verify on a board)
 `newCsrfToken()` uses `esp_random()`. Espressif documents that the hardware RNG is only a true random source
@@ -106,6 +103,11 @@ accepted, a rejected form that still writes, an exit that does not clear the swi
 after saving, a secret echoed into the page, confirmation field ignored, missing password accepted on a blank
 board, the F1 fix reverted. One mutant survives on purpose-equivalence: dropping the length check in
 `validSetupPassword` changes nothing because the settings engine enforces 8–63 independently (two layers).
+
+## Owner decisions recorded
+- **F3** (DNS rebinding): fixed (follow-up patch). Owner approved.
+- **Serial prompt while armed**: not changed. The serial `BootConfigFlow` runs only before the board is armed; running it in parallel with the setup WiFi loop would need a refactor. The skip-while-armed behaviour is documented in `INSTALL.md` (the "forgotten master password" section).
+- **F4** (CSRF token entropy on a real board): owner confirmed this is acceptable for setup mode; the CSRF check itself is correct and constant-time. Verify on hardware in S11.
 
 ## Running it
 `./run_tests.sh --no-sketch-compile` runs `test_setup_fuzz` (≈1.5 s, fixed seed). To hunt longer, with the

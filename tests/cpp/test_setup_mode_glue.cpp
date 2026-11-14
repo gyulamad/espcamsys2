@@ -612,6 +612,25 @@ TEST(a_phone_gets_the_real_form_and_the_captive_portal_probe_is_redirected) {
   TEST_ASSERT(page->out.find("My-Own-Master-1") == std::string::npos && page->out.find("s3cret") == std::string::npos, "no secret is in the page");
 }
 
+TEST(a_request_with_a_wrong_host_is_redirected_to_the_board_and_never_reaches_the_handler) {
+  // DNS rebinding guard: a page left open in the phone's browser could send a crafted Host header to
+  // reach the form; the serve layer redirects it before the handler (and therefore the CSRF check) runs.
+  world();
+  ArduinoSetupNet net(handler());
+  net.startAccessPoint(SSID, PASS);
+  std::shared_ptr<fake::Conn> ok  = connect(GET_ROOT);                                             // Host: 192.168.4.1
+  std::shared_ptr<fake::Conn> ok2 = connect("GET / HTTP/1.1\r\nHost: 192.168.4.1:80\r\n\r\n");   // port 80 explicit but allowed
+  std::shared_ptr<fake::Conn> bad = connect("GET / HTTP/1.1\r\nHost: evil.example.com\r\n\r\n");
+  std::shared_ptr<fake::Conn> h10 = connect("GET / HTTP/1.0\r\n\r\n");                            // HTTP/1.0: no Host, let through
+  pump(net);
+  TEST_ASSERT_EQ(statusOf(ok),  200, "correct host: handler's reply");
+  TEST_ASSERT_EQ(statusOf(ok2), 200, "explicit port 80: handler's reply");
+  TEST_ASSERT_EQ(statusOf(bad), 302, "wrong host: redirect");
+  TEST_ASSERT(bad->out.find("Location: http://192.168.4.1/\r\n") != std::string::npos, "redirect points to the board");
+  TEST_ASSERT_EQ(g_calls.n, 3, "wrong-host request never reached the handler");   // ok, ok2, h10 each reached it; bad did not
+  TEST_ASSERT_EQ(statusOf(h10), 200, "HTTP/1.0 (no Host header) is let through");
+}
+
 TEST(pressing_exit_ends_setup_clears_the_switch_and_restarts_after_the_grace_time) {
   Board b;
   b.tick(1);
@@ -772,6 +791,7 @@ int main() {
   RUN_TEST(the_mac_comes_from_the_efuse_in_the_wifi_format);
   RUN_TEST(the_board_opens_the_setup_wifi_named_after_its_mac_with_the_master_password);
   RUN_TEST(a_phone_gets_the_real_form_and_the_captive_portal_probe_is_redirected);
+  RUN_TEST(a_request_with_a_wrong_host_is_redirected_to_the_board_and_never_reaches_the_handler);
   RUN_TEST(pressing_exit_ends_setup_clears_the_switch_and_restarts_after_the_grace_time);
   RUN_TEST(a_post_without_the_token_is_refused_and_the_board_stays_in_setup_for_days);
   RUN_TEST(the_real_hardware_gives_the_boards_address_a_fresh_token_and_the_serial_port);

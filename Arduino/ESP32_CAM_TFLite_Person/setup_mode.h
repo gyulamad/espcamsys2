@@ -105,7 +105,7 @@ class HttpRequestReader {
   HttpRequestReader() { reset(); }
 
   void reset() {
-    buf_.clear(); method_.clear(); target_.clear(); body_.clear();
+    buf_.clear(); method_.clear(); target_.clear(); body_.clear(); host_.clear();
     headDone_ = false; contentLength_ = -1; rejectStatus_ = 0;
   }
 
@@ -140,6 +140,7 @@ class HttpRequestReader {
   const std::string& method() const { return method_; }
   const std::string& target() const { return target_; }
   const std::string& body() const { return body_; }
+  const std::string& host() const { return host_; }
 
  private:
   Status reject(int status) { rejectStatus_ = status; return Rejected; }
@@ -210,6 +211,7 @@ class HttpRequestReader {
     size_t s = value.find_first_not_of(" \t"), e = value.find_last_not_of(" \t");
     value = s == std::string::npos ? std::string() : value.substr(s, e - s + 1);
     if (name == "transfer-encoding") return 501;                    // chunked bodies are not read
+    if (name == "host") { host_ = value; return 0; }
     if (name != "content-length") return 0;
     if (value.empty() || value.size() > 9) return 400;
     long n = 0;
@@ -222,7 +224,7 @@ class HttpRequestReader {
     return 0;
   }
 
-  std::string buf_, method_, target_, body_;
+  std::string buf_, method_, target_, body_, host_;
   bool headDone_;
   long contentLength_;
   int rejectStatus_;
@@ -438,6 +440,15 @@ class ArduinoSetupNet : public ISetupNet {
       SETUP_WARN("request refused: %d", s.reader.rejectStatus());
       answer(s, rejection(s.reader.rejectStatus()));
       return;
+    }
+    // DNS rebinding guard: a page left open in the phone's browser could otherwise POST a save with a
+    // crafted Host header.  Allow the board's own IP (with or without the default port); redirect
+    // everything else to the board.  HTTP/1.0 clients may omit Host; let them through.
+    const std::string& h = s.reader.host();
+    if (!h.empty() && h != SETUP_AP_IP && h != std::string(SETUP_AP_IP) + ":80") {
+      HttpReply redir; redir.status = 302; redir.body = "Redirecting";
+      redir.headers.push_back(std::make_pair("Location", std::string("http://") + SETUP_AP_IP + "/"));
+      answer(s, redir); return;
     }
     answer(s, handler_ ? handler_(s.reader.method(), s.reader.target(), s.reader.body()) : rejection(500));
   }
