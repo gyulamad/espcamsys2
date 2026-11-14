@@ -51,9 +51,8 @@
 #include <functional>
 #include <string>
 
-#include "setup_form.h"      // HttpReply, SetupForm
+#include "setup_boot.h"      // ISetupHardware, SetupHandler (and so HttpReply, SetupForm, ISetupNet)
 #include "setup_logic.h"     // SETUP_AP_IP
-#include "setup_session.h"   // ISetupNet
 
 #ifndef SETUP_AP_CHANNEL
 #define SETUP_AP_CHANNEL 1
@@ -92,9 +91,8 @@
 
 namespace esp32cam_setup {
 
-// What the pure form handler is: (method, request target, raw body) -> reply. The target keeps its
+// SetupHandler (method, request target, raw body -> reply) is in setup_boot.h. The target keeps its
 // "?query" (the form ignores it); the body is the exact bytes, decoding is the form's job.
-typedef std::function<HttpReply(const std::string&, const std::string&, const std::string&)> SetupHandler;
 
 // ── the request reader ──────────────────────────────────────────────────────────────────────────
 // Reads ONE request, a few bytes at a time, and refuses everything unusual with the status to answer
@@ -463,6 +461,20 @@ class ArduinoSetupNet : public ISetupNet {
   WiFiServer server_;
   Slot slots_[SETUP_MAX_CONNECTIONS];
   bool touched_, running_, dnsStarted_, serverStarted_;
+};
+
+// ── the real hardware, for SetupBoot (setup_boot.h) ─────────────────────────────────────────────
+// The few things setupSettings() cannot do on a desktop: the board's own address, a random token, the
+// access point with its servers, and the serial port. Everything else about a setup boot is decided in
+// the pure, tested SetupBoot.
+class ArduinoSetupHardware : public ISetupHardware {
+ public:
+  std::string mac() override { return boardMacAddress(); }
+  std::string newToken() override { return newCsrfToken(); }
+  std::unique_ptr<ISetupNet> openNet(const SetupHandler& handler) override {
+    return std::unique_ptr<ISetupNet>(new ArduinoSetupNet(handler));
+  }
+  void log(const std::string& line) override { Serial.printf("%s", line.c_str()), Serial.println(); }
 };
 
 }  // namespace esp32cam_setup

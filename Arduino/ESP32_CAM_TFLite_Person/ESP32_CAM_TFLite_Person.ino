@@ -30,6 +30,15 @@
 // The glue to the real flash and serial port is the "Settings glue" block below.
 #include "settings_logic.h"
 #include "settings_schema.h"
+// The board's own setup WiFi (F-21: configure a board without a cable). An optional build-time default for
+// its master password comes from a git-ignored file next to the sketch (Arduino/templates/setup_credentials.
+// example.h); it must be seen BEFORE the setup headers, which read the macro it defines.
+#if defined(__has_include)
+#if __has_include("setup_credentials.local.h")
+#include "setup_credentials.local.h"
+#endif
+#endif
+#include "setup_mode.h"    // the setup WiFi: access point, DNS, the form (what runs it is the "Settings glue" block below)
 #include "scene_logic.h"   // darkness + motion gate: when is it worth running the model?
 #include "report_logic.h"  // what is sent to the relay for the dashboard, and the connection that carries it
 #include "remote_log.h"    // what this board reports to the relay's log (see the glue block below)
@@ -675,16 +684,20 @@ using esp32cam_settings::PERSON_SCHEMA;
 using esp32cam_settings::RemoteFill;
 using esp32cam_settings::loadPersonSettings;
 using esp32cam_settings::personRemotePrerequisites;
+using esp32cam_setup::ArduinoSetupHardware;
+using esp32cam_setup::SetupBoot;
+using esp32cam_setup::SetupStep;
 
 const uint32_t SETTINGS_WINDOW_MS = 5000;          // how long boot waits for a "y" before starting normally
 // A board that is MISSING settings (typically after a firmware update added one) first gives the
 // serial port SETTINGS_WINDOW_MS to itself, then asks the relay for them (RemoteFill). Only possible
-// when the live-view settings (Wi-Fi, server, key, id) are stored: a detector run without the
-// live view has no network settings and is configured over serial only.
+// when the settings that reach the relay (Wi-Fi, server, key, id) are stored; without them the board
+// is configured over serial or in its setup WiFi.
 const uint32_t REMOTE_CONNECT_MS = 20000;          // how long it gets to join Wi-Fi before restarting to try again
 const uint32_t REMOTE_WINDOW_MS = 30000;           // how long it then waits for the relay to supply them
 const uint32_t REMOTE_POLL_MS = 5000;              // and how often it asks meanwhile
 const char* const SETTINGS_NAMESPACE = "espcam";   // flash (NVS) namespace the settings live in
+const char* const BOARD_TYPE = "detector";         // the relay's word for this board; also names its setup WiFi
 
 // The settings in flash, via the core's Preferences library (NVS). Survives
 // uploading a new sketch; wiped by "Erase All Flash Before Sketch Upload".
@@ -725,6 +738,12 @@ void restartBoard() {
 // Shows the settings, asks for any that are missing (or lets the user change
 // them within the 5 s window), then loads them into g_cfg. If settings were
 // changed the board restarts instead of returning, so the new values start clean.
+//
+// A board that cannot reach the relay (a blank one), or whose SETUP_MODE switch was turned on from the
+// dashboard, also opens its OWN setup WiFi and waits there, with no timeout, until someone saves the
+// form or leaves setup mode (all of it in setup_boot.h, unit-tested). A board that is neither is left
+// exactly as it was: `setupBoot` then does nothing at all. The camera and the model are not started yet
+// at this point, so a detector in setup is offline, like a recorder.
 void setupSettings() {
   PreferencesStore store;
   SerialConsole console;
@@ -732,16 +751,34 @@ void setupSettings() {
     Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
   }
 
+  ArduinoSetupHardware setupHardware;
+  SetupBoot setupBoot(PERSON_SCHEMA, store, personRemotePrerequisites(), BOARD_TYPE, setupHardware);
+  if (setupBoot.armed()) {
+    // Configured, so there is nothing to ask on the serial port: serve the setup WiFi until the owner is done.
+    while (setupBoot.step(millis()) == SetupStep::Running) delay(5);
+    setupBoot.stop();
+    restartBoard();
+    return;
+  }
+
   BootConfigFlow flow(PERSON_SCHEMA, store, console, SETTINGS_WINDOW_MS);
   // Missing settings can also come from the relay (staged there by the operator), so a firmware
   // update that needs one more setting doesn't need a USB cable. Only gaps are ever filled, and
   // only if nobody types: see RemoteFill in settings_logic.h.
-  RelaySettingsLink link(store, "detector", "DETECTOR_ID");
+  RelaySettingsLink link(store, BOARD_TYPE, "DETECTOR_ID");
   RemoteFill remote(PERSON_SCHEMA, store, link, console, personRemotePrerequisites(),
                     REMOTE_CONNECT_MS, REMOTE_WINDOW_MS, REMOTE_POLL_MS);
   flow.attachRemote(&remote, SETTINGS_WINDOW_MS);
   BootConfigFlow::Status status;
-  while ((status = flow.step(millis())) == BootConfigFlow::Running) delay(5);
+  while ((status = flow.step(millis())) == BootConfigFlow::Running) {
+    // A blank board has its setup WiFi open while the serial prompt keeps working: whichever is used first wins.
+    if (setupBoot.step(millis()) == SetupStep::Restart) {
+      restartBoard();
+      return;
+    }
+    delay(5);
+  }
+  setupBoot.stop();   // the serial conversation was first (or the board was not in setup): the setup WiFi is not needed
 
   if (status == BootConfigFlow::Restart) {
     restartBoard();

@@ -230,7 +230,8 @@ else
     for h in ESP32_CAM_Recorder/settings_logic.h ESP32_CAM_Recorder/settings_schema.h \
              ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h \
              ESP32_CAM_Recorder/relay_find_logic.h \
-             ESP32_CAM_Recorder/relay_health.h ESP32_CAM_Recorder/setup_session.h; do
+             ESP32_CAM_Recorder/relay_health.h ESP32_CAM_Recorder/setup_session.h \
+             ESP32_CAM_Recorder/setup_boot.h; do
         group_text "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
@@ -238,6 +239,31 @@ else
         else
             echo "FAIL: $h does not compile as C++11"
             overall_status=1
+        fi
+    done
+
+    # The optional build-time default master password (setup_credentials.local.h, see
+    # Arduino/templates/setup_credentials.example.h): one a WPA2 access point would refuse must stop the
+    # BUILD (setup_logic.h static_asserts it); at run time a blank board would have no setup WiFi at all.
+    for pw in '"Owner-Secret-9"'; do
+        group_text "--- setup_logic.h accepts the default password $pw"
+        if g++ -std=c++11 -fsyntax-only -DSETUP_DEFAULT_PASSWORD_OVERRIDE="$pw" \
+               -include "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/setup_logic.h" -x c++ /dev/null 2>/dev/null; then
+            echo "ok"
+        else
+            echo "FAIL: a valid default password $pw was refused"
+            overall_status=1
+        fi
+    done
+    for pw in '"short"' '"has\ttab-in-it"' '"caf\xc3\xa9-password"' \
+              '"0123456789012345678901234567890123456789012345678901234567890123"'; do
+        group_text "--- setup_logic.h refuses the default password $pw"
+        if g++ -std=c++11 -fsyntax-only -DSETUP_DEFAULT_PASSWORD_OVERRIDE="$pw" \
+               -include "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/setup_logic.h" -x c++ /dev/null 2>/dev/null; then
+            echo "FAIL: the default password $pw compiled, but a WPA2 access point would refuse it"
+            overall_status=1
+        else
+            echo "ok (the build stops)"
         fi
     done
 
@@ -266,7 +292,7 @@ else
     # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) and the remote
     # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
     # must be identical too.
-    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h relay_health.h setup_session.h; do
+    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h relay_health.h setup_session.h setup_boot.h setup_logic.h setup_mode.h; do
         group_text "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
@@ -295,6 +321,15 @@ else
     run_cpp_test test_relay_health
     # The setup-mode session (F-21): when the board's own setup WiFi opens, how long it stays, when the board restarts.
     run_cpp_test test_setup_mode_session
+    # The setup boot (F-21): whether this boot is a setup boot, the WiFi's name and password, the wiring of
+    # form + session + access point, SETUP_MODE=0 — against each sketch's real key table; and the optional
+    # build-time default password.
+    run_cpp_test test_setup_boot_recorder
+    run_cpp_test test_setup_boot_person
+    run_cpp_test test_setup_credentials
+    # setup_mode.h compiled for real against fakes of the Arduino core (tests/cpp/ota_fakes/): the access point, DNS and
+    # HTTP server, and the ArduinoSetupHardware that SetupBoot runs on; the last tests put the real form and session on top.
+    run_cpp_test test_setup_mode_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change
@@ -326,7 +361,12 @@ else
     # is tested the same way, against fake Preferences/Serial/millis()/ESP.restart().
     sed -n '/Settings glue ──/,/end of settings glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_Recorder/ESP32_CAM_Recorder.ino" > "$BUILD_DIR/settings_glue.inc"
-    run_cpp_test test_settings_glue
+    # The block now also builds a SetupBoot (F-21) over a fake ArduinoSetupHardware (tests/cpp/setup_boot_fakes.h,
+    # included by settings_glue_fakes.h); setup_boot.h is found through the sketch's folder.
+    run_cpp_test test_settings_glue -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
+    # ...and the setup mode as the block wires it: nothing touched when not in setup, the setup WiFi alone
+    # for an armed board, next to the serial prompt for a blank one, and every way out ends in a restart.
+    run_cpp_test test_setup_glue_recorder -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
 
     # The sketch's few lines that join settings_sync.h to its flash store, schema and restart:
     # extracted from the .ino and compiled against fakes (fails loudly if a name or marker changes).
@@ -342,7 +382,8 @@ else
     # ...and the person detector's, likewise.
     sed -n '/Settings glue ──/,/end of settings glue/p' \
         "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person/ESP32_CAM_TFLite_Person.ino" > "$BUILD_DIR/person_settings_glue.inc"
-    run_cpp_test test_person_settings_glue
+    run_cpp_test test_person_settings_glue -I "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person"
+    run_cpp_test test_setup_glue_person -I "$ROOT_DIR/Arduino/ESP32_CAM_TFLite_Person"
 
     # The detector's remote-logging glue and its uplink glue (the socket, JPEG encoder, snapshot, the
     # Wi-Fi / heartbeat lines, the network task, start-up and the boot report) are tested the same way: extract the marked blocks from the .ino and build

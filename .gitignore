@@ -23,6 +23,10 @@ tests/cpp/build/
 ota.conf
 fw_version.h
 
+# An optional build-time default master password for the setup WiFi (F-21). Copy
+# Arduino/templates/setup_credentials.example.h to each sketch folder under this name.
+Arduino/*/setup_credentials.local.h
+
 Arduino/ESP32_CAM_Recorder/build/
 Arduino/ESP32_CAM_TFLite_Person/build/
 

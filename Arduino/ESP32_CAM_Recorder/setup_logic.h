@@ -34,17 +34,35 @@ using esp32cam_settings::Schema;
 static const char* const SETUP_MODE_KEY     = "SETUP_MODE";
 static const char* const SETUP_PASSWORD_KEY = "SETUP_PASSWORD";
 
-// The master password a board uses until its owner has chosen one. It is public
-// (it is in the repository), so the form refuses to save while it is still the
-// one in use; it only exists because a blank board has nothing else.
-static const char SETUP_DEFAULT_PASSWORD[] = "Admin1234";
+// The master password a board uses until its owner has chosen one. The built-in one is public
+// (it is in the repository), so the form refuses to save while it is still the one in use; it
+// only exists because a blank board has nothing else.
+//
+// A build can replace it with a private one of its own: define SETUP_DEFAULT_PASSWORD_OVERRIDE (a
+// string literal) before this header is first included. The sketches do that from the git-ignored
+// setup_credentials.local.h next to them (template: Arduino/templates/setup_credentials.example.h).
+// Everything that asks "is this still the default?" reads these constants, so the form's rule follows
+// the override (and still refuses the public built-in password, which stays public whatever a build uses). The checks below turn a bad override into a build error: at run time it
+// would make softAP() refuse the passphrase and a blank board would have no setup WiFi at all.
+static constexpr char SETUP_PUBLIC_PASSWORD[] = "Admin1234";   // the built-in one: in the repository, so known to everybody
+#ifdef SETUP_DEFAULT_PASSWORD_OVERRIDE
+static constexpr char SETUP_DEFAULT_PASSWORD[] = SETUP_DEFAULT_PASSWORD_OVERRIDE;
+#else
+static constexpr char SETUP_DEFAULT_PASSWORD[] = "Admin1234";
+#endif
 
 // WPA2 passphrases are 8 to 63 printable ASCII characters.
 static const size_t WPA2_PASS_MIN = 8;
 static const size_t WPA2_PASS_MAX = 63;
+
+constexpr bool isPrintableAscii(const char* s, size_t i = 0) {
+    return s[i] == '\0' ? true : (s[i] >= 0x20 && s[i] <= 0x7e && isPrintableAscii(s, i + 1));
+}
 static_assert(sizeof(SETUP_DEFAULT_PASSWORD) - 1 >= WPA2_PASS_MIN &&
               sizeof(SETUP_DEFAULT_PASSWORD) - 1 <= WPA2_PASS_MAX,
-              "the default master password must be a valid WPA2 passphrase");
+              "the default master password must be 8 to 63 characters (a WPA2 passphrase)");
+static_assert(isPrintableAscii(SETUP_DEFAULT_PASSWORD),
+              "the default master password must be printable ASCII (a WPA2 passphrase)");
 
 // The ESP32's own access-point address: where the form lives.
 static const char* const SETUP_AP_IP = "192.168.4.1";
@@ -129,8 +147,10 @@ inline bool validSetupPassword(const std::string& pass) {
     return true;
 }
 
+// "Not chosen yet": the password this build starts with, or the public built-in one. The form refuses
+// to save while the master password is either.
 inline bool isDefaultSetupPassword(const std::string& pass) {
-    return pass == SETUP_DEFAULT_PASSWORD;
+    return pass == SETUP_DEFAULT_PASSWORD || pass == SETUP_PUBLIC_PASSWORD;
 }
 
 // The password the setup WiFi uses now: the stored master password when there is

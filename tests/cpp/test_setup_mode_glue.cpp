@@ -646,6 +646,97 @@ TEST(a_post_without_the_token_is_refused_and_the_board_stays_in_setup_for_days) 
   TEST_ASSERT_EQ(statusOf(page), 200, "and the form still answers");
 }
 
+// ── SetupBoot (setup_boot.h) over the real hardware class ───────────────────────────────────────
+static void storeLine(MemoryStore& st, const char* line) {
+  CheckedLine c = checkLine(esp32cam_settings::RECORDER_SCHEMA, line);
+  for (size_t i = 0; i < c.pairs.size(); ++i) st.set(c.pairs[i].key, c.pairs[i].value);
+}
+
+TEST(the_real_hardware_gives_the_boards_address_a_fresh_token_and_the_serial_port) {
+  world();
+  fake::g().randomValue = 0x12345678;
+  ArduinoSetupHardware hw;
+  TEST_ASSERT_EQ(hw.mac(), std::string("AA:BB:CC:D4:E5:F6"), "the eFuse address");
+  std::string a = hw.newToken(), b = hw.newToken();
+  TEST_ASSERT(a.size() == 32 && a.find_first_not_of("0123456789abcdef") == std::string::npos, "a token is 32 hex digits");
+  hw.log("setup: a line for the serial port");
+  TEST_ASSERT(logged("setup: a line for the serial port"), "log() writes to the serial port");
+  TEST_ASSERT(fake::g().wifiCalls.empty(), "asking for the address, a token or a log line never starts the radio");
+}
+
+TEST(the_real_hardware_opens_an_access_point_that_answers_with_the_handler_it_was_given) {
+  world();
+  ArduinoSetupHardware hw;
+  std::unique_ptr<ISetupNet> net = hw.openNet(handler());
+  TEST_ASSERT(net != nullptr, "a net");
+  TEST_ASSERT(fake::g().wifiCalls.empty(), "opening it does not start the radio yet");
+  TEST_ASSERT(net->startAccessPoint(SSID, PASS), "it starts");
+  std::shared_ptr<fake::Conn> c = connect(GET_ROOT);
+  for (int i = 0; i < 6; ++i) net->poll();
+  TEST_ASSERT_EQ(statusOf(c), 200, "a phone is answered");
+  TEST_ASSERT_EQ(g_calls.n, 1, "by the handler the hardware was given");
+  net->stop();
+  TEST_ASSERT(!fake::g().softApUp, "and it stops");
+}
+
+TEST(a_board_that_is_not_in_setup_never_touches_the_radio_or_the_hardware) {
+  world();
+  MemoryStore st;
+  storeLine(st, TYPICAL);
+  size_t storedBefore = st.m.size();
+  ArduinoSetupHardware hw;
+  SetupBoot boot(esp32cam_settings::RECORDER_SCHEMA, st, esp32cam_settings::recorderRemotePrerequisites(), "recorder", hw);
+  TEST_ASSERT(!boot.active() && !boot.armed(), "configured and not armed: not in setup");
+  TEST_ASSERT(boot.step(1) == SetupStep::Proceed && boot.step(99999) == SetupStep::Proceed, "Proceed, every time");
+  boot.stop();
+  TEST_ASSERT(fake::g().wifiCalls.empty() && !fake::g().softApUp && !fake::g().dnsRunning && !fake::g().tcpListening, "the radio, DNS and the HTTP server were never touched");
+  TEST_ASSERT(fake::g().serial.empty(), "and nothing was printed");
+  TEST_ASSERT(st.m.size() == storedBefore && !st.has("SETUP_MODE"), "nothing was written");
+}
+
+TEST(a_blank_board_opens_the_setup_wifi_with_the_default_password_and_is_not_armed) {
+  world();
+  MemoryStore st;
+  ArduinoSetupHardware hw;
+  SetupBoot boot(esp32cam_settings::RECORDER_SCHEMA, st, esp32cam_settings::recorderRemotePrerequisites(), "recorder", hw);
+  TEST_ASSERT(boot.active() && !boot.armed(), "a blank board is in setup, not 'armed'");
+  TEST_ASSERT(boot.step(1) == SetupStep::Running, "running");
+  TEST_ASSERT_EQ(fake::g().softApSsid, std::string("espcamsys2-recorder-d4e5f6"), "named after its MAC");
+  TEST_ASSERT_EQ(fake::g().softApPass, std::string(SETUP_DEFAULT_PASSWORD), "with the built-in default password");
+  TEST_ASSERT(!logged(SETUP_DEFAULT_PASSWORD), "which is never printed");
+  boot.stop();
+  TEST_ASSERT(!fake::g().softApUp, "stop() takes the access point down");
+}
+
+TEST(an_armed_board_serves_the_form_and_leaves_with_a_restart_when_exited) {
+  world();
+  fake::g().randomValue = 0x12345678;
+  MemoryStore st;
+  storeLine(st, TYPICAL);
+  st.set("SETUP_PASSWORD", "My-Own-Master-1");
+  st.set("SETUP_MODE", "1");
+  ArduinoSetupHardware hw;
+  SetupBoot boot(esp32cam_settings::RECORDER_SCHEMA, st, esp32cam_settings::recorderRemotePrerequisites(), "recorder", hw);
+  TEST_ASSERT(boot.active() && boot.armed(), "armed");
+  TEST_ASSERT(boot.step(fake::g().now) == SetupStep::Running, "running");
+  TEST_ASSERT_EQ(fake::g().softApPass, std::string("My-Own-Master-1"), "the stored master password is the WiFi password");
+
+  std::shared_ptr<fake::Conn> page = connect(GET_ROOT);
+  for (int i = 0; i < 6; ++i) boot.step(fake::g().now);
+  size_t at = page->out.find("name=\"csrf\" value=\"");
+  TEST_ASSERT(statusOf(page) == 200 && at != std::string::npos, "the real form, with its token");
+  std::string token = page->out.substr(at + 19, 32);
+  std::shared_ptr<fake::Conn> exit = connect(post("csrf=" + token).replace(0, 10, "POST /exit"));
+  for (int i = 0; i < 6; ++i) boot.step(fake::g().now);
+  TEST_ASSERT_EQ(statusOf(exit), 200, "'Exit setup mode' is answered");
+  TEST_ASSERT_EQ(st.get("SETUP_MODE"), std::string("0"), "the switch is off in the store the board restarts from");
+  TEST_ASSERT(boot.step(fake::g().now) == SetupStep::Running && fake::g().softApUp, "the WiFi stays up for the grace time");
+  fake::g().now += SETUP_RESTART_GRACE_MS;
+  TEST_ASSERT(boot.step(fake::g().now) == SetupStep::Restart, "then Restart");
+  TEST_ASSERT(!fake::g().softApUp && fake::g().wifiMode == WIFI_OFF, "with the radio left clean");
+  TEST_ASSERT(!logged("My-Own-Master-1"), "the password was never printed");
+}
+
 int main() {
   RUN_TEST(the_access_point_starts_protected_on_the_right_ports);
   RUN_TEST(an_unprotected_or_invalid_access_point_is_never_started);
@@ -683,5 +774,10 @@ int main() {
   RUN_TEST(a_phone_gets_the_real_form_and_the_captive_portal_probe_is_redirected);
   RUN_TEST(pressing_exit_ends_setup_clears_the_switch_and_restarts_after_the_grace_time);
   RUN_TEST(a_post_without_the_token_is_refused_and_the_board_stays_in_setup_for_days);
+  RUN_TEST(the_real_hardware_gives_the_boards_address_a_fresh_token_and_the_serial_port);
+  RUN_TEST(the_real_hardware_opens_an_access_point_that_answers_with_the_handler_it_was_given);
+  RUN_TEST(a_board_that_is_not_in_setup_never_touches_the_radio_or_the_hardware);
+  RUN_TEST(a_blank_board_opens_the_setup_wifi_with_the_default_password_and_is_not_armed);
+  RUN_TEST(an_armed_board_serves_the_form_and_leaves_with_a_restart_when_exited);
   return test::summarize();
 }

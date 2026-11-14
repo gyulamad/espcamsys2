@@ -81,3 +81,12 @@ static bool said(const char* part) {
     return false;
 }
 
+
+// ── the setup boot (F-21) ───────────────────────────────────────────────
+// setupSettings() also builds a SetupBoot over ArduinoSetupHardware (setup_mode.h: the radio, DNS, the
+// HTTP server, the random generator), which needs the real Arduino core. Here it is the fake of
+// setup_boot_fakes.h under the same name; SetupBoot itself is the real one. setup_boot.h is found
+// through the -I for the sketch's folder that run_tests.sh gives these tests (like ota_fakes).
+#include "setup_boot.h"
+#include "setup_boot_fakes.h"
+namespace esp32cam_setup { typedef FakeSetupHardware ArduinoSetupHardware; }
