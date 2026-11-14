@@ -118,8 +118,10 @@ class HttpRequestReader {
     buf_.append(data, n);
     size_t end = buf_.find("\r\n\r\n");
     if (end == std::string::npos) {
-      // no end of head yet: a head this long will never be accepted, so stop collecting it
-      if (buf_.size() > (size_t)SETUP_HEAD_MAX) return reject(431);
+      // no end of head yet: a head this long will never be accepted, so stop collecting it. The 3 extra
+      // bytes are a blank line that has only partly arrived ("\r\n\r"): they are not part of the head, so
+      // counting them would refuse a head of 2045..2048 bytes or accept it depending on how TCP cut it.
+      if (buf_.size() > (size_t)SETUP_HEAD_MAX + 3) return reject(431);
       return NeedMore;
     }
     if (end > (size_t)SETUP_HEAD_MAX) return reject(431);
@@ -189,6 +191,9 @@ class HttpRequestReader {
     if (method.empty() || method.size() > 8) return 400;
     for (size_t i = 0; i < method.size(); ++i) if (method[i] < 'A' || method[i] > 'Z') return 400;
     if (target.empty() || target.size() > 256 || target[0] != '/' || target.find(' ') != std::string::npos) return 400;
+    // parseHead() lets a TAB through (header values may hold one); a request target may not: it is where a
+    // "path" with a hidden separator would slip past the exact-match routing of the form.
+    for (size_t i = 0; i < target.size(); ++i) if ((unsigned char)target[i] < 0x20 || (unsigned char)target[i] == 0x7f) return 400;
     if (version != "HTTP/1.1" && version != "HTTP/1.0") return 400;
     method_ = method;
     target_ = target;   // with its query: the form cuts it off itself
