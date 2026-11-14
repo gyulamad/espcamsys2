@@ -109,7 +109,6 @@ using esp32cam_settings::PersonSettings;
 static PersonSettings g_cfg;
 static void useTypicalSettings() {
     g_cfg = PersonSettings();
-    g_cfg.streamEnabled = true;
     g_cfg.serverHost = "192.168.4.9";
     g_cfg.httpPort = 8080;
     g_cfg.detectorId = "detector-1";
@@ -164,21 +163,7 @@ TEST(before_the_settings_are_read_the_log_is_serial_only) {
     TEST_ASSERT(serialHas("logged before remoteLogConfigure"), "but it is on the serial port");
 }
 
-TEST(with_the_live_view_off_nothing_is_ever_queued_or_started) {
-    // STREAM_ENABLED=0: no Wi-Fi at all, so no remote logging and no tasks — exactly as before.
-    resetWorld();
-    g_cfg.streamEnabled = false;
-    remoteLogConfigure();
-    remoteLogStart();
-    TEST_ASSERT_EQ((int)g_tasks.size(), 0, "no delivery task");
-    g_now += 100000;
-    RLOG_ERROR("serial only now");
-    TEST_ASSERT_EQ((int)remoteLogInstance.pending(), 0, "nothing queued for the relay");
-    TEST_ASSERT(serialHas("serial only now"), "still on the serial port");
-    useTypicalSettings();
-}
-
-TEST(configuring_with_the_live_view_on_queues_entries_made_before_the_task_exists) {
+TEST(configuring_queues_entries_made_before_the_task_exists) {
     // setup() logs the boot lines BEFORE the camera and the model are initialised (the task is only
     // created afterwards, in startNetwork()): they must wait in memory for it.
     resetWorld(); g_now = 1000;
@@ -191,7 +176,7 @@ TEST(configuring_with_the_live_view_on_queues_entries_made_before_the_task_exist
 TEST(starting_creates_the_mutex_and_a_background_task_pinned_to_core_0) {
     resetWorld();
     remoteLogStart();
-    TEST_ASSERT_EQ(g_mutexesCreated, 2, "a mutex was created (the earlier test that stayed serial-only created one too)");
+    TEST_ASSERT_EQ(g_mutexesCreated, 1, "a mutex was created");
     TEST_ASSERT_EQ((int)g_tasks.size(), 1, "one task");
     TEST_ASSERT(g_tasks.size() == 1 && std::string(g_tasks[0].name) == "remoteLog", "named");
     TEST_ASSERT(g_tasks.size() == 1 && g_tasks[0].core == 0, "on core 0, where the Wi-Fi stack runs, away from loop()");
@@ -265,7 +250,7 @@ TEST(the_fixed_configuration_info_goes_to_the_relay_after_ten_seconds_debug_neve
 TEST(the_config_is_fixed_in_the_sketch_there_are_no_log_settings) {
     RemoteLogConfig on = remoteLogConfigFor(true);
     RemoteLogConfig off = remoteLogConfigFor(false);
-    TEST_ASSERT(on.remoteEnabled && !off.remoteEnabled, "remote delivery follows the live view");
+    TEST_ASSERT(on.remoteEnabled && !off.remoteEnabled, "remote delivery is on once the settings are loaded and off before (the instance starts that way)");
     TEST_ASSERT(on.remoteMinLevel == LogLevel::Info, "INFO and above");
     TEST_ASSERT(on.echoAlways, "the serial port always gets everything");
     TEST_ASSERT_EQ((int)on.flushIntervalMs, 10000, "routine lines wait 10 s");
@@ -360,8 +345,7 @@ TEST(the_background_task_sleeps_250ms_then_runs_the_delivery_and_repeats) {
 
 int main() {
     RUN_TEST(before_the_settings_are_read_the_log_is_serial_only);
-    RUN_TEST(with_the_live_view_off_nothing_is_ever_queued_or_started);
-    RUN_TEST(configuring_with_the_live_view_on_queues_entries_made_before_the_task_exists);
+    RUN_TEST(configuring_queues_entries_made_before_the_task_exists);
     RUN_TEST(starting_creates_the_mutex_and_a_background_task_pinned_to_core_0);
     RUN_TEST(an_error_is_filed_under_the_detector_id_with_the_right_url_headers_and_body);
     RUN_TEST(the_trace_names_this_file_and_function_not_the_full_path);

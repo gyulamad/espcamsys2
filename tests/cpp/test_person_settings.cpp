@@ -18,15 +18,16 @@
 
 static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
 
-// A complete configuration with the live view ON, as one line.
-static const char* WITH_STREAM =
-    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=1;"
+// The detection settings, then the live view's: every detector needs both (the live view is not optional).
+static const char* DETECTION =
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0";
+static const char* LIVE_VIEW =
     "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
-// The minimal one: no live view, no Wi-Fi.
-static const char* NO_STREAM = "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=0";
+// A complete configuration, as one line.
+static const std::string COMPLETE = std::string(DETECTION) + ";" + LIVE_VIEW;
 
 // Stores a line the way the conversation does (including the cross-setting rule).
 static std::vector<std::string> storeLine(MemoryStore& st, const std::string& line) {
@@ -75,25 +76,23 @@ TEST(the_person_schema_is_consistent) {
     TEST_ASSERT(PERSON_SCHEMA.crossCheck != nullptr, "the threshold rule is registered");
 }
 
-TEST(the_two_example_templates_are_valid_complete_configurations) {
+TEST(the_example_person_template_is_a_valid_complete_configuration) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
-    const char* files[] = { "example.person.template.txt", "example.person-no-wifi.template.txt" };
-    // Every required setting except MOTION_EMA_PCT: the templates keep the motion auto-calibration off
+    const char* file = "example.person.template.txt";
+    // Every required setting except MOTION_EMA_PCT: the template keeps the motion auto-calibration off
     // (MOTION_EMA_LEN=0), and then its percentage is not asked for. The optional settings (SETUP_MODE,
     // SETUP_PASSWORD) are left out on purpose: a password placeholder in a template would become a real one.
-    const size_t expected[] = { requiredKeyCount(PERSON_SCHEMA) - 1, 13 };
-    for (size_t i = 0; i < 2; ++i) {
-        std::ifstream f(dir + "../../Arduino/templates/" + files[i]);
-        std::string line;
-        TEST_ASSERT(static_cast<bool>(std::getline(f, line)), (std::string(files[i]) + ": can be read").c_str());
-        MemoryStore st;
-        std::vector<std::string> errs = storeLine(st, line);
-        for (size_t e = 0; e < errs.size(); ++e) TEST_ASSERT(false, errs[e].c_str());
-        TEST_ASSERT(errs.empty(), (std::string(files[i]) + ": is valid input").c_str());
-        TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), (std::string(files[i]) + ": completes the configuration").c_str());
-        TEST_ASSERT_EQ((int)st.m.size(), (int)expected[i], (std::string(files[i]) + ": sets exactly the settings it should").c_str());
-    }
+    const size_t expected = requiredKeyCount(PERSON_SCHEMA) - 1;
+    std::ifstream f(dir + "../../Arduino/templates/" + file);
+    std::string line;
+    TEST_ASSERT(static_cast<bool>(std::getline(f, line)), (std::string(file) + ": can be read").c_str());
+    MemoryStore st;
+    std::vector<std::string> errs = storeLine(st, line);
+    for (size_t e = 0; e < errs.size(); ++e) TEST_ASSERT(false, errs[e].c_str());
+    TEST_ASSERT(errs.empty(), (std::string(file) + ": is valid input").c_str());
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), (std::string(file) + ": completes the configuration").c_str());
+    TEST_ASSERT_EQ((int)st.m.size(), (int)expected, (std::string(file) + ": sets exactly the settings it should").c_str());
 }
 
 // ── what is needed when ─────────────────────────────────────────────────
@@ -104,24 +103,45 @@ TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_val
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
-TEST(with_the_live_view_off_only_thirteen_settings_are_needed_and_no_wifi_is_asked_for) {
+TEST(the_live_view_settings_are_always_required) {
     MemoryStore st;
-    TEST_ASSERT(store(st, NO_STREAM), "stored");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete with just those thirteen");
-    TEST_ASSERT_EQ((int)st.m.size(), 13, "exactly thirteen stored");
+    TEST_ASSERT(store(st, DETECTION), "the twelve detection settings are stored");
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
+    TEST_ASSERT_EQ((int)ps.size(), 10, "the board is NOT complete without the live view: its 10 settings are needed");
+    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "API_KEY") && listed(ps, "ANN_RETRY") && listed(ps, "DETECTOR_ID") && listed(ps, "SERVER_HOST"), "including Wi-Fi, the relay and the detector's name");
+    TEST_ASSERT(!listed(ps, "PERSON_GPIO") && !listed(ps, "DETECT_THRESH"), "but not the detection ones");
+    bool allMissing = true;
+    for (size_t i = 0; i < ps.size(); ++i) if (!ps[i].missing) allMissing = false;
+    TEST_ASSERT(allMissing, "reported as not set");
+    TEST_ASSERT(store(st, LIVE_VIEW), "the live view's settings are stored");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and then the board is complete");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
-TEST(turning_the_live_view_on_asks_for_the_whole_live_view_group_and_nothing_else) {
+TEST(the_old_stream_switch_is_gone_and_a_board_that_still_has_it_stored_ignores_it) {
+    // STREAM_ENABLED used to switch the live view off for a detector without Wi-Fi. There is no such detector any
+    // more: the key is not in the table, and a board that still has it in flash must neither be asked about it
+    // nor read it (like the LAN server's old settings below).
+    TEST_ASSERT(!valid("STREAM_ENABLED=1") && !valid("STREAM_ENABLED=0"), "no longer a setting");
+    CheckedLine c = checkLine(PERSON_SCHEMA, "STREAM_ENABLED=1");
+    TEST_ASSERT(!c.errors.empty() && has(c.errors[0], "STREAM_ENABLED"), "a line that still has it says which key is no longer known");
+    for (size_t i = 0; i < PERSON_SCHEMA.count; ++i) TEST_ASSERT(std::string(PERSON_SCHEMA.keys[i].name) != "STREAM_ENABLED", "not in the table");
+
     MemoryStore st;
-    store(st, NO_STREAM);
-    store(st, "STREAM_ENABLED=1");
-    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 10, "the 10 live-view settings");
-    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "API_KEY") && listed(ps, "ANN_RETRY") && listed(ps, "DETECTOR_ID") && listed(ps, "SERVER_HOST"), "including Wi-Fi, the relay and the detector's name");
-    TEST_ASSERT(!listed(ps, "PERSON_GPIO") && !listed(ps, "DETECT_THRESH"), "but not the detection ones");
-    store(st, "STREAM_ENABLED=0");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "turning it off again needs nothing");
+    TEST_ASSERT(store(st, COMPLETE), "stored");
+    st.set("STREAM_ENABLED", "1");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "still complete with it left in flash");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT(s.serverHost == "192.168.4.9" && s.detectorId == "detector-1", "and loads as before");
+
+    // A board that was run with it OFF never had Wi-Fi settings: after the update it is incomplete, and says what it needs.
+    MemoryStore off;
+    TEST_ASSERT(store(off, DETECTION), "detection settings only");
+    off.set("STREAM_ENABLED", "0");
+    TEST_ASSERT_EQ((int)findProblems(PERSON_SCHEMA, off).size(), 10, "it now needs the 10 live-view settings");
+    TEST_ASSERT(!loadPersonSettings(off, s, err) && has(err, "WIFI is not set"), "and does not load without them");
 }
 
 // ── values ──────────────────────────────────────────────────────────────
@@ -145,9 +165,9 @@ TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_che
     TEST_ASSERT(valid("MOTION_HOLD_S=0") && valid("MOTION_HOLD_S=3600") && !valid("MOTION_HOLD_S=3601") && !valid("MOTION_HOLD_S=-1"), "hold 0..3600 s");
 }
 
-TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off) {
+TEST(the_scene_gate_settings_are_asked_for_on_a_board_that_predates_them) {
     MemoryStore st;
-    TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;STREAM_ENABLED=0"), "an old five-setting configuration is stored");
+    TEST_ASSERT(store(st, std::string("PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;") + LIVE_VIEW), "an old five-setting configuration is stored");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
     TEST_ASSERT_EQ((int)ps.size(), 9, "exactly the nine new ones are missing (what a firmware update to this version leaves behind)");
     TEST_ASSERT(listed(ps, "DARK_THRESH") && listed(ps, "MOTION_THRESH") && listed(ps, "MOTION_HOLD_S"), "the scene gate's three");
@@ -160,7 +180,7 @@ TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off) {
 
 TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_the_ema_pair) {
     MemoryStore st;
-    TEST_ASSERT(store(st, "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;STREAM_ENABLED=0"), "the previous version's configuration is stored");
+    TEST_ASSERT(store(st, std::string("PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;") + LIVE_VIEW), "the previous version's configuration is stored");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
     TEST_ASSERT_EQ((int)ps.size(), 6, "six settings are missing");
     TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "the area's corners");
@@ -197,7 +217,7 @@ TEST(a_board_that_still_has_the_old_server_settings_stored_is_not_asked_for_anyt
     // After a firmware update the flash still holds STREAM_USER/STREAM_PASS/STREAM_PORT: they must neither
     // make the board "incomplete" (it would wait for a cable) nor be read.
     MemoryStore st;
-    TEST_ASSERT(store(st, WITH_STREAM), "stored");
+    TEST_ASSERT(store(st, COMPLETE), "stored");
     st.set("STREAM_USER", "viewer");
     st.set("STREAM_PASS", "hunter22");
     st.set("STREAM_PORT", "8088");
@@ -205,14 +225,14 @@ TEST(a_board_that_still_has_the_old_server_settings_stored_is_not_asked_for_anyt
     PersonSettings s;
     std::string err;
     TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
-    TEST_ASSERT(s.streamEnabled && s.serverHost == "192.168.4.9" && s.detectorId == "detector-1", "and loads as before");
+    TEST_ASSERT(s.serverHost == "192.168.4.9" && s.detectorId == "detector-1", "and loads as before");
 }
 
 // ── the threshold rule ──────────────────────────────────────────────────
 
 TEST(clear_threshold_must_not_exceed_the_detect_threshold) {
     MemoryStore st;
-    store(st, NO_STREAM);                                   // detect 0.6, clear 0.5
+    store(st, COMPLETE);                                   // detect 0.6, clear 0.5
     TEST_ASSERT(store(st, "CLEAR_THRESH=0.6"), "equal is allowed (clears as soon as it drops below)");
     TEST_ASSERT(store(st, "CLEAR_THRESH=0.3"), "lower is fine");
     std::vector<std::string> e = storeLine(st, "CLEAR_THRESH=0.7");
@@ -231,7 +251,7 @@ TEST(clear_threshold_must_not_exceed_the_detect_threshold) {
 TEST(the_threshold_rule_works_in_the_boot_conversation) {
     MemoryStore st;
     ScriptConsole con;
-    store(st, WITH_STREAM);
+    store(st, COMPLETE);
     BootConfigFlow flow(PERSON_SCHEMA, st, con, 5000);
     con.in = "y\nDETECT_THRESH=0.4\n";
     BootConfigFlow::Status s = BootConfigFlow::Running;
@@ -265,7 +285,7 @@ TEST(the_motion_area_settings_have_flash_safe_names_and_can_be_changed_from_the_
 
 TEST(the_four_motion_area_numbers_must_make_a_usable_area) {
     MemoryStore st;
-    store(st, NO_STREAM);                                   // 0,0 - 96,96
+    store(st, COMPLETE);                                   // 0,0 - 96,96
     TEST_ASSERT(store(st, "MOTION_X0=20;MOTION_Y0=30;MOTION_X1=70;MOTION_Y1=80"), "a good area, all four together");
     TEST_ASSERT(store(st, "MOTION_X1=30"), "a single edge may move while the result stays usable (20..30 = 10 wide)");
     std::vector<std::string> e = storeLine(st, "MOTION_X1=29");
@@ -291,7 +311,7 @@ TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_
     TEST_ASSERT(!blank.m.count("MOTION_Y1"), "and it is not stored");
 
     MemoryStore st;
-    store(st, NO_STREAM);
+    store(st, COMPLETE);
     e = storeLine(st, "CLEAR_THRESH=0.7");
     TEST_ASSERT(anyError(e, "CLEAR_THRESH (0.7) must not be higher than DETECT_THRESH (0.6)"), "the threshold rule still applies");
     e = storeLine(st, "CLEAR_THRESH=0.7;MOTION_X1=5");
@@ -300,7 +320,7 @@ TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_
 
 TEST(the_motion_area_loads_into_the_typed_settings) {
     MemoryStore st;
-    store(st, NO_STREAM);
+    store(st, COMPLETE);
     TEST_ASSERT(store(st, "MOTION_X0=10;MOTION_Y0=20;MOTION_X1=60;MOTION_Y1=90"), "an area is stored");
     PersonSettings s;
     std::string err;
@@ -328,7 +348,7 @@ TEST(the_motion_ema_settings_are_whole_numbers_in_their_ranges_and_zero_length_s
 
 TEST(the_ema_percentage_is_only_asked_for_while_the_ema_is_on) {
     MemoryStore st;
-    TEST_ASSERT(store(st, NO_STREAM), "a complete configuration with MOTION_EMA_LEN=0");
+    TEST_ASSERT(store(st, COMPLETE), "a complete configuration with MOTION_EMA_LEN=0");
     TEST_ASSERT(!st.m.count("MOTION_EMA_PCT"), "it holds no percentage");
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and needs none while the EMA is off");
 
@@ -344,7 +364,7 @@ TEST(the_ema_percentage_is_only_asked_for_while_the_ema_is_on) {
 
 TEST(a_stored_ema_percentage_out_of_range_is_named_only_while_the_ema_is_on) {
     MemoryStore st;
-    store(st, NO_STREAM);
+    store(st, COMPLETE);
     st.m["MOTION_EMA_PCT"] = "5000";   // damaged in flash behind the rules' back
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "unused while MOTION_EMA_LEN=0: nobody is bothered by it");
     st.m["MOTION_EMA_LEN"] = "3000";
@@ -354,7 +374,7 @@ TEST(a_stored_ema_percentage_out_of_range_is_named_only_while_the_ema_is_on) {
 
 TEST(the_ema_settings_load_into_the_typed_copy_and_off_keeps_the_threshold_fixed) {
     MemoryStore st;
-    store(st, NO_STREAM);
+    store(st, COMPLETE);
     PersonSettings s;
     std::string err;
     TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
@@ -380,18 +400,18 @@ TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
     MemoryStore st;
     ScriptConsole con;
     BootConfigFlow flow(PERSON_SCHEMA, st, con, 5000);
-    con.in = std::string(NO_STREAM) + "\n";
+    con.in = COMPLETE + "\n";
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (uint32_t t = 0; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
-    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after the thirteen settings");
+    TEST_ASSERT(s == BootConfigFlow::Restart, "restart after all the settings");
     TEST_ASSERT(con.said("These settings need a value (" + std::to_string(requiredKeyCount(PERSON_SCHEMA)) + ")"), "first it asked for all of them");
-    TEST_ASSERT(con.said("STREAM_ENABLED - ") && con.said("DETECT_THRESH - "), "with their help text");
+    TEST_ASSERT(con.said("WIFI - ") && con.said("DETECT_THRESH - "), "with their help text");
 }
 
 TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown) {
     MemoryStore st;
     ScriptConsole con;
-    store(st, WITH_STREAM);
+    store(st, COMPLETE);
     BootConfigFlow flow(PERSON_SCHEMA, st, con, 5000);
     flow.step(1000);
     TEST_ASSERT(con.said("API_KEY=********") && con.said("WIFI=extender-1:****:extender-2:****"), "masked");
@@ -399,42 +419,21 @@ TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown) {
     TEST_ASSERT(con.said("DETECTOR_ID=detector-1") && con.said("DETECT_THRESH=0.6"), "ordinary values shown");
 }
 
-TEST(a_detector_without_wifi_shows_the_live_view_settings_as_not_used) {
-    MemoryStore st;
-    ScriptConsole con;
-    store(st, NO_STREAM);
-    BootConfigFlow flow(PERSON_SCHEMA, st, con, 5000);
-    flow.step(1000);
-    TEST_ASSERT(con.said("WIFI=<not set>   (not used)") && con.said("API_KEY=<not set>   (not used)"), "marked as not used, not as required");
-    TEST_ASSERT(con.said("Change settings? [y/N]"), "complete, so it just offers the 5 s window");
-}
-
 // ── typed settings ──────────────────────────────────────────────────────
 
-TEST(settings_load_into_typed_fields_with_the_live_view_on) {
+TEST(settings_load_into_typed_fields) {
     MemoryStore st;
-    store(st, WITH_STREAM);
+    store(st, COMPLETE);
     PersonSettings s;
     std::string err;
     TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
     TEST_ASSERT(s.personGpio == 13 && s.detectThreshold == 0.6f && s.clearThreshold == 0.5f && s.loopDelayMs == 10, "detection");
     TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10, "scene gate");
     TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "motion area");
-    TEST_ASSERT(s.streamEnabled && s.wifi.size() == 2 && s.wifi[1].pass == "pass;word2", "wifi, decoded");
+    TEST_ASSERT(s.wifi.size() == 2 && s.wifi[1].pass == "pass;word2", "wifi, decoded");
     TEST_ASSERT(s.serverHost == "192.168.4.9" && s.httpPort == 8080 && s.apiKey == "s3cret" && s.detectorId == "detector-1", "relay");
     TEST_ASSERT(s.streamMaxFps == 10 && s.streamJpegQuality == 80 && s.streamWriteTimeoutSec == 3, "stream tuning");
     TEST_ASSERT(s.announceHeartbeatSec == 600 && s.announceRetrySec == 30, "announce timing");
-    TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
-}
-
-TEST(with_the_live_view_off_the_stream_fields_keep_neutral_values) {
-    MemoryStore st;
-    store(st, NO_STREAM);
-    PersonSettings s;
-    std::string err;
-    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
-    TEST_ASSERT(!s.streamEnabled && s.wifi.empty() && s.serverHost.empty(), "no live view");
-    TEST_ASSERT(s.personGpio == 13 && s.detectThreshold == 0.6f && s.clearThreshold == 0.5f, "detection still loaded");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
@@ -452,7 +451,7 @@ TEST(loading_refuses_missing_or_invalid_settings_and_says_which) {
     PersonSettings s;
     std::string err;
     TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "PERSON_GPIO is not set"), "blank board");
-    store(st, WITH_STREAM);
+    store(st, COMPLETE);
     st.m["STREAM_MAX_FPS"] = "0";
     TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "STREAM_MAX_FPS is invalid"), "an invalid stored value");
 }
@@ -473,7 +472,7 @@ TEST(the_detector_defines_the_two_setup_settings_as_designed) {
 
 TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed) {
     MemoryStore st;
-    TEST_ASSERT(store(st, WITH_STREAM), "a configuration without the setup settings");
+    TEST_ASSERT(store(st, COMPLETE), "a configuration without the setup settings");
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "complete");
     TEST_ASSERT_EQ(st.badGets, 0, "the absent optional settings are never read");
     ChangeResult r = applyChangeLine(PERSON_SCHEMA, st, "SETUP_MODE=1", personLockedKeys());
@@ -484,13 +483,13 @@ TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed) {
 
 int main() {
     RUN_TEST(the_person_schema_is_consistent);
-    RUN_TEST(the_two_example_templates_are_valid_complete_configurations);
+    RUN_TEST(the_example_person_template_is_a_valid_complete_configuration);
     RUN_TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists);
-    RUN_TEST(with_the_live_view_off_only_thirteen_settings_are_needed_and_no_wifi_is_asked_for);
+    RUN_TEST(the_live_view_settings_are_always_required);
     RUN_TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_check_off);
-    RUN_TEST(the_scene_gate_settings_are_always_asked_for_also_with_the_live_view_off);
+    RUN_TEST(the_scene_gate_settings_are_asked_for_on_a_board_that_predates_them);
     RUN_TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_the_ema_pair);
-    RUN_TEST(turning_the_live_view_on_asks_for_the_whole_live_view_group_and_nothing_else);
+    RUN_TEST(the_old_stream_switch_is_gone_and_a_board_that_still_has_it_stored_ignores_it);
     RUN_TEST(the_output_gpio_must_be_a_pin_the_board_leaves_free);
     RUN_TEST(thresholds_are_scores_between_0_01_and_1);
     RUN_TEST(loop_delay_and_stream_tuning_ranges);
@@ -509,9 +508,7 @@ int main() {
     RUN_TEST(the_ema_settings_load_into_the_typed_copy_and_off_keeps_the_threshold_fixed);
     RUN_TEST(a_blank_detector_is_configured_with_one_line_and_restarts);
     RUN_TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown);
-    RUN_TEST(a_detector_without_wifi_shows_the_live_view_settings_as_not_used);
-    RUN_TEST(settings_load_into_typed_fields_with_the_live_view_on);
-    RUN_TEST(with_the_live_view_off_the_stream_fields_keep_neutral_values);
+    RUN_TEST(settings_load_into_typed_fields);
     RUN_TEST(the_documented_typical_values_are_the_defaults_of_the_struct_the_glue_test_relies_on);
     RUN_TEST(loading_refuses_missing_or_invalid_settings_and_says_which);
     RUN_TEST(the_detector_defines_the_two_setup_settings_as_designed);

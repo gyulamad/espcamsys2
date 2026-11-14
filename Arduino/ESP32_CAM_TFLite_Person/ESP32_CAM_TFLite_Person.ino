@@ -47,9 +47,9 @@
 
 #include "person_detect_model_data.h"
 
-// ── Live view (optional) ────────────────────────────────────────────────
-// With the STREAM_ENABLED setting on, the detector also joins Wi-Fi (any of
-// several networks, like the recorder) and keeps ONE connection open to the
+// ── Live view ───────────────────────────────────────────────────────────
+// The detector also joins Wi-Fi (any of several networks, like the recorder)
+// and keeps ONE connection open to the
 // relay, pushing its 96x96 grayscale picture and the numbers behind its alarm
 // line up it. The dashboard shows them under the camera the detector belongs to,
 // so the camera can be aimed and the thresholds tuned with visual confirmation.
@@ -61,8 +61,7 @@
 // a camera or model that would not start, a picture it could not encode — goes
 // to the relay's log file too, not only to the serial port (remote logging glue
 // below). Detection never waits for any of it: all networking runs in its own
-// tasks, and with no Wi-Fi the detector works exactly as before. With
-// STREAM_ENABLED=0 no Wi-Fi is started at all.
+// tasks, and while the relay cannot be reached the detector works exactly as before.
 
 // FW_GIT is the git revision this binary was built from: ota-deploy.sh writes it into
 // fw_version.h (gitignored) just before compiling. A sketch built by hand has none and says "dev".
@@ -122,13 +121,14 @@ using esp32cam_logic::resetReasonName;
 // RLOG_INFO / RLOG_WARN / RLOG_ERROR. (Not LOG_*: the ESP32 toolchain's syslog headers define those names.)
 //
 // There are no LOG_* settings on the detector (they would make every board that is updated ask for them):
-// remote logging is on whenever the live view is (STREAM_ENABLED=1), at INFO and above.
+// remote logging is always on, at INFO and above.
 
 void logEcho(void*, LogLevel, const char* line) {
   Serial.println(line);
 }
 
-// The log's configuration: remote delivery only if the live view (and so Wi-Fi) is on.
+// The log's configuration. Remote delivery is off until the settings are loaded (the instance below starts
+// that way: there is no relay address yet) and on from remoteLogConfigure() on.
 RemoteLogConfig remoteLogConfigFor(bool remote) {
   RemoteLogConfig c;
   c.remoteEnabled   = remote;
@@ -238,14 +238,14 @@ void remoteLogTask(void *) {
 // Applies the log's real configuration. Call once, right after setupSettings(): from then on what is logged
 // is queued for the relay (and delivered as soon as Wi-Fi and the task below are up).
 void remoteLogConfigure() {
-  remoteLogInstance.reconfigure(remoteLogConfigFor(g_cfg.streamEnabled));
+  remoteLogInstance.reconfigure(remoteLogConfigFor(true));
 }
 
 // Starts the delivery task. Called from startNetwork(), after the camera and the model have their memory.
 // Pinned to core 0 (where the Wi-Fi stack runs) so it never competes with loop() on core 1.
 void remoteLogStart() {
   remoteLogMutex = xSemaphoreCreateMutex();
-  if (!g_cfg.streamEnabled || !remoteLogMutex) return;   // no mutex, no safe way to share: serial only
+  if (!remoteLogMutex) return;   // no mutex, no safe way to share: serial only
   xTaskCreatePinnedToCore(remoteLogTask, "remoteLog", 8192, nullptr, 1, nullptr, 0);
 }
 
@@ -1647,7 +1647,7 @@ void logBootInfo()
     RLOG_INFO(
         "firmware built %s, detector id %s, free heap %u bytes, PSRAM %s",
         FW_BUILD,
-        g_cfg.streamEnabled ? g_cfg.detectorId.c_str() : "(live view off)",
+        g_cfg.detectorId.c_str(),
         (unsigned)ESP.getFreeHeap(),
         psramFound() ? "yes" : "NO"
     );
@@ -1672,17 +1672,10 @@ void logBootInfo()
         (unsigned)g_cfg.motionEmaPercent
     );
 
-    if (g_cfg.streamEnabled)
-    {
-        RLOG_INFO(
-            "live view: relay %s:%d, at most %d pictures/s, JPEG quality %d",
-            g_cfg.serverHost.c_str(), g_cfg.httpPort, g_cfg.streamMaxFps, g_cfg.streamJpegQuality
-        );
-    }
-    else
-    {
-        RLOG_INFO("live view is off (STREAM_ENABLED=0): no Wi-Fi, nothing is sent to the relay");
-    }
+    RLOG_INFO(
+        "live view: relay %s:%d, at most %d pictures/s, JPEG quality %d",
+        g_cfg.serverHost.c_str(), g_cfg.httpPort, g_cfg.streamMaxFps, g_cfg.streamJpegQuality
+    );
 }
 
 // The detector cannot do its job (no camera, no model): say so where somebody will read it, then
@@ -1696,10 +1689,7 @@ void startupFailed(const char *what)   // does not return: it ends in a restart 
 {
     RLOG_ERROR("%s - the detector cannot work, restarting in %u s", what, (unsigned)(STARTUP_FAILURE_RESTART_MS / 1000));
 
-    if (g_cfg.streamEnabled)
-    {
-        startNetwork();   // so the line above can reach the relay's log before the restart
-    }
+    startNetwork();   // so the line above can reach the relay's log before the restart
 
     uint32_t until = millis() + STARTUP_FAILURE_RESTART_MS;
 
@@ -1824,11 +1814,8 @@ void setup()
     logInternalHeap("boot");
 
     // Wi-Fi gets its internal RAM before the camera and the tensor arena take theirs.
-    if (g_cfg.streamEnabled)
-    {
-        earlyWifiInit();
-        logInternalHeap("Wi-Fi driver init");
-    }
+    earlyWifiInit();
+    logInternalHeap("Wi-Fi driver init");
 
     if (!initCamera())
     {
@@ -1854,7 +1841,7 @@ void setup()
 
     logInternalHeap("TFLite init");
 
-    if (g_cfg.streamEnabled && !startNetwork())
+    if (!startNetwork())
     {
         RLOG_ERROR("the live view could not start - the detector runs without it (see the line above)");
     }

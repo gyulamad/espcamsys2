@@ -14,6 +14,7 @@
 #include "settings_glue_fakes.h"
 
 #include "../../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
+#include "schema_counts.h"
 using esp32cam_settings::PersonSettings;
 static PersonSettings g_cfg;
 
@@ -31,15 +32,20 @@ static void powerUp() {
     resetLink();
 }
 
-static const char* NO_STREAM = "PERSON_GPIO=4;DETECT_THRESH=0.7;CLEAR_THRESH=0.4;LOOP_DELAY_MS=20;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=0";
+// The detection settings, then the live view's. Every detector needs both (the live view is not optional).
+static const char* DETECTION = "PERSON_GPIO=4;DETECT_THRESH=0.7;CLEAR_THRESH=0.4;LOOP_DELAY_MS=20;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0";
+static const char* LIVE_VIEW =
+    "WIFI=home:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=s3cret;DETECTOR_ID=det-1;"
+    "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
+static const std::string FIRST_BOOT = std::string(DETECTION) + ";" + LIVE_VIEW;
 
 TEST(the_first_boot_stores_the_typed_settings_in_flash_and_restarts) {
     eraseFlash(); powerUp();
-    typeAt(300, std::string(NO_STREAM) + "\n");
+    typeAt(300, FIRST_BOOT + "\n");
     setupSettings();
     TEST_ASSERT_EQ(g_restarts, 1, "restarted once");
-    TEST_ASSERT(g_flash["PERSON_GPIO"] == "4" && g_flash["DETECT_THRESH"] == "0.7" && g_flash["STREAM_ENABLED"] == "0", "values are in (fake) flash");
-    TEST_ASSERT_EQ((int)g_flash.size(), 13, "just the thirteen (no live view, so no Wi-Fi settings are asked for)");
+    TEST_ASSERT(g_flash["PERSON_GPIO"] == "4" && g_flash["DETECT_THRESH"] == "0.7" && g_flash["DETECTOR_ID"] == "det-1", "values are in (fake) flash");
+    TEST_ASSERT_EQ((int)g_flash.size(), (int)requiredKeyCount(esp32cam_settings::PERSON_SCHEMA) - 1, "all of them (MOTION_EMA_PCT is not asked for while MOTION_EMA_LEN=0)");
     TEST_ASSERT(said("These settings need a value") && said("All settings are stored. Restarting"), "the conversation happened on serial");
     TEST_ASSERT_EQ(g_prefsOpen, 0, "the flash was closed again");
     TEST_ASSERT(g_prefsNamespace == "espcam" && !g_prefsReadOnly, "the espcam namespace, opened read-write");
@@ -51,29 +57,9 @@ TEST(after_the_reboot_it_waits_five_seconds_then_loads_into_g_cfg) {
     TEST_ASSERT_EQ(g_restarts, 0, "no restart");
     TEST_ASSERT(said("Change settings? [y/N]") && g_now >= 5000 && g_now <= 5100, "asked, waited about 5 s of clock time");
     TEST_ASSERT(g_cfg.personGpio == 4 && g_cfg.detectThreshold == 0.7f && g_cfg.clearThreshold == 0.4f && g_cfg.loopDelayMs == 20, "loaded");
-    TEST_ASSERT(!g_cfg.streamEnabled && g_cfg.wifi.empty(), "live view off: nothing for the network task to use");
-}
-
-TEST(turning_the_live_view_on_later_asks_for_its_settings_and_restarts_when_complete) {
-    powerUp();
-    typeAt(500, "y\n");
-    typeAt(1000, "STREAM_ENABLED=1\n");
-    typeAt(1500,
-        "WIFI=home:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;API_KEY=s3cret;DETECTOR_ID=det-1;"
-        "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30\n");
-    typeAt(2000, "\n");
-    setupSettings();
-    TEST_ASSERT(said("These settings need a value (10)"), "after switching it on, the 10 live-view settings were asked for");
-    TEST_ASSERT_EQ(g_restarts, 1, "restart once everything is stored");
-    TEST_ASSERT(g_flash["STREAM_ENABLED"] == "1" && g_flash["DETECTOR_ID"] == "det-1", "stored");
-}
-
-TEST(with_the_live_view_on_g_cfg_gets_the_wifi_list_and_stream_settings) {
-    powerUp();
-    setupSettings();
-    TEST_ASSERT(g_cfg.streamEnabled && g_cfg.wifi.size() == 1 && g_cfg.wifi[0].ssid == "home" && g_cfg.wifi[0].pass == "password1", "wifi");
+    TEST_ASSERT(g_cfg.wifi.size() == 1 && g_cfg.wifi[0].ssid == "home" && g_cfg.wifi[0].pass == "password1", "wifi");
     TEST_ASSERT(g_cfg.serverHost == "192.168.4.9" && g_cfg.httpPort == 8080 && g_cfg.apiKey == "s3cret" && g_cfg.detectorId == "det-1", "relay");
-    TEST_ASSERT(g_cfg.detectorId == "det-1" && g_cfg.streamMaxFps == 10 && g_cfg.streamJpegQuality == 80, "stream");
+    TEST_ASSERT(g_cfg.streamMaxFps == 10 && g_cfg.streamJpegQuality == 80, "stream");
     TEST_ASSERT(!said("hunter22") && !said("s3cret") && !said("password1"), "no secret was printed");
 }
 
@@ -89,8 +75,8 @@ TEST(a_threshold_pair_that_breaks_the_rule_is_refused_end_to_end) {
 
 // ── missing settings asked for from the relay ───────────────────────────
 
-static const char* WITH_STREAM =
-    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=1;"
+static const char* COMPLETE =
+    "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;"
     "WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
@@ -102,7 +88,7 @@ static void provisionFlash(const char* line) {
 }
 
 TEST(a_detector_missing_a_setting_asks_the_relay_when_nobody_types) {
-    provisionFlash(WITH_STREAM); powerUp();
+    provisionFlash(COMPLETE); powerUp();
     g_flash.erase("STREAM_MAX_FPS");                     // a firmware update added this one
     g_link.reply(esp32cam_settings::FetchResult::Got, "STREAM_MAX_FPS=8");
     setupSettings();
@@ -114,7 +100,7 @@ TEST(a_detector_missing_a_setting_asks_the_relay_when_nobody_types) {
 }
 
 TEST(the_relay_can_not_change_the_detection_thresholds_of_a_working_detector) {
-    provisionFlash(WITH_STREAM); powerUp();
+    provisionFlash(COMPLETE); powerUp();
     g_flash.erase("STREAM_MAX_FPS");
     g_link.reply(esp32cam_settings::FetchResult::Got, "DETECT_THRESH=0.1;API_KEY=evil;SERVER_HOST=10.6.6.6;STREAM_MAX_FPS=8");
     setupSettings();
@@ -123,18 +109,35 @@ TEST(the_relay_can_not_change_the_detection_thresholds_of_a_working_detector) {
                 "everything that was already valid is untouched");
 }
 
-TEST(a_detector_without_the_live_view_has_no_network_settings_so_it_never_tries_wifi) {
-    provisionFlash(NO_STREAM); powerUp();
+TEST(a_detector_missing_its_network_settings_can_not_ask_the_relay_so_it_never_tries_wifi) {
+    provisionFlash(COMPLETE); powerUp();
+    g_flash.erase("WIFI");                               // without these the relay can not even be reached
     g_flash.erase("LOOP_DELAY_MS");
-    typeAt(60000, "LOOP_DELAY_MS=20\n");
+    typeAt(60000, "WIFI=home:password1;LOOP_DELAY_MS=20\n");
     setupSettings();
     TEST_ASSERT_EQ(g_link.connects, 0, "no Wi-Fi");
     TEST_ASSERT(said("Type the missing settings here"), "it said the serial port is the only way");
     TEST_ASSERT_EQ(g_flash["LOOP_DELAY_MS"], std::string("20"), "the typed value was stored");
+    TEST_ASSERT_EQ(g_flash["WIFI"], std::string("home:password1"), "so was the network");
+}
+
+TEST(a_detector_that_predates_the_always_on_live_view_is_asked_for_its_settings_over_serial) {
+    // A detector that was run with the old STREAM_ENABLED=0 has the detection settings and nothing else.
+    eraseFlash();
+    esp32cam_settings::CheckedLine c = esp32cam_settings::checkLine(esp32cam_settings::PERSON_SCHEMA, DETECTION);
+    for (size_t i = 0; i < c.pairs.size(); ++i) g_flash[c.pairs[i].key] = c.pairs[i].value;
+    g_flash["STREAM_ENABLED"] = "0";                     // left behind in flash, ignored
+    powerUp();
+    typeAt(500, std::string(LIVE_VIEW) + "\n");
+    setupSettings();
+    TEST_ASSERT(said("These settings need a value (10)"), "the 10 live-view settings are asked for");
+    TEST_ASSERT_EQ(g_link.connects, 0, "the relay can not be asked: there is no network setting yet");
+    TEST_ASSERT_EQ(g_restarts, 1, "restart once everything is stored");
+    TEST_ASSERT(g_flash["DETECTOR_ID"] == "det-1" && g_flash["WIFI"] == "home:password1", "stored");
 }
 
 TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again) {
-    provisionFlash(WITH_STREAM); powerUp();
+    provisionFlash(COMPLETE); powerUp();
     g_flash.erase("STREAM_MAX_FPS");
     setupSettings();
     TEST_ASSERT_EQ(g_restarts, 1, "restarted to try again");
@@ -144,12 +147,11 @@ TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again) {
 int main() {
     RUN_TEST(the_first_boot_stores_the_typed_settings_in_flash_and_restarts);
     RUN_TEST(after_the_reboot_it_waits_five_seconds_then_loads_into_g_cfg);
-    RUN_TEST(turning_the_live_view_on_later_asks_for_its_settings_and_restarts_when_complete);
-    RUN_TEST(with_the_live_view_on_g_cfg_gets_the_wifi_list_and_stream_settings);
     RUN_TEST(a_threshold_pair_that_breaks_the_rule_is_refused_end_to_end);
     RUN_TEST(a_detector_missing_a_setting_asks_the_relay_when_nobody_types);
     RUN_TEST(the_relay_can_not_change_the_detection_thresholds_of_a_working_detector);
-    RUN_TEST(a_detector_without_the_live_view_has_no_network_settings_so_it_never_tries_wifi);
+    RUN_TEST(a_detector_missing_its_network_settings_can_not_ask_the_relay_so_it_never_tries_wifi);
+    RUN_TEST(a_detector_that_predates_the_always_on_live_view_is_asked_for_its_settings_over_serial);
     RUN_TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again);
     return test::summarize();
 }

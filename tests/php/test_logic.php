@@ -602,7 +602,7 @@ function camtest_detector_reported(): array {
     return ['PERSON_GPIO' => '13', 'DETECT_THRESH' => '0.6', 'CLEAR_THRESH' => '0.5', 'LOOP_DELAY_MS' => '10', 'DARK_THRESH' => '40',
             'MOTION_THRESH' => '300', 'MOTION_HOLD_S' => '10', 'MOTION_X0' => '0', 'MOTION_Y0' => '0', 'MOTION_X1' => '96', 'MOTION_Y1' => '96',
             'MOTION_EMA_LEN' => '0',
-            'STREAM_ENABLED' => '1', 'WIFI' => 'net:********', 'SERVER_HOST' => '192.168.1.117',
+            'WIFI' => 'net:********', 'SERVER_HOST' => '192.168.1.117',
             'HTTP_PORT' => '8080', 'API_KEY' => '********', 'DETECTOR_ID' => 'detector-1', 'STREAM_MAX_FPS' => '10', 'STREAM_JPEG_Q' => '80',
             'STREAM_WR_TMO_S' => '3', 'ANN_HEARTBEAT' => '600', 'ANN_RETRY' => '30'];
 }
@@ -635,7 +635,7 @@ camtest_test('the generated schema has the person detector: the calibration sett
         if ($k['locked']) { $locked[] = $k['name']; }
     }
     sort($locked);
-    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'SETUP_PASSWORD', 'STREAM_ENABLED', 'WIFI']);
+    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'SETUP_PASSWORD', 'WIFI']);
     foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1', 'MOTION_EMA_LEN', 'MOTION_EMA_PCT', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
         camtest_assert_true(in_array($n, $names, true), $n);
     }
@@ -763,7 +763,7 @@ camtest_test('buildDeviceChange: without a rules argument (a recorder, an older 
 });
 
 camtest_test('buildDeviceChange for a detector: the connection settings and the alarm pin cannot be changed, a value out of range is refused', function () {
-    foreach (['SERVER_HOST' => '10.0.0.1', 'DETECTOR_ID' => 'x', 'PERSON_GPIO' => '4', 'STREAM_ENABLED' => '0', 'API_KEY' => 'k'] as $name => $value) {
+    foreach (['SERVER_HOST' => '10.0.0.1', 'DETECTOR_ID' => 'x', 'PERSON_GPIO' => '4', 'API_KEY' => 'k'] as $name => $value) {
         $r = camtest_detector_change([$name => $value]);
         camtest_assert_equal($r['ok'], false, $name);
     }

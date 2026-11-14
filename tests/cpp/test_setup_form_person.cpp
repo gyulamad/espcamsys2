@@ -14,9 +14,9 @@ using namespace esp32cam_setup;
 struct SetupFixture {
     static const Schema& schema() { return esp32cam_settings::PERSON_SCHEMA; }
     static std::string typical() {
-        // the live view ON, so the relay settings (and the ones that reach it) are all present
+        // every setting, including the ones that reach the relay
         return "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;"
-               "MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=1;"
+               "MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;"
                "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
                "API_KEY=s3cret;DETECTOR_ID=detector-1;"
                "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";

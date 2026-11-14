@@ -53,7 +53,7 @@ void settingsSyncTick();   // forward-declared in the sketch before otaTask(), d
 
 static const char* TYPICAL =
     "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;"
-    "MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;STREAM_ENABLED=1;WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
+    "MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0;WIFI=extender-1:password1;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
     "API_KEY=s3cret;DETECTOR_ID=detector-1;STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;"
     "ANN_HEARTBEAT=600;ANN_RETRY=30";
 
@@ -108,15 +108,14 @@ TEST(a_calibration_change_is_stored_logged_by_name_and_restarts_the_detector_onc
 }
 
 TEST(the_connection_settings_and_the_alarm_pin_are_refused_by_the_sketch_wiring) {
-  const char* lines[] = { "778\nSERVER_HOST=10.9.9.9\n", "779\nDETECTOR_ID=other\n", "780\nPERSON_GPIO=4\n", "781\nSTREAM_ENABLED=0\n" };
-  for (size_t i = 0; i < 4; i++) {
+  const char* lines[] = { "778\nSERVER_HOST=10.9.9.9\n", "779\nDETECTOR_ID=other\n", "780\nPERSON_GPIO=4\n" };
+  for (size_t i = 0; i < 3; i++) {
     setUp(); route("/change", 200, lines[i]); route("/report", 200);
     runSeconds(60);
     TEST_ASSERT_EQ(g_flash.m["SERVER_HOST"], std::string("192.168.4.9"), "the server is unchanged");
     TEST_ASSERT_EQ(g_flash.m["DETECTOR_ID"], std::string("detector-1"), "the id is unchanged");
     TEST_ASSERT_EQ(g_flash.m["PERSON_GPIO"], std::string("13"), "the alarm pin is unchanged");
-    TEST_ASSERT_EQ(g_flash.m["STREAM_ENABLED"], std::string("1"), "the live view stays on");
-    TEST_ASSERT_EQ(g_restarts, 0, "no restart");
+      TEST_ASSERT_EQ(g_restarts, 0, "no restart");
   }
 }
 

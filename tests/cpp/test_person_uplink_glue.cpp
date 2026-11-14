@@ -705,7 +705,6 @@ TEST(a_nearly_exhausted_network_task_stack_is_warned_about) {
 // ── startNetwork() ───────────────────────────────────────────────────────
 
 static void typicalLiveViewSettings() {
-    g_cfg.streamEnabled = true;
     g_cfg.serverHost = "192.168.4.9"; g_cfg.httpPort = 8080; g_cfg.apiKey = "s3cret"; g_cfg.detectorId = "det-1";
     esp32cam_settings::WifiNet a; a.ssid = "extender-1"; a.pass = "pw1";
     esp32cam_settings::WifiNet b; b.ssid = "extender-2"; b.pass = "pw2";
@@ -1053,16 +1052,13 @@ TEST(an_abnormal_restart_is_an_error_naming_the_reason) {
     TEST_ASSERT(logged('I', "booted (software restart)"), "a deliberate restart is not an alarm");
 }
 
-TEST(missing_psram_is_stated_and_a_board_without_the_live_view_says_so) {
+TEST(missing_psram_is_stated_and_the_detector_id_and_relay_are_always_reported) {
     resetWorld(); typicalLiveViewSettings();
     g_psram = false;
     logBootInfo();
     TEST_ASSERT(logged('I', "PSRAM NO"), "the camera cannot work without PSRAM: say so up front");
-    g_rlog.clear();
-    g_cfg.streamEnabled = false;
-    logBootInfo();
-    TEST_ASSERT(logged('I', "detector id (live view off)"), "no id to report when the live view is off");
-    TEST_ASSERT(logged('I', "live view is off (STREAM_ENABLED=0): no Wi-Fi, nothing is sent to the relay"), "and it says that nothing will be sent");
+    TEST_ASSERT(logged('I', "detector id det-1"), "the detector's id is always reported (the live view is not optional)");
+    TEST_ASSERT(logged('I', "live view: relay 192.168.4.9:8080"), "and so is where the live view goes");
 }
 
 // ── start-up failure ─────────────────────────────────────────────────────
@@ -1076,18 +1072,8 @@ TEST(a_camera_that_will_not_start_is_logged_given_time_to_reach_the_relay_then_r
     TEST_ASSERT(restarted, "the board restarts instead of sitting in an empty loop, looking fine on a serial cable");
     TEST_ASSERT(logged('E', "Camera initialization FAILED - the detector cannot work, restarting in 30 s"), "an ERROR says what failed and what happens next");
     TEST_ASSERT(g_now - t0 >= 30000 && g_now - t0 < 30300, "after 30 s: time for Wi-Fi to come up and the line to reach the relay");
-    TEST_ASSERT(g_tasks.size() == 1 && std::string(g_tasks[0].name) == "network", "the network is started for that, with the live view on");
+    TEST_ASSERT(g_tasks.size() == 1 && std::string(g_tasks[0].name) == "network", "the network is started for that");
     ::free(reportFrame);
-}
-
-TEST(without_the_live_view_a_start_up_failure_starts_no_network_but_still_restarts) {
-    resetWorld(); typicalLiveViewSettings();
-    g_cfg.streamEnabled = false;
-    bool restarted = false;
-    try { startupFailed("TFLite initialization FAILED"); } catch (const Restarted&) { restarted = true; }
-    TEST_ASSERT(restarted, "restarts");
-    TEST_ASSERT(g_tasks.empty() && g_remoteLogStarts == 0, "no Wi-Fi task: STREAM_ENABLED=0 means no Wi-Fi at all");
-    TEST_ASSERT(logged('E', "TFLite initialization FAILED - the detector cannot work, restarting in 30 s"), "still logged (to the serial port)");
 }
 
 int main() {
@@ -1141,8 +1127,7 @@ int main() {
     RUN_TEST(streaming_wr_tmo_s_decides_how_long_a_stalled_relay_is_waited_for);
     RUN_TEST(a_normal_boot_reports_firmware_memory_settings_and_where_the_live_view_goes);
     RUN_TEST(an_abnormal_restart_is_an_error_naming_the_reason);
-    RUN_TEST(missing_psram_is_stated_and_a_board_without_the_live_view_says_so);
+    RUN_TEST(missing_psram_is_stated_and_the_detector_id_and_relay_are_always_reported);
     RUN_TEST(a_camera_that_will_not_start_is_logged_given_time_to_reach_the_relay_then_restarted);
-    RUN_TEST(without_the_live_view_a_start_up_failure_starts_no_network_but_still_restarts);
     return test::summarize();
 }
