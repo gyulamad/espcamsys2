@@ -337,6 +337,10 @@ else
     # setup_mode.h compiled for real against fakes of the Arduino core (tests/cpp/ota_fakes/): the access point, DNS and
     # HTTP server, and the ArduinoSetupHardware that SetupBoot runs on; the last tests put the real form and session on top.
     run_cpp_test test_setup_mode_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
+    # Randomized attacks on the setup mode's request path (F-21 S10): the form parser and handler, the HTTP reader and the
+    # reply writer, checked for properties (the flash changes only through a good save, no secret or markup in a reply, ...).
+    # Fixed seed, about a second; see F-21-S10-security-review.md for how to hunt longer.
+    run_cpp_test test_setup_fuzz -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change
