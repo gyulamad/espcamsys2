@@ -387,6 +387,12 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   .det-chip.high   { color: var(--accent2); border-color: var(--accent2); box-shadow: 0 0 6px rgba(255,79,94,.35); }
   .det-chip.low    { color: #2dd67b; border-color: #1a4d3a; }
 
+  /* The ALARM CHAIN line (js/alarm-chain.js): can the detector's alarm pin start a recording at all. */
+  .det-sub.alarmchain.ok      { color: #2dd67b; }
+  .det-sub.alarmchain.off     { color: #f0a500; }
+  .det-sub.alarmchain.broken  { color: var(--accent2); }
+  .det-sub.alarmchain.unknown { color: var(--muted); }
+
   /* The Wi-Fi chip of a camera and of a detector (js/wifi-info.js): signal bars, network, strength. */
   .wifi-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; font-family: var(--mono); font-size: .65rem; letter-spacing: 0; text-transform: none; color: var(--muted); }
   .wifi-chip[hidden] { display: none; }
@@ -600,6 +606,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
           </div>
           <div class="det-apply" id="detapply-<?= $camId ?>"><span id="detapplytxt-<?= $camId ?>"></span><span class="det-apply-btns"><button data-cam="<?= $camId ?>" type="button" class="cam-btn" id="detapplybtn-<?= $camId ?>" onclick="CamBusy.run(this, () => applyDetectorThresholds(this.dataset.cam))" title="Send the moved thresholds to the detector (it stores them and restarts)">APPLY</button><button data-cam="<?= $camId ?>" type="button" class="cam-btn" onclick="resetDetectorThresholds(this.dataset.cam)" title="Forget the moved thresholds">RESET</button></span></div>
           <div class="det-line"><span class="k" id="detpinlabel-<?= $camId ?>">ALARM PIN</span><span class="det-chip" id="detpin-<?= $camId ?>">–</span></div>
+          <div class="det-sub alarmchain" id="detchainsub-<?= $camId ?>"></div>
           <div class="det-sub" id="detinfo-<?= $camId ?>"></div>
         </div>
       </div>
@@ -631,6 +638,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <script src="js/mux-pictures.js"></script>
 <script src="js/wifi-info.js"></script>
 <script src="js/camera-offline.js"></script>
+<script src="js/alarm-chain.js"></script>
 <script src="js/device-info.js"></script>
 <script>
   // ── Clock ──
@@ -645,16 +653,51 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     return [...document.querySelectorAll('.cam-card')].map(el => el.id.replace('card-', ''));
   }
 
+  // ── Which preloader a camera's card shows ──
+  // A card can have two: the stream overlay below (CONNECTING… / STREAM ERROR / FEED PAUSED) and the relay's
+  // offline cover with its "Reconnecting…" note (js/camera-offline.js, shown from the pushed status map). Both at once
+  // was the F-25 bug: an offline camera never sends the picture that would end the CONNECTING… spinner, so the two
+  // preloaders stacked. CamOffline.preloaderFor() is the one rule; these two maps are its inputs, and every writer
+  // of either layer goes through setStreamState / setKnownOffline, so the rule is applied wherever a state changes.
+  // <stream-preloader-source>
+  const streamStates = {};       // camera id -> what the stream overlay shows: 'connecting' | 'live' | 'error' | 'paused'
+  const knownOfflineCams = {};   // camera id -> whether the relay's last status push said the camera is not connected
+
+  // Applies the rule to one camera's two layers: the cover shows alone while the relay says the camera is offline
+  // (but not when the user paused that feed, which would hide the overlay's RESTORE button), the stream overlay
+  // shows alone otherwise while it has something to say, and neither shows while the picture is live.
+  function syncPreloaders(id) {
+    const verdict = CamOffline.preloaderFor(knownOfflineCams[id] === true, streamStates[id]);
+    const cover = document.getElementById('offline-' + id);
+    if (cover) cover.hidden = verdict !== 'cover';
+    const overlay = document.getElementById('overlay-' + id);
+    if (overlay) overlay.classList.toggle('visible', verdict === 'overlay');
+  }
+
+  function setStreamState(id, state) {
+    streamStates[id] = state;
+    syncPreloaders(id);
+  }
+
+  // `offline` is what CamOffline.render() made of the last status push (only a plain online: false counts).
+  function setKnownOffline(id, offline) {
+    knownOfflineCams[id] = offline === true;
+    syncPreloaders(id);
+  }
+  // </stream-preloader-source>
+
   // ── Stream state callbacks ──
   // Called for every picture the mux paints on a camera's <img> (onload) and when the connection goes down (onDown below).
   function onStreamLoad(id) {
     setStatus(id, 'live', 'LIVE');
     hideOverlay(id);
+    setStreamState(id, 'live');
   }
 
   function onStreamError(id) {
     setStatus(id, 'error', 'ERROR');
     showOverlay(id, '✕', 'STREAM ERROR', true);
+    setStreamState(id, 'error');
   }
 
   // ── Where the live data comes from ──
@@ -720,6 +763,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const overlay = document.getElementById('overlay-' + id);
     overlay.replaceChildren(h('div', { className: 'spinner' }), h('span', { textContent: 'CONNECTING…' }));
     overlay.classList.add('visible');
+    setStreamState(id, 'connecting');   // the relay may have this camera offline: then the offline cover shows instead (syncPreloaders)
 
     openPicture(id);
   }
@@ -755,6 +799,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       btn.classList.add('danger');
       setStatus(id, 'hidden', 'HIDDEN');
       showOverlay(id, '◼', 'FEED PAUSED', false);
+      setStreamState(id, 'paused');   // the user's own choice: the overlay (with RESTORE) shows even if the camera is offline
       document.getElementById('overlay-' + id).append(
         h('button', { className: 'cam-btn', textContent: '▶ RESTORE', onclick: () => toggleHide(id) }));
     }
@@ -841,6 +886,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     else switchState[id] = { forever: !!off.forever, untilAt: off.forever ? null : Date.now() + off.remainingMs };
     renderSwitch(id);
     renderSwitchAll();
+    renderAlarmChain(id);   // the alarm chain's last step is the switch: its OFF state is what silences an otherwise working chain
   }
 
   // ── Toasts (F-12) ──
@@ -1190,7 +1236,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     for (const id of getAllCameraIds()) {
       const s = data[id];
       CamWifi.render(document.getElementById('wifi-' + id), s && s.wifi);   // the network and signal the camera reported (or nothing)
-      CamOffline.render(document.getElementById('offline-' + id), data, id);   // a camera that is not connected: its last picture is dimmed and says so
+      // A camera that is not connected: its last picture is dimmed and says so — and its stream overlay (CONNECTING…,
+      // STREAM ERROR) steps aside, so the two preloaders never stack (F-25, syncPreloaders above).
+      setKnownOffline(id, CamOffline.render(document.getElementById('offline-' + id), data, id));
       CamDeviceInfo.render(document.getElementById('dev-' + id), s && s.device);   // address, uptime, memory, firmware (or nothing)
       if (!s) {
         // Neither connected to the relay yet nor any footage on disk for it.
@@ -1534,6 +1582,56 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (line && chip) line.hidden = chip.hidden;   // the line (its label too) follows the chip
   }
 
+  // ── ALARM CHAIN (F-31) ──
+  // Whether the detector's alarm pin CAN start a recording on this camera, and when it cannot, why not —
+  // in words, in the line under the ALARM PIN chip (js/alarm-chain.js; tests/node/test_alarm_chain.js).
+  // Every way the chain fails is silent: an alarm input left OFF (ALARM_GPIO_PIN=-1 is the firmware default),
+  // ALARM_ACTIVE=LOW armed against the detector's active-high output, or the recording switch OFF — none of
+  // them is an error anywhere (the relay logs the refused alarm at INFO and throttles it, the camera logs any
+  // HTTP answer at INFO). The red pin says the detector did its part; this line says whether the rest can follow.
+  const alarmChainRecorder = {};   // cam id -> what the board reported it holds ({ alarmGpioPin, alarmActive }) | null (nothing reported) | undefined (fetch pending or failed)
+  const alarmChainError = {};      // cam id -> why the settings could not be read (empty once read)
+
+  function renderAlarmChain(id) {
+    const el = detEl('chainsub', id);
+    if (!el) return;
+    if (!window.CamAlarmChain) return;   // the helper did not load: an empty line, never a broken panel (the e2e byte-for-byte check keeps the file served)
+    if (alarmChainRecorder[id] === undefined && !alarmChainError[id]) {
+      el.textContent = 'checking the camera\'s alarm input…';
+      el.className = 'det-sub alarmchain unknown';
+      return;
+    }
+    const verdict = CamAlarmChain.describe({
+      name: cameraNameOf(id),
+      recorder: alarmChainRecorder[id],
+      recorderError: alarmChainError[id] || null,
+      offLabel: switchState[id] ? switchLabel(switchState[id]).text : null,
+    });
+    el.textContent = verdict.text;
+    el.className = 'det-sub alarmchain ' + verdict.level;
+  }
+
+  // One fetch per camera with a detector panel, when the page loads: what the board REPORTED it holds
+  // (camera-settings.php passes on the relay's device-settings state; the staged line would be a wish,
+  // not the truth). From then on the line follows the live switch state (applySwitchState re-renders);
+  // a page reload re-reads the settings, which is often enough for values that change by the SETTINGS page.
+  async function fetchAlarmChain(id) {
+    try {
+      const res = await fetch('camera-settings.php?cam=' + encodeURIComponent(id), {
+        headers: { 'X-Requested-With': 'camdash' },
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
+      const s = j.state && j.state.reported && j.state.reported.settings;
+      alarmChainRecorder[id] = s ? { alarmGpioPin: s.ALARM_GPIO_PIN, alarmActive: s.ALARM_ACTIVE } : null;
+      alarmChainError[id] = '';
+    } catch (e) {
+      alarmChainRecorder[id] = undefined;
+      alarmChainError[id] = e.message;
+    }
+    renderAlarmChain(id);
+  }
+
   function renderDetector(id, d) {
     const row = document.getElementById('det-' + id);
     if (!row) return;
@@ -1623,6 +1721,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const pin = detEl('pin', id);
     pin.textContent = r.gpio.high ? 'HIGH' : 'LOW';
     pin.className = 'det-chip ' + (r.gpio.high ? 'high' : 'low');
+    renderAlarmChain(id);   // the chain's verdict follows the pin: a red pin with a broken chain is the F-31 blind spot
 
     // The board itself, for tracking down trouble: where it is, how long it has run (its Wi-Fi has a line of its own),
     // its memory, which firmware it runs (did the update reach it?), and the trouble it counted.
@@ -1752,6 +1851,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   // While somebody watches a detector, tell the relay "still looking" (an abandoned tab lets the view run out).
   if (document.querySelector('.det-row')) setInterval(keepDetectorViewsAlive, WATCH_KEEP_MS);
+
+  // F-31: read every camera-with-detector's reported alarm input once, for the ALARM CHAIN line (fetchAlarmChain).
+  document.querySelectorAll('.det-row').forEach((row) => fetchAlarmChain(row.dataset.cam));
 
   // ── Layout: DASHBOARD GRID / DASHBOARD LIST of the navigation bar (js/dashboard-layout.js) ──
   if (window.CamDashboardLayout) {

@@ -94,4 +94,32 @@ test('render: a page without the cover element is left alone (no throw), and the
   assertEqual(CamOffline.render(undefined, { a: { online: true } }, 'a'), false);
 });
 
+// ── preloaderFor (F-25: the two preloaders of a card never show at once) ──
+
+test('preloaderFor: while the relay says the camera is offline, the offline cover is the preloader', () => {
+  for (const state of ['connecting', 'live', 'error', undefined, 'anything a page invents']) {
+    assertEqual(CamOffline.preloaderFor(true, state), 'cover', String(state));
+  }
+});
+
+test('preloaderFor: a feed the user paused on purpose keeps its overlay even when the camera is offline (or RESTORE would be unreachable)', () => {
+  assertEqual(CamOffline.preloaderFor(true, 'paused'), 'overlay');
+});
+
+test('preloaderFor: while the camera is not known to be offline, the stream overlay shows unless the picture is live', () => {
+  assertEqual(CamOffline.preloaderFor(false, 'connecting'), 'overlay');
+  assertEqual(CamOffline.preloaderFor(false, 'error'), 'overlay');
+  assertEqual(CamOffline.preloaderFor(false, 'paused'), 'overlay');
+  assertEqual(CamOffline.preloaderFor(false, undefined), 'overlay', 'a page starts in the connecting state');
+  assertEqual(CamOffline.preloaderFor(false, 'live'), 'none');
+});
+
+test('preloaderFor: every answer names exactly one layer, so the two preloaders can never stack', () => {
+  for (const offline of [true, false]) {
+    for (const state of ['connecting', 'live', 'error', 'paused', undefined]) {
+      assertTrue(['cover', 'overlay', 'none'].includes(CamOffline.preloaderFor(offline, state)), `${offline}/${state}`);
+    }
+  }
+});
+
 summarize();

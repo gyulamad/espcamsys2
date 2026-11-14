@@ -553,6 +553,10 @@ fi
 #   - tests/dom/test_wifi_dom.js: the Wi-Fi chips on the real dashboard page in jsdom — a chip per camera and a
 #     line per detector (a resting one too), a hostile network name shown as text only, chips following the data.
 #     Needs php and jsdom. Override the port with E2E_WIFIDOM_PORT (and the next one up).
+#   - tests/dom/test_offline_preloader_dom.js: F-25 on the real dashboard page in jsdom — the CAMERA OFFLINE cover
+#     and the page's own CONNECTING… / STREAM ERROR / FEED PAUSED overlay never show at once (an offline camera
+#     keeps the cover alone through a RELOAD and a connection drop, CONNECTING… returns when it is back, a paused
+#     feed keeps RESTORE reachable). Needs php and jsdom. Override the port with E2E_PRELOAD_DOM_PORT.
 #   - tests/dom/test_camera_settings_dom.js: the camera settings page in jsdom saving a change — a board that
 #     predates the JPEG quality keys (JPEG_Q_* / SIZE_DROP, F-14) is not asked for values it cannot have yet
 #     (the version-skew regression), while a board that has the keys must still give the range when it switches
@@ -912,6 +916,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_resume_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (F-25: the CONNECTING… spinner and the CAMERA OFFLINE cover never show together) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_offline_preloader_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

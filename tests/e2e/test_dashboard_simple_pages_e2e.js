@@ -196,6 +196,8 @@ async function main() {
       ['cam-a', 'cam-b', 'cam-c'].every((id) => r.text.includes(`<div class="cam-offline" id="offline-${id}" role="status" hidden>`)
         && r.text.indexOf(`id="offline-${id}"`) < r.text.indexOf(`id="overlay-${id}"`) && r.text.indexOf(`id="overlay-${id}"`) < r.text.indexOf(`id="img-${id}"`))
       && (r.text.match(/CAMERA OFFLINE/g) || []).length === 3 && r.text.includes('.cam-offline[hidden] { display: none; }') && r.text.includes('<script src="js/camera-offline.js"></script>'), detail(r));
+    check('dashboard: the detector panel\'s ALARM CHAIN helper script is on the page (js/alarm-chain.js, F-31)',
+      r.text.includes('<script src="js/alarm-chain.js"></script>'), detail(r));
     check('dashboard: the camera status block shows the cover of a camera that is not connected (applyCameraStatuses)', /CamOffline\.render\(document\.getElementById\('offline-' \+ id\), data, id\)/.test(r.text), detail(r));
     check('dashboard: the recording state also switches the frame (updateCameraRecordButtonState)', /getElementById\('wrap-' \+ id\)[\s\S]{0,200}classList\.toggle\('recording', recording\)/.test(r.text), detail(r));
     for (const page of ['simple-list.php', 'simple-view.php', 'simple-view.php?cam=cam-a']) {
@@ -224,7 +226,7 @@ async function main() {
       inOrder(r.text, ['mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'simple-list.js']) && !r.text.includes('relay-json.js'), detail(r));
 
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['camera-offline.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
+    for (const f of ['camera-offline.js', 'alarm-chain.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }
