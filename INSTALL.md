@@ -57,6 +57,8 @@ There's also an **optional, separate sketch** (`ESP32_CAM_TFLite_Person`) that r
 
    You can send them as one long line or several lines; each line is checked as a whole (nothing from a line with a mistake is stored) and the camera tells you what is still missing. When everything is stored it restarts by itself. `HELP` lists every setting with what it means and what values are allowed.
 
+   **No cable for the settings?** A board can also open its own WiFi and show a settings page for a phone: see "First setup without a cable" below. The firmware itself still has to get onto the board once.
+
    | Setting | Meaning |
    |---|---|
    | `WIFI` | Networks to join, as `ssid:password` pairs joined by `:` — any number up to 8 (the camera takes the strongest one in range and fails over if it drops). An open network is `ssid:` with an empty password. |
@@ -138,6 +140,8 @@ This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that run
    ```
 
    That is everything a detector needs: the detection settings and the live view's (Wi-Fi and the relay) — the live view is not optional. The full example is `Arduino/templates/example.person.template.txt`. When everything is stored it restarts by itself. `HELP` lists every setting with what it means and the allowed values.
+
+   **No cable for the settings?** The detector can open its own setup WiFi too, exactly like the recorder: see "First setup without a cable" below (its WiFi is called `espcamsys2-detector-…`).
 
    *Upgrading a detector that has the old `STREAM_ENABLED` setting:* it is gone. With `STREAM_ENABLED=1` nothing changes (the stored value stays in flash and is ignored). A detector that was run with `STREAM_ENABLED=0` never had Wi-Fi settings, so after the update it lists the live-view settings as missing and waits for them on the serial port (or in the setup WiFi).
 
@@ -652,6 +656,69 @@ The relay log shows what happened, with the setting **names only** (values can b
 - It doesn't help when the settings needed to *reach* the relay are the ones missing or wrong (Wi-Fi, server, port, API key, id): those still need the serial port.
 - The line travels over plain HTTP together with the camera key, like everything else between the cameras and the relay. Don't stage anything you wouldn't be happy to have on your LAN.
 
+## First setup without a cable (the board's own setup WiFi)
+
+Typing a board's settings over the serial port (step 1, item 5) needs a cable and an opened case. A board can instead open **its own WiFi network** and show a small settings page that you reach with a phone or a laptop. It works the same for the recorder and the detector. The firmware itself still has to be on the board (flashed once with a cable, or over the air on a board that already runs a newer one); this replaces only the typing of the settings.
+
+### When a board opens its setup WiFi
+
+- **A board that cannot reach the relay** (a new one, or one whose Wi-Fi, server, port, API key or id are missing or invalid) opens it at power-up. The serial prompt keeps working at the same time: whichever you use first wins. A board that has those but lacks some *newer* setting does not: it asks the relay for it, see "Missing settings after a firmware update".
+- **A board you armed** (`SETUP_MODE=1`, below) opens it at its next restart instead of working normally.
+- **Never otherwise.** A configured board whose Wi-Fi has disappeared does *not* open it by itself, on purpose: if it did, a router outage would be an invitation. Such a board needs the cable.
+- **There is no time limit.** The setup WiFi stays up until you press **Save and restart** or **Exit setup mode**. A board in setup does not work: no live view, no recording, no alarm.
+
+### First setup of a new board
+
+1. **Power the board.** Its WiFi is called `espcamsys2-recorder-d4e5f6` or `espcamsys2-detector-d4e5f6`; the last six characters are the end of the board's own MAC address, so every board has a different name. The serial monitor (115200) says `setup WiFi up: join "…" and open http://192.168.4.1/`; it never prints the password.
+2. **Join it** from a phone or laptop with the **master password**: `Admin1234` for a board that has none yet (or your own build-time default, see below). The phone may say *no internet*: stay connected. Many phones then offer to "sign in to the network" and open the page by themselves; if yours does not, open **`http://192.168.4.1/`** in the browser (typed with `http://`; a browser set to HTTPS-only may refuse it).
+3. **Fill in the form.** The settings are the same as in step 1, item 5 (the form is generated from the firmware's own list); the ones the board still lacks are marked *required*. WiFi has one row per network: its name and password, or tick *open network*; blank rows are there to add more. A blank field means *leave as it is*. Passwords are never sent back to the page: a field only says *set* or *not set*. Unlike the dashboard's camera settings page, this form can change the Wi-Fi, the relay address, the API key and the id too: you are standing at the board.
+4. **Choose your own master password**, twice. A board that still has the default refuses to save without it. It is 8 to 63 characters of letters, digits, spaces and punctuation (no accents), because it is also the WPA2 password of the setup WiFi. It is **one password for the whole system**: you will type it whenever you join any board's setup WiFi, so write it down.
+5. **Press *Save and restart*.** Nothing at all is stored unless the whole form is valid. If something is wrong the page lists every problem under *Nothing was saved* and keeps what you typed (except passwords: type those again). When it works the page says *Saved*, the setup WiFi disappears after a couple of seconds and the board restarts into normal operation and joins your Wi-Fi.
+6. **Repeat for the next board, one at a time.** A phone joins one network at a time; boards powered together show up under different names.
+
+### Changing a working board's settings (arming it)
+
+1. On the dashboard open the camera's **⚙ SETTINGS** page, set **`SETUP_MODE`** to **1** and press **APPLY TO CAMERA**. Within about 30 seconds the board restarts into its setup WiFi. This works only while the board is still online.
+2. From then on **every dashboard page shows a red banner** naming the armed boards until they report back as normal. It cannot be dismissed.
+3. Join the board's WiFi with the master password (now your own) and open `http://192.168.4.1/` as above. Change what you want and press **Save and restart**, or press **Exit setup mode (change nothing)**, which sends the board back to normal operation without touching any other setting. The exit button is only there on a board that is already configured.
+4. Either way the board switches `SETUP_MODE` back to 0 by itself, restarts, and its next report clears the banner.
+
+The switch is a one-shot with no time limit, and a board waiting in setup is offline, so **the dashboard cannot switch it off again**: only the form can (or the cable). A forgotten armed board is a camera that is not recording, with its setup WiFi on, until somebody saves or exits; the banner keeps saying so.
+
+### Replacing the router (many boards at once)
+
+1. While every camera is still online, arm each one (`SETUP_MODE=1`). Each restarts into its setup WiFi and **stops working from that moment**.
+2. Replace the router.
+3. Go to each board with a phone, join its setup WiFi, enter the **new Wi-Fi name and password** in the form and save.
+
+There is no timeout precisely so that this works: a timer would send a board back to a router that no longer exists.
+
+### Your own default master password (optional, at build time)
+
+The built-in `Admin1234` is in the repository, so everybody knows it. If you would rather a new board never uses it, copy `Arduino/templates/setup_credentials.example.h` to `setup_credentials.local.h` in **each** sketch folder, change the text (8 to 63 printable ASCII characters; anything else stops the build) and build as usual. Git ignores that file. Boards without a master password of their own then open their setup WiFi with yours, and the form still makes you choose a real one; it does not change a board that already has its own.
+
+### If it does not work
+
+| What you see | Why, and what to do |
+|---|---|
+| The board's WiFi is not in the list | The board is not in setup: it is configured and not armed. Arm it from the dashboard (if it is online), or use the cable. Otherwise check the range: the ESP32 is 2.4 GHz only, so a 5 GHz-only phone cannot see it |
+| "Incorrect password" | The master password. `Admin1234` works only until the first setup (or your build-time default); after that it is your own |
+| The phone drops the network ("no internet") | Tell it to stay connected (Android: *keep connection*); the board answers every name so most phones then open the page |
+| The page does not open | Type `http://192.168.4.1/` (not `https`). At most 4 devices can be joined at once |
+| *Forbidden: open the setup page again* | The page is older than the board's last restart: load `http://192.168.4.1/` again and resubmit |
+| *Choose your own master password* | The board still has the default: type a new one in both fields |
+| Saved, but the board does not come back | Probably the Wi-Fi name or password you entered is wrong (the form can check the format, not whether the router accepts it). There is no automatic fallback: use the cable |
+| You forgot the master password | A board that is **not armed** offers the serial prompt at boot (step 1, item 5): `SHOW SETUP_PASSWORD` prints it, or send `SETUP_PASSWORD=<a new one>`. An **armed** board goes straight into setup and does not offer the serial prompt, so there is no way in short of erasing its flash (the settings go with it) and flashing it again |
+
+### Security notes
+
+- The setup WiFi is protected by WPA2 with the master password, and only a device that has joined it can reach the page. Anyone who knows the master password and is in range can reconfigure a board that is in setup, which is why the dashboard banner stays up while a board is armed.
+- **Until its first setup a board uses the public default password.** Set new boards up where nobody you do not trust is in range, or use a build-time default.
+- The page is plain HTTP inside the WPA2 WiFi: private from outsiders, not from others who know the master password. It runs no script, never shows a secret, refuses any POST without its per-session token, and stores nothing unless the whole form is valid.
+- The master password (`SETUP_PASSWORD`) can only be set in the form or over serial, never from the dashboard. `SHOW SETUP_PASSWORD` and `EXPORT` on the serial console print it unmasked, like the API key: keep exported lines private.
+- `SETUP_MODE` can be switched on from the dashboard (that traffic is plain HTTP on your LAN), but whoever does it still needs radio range and the master password to do anything with the board.
+- There is deliberately **no automatic fallback and no timeout** (see above): a board only opens its setup WiFi because a cable-free first setup or an armed switch asked it to.
+
 ## Calibrating the detector from the browser
 
 A detector that is paired with a dashboard camera (`'detector' => 'detector-1'` in `config.php`, or set on its camera's SETTINGS page) shows a **⚙ CALIBRATE** button on its row. It opens a page with the detector's own settings, the same way a recorder's settings page works:
@@ -924,6 +991,7 @@ Every camera card on the dashboard has a **⚙ SETTINGS** button. Its page has t
 **How it works.** The dashboard checks your change first (so a typo is answered at once), then queues it on the relay (`PUT /device-settings/<type>/<id>/change`, control key). The board's background task (the same one that checks for firmware updates) asks `GET .../change` every 30 s, applies it with the same all-or-nothing checks as the serial console, and posts what it holds and how it went to `POST .../report` (camera key). The page's picture of the camera comes from that report, so it only fills in after the camera has booted once with this firmware.
 
 **Safety rules**
+- **`SETUP_MODE`** is on this page like any other setting (it shows *Off* for a board that has never had it). Switching it to **1** sends that board into its own setup WiFi at its next restart: see "First setup without a cable". `SETUP_PASSWORD` (the master password) is never shown or changed here.
 - **The settings that connect the camera to the relay stay serial-only** — Wi-Fi, server, ports, API key, camera id — shown on the page as *serial only*. A wrong value there would leave a board nobody can reach without a USB cable. (If you want to change them remotely too, that needs a "try it, and go back if the relay can't be reached" feature; ask for it.)
 - A change is **all or nothing** and may **never leave the board needing a setting it doesn't have**: switching a feature on (for example the alarm GPIO) requires its other settings in the same change.
 - Secrets never leave the board: the report carries the Wi-Fi *name* and a masked password, and the key as `********`.

@@ -11,3 +11,7 @@ Serial Monitor (115200 baud, line ending "Newline") to configure a camera in one
 - For the next camera, paste the template, then a second line with only what differs (`CAMERA_ID=cam2`).
 - Real templates contain your Wi-Fi password and API key: name them `*.txt` (gitignored) — only `example.*` files are committed.
 - Special characters in a value: write `\;`, `\:` and `\\` for a literal `;`, `:` and `\`.
+- No cable? The same settings can be typed into the board's own setup WiFi page instead (a form, not a line): see
+  "First setup without a cable" in `INSTALL.md`. A template line is for the serial console only.
+- `EXPORT` also prints `SETUP_PASSWORD` (the master password of the setup WiFi) once a board has its own, unmasked. A line
+  that contains it is as secret as the API key: keep it in a `*.txt` file (gitignored), never in an `example.*` file.
