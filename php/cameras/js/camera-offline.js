@@ -8,6 +8,7 @@
 //
 //   isOffline   is a camera known not to be connected, from status.php's answer (the relay's `online`)
 //   render      shows the cover of a camera while it is offline and hides it again when it is back
+//   preloaderFor which of a card's two preloaders shows while the camera is not live (F-25: never both at once)
 
 (function (root, factory) {
   const api = factory();
@@ -30,5 +31,19 @@
     return offline;
   }
 
-  return { isOffline, render };
+  // Which of a camera card's two preloaders shows while the camera is not live: the page's own stream overlay (the
+  // "CONNECTING…" / "STREAM ERROR" / "FEED PAUSED" layer of the dashboard) or this module's offline cover above
+  // ("CAMERA OFFLINE / Reconnecting…"). Only one may show at a time (F-25: an offline camera never sends the picture
+  // that would end the CONNECTING… spinner, so without this rule the two preloaders stack on top of each other). When
+  // the relay says the camera is not connected the cover is the one that knows why, and the stream overlay yields to
+  // it — unless the user has paused that camera's feed on purpose, which wins, or the cover would only hide the
+  // overlay's RESTORE button. `offline` is isOffline()'s answer for the camera, `streamState` what the page's own
+  // stream layer is doing: 'connecting' | 'live' | 'error' | 'paused' (anything else counts as 'connecting', the
+  // state a page starts in). Returns 'cover', 'overlay' or 'none' (no preloader: the picture is live).
+  function preloaderFor(offline, streamState) {
+    if (offline) return streamState === 'paused' ? 'overlay' : 'cover';
+    return streamState === 'live' ? 'none' : 'overlay';
+  }
+
+  return { isOffline, render, preloaderFor };
 });

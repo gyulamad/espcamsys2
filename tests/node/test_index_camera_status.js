@@ -36,6 +36,7 @@ function run({ answers = [] } = {}) {
   const els = {};     // the page's elements, one per id (the covers keep their `hidden` between calls, as on the page)
   const pillOf = (id) => els['sw-pill-' + id];
   const devices = []; // what each camera's board line was told: [element id, the device facts]
+  const offlines = []; // what each camera was told the relay says about `online`: [id, CamOffline.render's answer]
   const env = {
     document: { getElementById: (id) => (els[id] = els[id] || { id, hidden: true }) },
     CamOffline,
@@ -46,6 +47,7 @@ function run({ answers = [] } = {}) {
     setFilesCount: (id, n) => log.push(`files ${id} ${n}`),
     applySwitchState: (id, off) => log.push(`switch ${id} ${off}`),
     applyRecordingState: (id, rec, end) => log.push(`recording ${id} ${rec} ${end}`),
+    setKnownOffline: (id, offline) => offlines.push([id, offline]),
     fetch: async (url) => {
       fetches.push(url);
       const answer = answers.shift() || { ok: true, json: {} };
@@ -55,7 +57,7 @@ function run({ answers = [] } = {}) {
   };
   const names = Object.keys(env);
   const api = new Function(...names, `${m[1]}\nreturn { pollAllStatuses, applyCameraStatuses, onLiveCameraStatus, showCameraStatusProblem, cameraDataIsDown };`)(...names.map((n) => env[n]));
-  return { api, log, clock, fetches, chips, devices, els, pillOf };
+  return { api, log, clock, fetches, chips, devices, offlines, els, pillOf };
 }
 
 const MAP = { a: { recording: true, recordingEndAt: 99, recordingCount: 3, recordingOff: 'off until 8:00' } };
@@ -214,6 +216,16 @@ test('a failed one-off ask does not end it', async () => {
   await t.api.pollAllStatuses();
   await t.api.pollAllStatuses();
   assertEqual(t.api.cameraDataIsDown(), true);
+});
+
+test('every push also says what the relay says about each camera being connected (the offline cover and the stream overlay follow it, F-25)', () => {
+  const t = run();
+  t.api.onLiveCameraStatus({ a: { online: false }, b: { online: true } });
+  assertEqual(t.offlines, [['a', true], ['b', false]], 'a plain online: false is offline, online: true is not');
+  t.api.onLiveCameraStatus({ a: { recording: true } });
+  assertEqual(t.offlines, [['a', true], ['b', false], ['a', false], ['b', false]], 'a map without `online` is not known to be offline');
+  t.api.onLiveCameraStatus({ error: 'x' });
+  assertEqual(t.offlines.length, 4, 'an error-shaped push is not applied');
 });
 
 runAll();

@@ -645,16 +645,51 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     return [...document.querySelectorAll('.cam-card')].map(el => el.id.replace('card-', ''));
   }
 
+  // ── Which preloader a camera's card shows ──
+  // A card can have two: the stream overlay below (CONNECTING… / STREAM ERROR / FEED PAUSED) and the relay's
+  // "CAMERA OFFLINE / Reconnecting…" cover (js/camera-offline.js, shown from the pushed status map). Both at once
+  // was the F-25 bug: an offline camera never sends the picture that would end the CONNECTING… spinner, so the two
+  // preloaders stacked. CamOffline.preloaderFor() is the one rule; these two maps are its inputs, and every writer
+  // of either layer goes through setStreamState / setKnownOffline, so the rule is applied wherever a state changes.
+  // <stream-preloader-source>
+  const streamStates = {};       // camera id -> what the stream overlay shows: 'connecting' | 'live' | 'error' | 'paused'
+  const knownOfflineCams = {};   // camera id -> whether the relay's last status push said the camera is not connected
+
+  // Applies the rule to one camera's two layers: the cover shows alone while the relay says the camera is offline
+  // (but not when the user paused that feed, which would hide the overlay's RESTORE button), the stream overlay
+  // shows alone otherwise while it has something to say, and neither shows while the picture is live.
+  function syncPreloaders(id) {
+    const verdict = CamOffline.preloaderFor(knownOfflineCams[id] === true, streamStates[id]);
+    const cover = document.getElementById('offline-' + id);
+    if (cover) cover.hidden = verdict !== 'cover';
+    const overlay = document.getElementById('overlay-' + id);
+    if (overlay) overlay.classList.toggle('visible', verdict === 'overlay');
+  }
+
+  function setStreamState(id, state) {
+    streamStates[id] = state;
+    syncPreloaders(id);
+  }
+
+  // `offline` is what CamOffline.render() made of the last status push (only a plain online: false counts).
+  function setKnownOffline(id, offline) {
+    knownOfflineCams[id] = offline === true;
+    syncPreloaders(id);
+  }
+  // </stream-preloader-source>
+
   // ── Stream state callbacks ──
   // Called for every picture the mux paints on a camera's <img> (onload) and when the connection goes down (onDown below).
   function onStreamLoad(id) {
     setStatus(id, 'live', 'LIVE');
     hideOverlay(id);
+    setStreamState(id, 'live');
   }
 
   function onStreamError(id) {
     setStatus(id, 'error', 'ERROR');
     showOverlay(id, '✕', 'STREAM ERROR', true);
+    setStreamState(id, 'error');
   }
 
   // ── Where the live data comes from ──
@@ -720,6 +755,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const overlay = document.getElementById('overlay-' + id);
     overlay.replaceChildren(h('div', { className: 'spinner' }), h('span', { textContent: 'CONNECTING…' }));
     overlay.classList.add('visible');
+    setStreamState(id, 'connecting');   // the relay may have this camera offline: then the offline cover shows instead (syncPreloaders)
 
     openPicture(id);
   }
@@ -755,6 +791,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       btn.classList.add('danger');
       setStatus(id, 'hidden', 'HIDDEN');
       showOverlay(id, '◼', 'FEED PAUSED', false);
+      setStreamState(id, 'paused');   // the user's own choice: the overlay (with RESTORE) shows even if the camera is offline
       document.getElementById('overlay-' + id).append(
         h('button', { className: 'cam-btn', textContent: '▶ RESTORE', onclick: () => toggleHide(id) }));
     }
@@ -1190,7 +1227,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     for (const id of getAllCameraIds()) {
       const s = data[id];
       CamWifi.render(document.getElementById('wifi-' + id), s && s.wifi);   // the network and signal the camera reported (or nothing)
-      CamOffline.render(document.getElementById('offline-' + id), data, id);   // a camera that is not connected: its last picture is dimmed and says so
+      // A camera that is not connected: its last picture is dimmed and says so — and its stream overlay (CONNECTING…,
+      // STREAM ERROR) steps aside, so the two preloaders never stack (F-25, syncPreloaders above).
+      setKnownOffline(id, CamOffline.render(document.getElementById('offline-' + id), data, id));
       CamDeviceInfo.render(document.getElementById('dev-' + id), s && s.device);   // address, uptime, memory, firmware (or nothing)
       if (!s) {
         // Neither connected to the relay yet nor any footage on disk for it.
