@@ -647,7 +647,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   // ── Which preloader a camera's card shows ──
   // A card can have two: the stream overlay below (CONNECTING… / STREAM ERROR / FEED PAUSED) and the relay's
-  // "CAMERA OFFLINE / Reconnecting…" cover (js/camera-offline.js, shown from the pushed status map). Both at once
+  // offline cover with its "Reconnecting…" note (js/camera-offline.js, shown from the pushed status map). Both at once
   // was the F-25 bug: an offline camera never sends the picture that would end the CONNECTING… spinner, so the two
   // preloaders stacked. CamOffline.preloaderFor() is the one rule; these two maps are its inputs, and every writer
   // of either layer goes through setStreamState / setKnownOffline, so the rule is applied wherever a state changes.
