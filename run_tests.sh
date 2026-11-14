@@ -231,7 +231,8 @@ else
              ESP32_CAM_TFLite_Person/settings_schema.h ESP32_CAM_Recorder/ota_logic.h \
              ESP32_CAM_Recorder/relay_find_logic.h \
              ESP32_CAM_Recorder/relay_health.h ESP32_CAM_Recorder/setup_session.h \
-             ESP32_CAM_Recorder/setup_boot.h; do
+             ESP32_CAM_Recorder/setup_boot.h ESP32_CAM_Recorder/setup_logic.h \
+             ESP32_CAM_Recorder/setup_form.h; do
         group_text "--- $h as C++11 (the ESP32 toolchain's dialect)"
         if g++ -std=c++11 -fsyntax-only -Wall -Wextra -pedantic \
                -include "$ROOT_DIR/Arduino/$h" -x c++ /dev/null; then
@@ -292,7 +293,7 @@ else
     # The over-the-air update (ota_logic.h: the decisions, ota.h: the Arduino glue) and the remote
     # log's logic (remote_log.h) are copied into both sketch folders the same way, and the copies
     # must be identical too.
-    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h relay_health.h setup_session.h setup_boot.h setup_logic.h setup_mode.h; do
+    for shared in ota_logic.h ota.h remote_log.h settings_sync.h relay_find_logic.h relay_find.h relay_health.h setup_session.h setup_boot.h setup_logic.h setup_mode.h setup_form.h; do
         group_text "--- $shared copies are identical"
         SHARED_ORIGINAL="$ROOT_DIR/Arduino/ESP32_CAM_Recorder/$shared"
         shared_ok=1
@@ -321,6 +322,12 @@ else
     run_cpp_test test_relay_health
     # The setup-mode session (F-21): when the board's own setup WiFi opens, how long it stays, when the board restarts.
     run_cpp_test test_setup_mode_session
+    # The setup mode's pure parts (F-21 S2, S3): the reason / SSID / password rules, and the on-device form (the
+    # helpers, then the request handler against each sketch's real key table).
+    run_cpp_test test_setup_logic
+    run_cpp_test test_setup_form
+    run_cpp_test test_setup_form_recorder
+    run_cpp_test test_setup_form_person
     # The setup boot (F-21): whether this boot is a setup boot, the WiFi's name and password, the wiring of
     # form + session + access point, SETUP_MODE=0 — against each sketch's real key table; and the optional
     # build-time default password.
