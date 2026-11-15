@@ -49,7 +49,7 @@ $configFile = __DIR__ . '/config.php';
 $relayBase  = rtrim((string) ($config['relay_url'] ?? ''), '/');
 $oldKey     = (string) ($config['relay_control_key'] ?? '');
 if ($oldKey === '') {
-    json_fail(503, 'Settings need the control key: add relay_control_key to config.php (and the same value as controlKey in the relay config.js) once, by hand — see "Switching recording ON / OFF" in INSTALL.md');
+    json_fail(503, 'Settings need the control key: add relay_control_key to config.php (and the same value as controlKey in the relay config.js) once, by hand — see "Switching recording ON / OFF" in MANUAL.md');
 }
 $actor   = CamLogic::buildActor((string) ($_SERVER['PHP_AUTH_USER'] ?? ''), (string) ($_SERVER['REMOTE_ADDR'] ?? ''));
 $headers = CamLogic::buildControlHeaders($oldKey, $actor);

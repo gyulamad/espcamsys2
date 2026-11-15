@@ -3,7 +3,7 @@
 // What this proves: the header compiles, makes the right requests (URL, X-Api-Key), flashes
 // only when the relay's answer says so, reports the right error token after a failure and
 // retries after the right wait, and restarts only after a good flash. It can NOT prove the
-// real flash and radio work: that needs a board (see the hardware checklist in INSTALL.md).
+// real flash and radio work: that needs a board (see the hardware checklist in ASSEMBLY.md).
 
 #include "framework.h"
 

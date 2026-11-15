@@ -911,7 +911,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // scope: 'camera' (with id) or 'all'; action: 'on' or 'off'.
   async function switchRecording(scope, id, action) {
     if (!SWITCH_ENABLED) {
-      toast('Not set up: add relay_control_key to config.php (see INSTALL.md)', 'error');
+      toast('Not set up: add relay_control_key to config.php (see MANUAL.md)', 'error');
       return;
     }
     let url = `recording-switch.php?scope=${scope}&action=${action}`;

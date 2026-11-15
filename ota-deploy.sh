@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ota-deploy.sh — compile the sketches of the git revision that is checked out and hand the
 # binaries to the relay, which gives them to every camera (they poll, download, flash and
-# reboot by themselves). See "Over-the-air updates" in INSTALL.md.
+# reboot by themselves). See "Over-the-air firmware updates" in DEPLOY.md.
 #
 # Usage:
 #   ./ota-deploy.sh [recorder|detector|all] [--wait SECS]

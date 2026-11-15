@@ -91,7 +91,7 @@ app.use((req, res, next) => {
 
 const RECORDINGS_DIR = path.join(__dirname, 'recordings');
 fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
-// ── Sorting out footage without a person (see lib/personscan.js, INSTALL.md) ──
+// ── Sorting out footage without a person (see lib/personscan.js, MANUAL.md) ──
 const scanCfg = personscan.resolveScanConfig(config.personScan, __dirname);
 for (const w of scanCfg.warnings) console.warn(`[config] ${w}`);
 
@@ -668,7 +668,7 @@ async function encodeRecording(rec) {
 
   ffmpeg.on('error', (err) => {
     clipsBeingEncoded.delete(outputPath);
-    // Most likely ffmpeg isn't installed — see INSTALL.md. Leave the raw
+    // Most likely ffmpeg isn't installed — see SETUP.md. Leave the raw
     // frames in place rather than deleting footage we can't otherwise recover.
     camLog('ERROR', rec.id, `ffmpeg failed to start (is it installed?): ${err.message} — raw frames kept at ${rec.tempDir}`);
   });
@@ -2311,7 +2311,7 @@ app.get('/recordings/:id/:filename/thumbnail', requireReadKey, requireExistingRe
 // Is the person check usable? Answers 409 (with the reason) when it is switched off, so the dashboard can say why.
 function requireScanEnabled(req, res, next) {
   if (scanCfg.enabled) return next();
-  return res.status(409).json({ error: 'the person check is switched off (switch it on under SETTINGS → Person check, or personScan.enabled in config.js — see INSTALL.md)' });
+  return res.status(409).json({ error: 'the person check is switched off (switch it on under SETTINGS → Person check, or personScan.enabled in config.js — see MANUAL.md)' });
 }
 
 // Sort out one clip: a clip without a person is moved to no-person/ (or deleted, personScan.action).
@@ -2630,7 +2630,7 @@ pushServer.listen(PUSH_PORT, () => console.log(`Camera relay (raw push) listenin
 // protocol). The camera then stores the address it was answered from. Entirely optional: if the port
 // is taken or the socket fails, the relay carries on and cameras simply keep their stored address.
 // discoveryPort in config.js (or DISCOVERY_PORT): default 8082, 0 = off. It must equal the
-// firmware's RELAY_FIND_PORT. The Pi's firewall has to let UDP in on it (INSTALL.md).
+// firmware's RELAY_FIND_PORT. The Pi's firewall has to let UDP in on it (SETUP.md).
 const discoveryCfg = discovery.resolveDiscoveryPort(fromEnv('DISCOVERY_PORT', config.discoveryPort));
 for (const w of discoveryCfg.warnings) console.warn(`[config] ${w}`);
 const discoveryAnswerGap = new Throttle(100);          // at most ~10 answers a second to one address

@@ -38,7 +38,7 @@ plan_of() {   # plan_of PATH... — the plan after those changed files, as one l
 }
 REC=Arduino/ESP32_CAM_Recorder; DET=Arduino/ESP32_CAM_TFLite_Person
 
-[ "$(plan_of README.md INSTALL.md tests/x.sh Arduino/templates/example.recorder.template.txt tools/sketch_build_lib.sh)" = "php=0 relay=0 deps=0 rec=0/0 det=0/0" ]
+[ "$(plan_of README.md MANUAL.md tests/x.sh Arduino/templates/example.recorder.template.txt tools/sketch_build_lib.sh)" = "php=0 relay=0 deps=0 rec=0/0 det=0/0" ]
 check "plan: docs, tests, tools and the example templates deploy nothing" $?
 [ "$(plan_of php/cameras/index.php)" = "php=1 relay=0 deps=0 rec=0/0 det=0/0" ]
 check "plan: php/ is the dashboard" $?

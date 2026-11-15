@@ -7,7 +7,7 @@ SKETCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKETCH_TYPES="recorder detector"
 
 # The AI-Thinker ESP32-CAM with the "Minimal SPIFFS" partition scheme: two app slots, big enough for
-# the person detector (see "Over-the-air firmware updates" in INSTALL.md).
+# the person detector (see "Over-the-air firmware updates" in DEPLOY.md).
 SKETCH_DEFAULT_FQBN="esp32:esp32:esp32cam:PartitionScheme=min_spiffs"
 
 # sketch_dir TYPE — the folder of that sketch. Fails (prints nothing) for a type that does not exist.

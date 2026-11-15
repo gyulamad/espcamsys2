@@ -19,7 +19,7 @@ const CONFIDENCE = Object.freeze({ default: 0.4, min: 0, max: 1 });   // min is 
 const isValidConfidence = (n) => typeof n === 'number' && Number.isFinite(n) && n > CONFIDENCE.min && n <= CONFIDENCE.max;
 
 const DEFAULTS = Object.freeze({
-  enabled: false,        // switched on once the model is installed (INSTALL.md, "Sorting out footage without a person")
+  enabled: false,        // switched on once the model is installed (MANUAL.md, "Sorting out footage without a person")
   auto: true,            // scan every recording right after it is saved
   action: 'move',        // a clip without a person: 'move' it to <camera>/no-person/ (safe) or 'delete' it
   python: 'python3',

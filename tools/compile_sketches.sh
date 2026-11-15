@@ -13,7 +13,7 @@
 # compiler's output is printed only for the ones that failed. Nothing is written into the repository
 # and nothing is flashed or published (ota-deploy.sh does that).
 #
-# Needs: arduino-cli with the esp32 core 3.x and the esp-tflite-micro library (INSTALL.md, "Compiling the
+# Needs: arduino-cli with the esp32 core 3.x and the esp-tflite-micro library (DEVELOP.md, "Compiling the
 # sketches"). The board and the extra compile arguments are the ones of ota-deploy.sh: ota.conf (see
 # ota.example.conf) if you have one, else the defaults.
 #
@@ -53,7 +53,7 @@ esac
 load_sketch_build_settings "${OTA_CONF:-$ROOT_DIR/ota.conf}"
 
 if ! command -v arduino-cli >/dev/null 2>&1; then
-    echo "compile_sketches: arduino-cli not found on PATH - install it and the esp32 core 3.x (INSTALL.md, \"Compiling the sketches\")" >&2
+    echo "compile_sketches: arduino-cli not found on PATH - install it and the esp32 core 3.x (DEVELOP.md, \"Compiling the sketches\")" >&2
     exit 2
 fi
 # An unknown board means the core is not installed (or the FQBN is misspelled): say so, instead of

@@ -106,7 +106,7 @@ board, the F1 fix reverted. One mutant survives on purpose-equivalence: dropping
 
 ## Owner decisions recorded
 - **F3** (DNS rebinding): fixed (follow-up patch). Owner approved.
-- **Serial prompt while armed**: not changed. The serial `BootConfigFlow` runs only before the board is armed; running it in parallel with the setup WiFi loop would need a refactor. The skip-while-armed behaviour is documented in `INSTALL.md` (the "forgotten master password" section).
+- **Serial prompt while armed**: not changed. The serial `BootConfigFlow` runs only before the board is armed; running it in parallel with the setup WiFi loop would need a refactor. The skip-while-armed behaviour is documented in `SETUP.md` (the "You forgot the master password" row of the setup-WiFi table).
 - **F4** (CSRF token entropy on a real board): owner confirmed this is acceptable for setup mode; the CSRF check itself is correct and constant-time. Verify on hardware in S11.
 
 ## Running it

@@ -986,7 +986,7 @@ class CamLogic
     // Free-text FILE and FOLDER paths on the Pi. Whoever can save settings here must not be able to point
     // the relay (which runs with its own rights) at an arbitrary place — a log written into another
     // program's folder, firmware served from /etc, the on/off state file overwritten. These are changed
-    // on the Pi itself: config.js or the relay's environment (INSTALL.md).
+    // on the Pi itself: config.js or the relay's environment (MANUAL.md).
     const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile'];
 
     // The fields from the relay's GET /system-settings that the page may show and change: the others
@@ -1018,7 +1018,7 @@ class CamLogic
             } elseif (in_array($key, self::RELAY_SETTING_KEYS, true)) {
                 $relay[$key] = $value;
             } elseif (in_array($key, self::RELAY_PATH_SETTING_KEYS, true)) {
-                return ['ok' => false, 'error' => $key . ' is a file or folder path on the Pi: it can only be changed there (in the relay\'s config.js or its environment, see INSTALL.md), never from the dashboard — nothing was saved'];
+                return ['ok' => false, 'error' => $key . ' is a file or folder path on the Pi: it can only be changed there (in the relay\'s config.js or its environment, see MANUAL.md), never from the dashboard — nothing was saved'];
             } else {
                 $shown = substr(preg_replace('/[^\x20-\x7e]/', '?', $key), 0, 40);
                 return ['ok' => false, 'error' => 'unknown setting "' . $shown . '" — nothing was saved'];

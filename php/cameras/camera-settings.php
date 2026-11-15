@@ -43,7 +43,7 @@ if ($camera === null) {
 }
 $key = (string) ($config['relay_control_key'] ?? '');
 if ($key === '') {
-    json_fail(503, 'Camera settings need the control key: add relay_control_key to config.php (and the same value as controlKey in the relay config.js) — see "Switching recording ON / OFF" in INSTALL.md');
+    json_fail(503, 'Camera settings need the control key: add relay_control_key to config.php (and the same value as controlKey in the relay config.js) — see "Switching recording ON / OFF" in MANUAL.md');
 }
 $actor   = CamLogic::buildActor((string) ($_SERVER['PHP_AUTH_USER'] ?? ''), (string) ($_SERVER['REMOTE_ADDR'] ?? ''));
 $headers = CamLogic::buildControlHeaders($key, $actor);

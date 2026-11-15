@@ -61,7 +61,7 @@ function run_power_action(array $command, string $action): array
         return ['ok' => true, 'error' => ''];
     }
     error_log('camdash: power helper failed (' . $action . ', exit ' . $code . '): ' . $out);
-    return ['ok' => false, 'error' => 'the helper failed (' . ($out !== '' ? substr($out, 0, 200) : 'exit ' . $code) . '). See "Resetting from the browser" in INSTALL.md'];
+    return ['ok' => false, 'error' => 'the helper failed (' . ($out !== '' ? substr($out, 0, 200) : 'exit ' . $code) . '). See "Resetting from the browser" in MANUAL.md'];
 }
 
 header('Content-Type: application/json');
@@ -88,7 +88,7 @@ if (!$plan['ok']) {
 $command = power_command($config);
 if (CamReboot::needsHost($plan['steps']) && !power_helper_present($command)) {
     // Checked BEFORE anything is done, so a half-installed system does not reset the boards and then fail.
-    json_fail(503, 'Restarting the web server or the Pi is not set up: run "sudo ./deploy.sh" from the repo (it installs the helper and its sudo rule) — see "Resetting from the browser" in INSTALL.md');
+    json_fail(503, 'Restarting the web server or the Pi is not set up: run "sudo ./deploy.sh" from the repo (it installs the helper and its sudo rule) — see "Resetting from the browser" in MANUAL.md');
 }
 
 $headers = CamLogic::buildSwitchHeaders($controlKey, request_actor());

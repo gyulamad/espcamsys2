@@ -222,7 +222,7 @@ async function main() {
     const btn = btnOf(doc);
     check('the button shows how many clips are archived, over every camera of the list', !!btn && btn.text() === '🗄 DELETE ARCHIVE (7)', btn && btn.text());
     check('…next to SORT OUT ALL (and BROWSE ARCHIVE), before DELETE ALL', same(header(panel).querySelectorAll('.cam-btn').map((b) => b.text()), ['🧑 SORT OUT ALL', '📂 BROWSE ARCHIVE', '🗄 DELETE ARCHIVE (7)', '🗑 DELETE ALL']));
-    check('…its hover text says how to check the archive first', btn.title.includes('no-person') && btn.title.includes('INSTALL.md') && btn.title.includes('cannot be undone'));
+    check('…its hover text says how to check the archive first', btn.title.includes('no-person') && btn.title.includes('MANUAL.md') && btn.title.includes('cannot be undone'));
     check('…and is a danger button', btn.classes().includes('danger'));
 
     const posts = () => server.posts().map((r) => `${r.cam} ${r.query}`);

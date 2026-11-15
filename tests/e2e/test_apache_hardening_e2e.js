@@ -267,14 +267,14 @@ function staticChecks() {
   const noComments = (t) => t.replace(/^\s*#.*$/gm, '');
   const protect = read('apache/camdash-protect.conf');
   const ssl = read('apache/camdash-ssl.conf');
-  const install = read('INSTALL.md');
+  const setupDoc = read('SETUP.md');
   check('there is NO new virtual host for the dashboard: the existing site keeps serving it (nothing is disabled)', !/<VirtualHost/.test(noComments(protect)) && !fs.existsSync(path.join(ROOT, 'apache/camdash.conf')) && !fs.existsSync(path.join(ROOT, 'apache/camdash-common.conf')));
   check('the protect snippet covers the folder deploy.sh copies to, set by ONE Define line', /^Define CAMDASH_DIR \/var\/www\/html\/camdash$/m.test(protect) && (noComments(protect).match(/\/var\/www\//g) || []).length === 1);
   check('the snippet denies data/ (the settings saved on the dashboard) to everyone', /<Directory \$\{CAMDASH_DIR\}\/data>\s*Require all denied/.test(protect));
   check('the snippet still denies lib/, config files, dot-files and sets the headers', /<Directory \$\{CAMDASH_DIR\}\/lib>/.test(protect) && /config\\\.php/.test(protect) && /X-Content-Type-Options/.test(protect) && /\^\\\./.test(protect));
   check('the optional HTTPS site is on every address, port 443, TLS 1.2 and 1.3 only, no HSTS', /<VirtualHost \*:443>/.test(ssl) && /SSLProtocol -all \+TLSv1\.2 \+TLSv1\.3/.test(ssl) && !/Strict-Transport-Security/i.test(noComments(ssl)));
   check('the HTTPS site serves the same web root as the default site', /DocumentRoot \/var\/www\/html$/m.test(ssl));
-  check('INSTALL.md does not tell the owner to disable the default site, bind to localhost, or use another folder', !/a2dissite 000-default/.test(install) && !/Listen 127\.0\.0\.1/.test(install) && !/should NOT answer at all/.test(install) && !/cd \/var\/www\/camdash\n/.test(install));
+  check('SETUP.md does not tell the owner to disable the default site, bind to localhost, or use another folder', !/a2dissite 000-default/.test(setupDoc) && !/Listen 127\.0\.0\.1/.test(setupDoc) && !/should NOT answer at all/.test(setupDoc) && !/cd \/var\/www\/camdash\n/.test(setupDoc));
   check('deploy.sh knows nothing about vhosts or listening addresses', !/beyond localhost|a2dissite|a2ensite|Listen /.test(read('deploy.sh')));
 }
 

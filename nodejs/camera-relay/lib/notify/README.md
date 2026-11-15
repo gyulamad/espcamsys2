@@ -87,7 +87,7 @@ You should receive a message with a picture within a few seconds, and the answer
 
 ## When you are notified: a person in a recording
 
-With the person check switched on (`personScan` in `config.js`, see INSTALL.md), every recording the relay
+With the person check switched on (`personScan` in `config.js`, see MANUAL.md), every recording the relay
 has just saved is checked, and if a person is found you get one message through every configured channel:
 
 ```

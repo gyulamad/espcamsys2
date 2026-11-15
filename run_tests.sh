@@ -28,7 +28,7 @@
 #
 # The sketches themselves are compiled too (tools/compile_sketches.sh): the tests below only build
 # parts of them against desktop fakes, so only this catches a patch that leaves a sketch not compiling.
-# It needs arduino-cli with the esp32 core 3.x (INSTALL.md, "Compiling the sketches"); without it the run
+# It needs arduino-cli with the esp32 core 3.x (DEVELOP.md, "Compiling the sketches"); without it the run
 # FAILS, like any other missing tool, unless --no-sketch-compile says that leaving it out is intended.
 #
 # Coverage is measured per area and N applies to EACH of them, so a
@@ -689,6 +689,12 @@ heading "Shell tests (the helpers that check what the sources contain, tests/she
 # the Apache config and the tests. It is the quick check on its own too: tests/shell/test_security_patches.sh.
 heading "Shell tests (the security patches 0001-0008 are in the sources and not undone)"
 "$ROOT_DIR/tests/shell/test_security_patches.sh"
+[ $? -ne 0 ] && overall_status=1
+
+# Static check, no setup needed: the split documentation set (F-32) is complete, its cross-links
+# resolve, and no code file still sends the reader to the old single install guide (now only a pointer page).
+heading "Shell tests (the documentation set: files, links, anchors, no stale references to the old single install guide)"
+"$ROOT_DIR/tests/shell/test_docs.sh"
 [ $? -ne 0 ] && overall_status=1
 
 # The relay itself needs its packages (express ...) for every end-to-end test below: installed here from

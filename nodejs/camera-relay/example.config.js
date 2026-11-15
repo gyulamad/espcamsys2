@@ -12,7 +12,7 @@ module.exports = {
   // Discovery: when the router gives the Pi a new address, the cameras find it again by themselves
   // (they ask over UDP, and this answers; the answer proves the relay knows camKey without sending it).
   // The port must equal RELAY_FIND_PORT in the firmware (default 8082). 0 switches it off. Optional.
-  // The Pi's firewall must let UDP in on it — see "Cameras find the relay by themselves" in INSTALL.md.
+  // The Pi's firewall must let UDP in on it — see "Cameras find the relay by themselves" in SETUP.md.
   // discoveryPort: 8082,
 
   // Pre-roll ("black box"): the relay always keeps the last N seconds of every
@@ -37,11 +37,11 @@ module.exports = {
   //                                 // => at most (keep + 1) * maxBytes of disk, ever
 
   // Settings staged for boards that are missing one (see "Missing settings after a
-  // firmware update" in INSTALL.md). A relative path is relative to this folder; optional.
+  // firmware update" in DEPLOY.md). A relative path is relative to this folder; optional.
   // Staging them needs controlKey above.
   // deviceSettingsDir: 'device-settings',   // default
 
-  // Firmware for the boards (over-the-air update, see "Over-the-air updates" in INSTALL.md).
+  // Firmware for the boards (over-the-air update, see "Over-the-air firmware updates" in DEPLOY.md).
   // ota-deploy.sh publishes the compiled sketches here with the controlKey below; the boards
   // poll for them with the camera key. A relative path is relative to this folder; optional.
   // firmwareDir: 'firmware',   // default
@@ -54,12 +54,12 @@ module.exports = {
   // switch is simply refused. Generate one with:  openssl rand -hex 24
   controlKey: '',
 
-  // Sorting out footage without a person (see "Sorting out footage without a person" in INSTALL.md).
+  // Sorting out footage without a person (see "Sorting out footage without a person" in MANUAL.md).
   // A YOLO ONNX model checks each recording frame by frame on the Pi, stops at the first person (that frame
   // becomes the clip's thumbnail) and files a clip that shows nobody under <camera>/no-person/ or deletes it.
   // A clip is NEVER removed unless the whole clip was read and no person found; any failure keeps it.
   // personScan: {
-  //   enabled: false,            // switch on after installing the model (INSTALL.md): the starting state only —
+  //   enabled: false,            // switch on after installing the model (MANUAL.md): the starting state only —
   //                              // the dashboard's SETTINGS page (Person check) switches it on/off, and wins
   //   auto: true,                // check every recording right after it is saved
   //   action: 'move',            // 'move' (safe) or 'delete' a clip with nobody in it

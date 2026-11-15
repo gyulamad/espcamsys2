@@ -130,7 +130,7 @@
 
   // What the button's hover text says: what the archive is, what the button does, and how to look first.
   const ARCHIVE_HINT = 'Permanently deletes the archive: the recordings the person check sorted out because nobody is in them. '
-    + 'This cannot be undone. To check them first, look in recordings/<camera>/no-person/ on the relay (over SSH) — see INSTALL.md.';
+    + 'This cannot be undone. To check them first, look in recordings/<camera>/no-person/ on the relay (over SSH) — see MANUAL.md.';
 
   function formatBytes(n) {
     if (n < 1024) return n + ' B';

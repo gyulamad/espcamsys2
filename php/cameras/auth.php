@@ -11,7 +11,7 @@
 //   3. Slows down guessing: after 10 wrong logins in a row every attempt is refused (429) for a
 //      growing time, up to 15 minutes. The counter is global, because over Tor every visitor
 //      arrives from 127.0.0.1. (Trade-off: while someone is guessing, the owner is locked out
-//      too — Tor v3 client authorization, see INSTALL.md, keeps strangers from reaching the
+//      too — Tor v3 client authorization, see MANUAL.md, keeps strangers from reaching the
 //      login at all.) Every wrong login is written to the web server's error log.
 //
 // The actual credential and throttle rules live in lib/Logic.php (CamLogic) so they can be unit

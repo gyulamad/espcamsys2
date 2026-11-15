@@ -40,7 +40,7 @@ const FIELDS = [
     label: 'Pre-roll RAM cap per camera (bytes)', help: 'The buffer drops its oldest frames first when it reaches this size. Default 8 MiB = 8388608.' },
 
   { key: 'personScanEnabled', type: 'bool', default: personscan.DEFAULTS.enabled, config: ['personScan', 'enabled'], env: null, group: 'Person check', restart: false,
-    label: 'Person check (sort out recordings without a person)', help: 'ON: every new recording is checked by the person detector, and a clip with nobody in it is moved to the archive (or deleted — personScan.action in config.js); the check can also be started by hand on a recording. OFF: nothing is checked or moved, and clips already waiting for their check are left alone. Needs the detector model installed first (INSTALL.md, "Sorting out footage without a person"); without it every check just reports an error and no clip is touched. Applies at once — no restart.' },
+    label: 'Person check (sort out recordings without a person)', help: 'ON: every new recording is checked by the person detector, and a clip with nobody in it is moved to the archive (or deleted — personScan.action in config.js); the check can also be started by hand on a recording. OFF: nothing is checked or moved, and clips already waiting for their check are left alone. Needs the detector model installed first (MANUAL.md, "Sorting out footage without a person"); without it every check just reports an error and no clip is touched. Applies at once — no restart.' },
   { key: 'personScanConfidence', type: 'float', min: personscan.CONFIDENCE.min, max: personscan.CONFIDENCE.max, minExclusive: true, step: 0.05, default: personscan.CONFIDENCE.default, config: ['personScan', 'confidence'], env: null, group: 'Person check', restart: false,
     label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check above is ON. Applies to the next clip checked — no restart.' },
 
@@ -304,7 +304,7 @@ function isSupervised(env) {
   return env.RELAY_SUPERVISED === '1' || (typeof env.INVOCATION_ID === 'string' && env.INVOCATION_ID !== '') || env.pm_id !== undefined;
 }
 
-// Non-zero on purpose: systemd's `Restart=on-failure` (the unit in INSTALL.md) only
+// Non-zero on purpose: systemd's `Restart=on-failure` (the unit in SETUP.md) only
 // restarts after a non-zero exit. (75 = EX_TEMPFAIL, "try again".)
 const RESTART_EXIT_CODE = 75;
 

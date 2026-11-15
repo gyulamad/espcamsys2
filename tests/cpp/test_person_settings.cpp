@@ -185,7 +185,7 @@ TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_t
     TEST_ASSERT_EQ((int)ps.size(), 6, "six settings are missing");
     TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "the area's corners");
     TEST_ASSERT(listed(ps, "MOTION_EMA_LEN") && listed(ps, "MOTION_EMA_PCT"), "and the motion auto-calibration's two");
-    // The line the INSTALL.md tells you to stage on the relay (the whole picture and no auto-calibration = what the board did before).
+    // The line DEPLOY.md tells you to stage on the relay (the whole picture and no auto-calibration = what the board did before).
     TEST_ASSERT(store(st, "MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0"), "the whole-picture, auto-calibration-off line is accepted");
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and the board is complete again: MOTION_EMA_PCT is not asked for while the EMA is off");
 }

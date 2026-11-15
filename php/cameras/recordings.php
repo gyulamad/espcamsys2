@@ -14,7 +14,7 @@
 //                                                  "seen" flag; unseen ones are shown bold and bright, seen ones gray)
 // GET  recordings.php?cam=ID&thumb=FILENAME     -> the picture of the first person found in that clip (JPEG)
 // POST recordings.php?cam=ID&scan=FILENAME      -> sorts one clip out: checks it for a person, a clip with nobody in it is
-//                                                  moved aside (or deleted, relay setting) — see INSTALL.md
+//                                                  moved aside (or deleted, relay setting) — see MANUAL.md
 // POST recordings.php?cam=ID&scanAll=1          -> the same for every clip of this camera not checked yet
 // GET  recordings.php?cam=ID&archive=1          -> {"count": N}: how many clips the sorting out has put in the archive
 //                                                  (the relay's recordings/<camera>/no-person/ folder)
