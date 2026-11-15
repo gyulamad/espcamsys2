@@ -175,7 +175,7 @@ inline void applyRelayByte(int b, bool &relaySupportsInBandAlarm) {
 }
 
 // ── In-band Wi-Fi report ─────────────────────────────────────────────
-// Every few seconds the camera tells the relay which Wi-Fi network it is on and how strong the signal is, so the
+// Every second the camera tells the relay which Wi-Fi network it is on and how strong the signal is, so the
 // dashboard can show it next to the camera. Same framing as the alarm message — [4-byte length][CONTROL_MARKER]
 // [MSG_WIFI][rssi: signed byte][ssid bytes] — written on the push connection between two frames, and only to a
 // relay that announced (RELAY_CAP_WIFI_INFO) that it understands it. These values must match
@@ -185,7 +185,9 @@ const uint8_t MSG_WIFI = 0x03;
 const uint8_t RELAY_CAP_WIFI_INFO = 0x03;
 const size_t  WIFI_SSID_MAX_LEN = 32;                                // an 802.11 network name is at most 32 bytes
 const size_t  WIFI_MESSAGE_MAX_LEN = 4 + 3 + WIFI_SSID_MAX_LEN;     // length prefix + marker + type + rssi + name
-const unsigned long WIFI_REPORT_INTERVAL_MS = 10000;
+// One report a second: as often as a detector reports its signal (its heartbeat, report_logic.h), so the dashboard's
+// Wi-Fi chip of a camera follows the signal as closely as the chip of a detector. A report is about 10-40 bytes.
+const unsigned long WIFI_REPORT_INTERVAL_MS = 1000;
 
 // Applies one byte read from the relay to the "does this relay understand Wi-Fi reports" flag. Like
 // applyRelayByte(): per connection (reset it to false on every new one), every other byte is ignored.

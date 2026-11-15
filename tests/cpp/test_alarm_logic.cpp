@@ -498,11 +498,16 @@ TEST(relay_greeting_with_both_capabilities_sets_both_flags_independently) {
     TEST_ASSERT(alarmOnly && !wifiOnly, "an older relay never gets a Wi-Fi report");
 }
 
+TEST(wifi_report_interval_matches_the_detectors_one_second_heartbeat) {
+    // The dashboard's Wi-Fi chip of a camera should follow the signal as closely as a detector's (F-34).
+    TEST_ASSERT(WIFI_REPORT_INTERVAL_MS == 1000, "a camera reports its signal once a second, like a detector");
+}
+
 TEST(wifi_report_is_due_at_once_on_a_new_connection_then_every_interval) {
     TEST_ASSERT(wifiReportDue(5, 0, /*reported=*/false), "first report of a connection: right away");
-    TEST_ASSERT(!wifiReportDue(5000, 1000, true), "4 s later: not yet");
-    TEST_ASSERT(!wifiReportDue(10999, 1000, true), "1 ms before the interval");
-    TEST_ASSERT(wifiReportDue(11000, 1000, true), "exactly one interval");
+    TEST_ASSERT(!wifiReportDue(1500, 1000, true), "0.5 s later: not yet");
+    TEST_ASSERT(!wifiReportDue(1999, 1000, true), "1 ms before the interval");
+    TEST_ASSERT(wifiReportDue(2000, 1000, true), "exactly one interval");
     TEST_ASSERT(wifiReportDue(30000, 1000, true), "overdue");
     TEST_ASSERT(wifiReportDue(1500, 1000, true, 500), "a custom interval");
 }
@@ -510,8 +515,8 @@ TEST(wifi_report_is_due_at_once_on_a_new_connection_then_every_interval) {
 TEST(wifi_report_schedule_survives_the_millis_counter_wrapping) {
     // Unsigned subtraction: on the board a report just before the 32-bit wrap is still seen as old after it.
     const unsigned long nearWrap = 0xFFFFFFFFUL - 2000;
-    TEST_ASSERT(!wifiReportDue(nearWrap + 7000, nearWrap, true), "7 s after the report, across the wrap: not yet");
-    TEST_ASSERT(wifiReportDue(nearWrap + 11000, nearWrap, true), "11 s after the report, across the wrap: due");
+    TEST_ASSERT(!wifiReportDue(nearWrap + 500, nearWrap, true), "0.5 s after the report, across the wrap: not yet");
+    TEST_ASSERT(wifiReportDue(nearWrap + 3000, nearWrap, true), "3 s after the report, across the wrap: due");
 }
 
 TEST(log_url_points_at_the_relays_log_endpoint) {
@@ -664,6 +669,7 @@ int main() {
     RUN_TEST(wifi_message_never_writes_past_the_buffer);
     RUN_TEST(relay_wifi_capability_byte_sets_its_flag_only);
     RUN_TEST(relay_greeting_with_both_capabilities_sets_both_flags_independently);
+    RUN_TEST(wifi_report_interval_matches_the_detectors_one_second_heartbeat);
     RUN_TEST(wifi_report_is_due_at_once_on_a_new_connection_then_every_interval);
     RUN_TEST(wifi_report_schedule_survives_the_millis_counter_wrapping);
     RUN_TEST(log_url_points_at_the_relays_log_endpoint);
