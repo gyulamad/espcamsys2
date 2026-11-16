@@ -10,8 +10,8 @@
 //   PUSH_INTERVAL_MUL           -> PUSH_GAP_MUL
 //   REMOTE_LOG_*                -> LOG_*   (see the table)
 //
-// There are no defaults. A setting listed "only needed when X" is skipped
-// while X switches its feature off.
+// A setting listed "only needed when X" is skipped while X switches its feature off. Settings that used to be
+// fixed in the code have a default (RECORDER_META below): a board that has none stored uses it.
 
 #pragma once
 
@@ -81,6 +81,31 @@ static const KeyDef RECORDER_KEYS[] = {
     { "SETUP_PASSWORD",  Kind::Secret,    8,    63,      Cond::Optional,      nullptr,           nullptr,
       "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
 };
+
+// The readable name, group and fallback of each setting (see KeyMeta in settings_logic.h). A setting with a
+// default is no longer asked for on a blank board: it simply uses that value, which is what the sketch used
+// before the value became a setting, until somebody changes it. The settings that say WHERE and WHO this board
+// is (WIFI, SERVER_HOST, ports, CAMERA_ID, API_KEY) and the safety switches (ALARM_GPIO_PIN, LOG_ENABLED) have
+// no default and stay required.
+static const KeyMeta RECORDER_META[] = {
+    // name             default  label                                   category          tier          apply
+    { "PUSH_GAP_MUL",   "1.5",   "Pause after each frame (x last push)", "Picture & link", Tier::Basic,    Apply::Live },
+    { "JPEG_Q_DROP",    "1",     "Lower quality on a slow link",         "Picture & link", Tier::Basic,    Apply::Live },
+    { "JPEG_Q_MIN",     "12",    "Best JPEG quality",                    "Picture & link", Tier::Basic,    Apply::Live },
+    { "JPEG_Q_MAX",     "63",    "Coarsest JPEG quality",                "Picture & link", Tier::Basic,    Apply::Live },
+    { "SIZE_DROP",      "1",     "Also shrink the frame size",           "Picture & link", Tier::Basic,    Apply::Live },
+    { "ALARM_ACTIVE",   "LOW",   "Pin level that means alarm",           "Alarm input",    Tier::Basic,    Apply::Reboot },
+    { "ALARM_ALL_CAMS", "0",     "Alarm records on every camera",        "Alarm input",    Tier::Basic,    Apply::Reboot },
+    { "LOG_MIN_LEVEL",  "1",     "Lowest level sent to the relay",       "Logging",        Tier::Basic,    Apply::Live },
+    { "LOG_ECHO",       "1",     "Show everything on serial",            "Logging",        Tier::Advanced, Apply::Live },
+    { "LOG_RETRY_MAX",  "3",     "Retries after a failed delivery",      "Logging",        Tier::Advanced, Apply::Live },
+    { "LOG_RETRY_SEC",  "300",   "Seconds between retries",              "Logging",        Tier::Advanced, Apply::Live },
+    { "LOG_FLUSH_SEC",  "10",    "Seconds routine entries wait",         "Logging",        Tier::Advanced, Apply::Live },
+    { "LOG_REPEAT_SEC", "30",    "Window for counting repeats",          "Logging",        Tier::Advanced, Apply::Live },
+    { "LOG_HEARTBEAT",  "600",   "Seconds between status lines",         "Logging",        Tier::Advanced, Apply::Live },
+    { "LOG_LOW_HEAP",   "30000", "Warn below this free heap (bytes)",    "Logging",        Tier::Advanced, Apply::Live },
+};
+static const size_t RECORDER_META_COUNT = sizeof(RECORDER_META) / sizeof(RECORDER_META[0]);
 
 // JPEG_Q_MIN (the finest quality) must not be above JPEG_Q_MAX (the coarsest):
 // the adapter walks best -> worst, so an inverted range would mean "the finest
@@ -181,7 +206,8 @@ inline std::vector<std::string> recorderLockedKeys() {
 
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.
-inline bool loadRecorderSettings(ISettingsStore& store, RecorderSettings& out, std::string& err) {
+inline bool loadRecorderSettings(ISettingsStore& flash, RecorderSettings& out, std::string& err) {
+    DefaultingStore store(flash, RECORDER_META, RECORDER_META_COUNT);   // what is stored, else the default
     std::vector<Problem> problems = findProblems(RECORDER_SCHEMA, store);
     if (!problems.empty()) {
         err = problems[0].key + (problems[0].missing ? " is not set" : " is invalid: " + problems[0].reason);

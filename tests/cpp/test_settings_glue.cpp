@@ -104,11 +104,11 @@ TEST(settings_mode_can_take_as_long_as_the_user_needs) {
 
 TEST(a_new_setting_missing_from_flash_is_asked_for_even_though_the_rest_is_there) {
     powerUp();
-    g_flash.erase("LOG_LOW_HEAP");   // as after upgrading to firmware with one more key
-    typeAt(500, "LOG_LOW_HEAP=20000\n");
+    g_flash.erase("PUSH_PORT");   // as after upgrading to firmware with one more key
+    typeAt(500, "PUSH_PORT=8082\n");
     setupSettings();
-    TEST_ASSERT(said("These settings need a value (1)") && said("LOG_LOW_HEAP"), "only that one is asked for");
-    TEST_ASSERT(g_restarts == 1 && g_flash["LOG_LOW_HEAP"] == "20000", "stored, restarted");
+    TEST_ASSERT(said("These settings need a value (1)") && said("PUSH_PORT"), "only that one is asked for");
+    TEST_ASSERT(g_restarts == 1 && g_flash["PUSH_PORT"] == "8082", "stored, restarted");
 }
 
 TEST(a_flash_that_cannot_be_opened_is_reported) {
@@ -164,12 +164,12 @@ static void provisionFlash() {
 
 TEST(a_board_missing_a_setting_asks_the_relay_when_nobody_types) {
     provisionFlash(); powerUp();
-    g_flash.erase("LOG_LOW_HEAP");                       // a firmware update added this one
-    g_link.reply(esp32cam_settings::FetchResult::Got, "LOG_LOW_HEAP=20000");
+    g_flash.erase("PUSH_PORT");                       // a firmware update added this one
+    g_link.reply(esp32cam_settings::FetchResult::Got, "PUSH_PORT=8082");
     setupSettings();
     TEST_ASSERT_EQ(g_restarts, 1, "restarted so the new setting takes effect");
-    TEST_ASSERT_EQ(g_flash["LOG_LOW_HEAP"], std::string("20000"), "the value from the relay is in flash");
-    TEST_ASSERT(g_link.fetches == 1 && g_link.needSeen[0] == "LOG_LOW_HEAP", "it told the relay what it was missing");
+    TEST_ASSERT_EQ(g_flash["PUSH_PORT"], std::string("8082"), "the value from the relay is in flash");
+    TEST_ASSERT(g_link.fetches == 1 && g_link.needSeen[0] == "PUSH_PORT", "it told the relay what it was missing");
     TEST_ASSERT(g_linkType == "recorder" && g_linkIdKey == "CAMERA_ID", "as a recorder, identified by CAMERA_ID");
     TEST_ASSERT(g_now >= 5000, "the serial port had its five seconds first");
     TEST_ASSERT(said("Asking the relay") && said("Stored 1 setting(s)"), "and the serial log says what happened");
@@ -178,20 +178,29 @@ TEST(a_board_missing_a_setting_asks_the_relay_when_nobody_types) {
 
 TEST(a_relay_with_nothing_staged_makes_the_board_restart_and_try_again) {
     provisionFlash(); powerUp();
-    g_flash.erase("LOG_LOW_HEAP");
+    g_flash.erase("PUSH_PORT");
     setupSettings();
     TEST_ASSERT_EQ(g_restarts, 1, "restarted to try again");
-    TEST_ASSERT(g_flash.count("LOG_LOW_HEAP") == 0, "nothing was stored");
+    TEST_ASSERT(g_flash.count("PUSH_PORT") == 0, "nothing was stored");
     TEST_ASSERT(g_now >= 35000 && g_now <= 36000, "after 5 s of serial and 30 s of waiting");
     TEST_ASSERT(said("no settings staged"), "it said what it was waiting for");
 }
 
+TEST(a_setting_that_has_a_default_is_not_asked_for_when_it_is_missing_from_flash) {
+    provisionFlash(); powerUp();
+    g_flash.erase("LOG_LOW_HEAP");   // firmware that made this a setting: the old built-in value is its default
+    setupSettings();
+    TEST_ASSERT(!said("need a value"), "nothing is asked for");
+    TEST_ASSERT(g_restarts == 0, "the board just goes on");
+    TEST_ASSERT(g_flash.count("LOG_LOW_HEAP") == 0, "and the default is not written to flash");
+}
+
 TEST(typing_a_value_on_serial_means_the_relay_is_not_asked) {
     provisionFlash(); powerUp();
-    g_flash.erase("LOG_LOW_HEAP");
-    typeAt(1000, "LOG_LOW_HEAP=25000\n");
+    g_flash.erase("PUSH_PORT");
+    typeAt(1000, "PUSH_PORT=8083\n");
     setupSettings();
-    TEST_ASSERT_EQ(g_flash["LOG_LOW_HEAP"], std::string("25000"), "the typed value is stored");
+    TEST_ASSERT_EQ(g_flash["PUSH_PORT"], std::string("8083"), "the typed value is stored");
     TEST_ASSERT(g_link.connects == 0 && g_link.fetches == 0, "Wi-Fi was never started");
 }
 
@@ -224,6 +233,7 @@ int main() {
     RUN_TEST(the_serial_console_reports_no_input_without_blocking);
     RUN_TEST(a_board_missing_a_setting_asks_the_relay_when_nobody_types);
     RUN_TEST(a_relay_with_nothing_staged_makes_the_board_restart_and_try_again);
+    RUN_TEST(a_setting_that_has_a_default_is_not_asked_for_when_it_is_missing_from_flash);
     RUN_TEST(typing_a_value_on_serial_means_the_relay_is_not_asked);
     RUN_TEST(a_blank_board_never_tries_wifi_it_has_no_wifi_settings_to_try);
     RUN_TEST(a_board_that_is_complete_never_touches_the_relay);

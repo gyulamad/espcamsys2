@@ -342,6 +342,7 @@ else
     # Fixed seed, about a second; see F-21-S10-security-review.md for how to hunt longer.
     run_cpp_test test_setup_fuzz -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     run_cpp_test test_settings_logic
+    run_cpp_test test_settings_defaults
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change
     run_cpp_test test_person_settings

@@ -853,9 +853,11 @@ void restartBoard() {
 // form or leaves setup mode (all of it in setup_boot.h, unit-tested). A board that is neither is left
 // exactly as it was: `setupBoot` then does nothing at all.
 void setupSettings() {
-  PreferencesStore store;
+  PreferencesStore flash;
+  // Every setting that used to be fixed in the code has a default: the board uses it until something is stored.
+  esp32cam_settings::DefaultingStore store(flash, esp32cam_settings::RECORDER_META, esp32cam_settings::RECORDER_META_COUNT);
   SerialConsole console;
-  if (!store.ok()) {
+  if (!flash.ok()) {
     Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
   }
 
@@ -911,12 +913,14 @@ void setupSettings() {
 // settings_sync.h is only the HTTP part. Names only in the log: values can be passwords.
 #include "settings_sync.h"
 
-static PreferencesStore* g_syncStore = nullptr;
+static PreferencesStore* g_syncFlash = nullptr;
+static esp32cam_settings::DefaultingStore* g_syncStore = nullptr;
 static SettingsSync* g_sync = nullptr;
 
 void settingsSyncTick() {
   if (!g_sync) {   // created on first use, in the task that uses it
-    g_syncStore = new PreferencesStore();
+    g_syncFlash = new PreferencesStore();
+    g_syncStore = new esp32cam_settings::DefaultingStore(*g_syncFlash, esp32cam_settings::RECORDER_META, esp32cam_settings::RECORDER_META_COUNT);
     g_sync = new SettingsSync(esp32cam_settings::RECORDER_SCHEMA, *g_syncStore, "recorder", esp32cam_settings::recorderLockedKeys());
   }
   if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId)) {

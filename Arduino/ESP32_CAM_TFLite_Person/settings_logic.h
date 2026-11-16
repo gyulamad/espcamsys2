@@ -245,6 +245,65 @@ public:
     virtual void clearAll() = 0;
 };
 
+// ── What a setting looks like on a settings page, and what it falls back to ──
+
+// How the dashboard groups a setting: the simple ones first, the risky ones behind "Expert".
+enum class Tier : uint8_t { Basic, Advanced, Expert };
+
+// When a changed value takes effect on the running board.
+enum class Apply : uint8_t {
+    Live,     // at the next settings sync
+    Reboot    // after the board restarts
+};
+
+// Extra facts about a setting, kept apart from the key table (KeyDef) so the table stays small and
+// every existing row is untouched. `name` is the KeyDef's name; a setting without a row here behaves
+// exactly as before (no default, no label).
+struct KeyMeta {
+    const char* name;
+    const char* defaultValue;   // what the board uses while nothing is stored (the old #define value); nullptr: none, still required
+    const char* label;          // the readable name shown on the settings page (the stored key is short)
+    const char* category;       // the settings page's group, e.g. "Picture & link"
+    Tier tier;
+    Apply apply;
+};
+
+inline const KeyMeta* findMeta(const KeyMeta* metas, size_t count, const std::string& name) {
+    for (size_t i = 0; i < count; ++i) {
+        if (name == metas[i].name) return &metas[i];
+    }
+    return nullptr;
+}
+
+// A view of the flash in which every setting that has a default always has a value: what is stored, else
+// its default. Reading through it is how a board keeps working with the values that used to be #defines
+// until somebody changes them; writing goes straight to the flash, so a default is never stored by itself.
+class DefaultingStore : public ISettingsStore {
+public:
+    DefaultingStore(ISettingsStore& flash, const KeyMeta* metas, size_t count)
+        : flash_(flash), metas_(metas), count_(count) {}
+
+    bool has(const std::string& key) override {
+        return flash_.has(key) || defaultOf(key) != nullptr;
+    }
+    std::string get(const std::string& key) override {
+        if (flash_.has(key)) return flash_.get(key);
+        const char* d = defaultOf(key);
+        return d ? d : "";
+    }
+    bool set(const std::string& key, const std::string& value) override { return flash_.set(key, value); }
+    void clearAll() override { flash_.clearAll(); }
+
+private:
+    const char* defaultOf(const std::string& key) const {
+        const KeyMeta* m = findMeta(metas_, count_, key);
+        return m ? m->defaultValue : nullptr;
+    }
+    ISettingsStore& flash_;
+    const KeyMeta* metas_;
+    size_t count_;
+};
+
 // The serial port, as the flow sees it.
 class IConsole {
 public:
