@@ -32,6 +32,7 @@
   const doc = env.document;
   const win = env.window;
   const working = new WeakMap();   // button -> the promise of the work it is busy with
+  const reserved = new WeakMap();  // button -> its spinner room is reserved (once per button)
   let cover = null;
   let textEl = null;
   let giveUpTimer = null;
@@ -44,6 +45,24 @@
     else button.removeAttribute('aria-busy');
   }
 
+  // The spinner sits IN FRONT of the button's text (`.is-busy::before`), so a working button is wider than a
+  // resting one — and on a phone that bit of width can move where the button's row breaks its lines, hopping
+  // everything below it for as long as the request runs (F-35). So, once per button, the room for the spinner
+  // is measured and reserved (min-width): the button keeps that width busy or not, and nothing moves. A wider
+  // reservation another helper made (js/stable-text.js) is kept. A button without layout (jsdom, a hidden
+  // panel) is left alone and measured at its next job.
+  function reserveSpinnerRoom(button) {
+    if (reserved.has(button)) return;
+    const resting = button.offsetWidth;
+    if (!resting) return;   // no layout to measure from
+    button.classList.add(BUSY_CLASS);
+    const withSpinner = button.offsetWidth;
+    button.classList.remove(BUSY_CLASS);
+    const keep = Math.max(resting, withSpinner, parseFloat(button.style.minWidth) || 0);
+    if (keep > resting) button.style.minWidth = keep + 'px';
+    reserved.set(button, true);
+  }
+
   // Runs `work` (a function returning a promise, or a promise) and shows the spinner on `button` meanwhile; gives back
   // what the work gives back (or throws what it throws) and always takes the spinner away. A click on a button that is
   // still busy does not start the work again: it gets the first run's promise. No button: the work just runs.
@@ -51,6 +70,7 @@
     const start = () => (typeof work === 'function' ? work() : work);
     if (!button) return start();
     if (working.has(button)) return working.get(button);
+    reserveSpinnerRoom(button);
     mark(button, true);
     const job = (async () => start())();
     working.set(button, job);

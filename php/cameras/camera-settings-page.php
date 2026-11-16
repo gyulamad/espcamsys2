@@ -110,6 +110,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 
 <script src="js/toast.js"></script>
 <script src="js/busy.js"></script>
+<script src="js/stable-text.js"></script>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
@@ -119,6 +120,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   const WHO = TYPE === 'detector' ? 'detector' : 'camera';
   const API = 'camera-settings.php?cam=' + encodeURIComponent(CAM) + (TYPE === 'detector' ? '&type=detector' : '');
   let keys = [], gpios = [], reported = null, camera = null, original = {}, pollTimer = null;
+  let lastStructure = null;   // what the form (and the banners) were last built from; only a change rebuilds them
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert'), cancelBtn = $('cancel');
@@ -156,21 +158,40 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     return input;
   }
 
+  // The status block above the form ("reported 12 s ago", "QUEUED: ... 3 s ago", ...). Its seconds tick, and
+  // on a phone its sentences wrap into a varying number of lines: the block's height is reserved for what the
+  // newest text wraps to (js/stable-text.js, F-35), so a tick of the clock cannot move the form below it.
+  function setStateText(parts) {
+    const text = parts.join('\n');
+    const state = $('state');
+    state.textContent = text;
+    state.style.whiteSpace = 'pre-line';
+    if (window.CamStableText && text !== '') window.CamStableText.reserveHeight(state, [text]);
+  }
+
   function render(data) {
     camera = data.camera; keys = data.keys; gpios = data.gpios;
     const st = data.state; reported = st.reported ? st.reported.settings : null;
+
+    // The status text and the WITHDRAW button follow every answer (their seconds tick); the FORM and the
+    // banners are built from the structure below, and are rebuilt only when it CHANGED. While a change is
+    // queued this page polls every few seconds, and each rebuild used to move everything below the form and
+    // wipe what was being typed (F-35): an unchanged answer now keeps both.
+    const parts = [];
+    if (st.reported) parts.push('Settings reported by the ' + WHO + ' ' + ago(st.now - st.reported.at));
+    if (st.pending) parts.push('QUEUED: ' + st.pending.keys.join(', ') + ' (queued ' + ago(st.now - st.pending.at) + ') — waiting for the ' + WHO + ' to pick it up');
+    if (st.last) parts.push('Last change: ' + st.last.result.toUpperCase() + (st.last.message ? ' — ' + st.last.message : '') + ' (' + ago(st.now - st.last.at) + ')');
+    setStateText(parts);
+    cancelBtn.hidden = !st.pending;
+    const structure = JSON.stringify([camera, keys, gpios, st.reported, st.pending, st.last]);
+    if (structure === lastStructure) return;
+    lastStructure = structure;
+
     $('title').textContent = camera.icon + ' ' + camera.name + (TYPE === 'detector' ? ' — detector' : '');
     document.title = camera.name + (TYPE === 'detector' ? ' detector calibration' : ' settings') + ' — ESP32-CAM Dashboard';
     if (TYPE === 'detector') { $('subtitle').textContent = 'Person detector calibration (' + camera.deviceId + ')'; $('calib-help').hidden = false; $('calib-help').style.whiteSpace = 'pre-line'; }
     $('entry').hidden = TYPE === 'detector'; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id; $('e-detector').value = camera.detector || '';
     $('banners').textContent = ''; form.textContent = ''; original = {};
-
-    const parts = [];
-    if (st.reported) parts.push('Settings reported by the ' + WHO + ' ' + ago(st.now - st.reported.at));
-    if (st.pending) parts.push('QUEUED: ' + st.pending.keys.join(', ') + ' (queued ' + ago(st.now - st.pending.at) + ') — waiting for the ' + WHO + ' to pick it up');
-    if (st.last) parts.push('Last change: ' + st.last.result.toUpperCase() + (st.last.message ? ' — ' + st.last.message : '') + ' (' + ago(st.now - st.last.at) + ')');
-    $('state').textContent = parts.join('\n'); $('state').style.whiteSpace = 'pre-line';
-    cancelBtn.hidden = !st.pending;
 
     if (!reported) {
       banner('This ' + WHO + ' has not reported its settings yet. It reports once it runs the firmware that supports remote settings (' + (TYPE === 'detector' ? 'flash the detector with the current ESP32_CAM_TFLite_Person sketch, or publish it with ota-deploy.sh detector' : 'publish it with ota-deploy.sh') + ') and has reached the relay — then this page fills in.' + (TYPE === 'detector' ? '' : ' You can still rename it or remove it from the dashboard above.'), 'warn');

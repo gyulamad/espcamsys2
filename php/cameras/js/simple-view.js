@@ -9,7 +9,9 @@
 // by hand, has its stale last picture covered with an "offline" message (js/camera-offline.js). A click on the picture
 // toggles full screen of the picture alone, the FULL SCREEN button toggles it for the whole page with the status line
 // (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
-// under the picture show the time left before the next camera.
+// under the picture show the time left before the next camera. The status line is a row that wraps on a
+// phone: every text in it that changes reserves the room of its widest wording (js/stable-text.js, F-35),
+// so a change of value can never move the line breaks and hop the page.
 
 (function () {
   const S = window.CamSimple;
@@ -50,6 +52,13 @@
   const situation = (now) => humans.apply(now, S.priorities(ids, status, detectors));
 
   // The status line and the red frame around the picture follow the recording state of the current camera.
+  // The line is a flex row that wraps on a phone: every text in it that changes reserves the width of its
+  // widest wording (js/stable-text.js, F-35), or a change of value would move the line breaks and hop the page.
+  const REC_LABELS = ['RECORDING: –', 'RECORDING: ON', 'RECORDING: off'];   // what renderRecording composes
+  const SLIDESHOW_OFF = '▶ SLIDESHOW';
+  const SLIDESHOW_ON = '⏸ SLIDESHOW ON';
+  const SLIDESHOW_LABELS = [SLIDESHOW_OFF, SLIDESHOW_ON];                   // what setSlideshow puts on the button
+  const SCREEN_LABELS = ['SCREEN: KEPT ON', 'SCREEN: KEPT ON (VIDEO)', 'SCREEN: NOT HELD – TOUCH THE PAGE'];
   function renderRecording() {
     const rec = el('rec');
     const on = S.isRecording(status, current);
@@ -94,7 +103,7 @@
     button.classList.toggle('on', on);
     button.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (on) keepViews();
-    button.textContent = on ? '⏸ SLIDESHOW ON' : '▶ SLIDESHOW';
+    button.textContent = on ? SLIDESHOW_ON : SLIDESHOW_OFF;
     lastFraction = 0;
     renderCountdown(Date.now(), on ? situation(Date.now()) : null);
   }
@@ -107,7 +116,7 @@
     el('countdown').hidden = left === null;
     el('countdown-bar').hidden = left === null;
     if (left === null) return;
-    el('countdown').textContent = 'NEXT IN ' + left.seconds + ' s';
+    el('countdown').textContent = S.countdownText(left.seconds);
     // Back to full after a switch must not slide up slowly: only the running-out is animated.
     el('countdown-fill').style.transition = left.fraction > lastFraction ? 'none' : '';
     el('countdown-fill').style.width = (left.fraction * 100) + '%';
@@ -166,6 +175,24 @@
     },
   });
 
+  // F-35: the status line is a flex row that wraps on a phone, so no text in it may change where the lines
+  // break. Reserve, before the first paint, the room of the widest wording of everything that changes here.
+  // (The clock is left out: its text is always the same eight characters. The camera's title is its two plain
+  // spans, icon and name, each reserved for the widest of ALL the cameras — the slideshow switches cameras,
+  // and a longer name would otherwise move the line breaks at every switch.) The page works without the
+  // helper: only the jumps are left then.
+  function reserveStatusLine() {
+    const stable = window.CamStableText;
+    if (!stable) return;
+    stable.reserve(el('countdown'), S.countdownTexts(Math.ceil(slideshowMs / 1000)));
+    stable.reserve(el('rec'), REC_LABELS);
+    stable.reserve(el('slideshow'), SLIDESHOW_LABELS);
+    stable.reserve(el('screen-state'), SCREEN_LABELS);
+    stable.reserve(el('cam-name'), cameras.map((c) => c.name));
+    stable.reserve(el('cam-icon'), cameras.map((c) => c.icon || ''));
+  }
+  reserveStatusLine();
+
   // Two ways into full screen, both toggles (the page works without the helper: no listener, the button stays hidden):
   // a click on the picture shows the picture alone (its box: no status line), the FULL SCREEN button shows the whole
   // page, status line (camera name, clock, recording, countdown) included.
@@ -204,12 +231,16 @@
     keeper.keepAwake();
     const state = el('screen-state');
     // Says what holds the screen, so a device that still goes dark can be told apart from one that is not held.
-    setInterval(() => {
+    // Said AT ONCE (not at the first tick two seconds in): the line shows up with the page, and with its width
+    // reserved above (F-35) its text changing as the keeper finds its method moves nothing.
+    const renderScreenState = () => {
       if (!state) return;
       const how = keeper.method();
       state.hidden = false;
-      state.textContent = how === 'wake-lock' ? 'SCREEN: KEPT ON' : how === 'video' ? 'SCREEN: KEPT ON (VIDEO)' : 'SCREEN: NOT HELD – TOUCH THE PAGE';
-    }, 2000);
+      state.textContent = how === 'wake-lock' ? SCREEN_LABELS[0] : how === 'video' ? SCREEN_LABELS[1] : SCREEN_LABELS[2];
+    };
+    renderScreenState();
+    setInterval(renderScreenState, 2000);
   }
 
   if (current !== undefined) pictures.show(current);   // (no usable camera list: nothing to show)

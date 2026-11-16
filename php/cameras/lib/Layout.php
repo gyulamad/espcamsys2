@@ -55,8 +55,12 @@ class CamLayout
   .files-name { color: var(--seen); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .files-size { color: var(--seen); font-weight: 400; flex-shrink: 0; }
   /* The first person found in a clip, so who is in it is visible without playing it. */
+  /* The footage list's thumbnails: a fixed 4:3 box with the picture cropped to fill it (like the camera
+     thumbnails of the simple list, .thumb). The box, not the picture, sets the row's height, so a row does
+     not grow by ~70px when its picture has decoded (loading="lazy" decodes while the visitor scrolls, and
+     the rows below used to jump by the picture's height, F-35). */
   .files-thumb-btn { padding: 0; border: 0; background: none; flex-shrink: 0; cursor: zoom-in; line-height: 0; }
-  .files-thumb { width: 96px; height: auto; border-radius: 3px; border: 1px solid var(--border); }
+  .files-thumb { width: 96px; height: 72px; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); }
   /* The picture in large, over the whole page; a click or Escape closes it. */
   .files-lightbox {
     position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -450,6 +454,10 @@ CSS . "\n";
   body { background: var(--bg); color: var(--text); font-family: var(--sans); }
   .btn { font-family: var(--mono); font-size: .85rem; letter-spacing: .06em; padding: 8px 16px; background: transparent; color: var(--text);
          border: 1px solid var(--border-light); border-radius: 6px; cursor: pointer; text-decoration: none; display: inline-block; }
+  /* An explicit line height, for the reason recordingsListStyle gives the footage list's .cam-btn: with
+     "normal" the font that draws a button's pictogram sets its height, so swapping ▶ for ⏸ (the slideshow
+     button's two wordings, F-35) could grow the button by a pixel — and the status row with it. */
+  .btn { line-height: 1.2; }
   .btn:hover, .btn:focus-visible { border-color: var(--accent); color: var(--accent); }
   .btn.on { border-color: var(--accent); color: var(--accent); }
   .btn[hidden] { display: none; }   /* .btn's own display would otherwise beat the hidden attribute */
@@ -464,6 +472,10 @@ CSS . "\n";
   .thumb:hover, .thumb:focus-visible { border-color: var(--accent); }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .cam-icon { margin-right: .4em; }
+  /* The camera title's two spans keep the room of the widest camera's icon and name while the slideshow
+     switches cameras (js/stable-text.js, F-35): inline-block, because a min-width means nothing to an
+     inline span — without the reserved room a longer name would move the status line's line breaks. */
+  .cam-title span { display: inline-block; }
   .thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-family: var(--mono); font-size: .85rem; color: var(--text); background: rgba(11,14,20,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* the large view: the picture takes everything the status line leaves */
@@ -542,7 +554,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             // hidden until js/simple-view.js knows the browser can do it (the status line is part of what goes full screen here)
             . '<button class="btn" type="button" id="fullscreen" aria-pressed="false" title="Show the whole page full screen, with this status line (a click on the picture shows the picture alone)" hidden>⛶ FULL SCREEN</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'fullscreen.js', 'screen-keeper.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'fullscreen.js', 'screen-keeper.js', 'stable-text.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser

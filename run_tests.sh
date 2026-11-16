@@ -525,6 +525,10 @@ fi
 #   - tests/dom/test_simple_view_fullscreen_browser.js: the simple view's two ways into full screen in a real Chromium:
 #     the FULL SCREEN button shows the whole page (status line in view, button pressed), a click on the picture shows
 #     the picture box alone (status line covered).
+#   - tests/dom/test_no_jumps_browser.js: F-35 in a real Chromium at a phone viewport: the simple view's countdown
+#     running "NEXT IN 10 s" -> "9 s" and the switch to a longer-named camera move nothing (the status line's height
+#     and the picture's room stay), the reservations of js/stable-text.js are on the page from the first paint, and
+#     the screen-state line is there at once.
 #   - tests/e2e/test_dashboard_logout_e2e.js: the LOG OUT button (real php -S): on every page's navigation bar as a
 #     plain POST form; logout.php answers a logged-in same-origin POST with 401 + the login's own realm and
 #     a "logged out" page; a GET or a cross-site POST is refused and never prompts; one audit line per real
@@ -996,6 +1000,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
     run_node_e2e "$ROOT_DIR/tests/dom/test_simple_view_fullscreen_browser.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "Browser (F-35: on a phone, the simple view's changing texts move nothing) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
+    run_node_e2e "$ROOT_DIR/tests/dom/test_no_jumps_browser.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
