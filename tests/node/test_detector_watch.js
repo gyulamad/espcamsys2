@@ -50,6 +50,16 @@ test('an offline detector that supports the view can still be asked', () => {
   assertEqual([b.hidden, b.action], [false, 'on']);
 });
 
+test('asked on a detector that is not there: STARTING, but the title says the ask sits unheard (F-33)', () => {
+  const b = w.watchButton({ state: 'offline', report: null, view: view({ wanted: true }) });
+  assertEqual([b.label, b.action], ['… STARTING', 'off']);
+  assertTrue(/has not checked in with the relay/.test(b.title), b.title);
+  const never = w.watchButton({ state: 'never', report: null, view: view({ wanted: true }) });
+  assertTrue(/has not checked in with the relay/.test(never.title), never.title);
+  const resting = w.watchButton(idle({ wanted: true }));
+  assertEqual(resting.title, 'Asked: the detector checks in about every 30 s while it rests. Click to cancel.', 'a resting detector does hear the ask: the title stays reassuring');
+});
+
 const NOW = 1e9;
 test('keep-alive: only while the view is wanted or running, the page is visible and the person active', () => {
   assertEqual(w.keepAliveDue(live(500), NOW, NOW - 1000, false), true);

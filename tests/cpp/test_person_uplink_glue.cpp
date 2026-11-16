@@ -74,6 +74,8 @@ struct HTTPClient {
     void addHeader(const char* k, const char* v) { keyed = keyed || (std::string(k) == "X-Api-Key" && std::string(v) == "s3cret"); }
     int GET() { g_viewAsked.push_back(keyed ? url : "NO KEY " + url); return g_viewCode; }
     String getString() { return String(g_viewBody.c_str()); }
+    // The core's HTTPClient::errorToString(): what a negative GET() code means, for the poll's failure line.
+    String errorToString(int code) { return code == -1 ? String("connection refused") : String("http error"); }
     void end() {}
 };
 
@@ -793,6 +795,67 @@ TEST(the_poll_says_nothing_about_a_network_it_is_not_connected_to) {
     TEST_ASSERT(!g_viewAsked.empty() && g_viewAsked[0] == "http://192.168.4.9:8080/detector/det-1/view", "no signal, no query: nothing is invented");
 }
 
+// ── the view poll's failures are SAID, not retried in silence (F-33) ──
+// A poll that fails is what keeps a resting detector from ever hearing a WATCH ask. Before F-33 the
+// sketch retried it without a word, so a board that could not check in looked exactly like a gone one.
+
+// The world flips the poll's answer after a while (the relay comes back / starts refusing), to watch
+// the sketch notice.
+static int g_flipViewAnswerAfterDelays = -1;
+static bool g_viewAnswerFlipped = false;
+static void flipViewAnswerAfterAWhile() {
+    if (g_flipViewAnswerAfterDelays >= 0 && (int)g_taskDelays.size() >= g_flipViewAnswerAfterDelays && !g_viewAnswerFlipped) {
+        g_viewCode = 200;
+        g_viewBody = "view=0;stop=0;mins=10";
+        g_viewAnswerFlipped = true;
+    }
+}
+
+TEST(a_refused_view_poll_is_said_once_with_its_cause_and_fix) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = 401;
+    g_viewBody = "{\"error\":\"wrong key: API_KEY on the board must equal camKey in the relay's config.js\"}";
+    // ~12 s of passes: the gate retries the poll every 10 s, so two refused polls happen — and stay one line.
+    runNetworkTask(62);
+    TEST_ASSERT(logged('W', "refused the view poll (HTTP 401)"), "the refusal, with its code");
+    TEST_ASSERT(logged('W', "API_KEY on the board must equal camKey"), "the fix, taken from the relay's own error body");
+    TEST_ASSERT(logged('W', "a WATCH ask cannot reach the board"), "what the outage costs the dashboard");
+    int said = 0;
+    for (size_t i = 0; i < g_rlog.size(); i++) if (has(g_rlog[i].text, "view poll")) said++;
+    TEST_ASSERT_EQ(said, 1, "one line for a repeating refusal, not one per retry");
+    TEST_ASSERT_EQ(g_reachableCalls, 0, "a refused poll is not 'the relay is reachable'");
+}
+
+TEST(an_unreachable_relay_is_said_in_the_view_poll_with_the_transport_error) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = -1;   // the fake's errorToString: "connection refused"
+    runNetworkTask(3);
+    TEST_ASSERT(logged('W', "could not reach the relay at 192.168.4.9:8080 (connection refused)"), "the address and what went wrong on the wire");
+    TEST_ASSERT(!logged('I', "view poll"), "nothing claims recovery");
+}
+
+TEST(a_view_poll_that_recovers_says_so_and_resumes_the_queued_log_lines) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = -1;
+    g_flipViewAnswerAfterDelays = 50;   // after 10 s of rest (50 passes) the relay answers again: pass 51's retry succeeds
+    g_onTaskDelay = flipViewAnswerAfterAWhile;
+    runNetworkTask(60);
+    TEST_ASSERT(logged('W', "could not reach the relay at 192.168.4.9:8080"), "the outage was said first");
+    TEST_ASSERT(logged('I', "the view poll is answered again"), "and its end is said too");
+    TEST_ASSERT(g_reachableCalls >= 1, "a resting board has no uplink: the answered poll is where its queued log lines go out");
+    g_onTaskDelay = nullptr; g_flipViewAnswerAfterDelays = -1; g_viewAnswerFlipped = false;
+}
+
+TEST(a_200_that_is_not_an_answer_is_said_with_what_came_instead) {
+    resetWorld(); typicalLiveViewSettings();
+    g_viewCode = 200;
+    g_viewBody = "<html>Some Router Admin</html>";   // a wrong host, or a captive portal
+    runNetworkTask(3);
+    TEST_ASSERT(logged('W', "answered the view poll with something this firmware does not understand"), "the 200 is not silently trusted");
+    TEST_ASSERT(logged('W', "('<html>Some Router Admin</html>')"), "the foreign body is quoted");
+    TEST_ASSERT(logged('W', "probably a relay older than this firmware"), "with its likely cause");
+}
+
 TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio) {
     resetWorld(); typicalLiveViewSettings();
     g_viewCode = 200; g_viewBody = "view=0;stop=0;mins=10";
@@ -1112,6 +1175,10 @@ int main() {
     RUN_TEST(a_relay_without_the_view_switch_keeps_the_stream_on_all_the_time);
     RUN_TEST(the_poll_tells_the_relay_which_wifi_network_the_board_is_on_and_how_strong_it_is);
     RUN_TEST(the_poll_says_nothing_about_a_network_it_is_not_connected_to);
+    RUN_TEST(a_refused_view_poll_is_said_once_with_its_cause_and_fix);
+    RUN_TEST(an_unreachable_relay_is_said_in_the_view_poll_with_the_transport_error);
+    RUN_TEST(a_view_poll_that_recovers_says_so_and_resumes_the_queued_log_lines);
+    RUN_TEST(a_200_that_is_not_an_answer_is_said_with_what_came_instead);
     RUN_TEST(nobody_watching_means_no_picture_link_and_a_sleeping_radio);
     RUN_TEST(somebody_watching_opens_the_picture_link_and_wakes_the_radio);
     RUN_TEST(the_network_task_puts_wi_fi_in_station_mode_without_sleep_and_adds_every_network);

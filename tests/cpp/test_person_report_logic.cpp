@@ -1158,6 +1158,97 @@ TEST(view_gate_streams_all_the_time_for_a_relay_without_the_switch_until_it_is_u
     TEST_ASSERT(!g.live(60101) && !g.relayWithoutSwitch(), "the relay was updated: the switch works, nobody is looking, so it rests");
 }
 
+// ── the view poll's failures, in words (F-33) ────────────────────────
+// A refused or unanswered poll is what keeps a resting detector from ever hearing a WATCH ask. Before
+// F-33 it was retried in silence, so a board that could not check in looked exactly like a gone one.
+
+TEST(view_poll_watch_says_once_and_then_at_intervals_while_the_poll_fails) {
+    ViewPollWatch w;
+    TEST_ASSERT(w.update(1000, false, -1).kind == ViewPollEvent::NoAnswer, "the first failure is said at once");
+    TEST_ASSERT(w.update(2000, false, -1).kind == ViewPollEvent::None, "and the repeats are not said");
+    TEST_ASSERT(w.update(1000 + 60000, false, -1).kind == ViewPollEvent::None, "nor a minute later (the interval is 5 min)");
+    ViewPollEvent e = w.update(1000 + 300000, false, -1);
+    TEST_ASSERT(e.kind == ViewPollEvent::NoAnswer && e.failingForMs == 300000, "five minutes in: said again, with how long it has been failing");
+    e = w.update(1000 + 600000, false, -1);
+    TEST_ASSERT(e.kind == ViewPollEvent::NoAnswer && e.failingForMs == 600000, "still failing ten minutes in");
+    e = w.update(1000 + 600001, true, 200);
+    TEST_ASSERT(e.kind == ViewPollEvent::Recovered && e.failingForMs == 600001, "the relay answers again: said once, with the length of the outage (from the first failure)");
+    TEST_ASSERT(w.update(1000 + 600002, true, 200).kind == ViewPollEvent::None, "a healthy poll says nothing");
+    TEST_ASSERT(!w.failing(), "and the watch is quiet again");
+}
+
+TEST(view_poll_watch_names_the_kind_of_every_failure) {
+    ViewPollWatch w;
+    TEST_ASSERT(w.update(0, false, 401).kind == ViewPollEvent::Refused, "an HTTP error is a refusal");
+    TEST_ASSERT(w.update(300000, false, 404).kind == ViewPollEvent::LegacySwitch, "404 is the older-relay switch (it has its own words)");
+    ViewPollWatch w2;
+    TEST_ASSERT(w2.update(0, false, 200).kind == ViewPollEvent::NotOurAnswer, "a 200 that is not an answer of this kind");
+    ViewPollWatch w3;
+    TEST_ASSERT(w3.update(0, false, -11).kind == ViewPollEvent::NoAnswer, "no answer at all (a transport error)");
+    TEST_ASSERT(w3.update(300000, false, 503).kind == ViewPollEvent::Refused, "the cause changed mid-outage: said with its new kind");
+}
+
+TEST(view_poll_watch_works_across_the_millis_wrap) {
+    ViewPollWatch w;
+    uint32_t t = 0xFFFFFFFFu - 2000;
+    TEST_ASSERT(w.update(t, false, 401).kind == ViewPollEvent::Refused, "the first failure near the wrap");
+    ViewPollEvent e = w.update(t + 300000, false, 401);
+    TEST_ASSERT(e.kind == ViewPollEvent::Refused && e.failingForMs == 300000, "and the interval is wrap-safe");
+}
+
+TEST(view_poll_words_say_what_broke_and_what_it_costs) {
+    ViewPollEvent e; e.kind = ViewPollEvent::NoAnswer;
+    std::string s = describeViewPollEvent(e, "192.168.1.5", 8080, "connection refused");
+    TEST_ASSERT(has(s, "could not reach the relay at 192.168.1.5:8080 (connection refused)"), "the address and the transport error");
+    TEST_ASSERT(has(s, "relay down, wrong SERVER_HOST/HTTP_PORT, or a firewall"), "the usual causes");
+    TEST_ASSERT(has(s, "a WATCH ask cannot reach the board"), "what the outage costs the dashboard");
+    TEST_ASSERT(!has(s, "failing for"), "the first line of an outage does not say how long");
+
+    e.failingForMs = 13 * 3600 * 1000u + 22 * 60 * 1000u;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "");
+    TEST_ASSERT(has(s, "(the view polls have been failing for 13h 22m)"), "a repeated line carries the length of the outage");
+    TEST_ASSERT(!has(s, " ()"), "no empty parentheses when there is no transport error");
+
+    e.kind = ViewPollEvent::Refused; e.status = 401;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "wrong key: API_KEY on the board must equal camKey in the relay's config.js");
+    TEST_ASSERT(has(s, "refused the view poll (HTTP 401)"), "the refusal and its code");
+    TEST_ASSERT(has(s, "API_KEY on the board must equal camKey"), "the fix, mirroring the uplink's refusal hint");
+
+    e.status = 429;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "too many wrong keys from this address: locked out, try again in 55 s");
+    TEST_ASSERT(has(s, "locked out after wrong keys"), "a lockout is explained as such");
+
+    e.status = 503;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "the relay already knows 64 detectors and accepts no more");
+    TEST_ASSERT(has(s, "cannot take this detector's view poll (HTTP 503)"), "a full relay is said as such");
+
+    e.status = 500; e.failingForMs = 0;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "no reason given");
+    TEST_ASSERT(has(s, "HTTP 500") && has(s, "update nodejs/camera-relay and this firmware"), "an unexpected code says to update");
+
+    e.kind = ViewPollEvent::NotOurAnswer; e.status = 200; e.failingForMs = 0;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "<html>Router Admin</html>");
+    TEST_ASSERT(has(s, "does not understand ('<html>Router Admin</html>')"), "the foreign answer is quoted");
+    TEST_ASSERT(has(s, "probably a relay older than this firmware"), "and its likely cause");
+
+    e.kind = ViewPollEvent::LegacySwitch; e.status = 404;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "");
+    TEST_ASSERT(has(s, "has no live view switch (HTTP 404)") && has(s, "streams all the time"), "the legacy state is announced, not hidden");
+
+    e.kind = ViewPollEvent::Recovered; e.failingForMs = 65000;
+    s = describeViewPollEvent(e, "192.168.1.5", 8080, "");
+    TEST_ASSERT(has(s, "answered again (it had been failing for 1m 05s)"), "the recovery, with the outage's length");
+
+    e.kind = ViewPollEvent::None;
+    TEST_ASSERT(describeViewPollEvent(e, "x", 1).empty(), "None has no words");
+    e.kind = ViewPollEvent::Recovered;
+    TEST_ASSERT(viewPollEventLevel(e) == Level::Info, "a recovery is a note");
+    e.kind = ViewPollEvent::LegacySwitch;
+    TEST_ASSERT(viewPollEventLevel(e) == Level::Info, "the legacy switch is a note too");
+    e.kind = ViewPollEvent::Refused; e.status = 401;
+    TEST_ASSERT(viewPollEventLevel(e) == Level::Warn, "a refusal is a warning");
+}
+
 int main() {
     RUN_TEST(json_strings_are_escaped);
     RUN_TEST(log_url);
@@ -1235,5 +1326,9 @@ int main() {
     RUN_TEST(session_release_closes_the_link_quietly_and_a_later_step_reconnects_at_once);
     RUN_TEST(status_json_reports_the_time_left_of_the_live_view);
     RUN_TEST(view_gate_streams_all_the_time_for_a_relay_without_the_switch_until_it_is_updated);
+    RUN_TEST(view_poll_watch_says_once_and_then_at_intervals_while_the_poll_fails);
+    RUN_TEST(view_poll_watch_names_the_kind_of_every_failure);
+    RUN_TEST(view_poll_watch_works_across_the_millis_wrap);
+    RUN_TEST(view_poll_words_say_what_broke_and_what_it_costs);
     return test::summarize();
 }

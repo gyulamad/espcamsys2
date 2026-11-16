@@ -1746,7 +1746,19 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (isStreaming(d)) {
       return { hidden: false, label: '■ STOP', title: 'Stop the live view now, so the detector can rest', action: 'off' };
     }
-    if (view.wanted) return { hidden: false, label: '… STARTING', title: 'Asked: the detector checks in about every 30 s while it rests. Click to cancel.', action: 'off' };
+    if (view.wanted) {
+      // F-33: an ask only reaches a detector that checks in. When this one is not there (offline, never
+      // heard from), the ask sits unheard — the title says so instead of promising a start that cannot come.
+      const silent = d.state === 'offline' || d.state === 'never';
+      return {
+        hidden: false,
+        label: '… STARTING',
+        title: silent
+          ? 'Asked, but the detector has not checked in with the relay lately — it cannot hear the ask until it is back. Click to cancel.'
+          : 'Asked: the detector checks in about every 30 s while it rests. Click to cancel.',
+        action: 'off',
+      };
+    }
     return { hidden: false, label: '▶ WATCH', title: 'Show the sensor values and the small picture (the detector rests when nobody watches)', action: 'on' };
   }
   // Should this page tell the relay "still looking" now? Only while the live view is wanted or running, the

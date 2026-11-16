@@ -1285,28 +1285,77 @@ void logHeartbeat(person_report::UplinkSession &session)
 
 // ── The task ────────────────────────────────────────────────
 
+// Says what one view poll's outcome means, when it is worth saying: ViewPollWatch collapses an outage
+// into the first line, a repeat every few minutes and the recovery (report_logic.h, F-33). Before this,
+// a refused or unanswered poll — the one thing that keeps a resting detector from ever hearing a WATCH
+// ask — was retried in silence, and a board that could not check in looked exactly like a gone one.
+void noteViewPoll(person_report::ViewPollWatch &watch, uint32_t now, bool ok, int code, const std::string &detail)
+{
+    person_report::ViewPollEvent ev = watch.update(now, ok, code);
+
+    if (ev.kind == person_report::ViewPollEvent::None)
+    {
+        return;
+    }
+
+    const std::string line = person_report::describeViewPollEvent(ev, g_cfg.serverHost, g_cfg.httpPort, detail);
+
+    if (person_report::viewPollEventLevel(ev) == person_report::Level::Info)
+    {
+        RLOG_INFO("%s", line.c_str());
+    }
+    else
+    {
+        RLOG_WARN("%s", line.c_str());
+    }
+}
+
 // Asks the relay whether somebody wants the live view (GET /detector/<id>/view) and tells the gate what
 // came back. 404 = an older relay without the switch: the gate then streams always (the old behaviour).
-void pollViewSwitch(person_report::ViewGate &gate) {
-  HTTPClient http;
-  // The poll also tells the relay which Wi-Fi network this board is on and how strong the signal is (it rests, so
-  // it has no other connection to say it on).
-  http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId, std::string(WiFi.SSID().c_str()), WiFi.RSSI()).c_str()));
-  http.setTimeout(5000);
-  http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
-  int code = http.GET();
-  String body = (code == 200) ? http.getString() : String();
-  http.end();
-  uint32_t now = millis();
-  if (code == 404) {
-    gate.onRelayWithoutSwitch(now);
-    return;
-  }
-  if (code != 200 || !gate.onAnswer(now, std::string(body.c_str()))) {
-    gate.onPollFailed(now);
-    return;
-  }
-  g_relayHealth.confirm(now);   // the relay answered: it is there, even though no picture stream is open
+// Every other failure is said out loud once (and every few minutes while it lasts) — see noteViewPoll.
+void pollViewSwitch(person_report::ViewGate &gate, person_report::ViewPollWatch &watch)
+{
+    HTTPClient http;
+    // The poll also tells the relay which Wi-Fi network this board is on and how strong the signal is (it rests, so
+    // it has no other connection to say it on).
+    http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId, std::string(WiFi.SSID().c_str()), WiFi.RSSI()).c_str()));
+    http.setTimeout(5000);
+    http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
+    int code = http.GET();
+    String body = (code > 0) ? http.getString() : String();   // a refusal's body says why (a small JSON error)
+    String transport = (code <= 0) ? http.errorToString(code) : String();
+    http.end();
+    uint32_t now = millis();
+    std::string detail;
+    if (code <= 0)
+    {
+        detail = std::string(transport.c_str());
+    }
+    else if (code != 200)
+    {
+        detail = person_report::extractJsonError(std::string(body.c_str()));
+    }
+
+    if (code == 404)
+    {
+        noteViewPoll(watch, now, false, code, detail);
+        gate.onRelayWithoutSwitch(now);
+        return;
+    }
+
+    const bool answered = code == 200 && gate.onAnswer(now, std::string(body.c_str()));
+
+    if (!answered)
+    {
+        if (code == 200) detail = std::string(body.c_str());   // not an answer of this kind: quote what came instead
+        noteViewPoll(watch, now, false, code, detail);
+        gate.onPollFailed(now);
+        return;
+    }
+
+    noteViewPoll(watch, now, true, code, std::string());
+    g_relayHealth.confirm(now);   // the relay answered: it is there, even though no picture stream is open
+    remoteLogRelayReachable();    // a resting board has no uplink, so THIS is where its queued log lines go out
 }
 
 void networkTask(void *)
@@ -1344,6 +1393,7 @@ void networkTask(void *)
     person_report::WifiWatch wifiWatch(10000);
     person_report::Every heartbeat((uint32_t)g_cfg.announceHeartbeatSec * 1000UL);
     person_report::ViewGate viewGate;   // streams only while somebody watches; otherwise the radio rests
+    person_report::ViewPollWatch viewPollWatch;   // the poll's failures, said once and then at intervals (F-33)
     bool radioAwake = true;
 
     for (;;)
@@ -1376,7 +1426,7 @@ void networkTask(void *)
             relayFindTick();
 
             // Does somebody want to see the sensor values and the picture? (does nothing unless an ask is due)
-            if (viewGate.pollDue(millis())) pollViewSwitch(viewGate);
+            if (viewGate.pollDue(millis())) pollViewSwitch(viewGate, viewPollWatch);
         }
 
         const uint32_t nowMs = millis();

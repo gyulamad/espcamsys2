@@ -313,4 +313,48 @@ test('missingPictureNotice: any other state carries the reason from the view, wi
   assertTrue(!text.includes('DETECTOR_ID'));
 });
 
+// ── the live-view ask a silent detector cannot hear (F-33) ──────────────
+// Before F-33 the ask was answered with a plain ok on any detector, so the dashboard's button sat at
+// "… STARTING" for as long as the page was open while the board was gone — and nothing anywhere said why.
+
+test('lastHeardAt: the newest of the uplink and the check-in times, or null when never', () => {
+  assertEqual(ds.lastHeardAt(rec({ receivedAt: 5000, polledAt: 4000 })), 5000, 'the uplink is newer');
+  assertEqual(ds.lastHeardAt(rec({ receivedAt: 5000, polledAt: 9000 })), 9000, 'a resting check-in can be the newest');
+  assertEqual(ds.lastHeardAt(rec({ receivedAt: 0, polledAt: 0 })), null, 'nothing yet');
+  assertEqual(ds.lastHeardAt(undefined), null, 'no record at all');
+});
+
+test('unheardAskWarning: a connected detector hears the ask through its connection', () => {
+  assertEqual(ds.unheardAskWarning(rec({ connected: true, receivedAt: 0, polledAt: 0 }), 1000), null);
+});
+
+test('unheardAskWarning: a resting detector checks in every ~30 s, so its ask can be heard', () => {
+  const resting = rec({ connected: false, receivedAt: 1000, polledAt: 60000, polls: 3 });
+  assertEqual(ds.unheardAskWarning(resting, 60000 + 30000), null, 'it asked 30 s ago (within IDLE_STALE_MS)');
+  // ... and so does one that JUST stopped streaming: while streaming it checked in every few seconds
+  const justStopped = rec({ connected: false, receivedAt: 1000, polledAt: 97000, polls: 300 });
+  assertEqual(ds.unheardAskWarning(justStopped, 98000), null);
+});
+
+test('unheardAskWarning: a detector that stopped checking in says how long, and that the ask waits for it', () => {
+  const gone = rec({ connected: false, receivedAt: 1000, polledAt: 1000, lastDisconnectAt: 2000, lastDisconnectWhy: 'the board closed the connection' });
+  const now = 1000 + 13 * 3600 * 1000 + 22 * 60 * 1000;
+  const w = ds.unheardAskWarning(gone, now);
+  assertTrue(w.includes("has not checked in for 13 h 22 min"), w);
+  assertTrue(w.includes('the ask is kept for 90 s and will be picked up only if the detector comes back'), w);
+});
+
+test('unheardAskWarning: a detector never heard from says so', () => {
+  const fresh = rec({ connected: false, receivedAt: 0, polledAt: 0 });
+  const w = ds.unheardAskWarning(fresh, 1000);
+  assertTrue(w.includes('has never checked in with the relay'), w);
+});
+
+test('unheardAskWarning: the newest of the check-in and the uplink is what counts', () => {
+  // numbers arrived 2 min ago but the connection ended and the board no longer asks: it cannot hear the ask
+  const stale = rec({ connected: false, receivedAt: 90000, polledAt: 1000, lastDisconnectAt: 91000 });
+  const w = ds.unheardAskWarning(stale, 90000 + 120 * 1000);
+  assertTrue(w.includes('has not checked in for 2 min 0 s'), w);
+});
+
 summarize();

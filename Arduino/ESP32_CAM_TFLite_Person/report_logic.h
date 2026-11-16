@@ -719,6 +719,134 @@ private:
     bool polled_;
 };
 
+// ── The view poll's failures, in words ───────────────────────────────────
+// The poll (ViewGate) is how a resting detector hears that somebody wants to look. Every other path
+// of this firmware logs its failures with their cause and what to do about them; until F-33 the poll
+// was the one exception: a refused or unanswered poll was retried in silence. A board that was up and
+// well but could not check in then looked exactly like a board that was gone — the relay showed
+// "offline", its log had nothing but the dashboard's "no picture" lines, and a power cycle (which
+// cannot fix a refused poll) changed nothing. These three pieces give the poll the same voice the
+// uplink has: what happened, why, and what to do about it — said once, then repeated at intervals so
+// a long outage stays visible without flooding the log.
+
+// One poll outcome worth saying. `failingForMs` (0 on the first line of an outage) is how long the
+// polls have been failing, so a line that repeats the same cause still carries something new.
+struct ViewPollEvent {
+    enum Kind {
+        None,          // nothing to say (a failure already noted, not yet due to repeat)
+        NoAnswer,      // the request never got an answer (transport: code <= 0)
+        Refused,       // an HTTP error answer: `status` says which, the body's error says why
+        NotOurAnswer,  // HTTP 200 but not an answer of this kind (an older relay, a foreign page)
+        LegacySwitch,  // HTTP 404: an older relay without the live view switch (the board streams always)
+        Recovered      // answered again after failing
+    };
+    Kind kind = None;
+    int status = 0;             // Refused / LegacySwitch: the HTTP code; 0 when there is none
+    uint32_t failingForMs = 0;  // how long the polls have been failing (0: this is the first line)
+};
+
+// Collapses an outage of polls into one line per change and a repeat every stillFailingEveryMs.
+// `update(now, ok, status)`: ok = the relay answered and the answer was usable; status = the HTTP
+// code, or <= 0 when no answer came at all. Pure C++11, unit-tested (test_person_report_logic.cpp).
+class ViewPollWatch {
+public:
+    explicit ViewPollWatch(uint32_t stillFailingEveryMs = 5 * 60 * 1000)
+        : stillFailingEveryMs_(stillFailingEveryMs), failing_(false), failingSince_(0), lastNotedAt_(0) {}
+
+    ViewPollEvent update(uint32_t now, bool ok, int status) {
+        if (ok) {
+            if (!failing_) return ViewPollEvent();
+            ViewPollEvent e;
+            e.kind = ViewPollEvent::Recovered;
+            e.failingForMs = (uint32_t)(now - failingSince_);
+            failing_ = false;
+            return e;
+        }
+        if (!failing_) {
+            failing_ = true;
+            failingSince_ = now;
+            lastNotedAt_ = now;
+            return eventFor(status, 0);
+        }
+        if ((uint32_t)(now - lastNotedAt_) < stillFailingEveryMs_) return ViewPollEvent();
+        lastNotedAt_ = now;
+        return eventFor(status, (uint32_t)(now - failingSince_));
+    }
+
+    bool failing() const { return failing_; }
+
+private:
+    ViewPollEvent eventFor(int status, uint32_t forMs) {
+        ViewPollEvent e;
+        e.failingForMs = forMs;
+        if (status == 404) { e.kind = ViewPollEvent::LegacySwitch; e.status = status; return e; }
+        if (status == 200) { e.kind = ViewPollEvent::NotOurAnswer; e.status = status; return e; }
+        if (status > 0) { e.kind = ViewPollEvent::Refused; e.status = status; return e; }
+        e.kind = ViewPollEvent::NoAnswer;
+        return e;
+    }
+
+    uint32_t stillFailingEveryMs_;
+    bool failing_;
+    uint32_t failingSince_;
+    uint32_t lastNotedAt_;
+};
+
+// The log line for a poll outcome (None gives ""). `detail`: what the refusal's JSON said
+// (extractJsonError), the foreign body for NotOurAnswer, or the transport error for NoAnswer.
+// The fix hints mirror explainRefusal()'s, and the last sentence says what the outage costs the
+// dashboard: with the poll down, a WATCH ask cannot reach the board at all.
+inline std::string describeViewPollEvent(const ViewPollEvent& ev, const std::string& host, int port,
+                                         const std::string& detail = std::string()) {
+    if (ev.kind == ViewPollEvent::None) return std::string();
+    const std::string at = host + ":" + std::to_string(port);
+    const std::string failing = ev.failingForMs
+        ? std::string(" (the view polls have been failing for ") + formatDuration(ev.failingForMs) + ")"
+        : std::string();
+    switch (ev.kind) {
+        case ViewPollEvent::NoAnswer:
+            return "the view poll could not reach the relay at " + at +
+                   (detail.empty() ? std::string() : " (" + detail + ")") +
+                   " — relay down, wrong SERVER_HOST/HTTP_PORT, or a firewall" + failing +
+                   "; a WATCH ask cannot reach the board while this keeps failing";
+        case ViewPollEvent::Refused: {
+            const std::string d = detail.empty() ? std::string("no reason given") : detail;
+            switch (ev.status) {
+                case 401:
+                    return "the relay at " + at + " refused the view poll (HTTP 401): " + d +
+                           " — API_KEY on the board must equal camKey in the relay's config.js" + failing +
+                           "; a WATCH ask cannot reach the board while this keeps failing";
+                case 429:
+                    return "the relay at " + at + " refused the view poll (HTTP 429): " + d +
+                           " — locked out after wrong keys: is something else presenting this board's key?" + failing;
+                case 503:
+                    return "the relay at " + at + " cannot take this detector's view poll (HTTP 503): " + d + failing;
+                default:
+                    return "the relay at " + at + " answered the view poll with HTTP " + std::to_string(ev.status) +
+                           ": " + d + " — unexpected: update nodejs/camera-relay and this firmware" + failing;
+            }
+        }
+        case ViewPollEvent::NotOurAnswer:
+            return "the relay at " + at + " answered the view poll with something this firmware does not understand" +
+                   (detail.empty() ? std::string() : " ('" + printablePrefix(detail, 40) + "')") +
+                   " — probably a relay older than this firmware: update nodejs/camera-relay" + failing;
+        case ViewPollEvent::LegacySwitch:
+            return "the relay at " + at + " has no live view switch (HTTP 404) — probably an older relay: " +
+                   "the detector streams all the time until it is updated" + failing;
+        case ViewPollEvent::Recovered:
+            return "the view poll is answered again (it had been failing for " + formatDuration(ev.failingForMs) + ")";
+        case ViewPollEvent::None:
+        default:
+            return std::string();
+    }
+}
+
+// What level the poll's line is worth: an outage is a warning, the switch gone legacy and the
+// recovery are only notes.
+inline Level viewPollEventLevel(const ViewPollEvent& ev) {
+    return (ev.kind == ViewPollEvent::Recovered || ev.kind == ViewPollEvent::LegacySwitch) ? Level::Info : Level::Warn;
+}
+
 struct UplinkConfig {
     std::string host;
     int port = 0;

@@ -193,4 +193,32 @@ function missingPictureNotice(id, view, knownIds) {
     + ' — check that DETECTOR_ID on the board equals the detector paired with the camera in the dashboard\'s config.php';
 }
 
-module.exports = { parseStatus, parseArea, buildView, describeAge, missingPictureNotice, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };
+// When the relay last heard ANYTHING from this detector — a reading or a picture on the uplink, or a resting
+// check-in (the live-view poll) — as an epoch-ms time, or null when never. A live-view ask can only be picked up
+// by a detector that checks in, so this is what "the ask cannot be heard" is judged on.
+function lastHeardAt(det) {
+  if (!det) return null;
+  const times = [det.receivedAt, det.polledAt].filter((t) => Number.isFinite(t) && t > 0);
+  return times.length ? Math.max(...times) : null;
+}
+
+// What the relay says when it is asked for the live view of a detector that cannot hear the ask (F-33: the
+// button then sits at "… STARTING" for as long as the page is open, with nothing anywhere saying why), or
+// null while the ask CAN be heard:
+//   * a connected detector is reached through its uplink connection no matter when it last checked in;
+//   * a resting one asks the relay every ~30 s (idleFresh = it asked within IDLE_STALE_MS) and answers the
+//     ask at its next check-in — which is also true just after it stopped streaming, since a streaming board
+//     checks in every few seconds.
+// The ask is still recorded (detectorview.ask), because a detector that comes back within WANT_MS picks it up.
+function unheardAskWarning(det, now) {
+  if (!det) return null;
+  if (det.connected) return null;
+  if (detectorview.describe(det, now).idleFresh) return null;
+  const heard = lastHeardAt(det);
+  const keepS = Math.round(detectorview.WANT_MS / 1000);
+  const kept = `the ask is kept for ${keepS} s and will be picked up only if the detector comes back`;
+  if (heard === null) return `the detector has never checked in with the relay, so it cannot hear the ask — ${kept}`;
+  return `the detector has not checked in for ${describeAge(Math.max(0, now - heard))}, so it cannot hear the ask — ${kept}`;
+}
+
+module.exports = { parseStatus, parseArea, buildView, describeAge, missingPictureNotice, lastHeardAt, unheardAskWarning, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };

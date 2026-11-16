@@ -815,6 +815,15 @@ function describeSocketEnd(code) {
   return code;
 }
 
+// The relay itself ends a detector's connection on purpose (its messages were unusable): record that on the
+// socket, so the close handler says the relay dropped it instead of blaming the board. F-33: a disconnect
+// attributed to "the board closed the connection" sent the maintainer to power-cycle a board that was not
+// the problem — the relay's own actions must be explainable from its log alone.
+function dropDetectorSocket(socket, why) {
+  socket.detectorDropWhy = why;
+  socket.destroy();
+}
+
 // A detector authenticated while an older connection for the same id is still registered: it is either
 // still sending (two boards share an id — both stay, and the log says so) or gone quiet (the same board
 // reconnecting after its old connection died silently, typical on weak Wi-Fi — close the leftover).
@@ -839,7 +848,7 @@ function noteBadDetectorMessage(id, det, socket, why) {
   if (t.allow) detLog('WARN', id, `ignored an unusable message from the detector: ${why}${suppressedNote(t.suppressed)}`);
   if (det.badInARow >= MAX_BAD_MESSAGES_IN_A_ROW) {
     detLog('WARN', id, `${det.badInARow} unusable messages in a row — dropping the connection`);
-    socket.destroy();
+    dropDetectorSocket(socket, `the relay dropped the connection: ${det.badInARow} unusable messages in a row`);
   }
 }
 
@@ -972,7 +981,9 @@ function handleDetectorUpgrade(req, socket, head) {
 
   socket.on('close', (hadError) => {
     const wasCurrent = det.socket === socket;
-    const why = lastSocketError && lastSocketError.includes(' ') ? lastSocketError : describeSocketEnd(lastSocketError);
+    // A reason the relay recorded for dropping the socket itself comes first: the OS gave no error for a
+    // destroy() we asked for, and without this the line below would blame the board (see dropDetectorSocket).
+    const why = socket.detectorDropWhy || (lastSocketError && lastSocketError.includes(' ') ? lastSocketError : describeSocketEnd(lastSocketError));
     if (wasCurrent) {
       det.socket = null;
       det.connected = false;
@@ -1664,7 +1675,17 @@ app.post('/detector/:id/view', requireControlKeyForDevice, (req, res) => {
   detectorview.ask(det, action, now);
   if (action !== 'keep') detLog('INFO', id, `live view ${action === 'on' ? 'switched ON' : 'switched OFF'} by ${actorOf(req)}`);
   detectorBus.emit('change');
-  return res.json({ ok: true, view: detectorview.describe(det, now) });
+  const answer = { ok: true, view: detectorview.describe(det, now) };
+  // F-33: an ask only reaches a detector that checks in. When this one cannot hear it — not connected and no
+  // check-in for a while — say so at once, in the answer and (throttled) in the log; the dashboard's button
+  // would otherwise sit at "… STARTING" for as long as the page is open, with nothing anywhere saying why.
+  const warning = detectorstate.unheardAskWarning(det, now);
+  if (warning) {
+    answer.warning = warning;
+    const t = detectorViewThrottle.check(`${id}:unheard-ask`, now);
+    if (t.allow) detLog('WARN', id, `the dashboard asked for the live view, but the detector cannot hear it: ${warning}${suppressedNote(t.suppressed)}`);
+  }
+  return res.json(answer);
 });
 // ── end of the live view switch ──────────────────────────────────────────────
 

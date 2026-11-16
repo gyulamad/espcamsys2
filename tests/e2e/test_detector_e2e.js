@@ -242,6 +242,17 @@ async function main() {
     check('an unusable message is logged with the reason and does not drop the connection',
       !!(await waitFor(() => /WARN  e2e-detector-1@127\.0\.0\.1 \[relay\]: ignored an unusable message from the detector: gpio\.pin, scene\.\* and person\.detectAt\/clearAt must be numbers in range/.test(readLog()), 2000)) && !det.destroyed, readLog().slice(-700));
 
+    // ── 5b. 25 unusable messages in a row: the relay drops the connection, and owns up to it (F-33) ──
+    // Before F-33 the disconnect line after a relay-side drop blamed the board ("the board closed the
+    // connection"), sending whoever read the log to power-cycle a board that was not the problem.
+    const bad = await uplink('e2e-badr');
+    socks.push(bad.socket);
+    for (let i = 0; i < 25; i += 1) bad.socket.write(wire({ hello: 1 }, JPEG));
+    check('25 unusable messages in a row are dropped, and the log says the RELAY dropped them',
+      !!(await waitFor(() => /WARN  e2e-badr@127\.0\.0\.1 \[relay\]: 25 unusable messages in a row — dropping the connection/.test(readLog())
+        && /e2e-badr@127\.0\.0\.1 \[relay\]: detector disconnected after \d+s, \d+ pictures received \(the relay dropped the connection: 25 unusable messages in a row\)/.test(readLog()), 2000)), readLog().slice(-900));
+    check('the dropped socket is really closed', !!(await waitFor(() => bad.socket.destroyed, 2000)));
+
     // ── 6. a picture that never comes ───────────────────────────────────────────────────
     const mute = await uplink('e2e-nopic');
     socks.push(mute.socket);
@@ -265,7 +276,7 @@ async function main() {
     v = await openPicture('detector-1');
     check('asking for an id that does not exist is answered at once too', v.status === 200 && v.headMs < 1500, `${v.status} after ${v.headMs} ms`);
     check('...and the relay log lists the detectors that DO exist',
-      !!(await waitFor(() => /the dashboard asked for the picture of detector 'detector-1' but there is none: no detector called 'detector-1' has connected to the relay since it started \(detectors seen: e2e-detector-1, e2e-nopic\)/.test(readLog()), 2000)), readLog().slice(-600));
+      !!(await waitFor(() => /the dashboard asked for the picture of detector 'detector-1' but there is none: no detector called 'detector-1' has connected to the relay since it started \(detectors seen: e2e-badr, e2e-detector-1, e2e-nopic\)/.test(readLog()), 2000)), readLog().slice(-600));
     v.close();
     r = await request('GET', '/detectors');
     check('asking for a missing detector does not create it', r.json['detector-1'] === undefined);

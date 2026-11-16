@@ -110,7 +110,7 @@ async function main() {
     r = await dash(null);
     check('no action at all is a 400', r.status === 400, String(r.status));
     r = await dash('on');
-    check('ON is accepted and says it is wanted', r.status === 200 && r.json.ok === true && r.json.view.wanted === true, r.text);
+    check('ON is accepted and says it is wanted (the detector checks in, so no unheard warning)', r.status === 200 && r.json.ok === true && r.json.view.wanted === true && r.json.warning === undefined, r.text);
     r = await board();
     check('the board is now told to stream', r.text === 'view=1;stop=0;mins=10', r.text);
     r = await dash('keep');
@@ -137,6 +137,23 @@ async function main() {
     // the uplink closes: a resting detector is idle again
     u.socket.destroy();
     check('the board closes its uplink and keeps asking: idle again (not offline)', !!(await waitFor(async () => { await board(); return (await state())[ID].state === 'idle'; }, 12000)), JSON.stringify((await state())[ID]));
+
+    // F-33: an ask only reaches a detector that checks in. A detector that sent readings once and vanished
+    // (no uplink any more, and it never asked while resting) cannot hear the ask: the answer says so.
+    // (Before the id-limit test below: that one fills the relay with 64 ids, and a new detector is refused.)
+    const silent = await fake.uplink(PORT, 'e2e-view-silent', { key: KEY });
+    socks.push(silent.socket);
+    silent.socket.write(wire(status(), JPEG));
+    check('the silent detector connected and was heard from once', !!(await waitFor(async () => (await state())['e2e-view-silent'].online === true, 2000)));
+    silent.socket.destroy();
+    await sleep(6000);   // past STALE_MS: the readings are old, and it never checks in (no poll) -> it cannot hear an ask
+    r = await dash('on', 'e2e-view-silent');
+    check('ON on a detector that has gone silent is accepted, with a warning that names the silence',
+      r.status === 200 && r.json.ok === true && typeof r.json.warning === 'string' && /has not checked in for/.test(r.json.warning), r.text);
+    check('the relay logs that the ask cannot be heard', !!(await waitFor(() => /WARN  e2e-view-silent@127\.0\.0\.1 \[relay\]: the dashboard asked for the live view, but the detector cannot hear it: the detector has not checked in for/.test(readLog()), 2000)), readLog().slice(-500));
+    r = await dash('off', 'e2e-view-silent');
+    check('OFF carries the warning too: the stop is exactly another thing the detector cannot hear',
+      r.status === 200 && r.json.ok === true && typeof r.json.warning === 'string' && /has not checked in for/.test(r.json.warning), r.text);
 
     // the new detector id limit also applies to asking
     const many = [];
