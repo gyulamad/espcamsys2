@@ -673,6 +673,10 @@ heading "Shell tests (the sketch compile check, tools/compile_sketches.sh, again
 "$ROOT_DIR/tests/shell/test_compile_sketches.sh"
 [ $? -ne 0 ] && overall_status=1
 
+heading "Shell tests (deploy_all.sh and tools/deploy_plan_lib.sh, against fake deploy / ota / curl tools)"
+"$ROOT_DIR/tests/shell/test_deploy_all.sh"
+[ $? -ne 0 ] && overall_status=1
+
 heading "Shell tests (the output levels, tools/test_output.sh, and --verbose)"
 "$ROOT_DIR/tests/shell/test_test_output.sh"
 [ $? -ne 0 ] && overall_status=1

@@ -781,6 +781,27 @@ It writes the git revision into `fw_version.h` (gitignored, removed afterwards),
 - A build that boots but can't reach the relay (bad release) can't be rescued over the air: **recover by cable** (USB upload of a good build; settings are kept).
 - Plain HTTP on the relay's port for now, with the same trust as the rest of the camera traffic: anyone on the LAN who has the camera key could fetch the firmware, and the control key travels in clear to publish it. There is no signing, rollback or boot-loop protection yet; HTTPS is the planned next step.
 
+### Deploying a new version in one go: `deploy_all.sh`
+
+On the Pi, in the repository, as the user who runs the relay (not as root: the script asks for root by itself, for the dashboard copy only):
+
+```bash
+./deploy_all.sh --branch=master --dry-run     # what would be done: pulls nothing, changes nothing
+./deploy_all.sh --branch=master --run-tests   # the real thing: pull, tests, deploy
+```
+
+`--branch=NAME` makes the script do the pull itself: it fetches that branch of `origin`, checks it out and fast-forwards it, and what changed between the version **before** and **after** the pull is what gets deployed. It refuses to pull with uncommitted changes, or when the local branch has commits `origin` does not have (nothing is switched or deployed then). Without it, `git pull` yourself first and run `./deploy_all.sh`.
+
+It deploys only what changed since the version that is running, **in this order**, and stops at the first step that fails:
+
+1. `--run-tests`: `./run_tests.sh` (with `--no-sketch-compile` when no sketch changed). A failure stops everything before anything is touched.
+2. `php/` changed: `sudo ./deploy.sh`.
+3. A sketch's `settings_schema.h` changed: the settings are **staged on the relay** (`PUT /device-settings/<type>`) from `Arduino/templates/recorder.txt` (recorder) or `Arduino/templates/person.txt` (detector) — the files you keep from your first flash. The lines that are per board or secret (`WIFI`, `SERVER_HOST`, `HTTP_PORT`, `PUSH_PORT`, `API_KEY`, `CAMERA_ID`, `DETECTOR_ID`, `SETUP_PASSWORD`, `SETUP_MODE`) are **left out**: the relay never takes them from a fleet line, and a staged line can be fetched by every board of the type. A board that lacks a new setting then fills it in by itself after the update (see *Missing settings after a firmware update*). The staged fleet line is replaced by this one.
+4. A sketch changed: `./ota-deploy.sh recorder|detector|all --wait SECS` (default 600, change with `--wait`). Every camera of that type is updated and watched; one that does not come back stops the deploy.
+5. `nodejs/` changed: `npm ci` (only if `package.json` / the lockfile changed), then `POST /restart` and a wait until the relay answers again. The relay is the **last** on purpose: if a camera got a bad firmware, the relay is still the old, working one, so you can still reach the camera and put the last good version back. When the firmware step fails the script says so, does not restart the relay and prints the commands: `git checkout <old revision> && ./ota-deploy.sh <type> --wait SECS`.
+
+"Changed" is compared with the revision in `.deployed-rev` (written at the end of a good run, not for a tree with uncommitted changes); the first time with the version the Pi had before the pull (before `--branch` pulled, or else before your own `git pull`, `ORIG_HEAD`). Without any of these, name it with `--since REV`, or deploy everything with `--all`. Everything the script needs (`ota.conf`, the settings files, the tools) is checked **before** the first step, so a missing file does not leave a deploy half done. The restart needs the relay to run under systemd or pm2 (see `POST /restart`). Checking that the cameras stream and the dashboard works is still done by hand afterwards.
+
 ## Upgrading from the version with camera power on/off
 
 Cameras can no longer be switched off from the dashboard (pre-roll needs them streaming all the time), and the dashboard's "camera on" alarm setting is gone.
