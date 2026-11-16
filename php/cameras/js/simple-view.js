@@ -9,8 +9,10 @@
 // by hand, has its stale last picture covered with an "offline" message (js/camera-offline.js). A click on the picture
 // toggles full screen of the picture alone, the FULL SCREEN button toggles it for the whole page with the status line
 // (js/fullscreen.js). While the slideshow runs (it is on when the page opens), "NEXT IN n s" and a bar
-// under the picture show the time left before the next camera. The status line is a row that wraps on a
-// phone: every text in it that changes reserves the room of its widest wording (js/stable-text.js, F-35),
+// under the picture show the time left before the next camera; when the slideshow only HOLDS on the camera
+// on screen (it is recording, or it saw somebody) the bar stays and freezes instead of vanishing — its four
+// pixels would otherwise move the page whenever the red recording frame lights up. The status line is a row that
+// wraps on a phone: every text in it that changes reserves the room of its widest wording (js/stable-text.js, F-35),
 // so a change of value can never move the line breaks and hop the page.
 
 (function () {
@@ -109,12 +111,17 @@
   }
 
   // The slideshow's "time left" indicator: seconds in the status line and a bar under the picture that runs
-  // out. Both are hidden when no slideshow runs or it has nowhere to go (nothing to count down to).
+  // out. The seconds hide when there is nothing to count (their room is reserved, so hiding moves nothing).
+  // The bar cannot hide with them: it belongs to the slideshow MODE, not to whether a countdown runs this
+  // second — a camera that records (or saw somebody) holds the slideshow, and hiding the bar then would
+  // grow the picture by the bar's four pixels and hop the page, at the very moment the red recording frame
+  // lights up around it. While the slideshow holds, the bar freezes where it stands and runs on when the
+  // hold lifts. Stopping the slideshow with the button is the user's own decision: the bar goes with the mode.
   let lastFraction = 0;
   function renderCountdown(now, prio) {
     const left = slideshow ? S.countdown(slideshow.remainingMs(now, prio), slideshowMs) : null;
+    el('countdown-bar').hidden = !slideshow;
     el('countdown').hidden = left === null;
-    el('countdown-bar').hidden = left === null;
     if (left === null) return;
     el('countdown').textContent = S.countdownText(left.seconds);
     // Back to full after a switch must not slide up slowly: only the running-out is animated.

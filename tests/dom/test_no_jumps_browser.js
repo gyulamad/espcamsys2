@@ -11,6 +11,9 @@
 //     LONGER name): the status line keeps its height and the picture its room, every measure of them
 //   - the slideshow button's wider wording ("⏸ SLIDESHOW ON") and a change of the recording state move
 //     nothing either
+//   - the slideshow HOLDING on the camera that is on screen (it is recording: what the relay pushes when a
+//     recording starts) moves nothing either — the countdown bar stays with the slideshow instead of
+//     vanishing and growing the picture by its four pixels, and the seconds hide into their reserved room
 //   - the reservations are on the page before the first second has passed (countdown, recording state, screen
 //     state, slideshow button, camera title) and are at least as wide as what they show
 //   - the screen-state line is there from the first paint (not two seconds in), saying what holds the screen
@@ -96,6 +99,24 @@ async function main() {
       window.__advanceClock = (ms) => { offsetMs += ms; return base + offsetMs; };
       Date.now = () => base + offsetMs;
     });
+    // The mux transport, stubbed: js/mux-client.js's client is replaced by one that stands still, and the
+    // test pushes the cameras' recording state the way the relay does — through the page's REAL
+    // js/mux-pictures.js, whose js/mux-codec.js message format this mirrors ({ type, source, payload }).
+    // (The property is intercepted, not replaced: the real file's assignment lands in the empty setter, so
+    // nothing throws and the page loads exactly as it ships.)
+    await page.addInitScript(() => {
+      let onMessage = null;
+      Object.defineProperty(window, 'CamMuxClient', {
+        configurable: true,
+        get() {
+          return { create(options) { onMessage = options.onMessage; return { start() {}, restart() {}, stop() {}, state: () => 'live' }; } };
+        },
+        set() {},
+      });
+      window.__cameraStatus = (data) => {
+        if (onMessage) onMessage({ type: 3, source: 'state:cameras', payload: new TextEncoder().encode(JSON.stringify(data)) });
+      };
+    });
     await page.goto(ORIGIN + '/simple-view.php');
 
     const text = (sel) => page.$eval(sel, (el) => el.textContent);
@@ -143,6 +164,33 @@ async function main() {
     check('the slideshow button\'s wider wording (and RECORDING: ON) moves nothing',
       same(before.statusTop, atOn.statusTop) && same(before.statusHeight, atOn.statusHeight) && same(before.pictureTop, atOn.pictureTop) && same(before.pictureHeight, atOn.pictureHeight),
       JSON.stringify({ before, atOn }));
+
+    // The hold (F-35): the camera that is on screen starts recording — the relay pushes its state, the page
+    // shows RECORDING: ON, the red frame lights up around the picture, and the slideshow HOLDS on this
+    // camera (nothing to count down to). The countdown bar must stay with the slideshow: hiding it grew the
+    // picture by its four pixels — the hop that used to come with the frame's lighting-up. The seconds hide
+    // into their reserved room.
+    await page.evaluate(() => window.__cameraStatus({ 'cam-a': { recording: false }, 'cam-b': { recording: true } }));
+    await page.waitForFunction(() => document.getElementById('rec').textContent === 'RECORDING: ON');
+    const atHold = await page.evaluate(LAYOUT);
+    const holdState = await page.evaluate(() => ({
+      textHidden: document.getElementById('countdown').hidden,
+      barHidden: document.getElementById('countdown-bar').hidden,
+      frameOn: document.getElementById('picture-box').classList.contains('recording'),
+    }));
+    check('the hold (the camera on screen records) moves nothing',
+      same(before.statusTop, atHold.statusTop) && same(before.statusHeight, atHold.statusHeight) && same(before.pictureTop, atHold.pictureTop) && same(before.pictureHeight, atHold.pictureHeight),
+      JSON.stringify({ before, atHold }));
+    check('during the hold the seconds hide but the bar and the red frame stay', holdState.textHidden === true && holdState.barHidden === false && holdState.frameOn === true, JSON.stringify(holdState));
+
+    // The hold lifts the way it does live: the recording moves to the OTHER camera — the slideshow follows
+    // it (a camera that records is shown first), the countdown runs again, and nothing has moved.
+    await page.evaluate(() => window.__cameraStatus({ 'cam-a': { recording: true }, 'cam-b': { recording: false } }));
+    await page.waitForFunction(() => !document.getElementById('countdown').hidden && document.getElementById('countdown').textContent.startsWith('NEXT IN'));
+    const afterHold = await page.evaluate(LAYOUT);
+    check('when the hold lifts the countdown is back and nothing has moved',
+      same(before.statusTop, afterHold.statusTop) && same(before.statusHeight, afterHold.statusHeight) && same(before.pictureTop, afterHold.pictureTop) && same(before.pictureHeight, afterHold.pictureHeight),
+      JSON.stringify({ before, afterHold }));
 
     check('the page raised no script error', errors.length === 0, JSON.stringify(errors));
   } finally {

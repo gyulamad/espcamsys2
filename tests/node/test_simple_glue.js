@@ -282,22 +282,24 @@ test('countdown: a camera that starts recording is shown at once and its time st
   assertEqual(env.els.countdown.textContent, 'NEXT IN 10 s');
 });
 
-test('countdown: hidden while there is nowhere to go (the only recording camera stays), back when there is', async () => {
+test('countdown: while the slideshow holds (the only recording camera stays) the seconds hide and the bar stays — hiding it would hop the picture', async () => {
   const env = await started({ seconds: 10 });
   env.relay.status = { a: { recording: true } };
   await env.poll();
   env.els.slideshow.fire('click');
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true]);
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, false], 'the seconds hide, the bar stays with the slideshow (F-35: the bar\'s four pixels would move the picture at the very moment the recording frame lights up)');
   env.relay.status = { a: { recording: true }, b: { recording: true } };
   await env.poll();
-  assertEqual(env.els.countdown.hidden, false);
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [false, false], 'both back when there is somewhere to go');
 });
 
-test('countdown: one camera only — a slideshow with nowhere to go shows no indicator', async () => {
+test('countdown: one camera only — the seconds hide (nowhere to go) while the bar stays with the slideshow', async () => {
   const env = await started({ cameras: [CAMS[0]], seconds: 5 });
   env.els.slideshow.fire('click');
   await env.advance(1000, 2);
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true]);
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, false]);
+  env.els.slideshow.fire('click');
+  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true], 'the bar goes with the mode the user switched off');
 });
 
 test('view: the pager and the slideshow button do not touch full screen', async () => {
