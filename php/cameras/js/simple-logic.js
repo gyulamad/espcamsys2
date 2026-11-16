@@ -9,6 +9,8 @@
 //   isRecording     is a camera recording, from status.php's answer (the red frame of both pages)
 //   isOffline       is a camera known not to be connected (the slideshow skips it; the rule is camera-offline.js's)
 //   countdown       what the slideshow's "time left" indicator shows (whole seconds and the part of the time left)
+//   countdownText   the indicator's wording ("NEXT IN 9 s"); countdownTexts: every wording a slideshow of up to
+//                   so-and-so many seconds can show (the width the status line reserves, F-35)
 //   viewRequests    which detectors the slideshow must switch to live view (no values otherwise)
 //   priorities      how "interesting" each camera is right now, from the two status answers
 //   tier            the kinds of "interesting" that count as one: a person seen and a recording are both a human
@@ -233,11 +235,25 @@
     return { seconds: Math.ceil(left / 1000), fraction: left / intervalMs };
   }
 
+  // "NEXT IN 9 s" — the status line's text for the seconds countdown() gives. One place, so the page's
+  // indicator and the width it reserves (countdownTexts, F-35) can never disagree about the wording.
+  function countdownText(seconds) {
+    return 'NEXT IN ' + seconds + ' s';
+  }
+
+  // Every text countdownText() shows while a slideshow of up to `maxSeconds` counts down: the seconds run
+  // 1..maxSeconds, and the widest of them is the one with the most digits — maxSeconds itself. That is what
+  // the status line reserves the width of, so 10 s -> 9 s can never move the layout (F-35).
+  function countdownTexts(maxSeconds) {
+    if (typeof maxSeconds !== 'number' || !Number.isFinite(maxSeconds) || maxSeconds < 1) return [];
+    return [countdownText(Math.ceil(maxSeconds))];
+  }
+
   // 14:05:09 — the clock of the status line (local time, like the dashboard's).
   function formatClock(date) {
     const two = (n) => String(n).padStart(2, '0');
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, HUMAN_HOLD_MS, fitThumbnails, neighbor, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, tier, createHumanHold, nextByPriority, jumpTarget, createSlideshow, countdown, formatClock };
+  return { PRIORITY, HUMAN_HOLD_MS, fitThumbnails, neighbor, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, tier, createHumanHold, nextByPriority, jumpTarget, createSlideshow, countdown, countdownText, countdownTexts, formatClock };
 });

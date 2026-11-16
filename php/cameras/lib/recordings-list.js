@@ -274,7 +274,7 @@
         const btn = document.getElementById(elId(key));
         if (!btn) return;
         btn.disabled = disabled;
-        btn.textContent = text;
+        if (btn.textContent !== text) btn.textContent = text;   // nothing changed: touch nothing (F-35)
       };
       set('del-selected', n === 0, `🗑 DELETE SELECTED (${n})`);
       set('dl-selected', n === 0, `⬇ DOWNLOAD SELECTED (${n})`);
@@ -282,6 +282,20 @@
       const all = boxes(false), seen = boxes(true);
       set('sel-all', all.length === 0, all.length > 0 && all.every((b) => b.checked) ? '☐ UNSELECT ALL' : '☑ SELECT ALL');
       set('sel-seen', seen.length === 0, seen.length > 0 && seen.every((b) => b.checked) ? '☐ UNSELECT ALL SEEN' : '☑ SELECT ALL SEEN');
+    }
+
+    // The footer's buttons sit in a row that wraps on a phone, and their labels carry counts that change with
+    // the ticks: each reserves the room of the widest label it can show — at most every clip of the list ticked
+    // (F-35, js/stable-text.js). A page without the helper works; only the jumps are left.
+    function reserveFooterButtons(fileCount) {
+      const stable = root.CamStableText;
+      if (!stable || !(fileCount > 0)) return;
+      const n = String(fileCount);
+      stable.reserve(document.getElementById(elId('del-selected')), [`🗑 DELETE SELECTED (${n})`]);
+      stable.reserve(document.getElementById(elId('dl-selected')), [`⬇ DOWNLOAD SELECTED (${n})`]);
+      stable.reserve(document.getElementById(elId('sort-selected')), [`🧑 SORT OUT SELECTED (${n})`]);
+      stable.reserve(document.getElementById(elId('sel-all')), ['☑ SELECT ALL', '☐ UNSELECT ALL']);
+      stable.reserve(document.getElementById(elId('sel-seen')), ['☑ SELECT ALL SEEN', '☐ UNSELECT ALL SEEN']);
     }
 
     // "Select all" / "Select all seen": ticks every target, or — when they are all ticked already — unticks
@@ -540,6 +554,11 @@
     }
 
     // Loads and draws the list. A draw that fails shows a message in the panel instead of throwing.
+    // The list reloads itself while clips are being checked (schedulePoll), and the dashboard's panels reload
+    // when a recording ends: a redraw rebuilds EVERY row, and on a phone that moves everything below the panel
+    // — so a load whose data is exactly what is already drawn draws nothing (F-35). The data decides: the
+    // files, their seen/scan flags, the archive's state and what could not be loaded.
+    let lastDrawn = null;
     async function refresh() {
       try {
         const [{ files, failed }, archiveTotal] = await Promise.all([loadCameras(cams, fetchFn), loadArchiveTotal(cams, fetchFn)]);
@@ -548,6 +567,9 @@
         const archiveNodes = archived ? [archiveSection(archived)] : [];
         hooks.loaded(files, failed);
         schedulePoll(files);
+        const signature = JSON.stringify([files, failed, archiveTotal, archiveOpen, archived]);
+        if (signature === lastDrawn) return;
+        lastDrawn = signature;
         if (cams.length > 0 && failed.length === cams.length) {   // every camera failed (no cameras is just an empty list)
           setContent(empty('Could not load recordings.'));
           return;
@@ -562,6 +584,7 @@
         const keep = new Set(selected().map((p) => `${p.cam}/${p.filename}`));
         setContent(header(files.length, archiveTotal), ...archiveNodes, ...notice, ...files.flatMap((f) => row(f, keep)), footer());
         updateSelectionUI();
+        reserveFooterButtons(files.length);
       } catch (e) {
         setContent(empty('Could not load recordings.'));
       }

@@ -323,6 +323,8 @@ camtest_test('simpleViewPage: the picture, pager, status line and slideshow butt
     camtest_assert_true(strpos($html, 'class="nav-link" href="simple-list.php"') !== false && strpos($html, 'class="nav-link" href="./?layout=grid"') !== false, 'the navigation bar leads to the other pages');
     camtest_assert_true(strpos($html, '>▦ LIST<') === false && strpos($html, '>DASHBOARD<') === false, 'no second copy of those links in the status line');
     camtest_assert_true(strpos($html, '<script src="js/simple-view.js">') !== false && strpos($html, 'js/simple-logic.js') !== false);
+    camtest_assert_true(strpos($html, '<script src="js/stable-text.js">') !== false, 'the status line reserves the room of its widest wording (F-35)');
+    camtest_assert_true(strpos($html, 'js/stable-text.js') < strpos($html, 'js/simple-view.js'), 'the reservation helper loads before the page script that uses it');
     camtest_assert_true(layout_mux_scripts_before($html, 'js/simple-view.js'), 'the mux scripts, in order, before the view script');
     camtest_assert_true(strpos($html, 'js/relay-json.js') === false, 'nothing is polled: the helper that asks the relay is not loaded');
 });
@@ -340,7 +342,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 11);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, fullscreen.js, screen-keeper.js, simple-view.js, the storage warning and the setup-mode alert
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 12);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, fullscreen.js, screen-keeper.js, stable-text.js, simple-view.js, the storage warning and the setup-mode alert
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);

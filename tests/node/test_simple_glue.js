@@ -107,8 +107,8 @@ function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, ful
   env.mux = makeMux();
   env.offlineHelper = offlineHelper;   // false: js/camera-offline.js is not on the page
   const els = {};
-  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'fullscreen', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline']) els[id] = makeEl();
-  for (const id of ['countdown', 'countdown-bar', 'offline', 'fullscreen']) els[id].hidden = true;   // as the page is delivered
+  for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'fullscreen', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline', 'screen-state']) els[id] = makeEl();
+  for (const id of ['countdown', 'countdown-bar', 'offline', 'fullscreen', 'screen-state']) els[id].hidden = true;   // as the page is delivered
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -154,7 +154,7 @@ function install(env) {
 // until the test is over.
 function load(env, file) {
   env.windowListeners = {};
-  env.window = { CamSimple, CamOffline: env.offlineHelper ? CamOffline : undefined, CamMuxPictures: env.muxHelper ? env.mux.api : undefined, CamFullscreen: env.fullscreen, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
+  env.window = { CamSimple, CamOffline: env.offlineHelper ? CamOffline : undefined, CamMuxPictures: env.muxHelper ? env.mux.api : undefined, CamFullscreen: env.fullscreen, CamStableText: env.stable, CamScreenKeeper: env.keeper, innerHeight: 800, addEventListener(type, fn) { (env.windowListeners[type] = env.windowListeners[type] || []).push(fn); } };
   cleanups.push(install(env));
   delete require.cache[require.resolve(path.join(JS, file))];
   require(path.join(JS, file));
@@ -884,6 +884,61 @@ test('list: a page without the grid (no cameras) does nothing', () => {
   env.document.getElementById = () => null;
   load(env, 'simple-list.js');
   assertEqual(Object.keys(env.windowListeners).length, 0);
+});
+
+// ── F-35: the status line reserves the room of its widest wording (js/stable-text.js) ──
+
+test('view: the status line reserves the room of its widest wording before anything changes (F-35)', async () => {
+  const env = makeEnv({ seconds: 10 });
+  env.stable = { calls: [], reserve(el, texts) { this.calls.push(['reserve', el, texts]); }, reserveHeight(el, texts) { this.calls.push(['reserveHeight', el, texts]); } };
+  load(env, 'simple-view.js');
+  await env.run(async () => {});
+  const reserved = (el) => env.stable.calls.filter(([k, e]) => k === 'reserve' && e === el).map(([, , texts]) => texts);
+  assertEqual(reserved(env.els.countdown), [['NEXT IN 10 s']], 'the slideshow\'s own full time is the widest "NEXT IN … s"');
+  assertEqual(reserved(env.els.rec), [['RECORDING: –', 'RECORDING: ON', 'RECORDING: off']]);
+  assertEqual(reserved(env.els.slideshow), [['▶ SLIDESHOW', '⏸ SLIDESHOW ON']]);
+  assertEqual(reserved(env.els['screen-state']), [['SCREEN: KEPT ON', 'SCREEN: KEPT ON (VIDEO)', 'SCREEN: NOT HELD – TOUCH THE PAGE']]);
+  assertEqual(reserved(env.els['cam-name']), [['Alpha', 'Beta', 'Gamma']], 'the widest name of EVERY camera: the slideshow switches cameras');
+  assertEqual(reserved(env.els['cam-icon']), [['🚪', '🚗', '']], 'the icons of every camera (Gamma has none: the helper drops the empty one)');
+});
+
+test('view: no helper, no reservation — the page still works (F-35)', async () => {
+  const env = await started({ current: 'a', slideshowOn: true });
+  env.relay.status = { a: { recording: false } };
+  await env.poll();
+  assertEqual(env.els.rec.textContent, 'RECORDING: off');
+  await env.advance(1000);
+  assertEqual(env.els.countdown.textContent, 'NEXT IN 9 s');
+});
+
+test('view: the countdown says its seconds the one way the logic words it (F-35)', async () => {
+  const env = await started({ slideshowOn: true });
+  assertEqual(env.els.countdown.textContent, 'NEXT IN 10 s');
+  await env.advance(1000);
+  assertEqual(env.els.countdown.textContent, 'NEXT IN 9 s');
+  await env.advance(9000, 1);
+  assertEqual(env.els.countdown.textContent, 'NEXT IN 10 s', 'the next camera has its full time again');
+  assertEqual(env.els['cam-name'].textContent, 'Beta', 'the slideshow moved on');
+});
+
+test('view: the keeper says what holds the screen AT ONCE, in the width reserved for it (F-35)', async () => {
+  const env = makeEnv();
+  let how = 'none';
+  env.keeper = { create: () => ({ keepAwake() {}, method: () => how }) };
+  load(env, 'simple-view.js');
+  await env.run(async () => {});
+  assertEqual(env.els['screen-state'].hidden, false, 'shown with the page, not two seconds in');
+  assertEqual(env.els['screen-state'].textContent, 'SCREEN: NOT HELD – TOUCH THE PAGE');
+  how = 'wake-lock';
+  const everyTwo = env.intervals.find((i) => i.ms === 2000);
+  assertTrue(!!everyTwo, 'the keeper re-says it every two seconds');
+  await everyTwo.fn();
+  assertEqual(env.els['screen-state'].textContent, 'SCREEN: KEPT ON');
+});
+
+test('view: without the keeper nothing is said about the screen and nothing is unhidden (F-35)', async () => {
+  const env = await started({ current: 'a' });
+  assertTrue(env.els['screen-state'].hidden, 'the line stays hidden: there is nothing to say');
 });
 
 runAll();

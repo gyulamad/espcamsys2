@@ -640,6 +640,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <script src="js/camera-offline.js"></script>
 <script src="js/alarm-chain.js"></script>
 <script src="js/device-info.js"></script>
+<script src="js/stable-text.js"></script>
+<script src="js/switch-status.js"></script>
 <script>
   // ── Clock ──
   function tick() {
@@ -652,6 +654,27 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function getAllCameraIds() {
     return [...document.querySelectorAll('.cam-card')].map(el => el.id.replace('card-', ''));
   }
+
+  // ── F-35: the page must not move when a value changes ──
+  // The pills and buttons below sit in rows that wrap on a phone (flex-wrap), so a text whose WIDTH changes
+  // (LIVE -> CONNECTING, "9 s" left -> "59 s" left) can move where those rows break their lines and hop the
+  // whole page. Each of them reserves, once, the room of its widest wording (js/stable-text.js). The two
+  // countdowns whose widest wording depends on what the relay reports reserve when that arrives:
+  // reserveSwitchPill (the recording switch, on applySwitchState) and the REC pill (beginRecordCountdown).
+  function reserveStatusRows() {
+    const stable = window.CamStableText;
+    if (!stable) return;   // the page works without the helper: only the jumps are left
+    const ids = getAllCameraIds();
+    const n = ids.length;
+    for (const id of ids) {
+      stable.reserve(document.getElementById('pill-' + id), ['CONNECTING', 'LIVE', 'ERROR', 'HIDDEN']);
+      stable.reserve(document.getElementById('hide-' + id), ['✕ HIDE', '▶ SHOW']);
+      // the recordings count the relay reports is unbounded: reserved for four digits, whatever it does
+      stable.reserve(document.getElementById('files-btn-' + id), ['📼 FILES', '📼 FILES (9999)']);
+    }
+    stable.reserve(document.getElementById('switch-all-pill'), ['ALL ON', 'ALL OFF', `${n} of ${n} OFF`]);
+  }
+  reserveStatusRows();
 
   // ── Which preloader a camera's card shows ──
   // A card can have two: the stream overlay below (CONNECTING… / STREAM ERROR / FEED PAUSED) and the relay's
@@ -731,7 +754,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
   function setStatus(id, cls, label) {
     const pill = document.getElementById('pill-' + id);
-    pill.className = 'status-pill ' + cls;
+    const full = 'status-pill ' + cls;
+    if (pill.className === full && pill.textContent === label) return;   // nothing changed: touch nothing (F-35)
+    pill.className = full;
     pill.textContent = label;
   }
 
@@ -841,27 +866,26 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   const SWITCH_OFF_MINUTES = <?= (int) $switchOffMinutes ?>;   // from the SETTINGS page
   const switchState = {};   // camera id -> { forever, untilAt } while OFF (untilAt: this browser's clock, ms); absent = recording is ON
 
-  function formatRemaining(ms) {
-    const mins = Math.ceil(ms / 60000);
-    if (ms < 60000) return `${Math.max(1, Math.ceil(ms / 1000))} s`;
-    if (mins < 60) return `${mins} min`;
-    const h = Math.floor(mins / 60), m = mins % 60;
-    return m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, '0')} min`;
-  }
-
-  function switchLabel(st) {
-    if (!st) return { text: 'REC ON', off: false };
-    if (st.forever) return { text: 'REC OFF · until switched ON', off: true };
-    const left = Math.max(0, st.untilAt - Date.now());
-    const until = new Date(st.untilAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return { text: `REC OFF · ${formatRemaining(left)} left (until ${until})`, off: true };
+  // The words of the recording switch (formatRemaining, label) are CamSwitchStatus's (js/switch-status.js) —
+  // the same rules the tests run. The pill is a flex row item on a phone: its text changes every second while
+  // it counts down, so it reserves the room of its widest wording (F-35) at every state change.
+  function reserveSwitchPill(id, st) {
+    const pill = document.getElementById('sw-pill-' + id);
+    if (!window.CamStableText || !pill) return;
+    if (!st) { window.CamStableText.reserve(pill, ['REC ON']); return; }
+    const until = st.forever ? undefined : new Date(st.untilAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    window.CamStableText.reserve(pill, CamSwitchStatus.labelCandidates(st.forever ? 0 : Math.max(0, st.untilAt - Date.now()), until));
   }
 
   function renderSwitch(id) {
     const st = switchState[id];
-    const label = switchLabel(st);
+    const label = CamSwitchStatus.label(st, Date.now());
     const pill = document.getElementById('sw-pill-' + id);
-    if (pill && !cameraDataIsDown()) { pill.textContent = label.text; pill.className = 'switch-pill ' + (label.off ? 'off' : 'on'); }
+    const cls = 'switch-pill ' + (label.off ? 'off' : 'on');
+    if (pill && !cameraDataIsDown() && !(pill.textContent === label.text && pill.className === cls)) {
+      pill.textContent = label.text;
+      pill.className = cls;
+    }
     const rec = document.getElementById('rec-btn-' + id);
     if (rec) {
       rec.classList.toggle('switched-off', label.off);
@@ -875,15 +899,19 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     const off = ids.filter(id => switchState[id]).length;
     const pill = document.getElementById('switch-all-pill');
     if (!pill || cameraDataIsDown()) return;
-    if (off === 0)             { pill.textContent = 'ALL ON';                     pill.className = 'switch-pill on'; }
-    else if (off === ids.length) { pill.textContent = 'ALL OFF';                   pill.className = 'switch-pill off'; }
-    else                       { pill.textContent = `${off} of ${ids.length} OFF`; pill.className = 'switch-pill off'; }
+    const label = off === 0 ? ['ALL ON', 'switch-pill on']
+      : off === ids.length ? ['ALL OFF', 'switch-pill off']
+      : [`${off} of ${ids.length} OFF`, 'switch-pill off'];
+    if (pill.textContent === label[0] && pill.className === label[1]) return;   // nothing changed: touch nothing (F-35)
+    pill.textContent = label[0];
+    pill.className = label[1];
   }
 
   // `off` is what the relay reports for a camera: null (may record) or { forever, until, remainingMs }.
   function applySwitchState(id, off) {
     if (!off) delete switchState[id];
     else switchState[id] = { forever: !!off.forever, untilAt: off.forever ? null : Date.now() + off.remainingMs };
+    reserveSwitchPill(id, switchState[id]);
     renderSwitch(id);
     renderSwitchAll();
     renderAlarmChain(id);   // the alarm chain's last step is the switch: its OFF state is what silences an otherwise working chain
@@ -1112,6 +1140,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     let remaining = seconds;
     pill.classList.add('active');
     pill.textContent = `⏺ REC ${remaining}s`;
+    // The pill joins a flex row that wraps on a phone, and its seconds tick every second: reserve the room of
+    // its widest text (this countdown's own full time — its digits are the most any of its ticks will show) so
+    // the ticks cannot move the row's line breaks (F-35). A resync (an extended recording) reserves again.
+    if (window.CamStableText) window.CamStableText.reserve(pill, [`⏺ REC ${remaining}s`]);
 
     if (recordCountdowns[id]) clearInterval(recordCountdowns[id]);
     recordCountdowns[id] = setInterval(() => {
@@ -1172,7 +1204,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   function setFilesCount(id, count) {
     if (!Number.isInteger(count) || count < 0) return;
     const btn = document.getElementById('files-btn-' + id);
-    if (btn) btn.textContent = `📼 FILES (${count})`;
+    const text = `📼 FILES (${count})`;
+    if (btn && btn.textContent !== text) btn.textContent = text;   // nothing changed: touch nothing (F-35)
   }
 
   const recordingLists = {};   // camera id -> the list drawn in its panel
@@ -1269,8 +1302,8 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     setSwitchPillNoData(document.getElementById('switch-all-pill'));
   }
   function setSwitchPillNoData(pill) {
-    if (!pill) return;
-    pill.textContent = 'NO DATA';
+    if (!pill || (pill.textContent === CamSwitchStatus.NO_DATA && pill.className === 'switch-pill')) return;   // touch nothing twice (F-35)
+    pill.textContent = CamSwitchStatus.NO_DATA;
     pill.className = 'switch-pill';
   }
   // </camera-status-source>
@@ -1285,6 +1318,37 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // (the relay works it out: never connected, connection lost, no picture, ...).
   const detEl = (k, id) => document.getElementById('det' + k + '-' + id);
   const setW = (e, frac) => { e.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%'; };
+
+  // One of the detector's sub-lines: the full-width text under a bar. The text wraps into however many lines
+  // fit the card, so a change of wording (or of a number inside the sentence) can add or take a line — and
+  // everything below it in the card would hop (F-35). When the text changes, the line's height is reserved for
+  // what it now wraps to (js/stable-text.js); a taller reservation is never given back, so the height stays
+  // put from then on. `candidates` reserves for more than the current text when the page knows its widest wording.
+  function setDetSub(id, key, text, candidates) {
+    const el = detEl(key, id);
+    if (!el || el.textContent === text) return;   // nothing changed: touch nothing
+    el.textContent = text;
+    if (window.CamStableText) window.CamStableText.reserveHeight(el, candidates || [text]);
+  }
+  // The same, for a line whose text is not known yet: only the reservation, for the widest wording it may
+  // ever show, before the first readings arrive.
+  function reserveDetSub(id, key, candidates) {
+    const el = detEl(key, id);
+    if (!el || !window.CamStableText || !candidates) return;
+    window.CamStableText.reserveHeight(el, candidates);
+  }
+  // The sub-lines under the bars wrap into whole sentences: their height is reserved for the widest wording
+  // each can show before the first readings arrive (F-35). The formats are literal in renderDetector above,
+  // so the widest is computable; the motion line's wording depends on what the detector reports, so it
+  // reserves as it changes (setDetSub). Runs here, after detEl's own definition.
+  function reserveDetectorSubs() {
+    if (!window.CamStableText) return;   // the page works without the helper: only the jumps are left
+    for (const id of getAllCameraIds()) {
+      reserveDetSub(id, 'brightsub', ['darkness check off (DARK_THRESH=0)', 'dark below 255 (DARK_THRESH)']);
+      reserveDetSub(id, 'personsub', ['person at ≥ 100 % (DETECT_THRESH, red), clears below 100 % (CLEAR_THRESH, amber)']);
+    }
+  }
+  reserveDetectorSubs();
   function placeMark(e, frac) {
     if (frac === null) { e.style.display = 'none'; return; }
     e.style.display = ''; e.style.left = 'calc(' + Math.max(0, Math.min(1, frac)) * 100 + '% - 1px)';
@@ -1605,7 +1669,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       name: cameraNameOf(id),
       recorder: alarmChainRecorder[id],
       recorderError: alarmChainError[id] || null,
-      offLabel: switchState[id] ? switchLabel(switchState[id]).text : null,
+      offLabel: switchState[id] ? CamSwitchStatus.label(switchState[id], Date.now()).text : null,
     });
     el.textContent = verdict.text;
     el.className = 'det-sub alarmchain ' + verdict.level;
@@ -1629,6 +1693,9 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       alarmChainRecorder[id] = undefined;
       alarmChainError[id] = e.message;
     }
+    // The board answered after the page was already closed (a test tearing its window down): the document is
+    // gone with it, and touching it would crash whoever is left running. Nothing is drawn any more, then.
+    if (!document) return;
     renderAlarmChain(id);
   }
 
@@ -1679,7 +1746,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     detEl('bright', id).textContent = darkOn ? sc.brightness + '/' + eff.DARK_THRESH : sc.brightness;
     if (!isDragging(id, 'DARK_THRESH')) placeMark(detEl('brightmark', id), darkOn ? eff.DARK_THRESH / 255 : null);
     detEl('brightbar', id).className = 'fill' + (darkOn && sc.brightness < eff.DARK_THRESH ? ' warn' : '');
-    detEl('brightsub', id).textContent = darkOn ? 'dark below ' + eff.DARK_THRESH + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)';
+    setDetSub(id, 'brightsub', darkOn ? 'dark below ' + eff.DARK_THRESH + ' (DARK_THRESH)' : 'darkness check off (DARK_THRESH=0)');
 
     // Motion; the bar's scale is a fixed multiple of the REPORTED threshold (see nextMotionScale), so the stick
     // stays where it was put whatever the live readings do.
@@ -1691,10 +1758,10 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     if (!isDragging(id, 'MOTION_THRESH')) placeMark(detEl('motionmark', id), mOn ? eff.MOTION_THRESH / mScale : null);
     detEl('motionbar', id).className = 'fill' + (mOn && sc.motion >= limit ? ' hit' : '');
     const area = sc.area ? effectiveArea(sc.area, pd) : null;   // null: a detector from before the motion area
-    detEl('motionsub', id).textContent = (mOn
+    setDetSub(id, 'motionsub', (mOn
       ? 'moving at ≥ ' + limit + (limit > eff.MOTION_THRESH ? ' (raised by the auto-calibration; MOTION_THRESH ' + eff.MOTION_THRESH + ' is the lowest)' : ' (MOTION_THRESH)') + ', detection stays on ' + sc.holdS + ' s after (MOTION_HOLD_S)'
       : 'motion check off (MOTION_THRESH=0)') +
-      (area ? (isWholePicture(area) ? '; whole picture counts' : '; only inside the dashed area ' + fmtArea(area)) : '');
+      (area ? (isWholePicture(area) ? '; whole picture counts' : '; only inside the dashed area ' + fmtArea(area)) : ''));
     const box = detEl('area', id);
     box.hidden = !area;
     if (area) {
@@ -1712,7 +1779,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     detEl('personbar', id).className = 'fill' + (pe.detected ? ' hit' : '');
     if (!isDragging(id, 'DETECT_THRESH')) placeMark(detEl('persondetect', id), eff.DETECT_THRESH);
     if (!isDragging(id, 'CLEAR_THRESH')) placeMark(detEl('personclear', id), eff.CLEAR_THRESH);
-    detEl('personsub', id).textContent = 'person at ≥ ' + Math.round(eff.DETECT_THRESH * 100) + ' % (DETECT_THRESH, red), clears below ' + Math.round(eff.CLEAR_THRESH * 100) + ' % (CLEAR_THRESH, amber)';
+    setDetSub(id, 'personsub', 'person at ≥ ' + Math.round(eff.DETECT_THRESH * 100) + ' % (DETECT_THRESH, red), clears below ' + Math.round(eff.CLEAR_THRESH * 100) + ' % (CLEAR_THRESH, amber)');
     markPendingSticks(id);
     renderApplyBar(id);
 

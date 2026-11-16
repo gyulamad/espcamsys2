@@ -40,6 +40,7 @@ function run({ answers = [] } = {}) {
   const env = {
     document: { getElementById: (id) => (els[id] = els[id] || { id, hidden: true }) },
     CamOffline,
+    CamSwitchStatus: require('../../php/cameras/js/switch-status'),   // the real one: it is what the page runs
     CamWifi: { render: (el, wifi) => chips.push([el && el.id, wifi]) },
     CamDeviceInfo: { render: (el, device) => devices.push([el && el.id, device]) },
     isStatusMap: (data) => !!data && typeof data === 'object' && !Array.isArray(data) && !data.error,

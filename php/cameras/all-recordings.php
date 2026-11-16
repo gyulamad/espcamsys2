@@ -79,6 +79,7 @@ $cameraLabelsJson = json_encode(
 </main>
 
 <script src="js/busy.js"></script>
+<script src="js/stable-text.js"></script>
 <?= CamLayout::recordingsListScript() ?>
 <script>
   const CAMERA_LABELS = <?= $cameraLabelsJson ?>;

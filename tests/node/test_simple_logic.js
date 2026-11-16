@@ -521,6 +521,23 @@ test('countdown: out-of-range values are clamped, anything unusable is nothing t
   for (const bad of [0, -1, NaN, undefined, null]) assertEqual(S.countdown(5000, bad), null, String(bad));
 });
 
+test('countdownText: the wording the status line shows for the seconds left (F-35)', () => {
+  assertEqual(S.countdownText(10), 'NEXT IN 10 s');
+  assertEqual(S.countdownText(9), 'NEXT IN 9 s');
+  assertEqual(S.countdownText(0), 'NEXT IN 0 s');
+});
+
+test('countdownTexts: the width the status line reserves is the wording of the slideshow\'s own full time (F-35)', () => {
+  // the seconds of a slideshow run 1..maxSeconds, and the widest of them is the one with the most digits
+  assertEqual(S.countdownTexts(10), ['NEXT IN 10 s']);
+  assertEqual(S.countdownTexts(300), ['NEXT IN 300 s']);
+  assertEqual(S.countdownTexts(9), ['NEXT IN 9 s']);
+  assertEqual(S.countdownTexts(2.4), ['NEXT IN 3 s']);   // a fractional setting counts up to its ceiling
+  assertEqual(S.countdownTexts(0), []);
+  assertEqual(S.countdownTexts(-1), []);
+  assertEqual(S.countdownTexts(NaN), []);
+});
+
 // ── formatClock ──────────────────────────────────────────────────────
 
 test('formatClock: HH:MM:SS with leading zeros', () => {
