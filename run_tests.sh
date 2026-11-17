@@ -106,6 +106,14 @@ if [ -z "${RUN_TESTS_FILTERED:-}" ]; then
         "${BASH_SOURCE[0]}" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
 fi
 
+# On CI (Actions sets GITHUB_ACTIONS) the raw output of the whole run is kept in
+# a file: the annotations at the end of a failed run are picked from it (see the
+# end of this script). A developer run captures nothing and prints nothing extra.
+if [ -n "${RUN_TESTS_FILTERED:-}" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    RUN_TESTS_LOG="$(mktemp "${TMPDIR:-/tmp}/run_tests.ci.XXXXXXXX.log")"
+    exec > >(tee "$RUN_TESTS_LOG") 2>&1
+fi
+
 # Instrumentation flags are only added when coverage was asked for, so a
 # normal run builds exactly as before.
 COV_FLAGS=()
@@ -1338,5 +1346,37 @@ else
     echo "ONE OR MORE TEST SUITES FAILED"
 fi
 hr
+
+# A red run on CI must name its failures without any login: the job log needs a
+# GitHub session to read ("Sign in to view logs"), but check-run annotations are
+# public (the checks page and the API serve them to anyone). Each ::error:: line
+# below becomes an error annotation on the run's checks: the first names the
+# environment that ran the tests (so a runner-image or toolchain change can be
+# told from a code change), the rest are the failing lines themselves. GitHub
+# caps how many annotations a step may carry, so the list stops at 10.
+if [ "$overall_status" -ne 0 ] && [ -n "${RUN_TESTS_LOG:-}" ] && [ -s "$RUN_TESTS_LOG" ]; then
+    ci_annotate() {
+        # A workflow command's message may not carry a bare %, CR or LF, and an
+        # annotation is small: escape, then cut the line to a safe length.
+        printf '::error::%s\n' "$(printf '%s' "$1" \
+            | sed -e 's/%/%25/g' -e 's/\r//g' \
+            | awk '{ print substr($0, 1, 400) }')"
+    }
+    ci_os="unknown"
+    [ -r /etc/os-release ] && . /etc/os-release && ci_os="${PRETTY_NAME:-unknown}"
+    ci_php="$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo none)"
+    ci_node="$(node -v 2>/dev/null || echo none)"
+    ci_cli="$(arduino-cli version 2>/dev/null | sed -n 's/.*Version: *//;s/ .*//p')"
+    ci_annotate "run_tests: red on $ci_os, php $ci_php, node $ci_node, arduino-cli ${ci_cli:-none}"
+    grep -E '^\[FAIL\]|^FAIL:' "$RUN_TESTS_LOG" | sort -u | head -9 \
+        | while IFS= read -r line; do ci_annotate "$line"; done
+    # A suite that died without printing a [FAIL] line (a crash, a tool missing
+    # beyond the checks above): the last real lines of the run say what happened.
+    if ! grep -qE '^\[FAIL\]|^FAIL:' "$RUN_TESTS_LOG"; then
+        grep -vE '^[.[:space:]]*$' "$RUN_TESTS_LOG" | tail -9 \
+            | while IFS= read -r line; do ci_annotate "$line"; done
+    fi
+    rm -f "$RUN_TESTS_LOG"
+fi
 
 exit "$overall_status"
