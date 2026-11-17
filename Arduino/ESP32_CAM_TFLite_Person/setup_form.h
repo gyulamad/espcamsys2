@@ -566,7 +566,7 @@ public:
     // hardware random generator). The schema must have SETUP_MODE and SETUP_PASSWORD: without them
     // the board could never leave the default password, so the form refuses to work at all.
     SetupForm(const Schema& schema, ISettingsStore& store, const FormConfig& cfg, const std::string& csrfToken)
-        : schema_(schema), store_(store), cfg_(cfg), token_(csrfToken), saved_(false), exited_(false) {}
+        : schema_(schema), store_(store, schema.meta, schema.metaCount), cfg_(cfg), token_(csrfToken), saved_(false), exited_(false) {}
 
     // method: "GET" / "POST" (case-sensitive, as on the wire); target: the request target (path and
     // optional ?query, which is ignored); body: the request body, already limited by the server.
@@ -672,7 +672,7 @@ private:
     }
 
     const Schema& schema_;
-    ISettingsStore& store_;
+    DefaultingStore store_;   // the flash with the schema's defaults: the page shows what the board really uses
     FormConfig cfg_;
     std::string token_;
     bool saved_;

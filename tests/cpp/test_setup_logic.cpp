@@ -28,9 +28,9 @@ static const KeyDef KEYS[] = {
     { "SETUP_MODE",     Kind::Bool,   0, 0,     Cond::Always, nullptr, nullptr, "switch" },
     { "SETUP_PASSWORD", Kind::Secret, 0, 0,     Cond::Always, nullptr, nullptr, "master password" },
 };
-static const Schema SCHEMA = { KEYS, sizeof(KEYS) / sizeof(KEYS[0]), nullptr };
+static const Schema SCHEMA = { KEYS, sizeof(KEYS) / sizeof(KEYS[0]), nullptr, nullptr, 0 };
 // A schema from an older firmware that has neither new key.
-static const Schema OLD_SCHEMA = { KEYS, 5, nullptr };
+static const Schema OLD_SCHEMA = { KEYS, 5, nullptr, nullptr, 0 };
 
 static std::vector<std::string> prereq() {
     static const char* const k[] = { "WIFI", "SERVER_HOST", "HTTP_PORT", "API_KEY", "CAMERA_ID" };

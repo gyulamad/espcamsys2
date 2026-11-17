@@ -284,6 +284,12 @@ struct JpegQualityAdapter {
     int current = 12;
     int fastStreak = 0;
     bool enabled = true;  // false: hold the configured quality, never adapt (the JPEG_Q_DROP setting)
+    // How hard it reacts: settings (Q_DEGRADE_STEP, Q_RECOVER_STEP, Q_FAST_STREAK, Q_VSLOW_FACTOR); the
+    // defaults are the values it always had.
+    int degradeStep = JPEG_QUALITY_DEGRADE_STEP;
+    int recoverStep = JPEG_QUALITY_RECOVER_STEP;
+    int fastStreakNeeded = JPEG_QUALITY_FAST_STREAK;
+    unsigned long verySlowFactor = JPEG_QUALITY_VERY_SLOW_FACTOR;
 };
 
 inline JpegQualityAdapter makeJpegQualityAdapter(int best, int worst) {
@@ -306,8 +312,8 @@ inline int adaptJpegQuality(JpegQualityAdapter &a, unsigned long pushMs, bool pu
     if (!a.enabled) return a.current;   // JPEG_Q_DROP=0: the link never moves the quality
     if (!pushOk || pushMs > slowMs) {
         a.fastStreak = 0;
-        int step = JPEG_QUALITY_DEGRADE_STEP;
-        if (!pushOk || pushMs > slowMs * JPEG_QUALITY_VERY_SLOW_FACTOR) step *= 2;
+        int step = a.degradeStep;
+        if (!pushOk || pushMs > slowMs * a.verySlowFactor) step *= 2;
         a.current = a.current + step > a.worst ? a.worst : a.current + step;
         return a.current;
     }
@@ -315,9 +321,9 @@ inline int adaptJpegQuality(JpegQualityAdapter &a, unsigned long pushMs, bool pu
         a.fastStreak = 0;
         return a.current;
     }
-    if (++a.fastStreak < JPEG_QUALITY_FAST_STREAK) return a.current;
+    if (++a.fastStreak < a.fastStreakNeeded) return a.current;
     a.fastStreak = 0;
-    a.current = a.current - JPEG_QUALITY_RECOVER_STEP < a.best ? a.best : a.current - JPEG_QUALITY_RECOVER_STEP;
+    a.current = a.current - a.recoverStep < a.best ? a.best : a.current - a.recoverStep;
     return a.current;
 }
 
@@ -344,6 +350,9 @@ struct FrameSizeLadder {
     int worst = 0;       // the smallest rung: never drop below it
     int current = 0;     // the rung in use
     int fastStreak = 0;  // fast pushes in a row while eligible to climb
+    // Settings (SIZE_UP_STREAK, Q_VSLOW_FACTOR); the defaults are the values it always had.
+    int upStreakNeeded = FRAME_SIZE_UP_FAST_STREAK;
+    unsigned long verySlowFactor = JPEG_QUALITY_VERY_SLOW_FACTOR;
 };
 
 inline FrameSizeLadder makeFrameSizeLadder(int best, int worst) {
@@ -372,7 +381,7 @@ inline FrameSizeLadder makeFrameSizeLadder(int best, int worst) {
 inline int adaptFrameSize(FrameSizeLadder &l, bool qualityExhausted, bool qualityAtFinest,
                           unsigned long pushMs, bool pushOk,
                           unsigned long slowMs, unsigned long fastMs) {
-    if (qualityExhausted && (!pushOk || pushMs > slowMs * JPEG_QUALITY_VERY_SLOW_FACTOR)) {
+    if (qualityExhausted && (!pushOk || pushMs > slowMs * l.verySlowFactor)) {
         l.fastStreak = 0;
         if (l.current >= l.worst) return l.current; // already the smallest rung
         l.current++;
@@ -381,7 +390,7 @@ inline int adaptFrameSize(FrameSizeLadder &l, bool qualityExhausted, bool qualit
 
     if (qualityAtFinest && l.current > l.best) {
         if (pushOk && pushMs < fastMs) {
-            if (++l.fastStreak >= FRAME_SIZE_UP_FAST_STREAK) {
+            if (++l.fastStreak >= l.upStreakNeeded) {
                 l.fastStreak = 0;
                 l.current--;
             }

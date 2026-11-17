@@ -88,7 +88,6 @@ bool cameraReady = false;
 // setup would actually want to change. The actual debounce state machine
 // lives in logic.h (alarmDebounceUpdate()) — this is just its persistent
 // state across loop() calls.
-const unsigned long ALARM_DEBOUNCE_MS = 50;
 // Set from the pin interrupt (onAlarmEdge), consumed in checkAlarmTrigger().
 // The ISR only latches "an edge happened", so a quick press is never lost
 // even when loop() is slow (frame push + delay).
@@ -98,12 +97,11 @@ volatile unsigned long alarmLastIsrMs = 0;
 // relay keeps extending the recording instead of letting it run out under a
 // sensor that is still alarming (see alarmHoldUpdate() in logic.h). Must stay
 // below the relay's alarmRecordSeconds, whose minimum is 1 s.
-const unsigned long ALARM_HOLD_REFRESH_MS = 1000;
 AlarmHoldState alarmHold;
 
 void IRAM_ATTR onAlarmEdge() {
   unsigned long now = millis();
-  if (now - alarmLastIsrMs < ALARM_DEBOUNCE_MS) return;  // lockout against contact bounce
+  if (now - alarmLastIsrMs < g_cfg.alarmDebounceMs) return;  // lockout against contact bounce
   alarmLastIsrMs = now;
   alarmPending = true;
 }
@@ -232,7 +230,7 @@ bool postLogBatch(const std::string &body, String &detail) {
   HTTPClient http;
   std::string url = buildLogUrl(g_cfg.serverHost, g_cfg.httpPort);
   http.begin(String(url.c_str()));
-  http.setTimeout(5000);
+  http.setTimeout(g_cfg.httpTimeoutMs);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
   int code = http.POST((uint8_t *)body.data(), body.size());
@@ -355,11 +353,9 @@ void otaStart() {
 // itself slow and loses the frame — so it is worth riding out a bad few seconds
 // first. (The relay's "is this a second sender?" window must stay shorter than
 // this: see LIVE_WINDOW_MS in nodejs/camera-relay/lib/connection.js.)
-const unsigned long PUSH_WRITE_TIMEOUT_MS = 8000;
-const unsigned long PUSH_SLOW_WARN_MS = 2000;   // a frame that takes longer than this to push is worth a warning —
-                                                // and is also when the frames start to be made smaller
-const unsigned long PUSH_FAST_MS = 600;         // pushes faster than this, for a while, let the picture improve again
-const unsigned long PUSH_MAX_GAP_MS = 1000;     // the pause after a push never exceeds this, however slow it was
+// PUSH_WR_TMO_MS, PUSH_SLOW_MS, PUSH_FAST_MS and PUSH_MAX_GAP_MS are settings (g_cfg.push*Ms): a frame that takes
+// longer than PUSH_SLOW_MS is worth a warning and is when the frames start to be made smaller; faster than
+// PUSH_FAST_MS, for a while, lets the picture improve again; the pause after a push never exceeds PUSH_MAX_GAP_MS.
 
 // Weak WiFi can't carry full-size frames, so the JPEG quality adapts to the
 // link (see adaptJpegQuality() in logic.h). Quality numbers: LOWER = better
@@ -419,7 +415,7 @@ size_t writePushBytes(const uint8_t *data, size_t len) {
     if (n > 0) {
       total += n;
       lastProgress = millis();
-    } else if (writeStalled(lastProgress, millis(), PUSH_WRITE_TIMEOUT_MS)) {
+    } else if (writeStalled(lastProgress, millis(), g_cfg.pushWriteTimeoutMs)) {
       break; // truly stuck — give up rather than hang loop() indefinitely
     }
     // Yield on every iteration, not only when write() returned 0: a frame
@@ -482,7 +478,7 @@ void sendAlarmRequest(const String &id) {
   HTTPClient http;
   std::string url = buildAlarmUrl(g_cfg.serverHost, g_cfg.httpPort, id.c_str());
   http.begin(String(url.c_str()));
-  http.setTimeout(5000);
+  http.setTimeout(g_cfg.httpTimeoutMs);
   // Send the camera key so the relay can authenticate this request (review
   // NODE-H1 / COMBINED-H3): the alarm HTTP route is no longer keyless by
   // default. Old relays ignore the header; new relays require it.
@@ -574,7 +570,7 @@ void checkAlarmTrigger() {
 
   bool edge = alarmPending;
   alarmPending = false;
-  if (!alarmHoldUpdate(alarmHold, edge, alarmInputActive(), millis(), ALARM_HOLD_REFRESH_MS)) return;
+  if (!alarmHoldUpdate(alarmHold, edge, alarmInputActive(), millis(), g_cfg.alarmHoldMs)) return;
 
   if (edge) RLOG_INFO("alarm input triggered");
   triggerAlarmRecording(!edge);
@@ -639,7 +635,13 @@ bool initCamera() {
   // here from g_cfg, which the boot flow loaded before initCamera() ran.
   jpegQuality = makeJpegQualityAdapter(g_cfg.jpegQualityMin, g_cfg.jpegQualityMax);
   jpegQuality.enabled = g_cfg.jpegQualityDrop;
+  jpegQuality.degradeStep = g_cfg.qualityDegradeStep;
+  jpegQuality.recoverStep = g_cfg.qualityRecoverStep;
+  jpegQuality.fastStreakNeeded = g_cfg.qualityFastStreak;
+  jpegQuality.verySlowFactor = g_cfg.qualityVerySlowFactor;
   frameSize = makeFrameSizeLadder(frameSizeLadderIndex(config.frame_size), FRAME_SIZE_LADDER_LEN - 1);
+  frameSize.upStreakNeeded = g_cfg.sizeUpStreak;
+  frameSize.verySlowFactor = g_cfg.qualityVerySlowFactor;
 
   // Orientation: set explicitly (not left to driver defaults) and keep it
   // identical to ESP32_CAM_TFLite_Person, so the live video and the AI
@@ -647,8 +649,8 @@ bool initCamera() {
   // differently, change BOTH sketches together (vflip + hmirror = 180°).
   sensor_t *sensor = esp_camera_sensor_get();
   if (sensor) {
-    sensor->set_vflip(sensor, 0);
-    sensor->set_hmirror(sensor, 0);
+    sensor->set_vflip(sensor, g_cfg.camVflip ? 1 : 0);
+    sensor->set_hmirror(sensor, g_cfg.camHmirror ? 1 : 0);
   }
   return true;
 }
@@ -714,7 +716,7 @@ String maskedSsid() {
 }
 void connectWifi() {
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);   // disable modem-sleep power saving — it's the other
+  WiFi.setSleep(g_cfg.wifiSleep);   // WIFI_SLEEP=0: disable modem-sleep power saving — it's the other
                           // big source of added latency on ESP32 WiFi
 
   for (size_t i = 0; i < g_cfg.wifi.size(); i++) {
@@ -760,7 +762,7 @@ public:
                       "/device-settings/" + type_ + "/" + store_.get(idKey_) + "?need=" + needKeys;
     HTTPClient http;
     http.begin(String(url.c_str()));
-    http.setTimeout(5000);
+    http.setTimeout(g_cfg.httpTimeoutMs);
     http.addHeader("X-Api-Key", store_.get("API_KEY").c_str());
     int code = http.GET();
     esp32cam_settings::FetchResult result = esp32cam_settings::FetchResult::Failed;
@@ -853,11 +855,9 @@ void restartBoard() {
 // form or leaves setup mode (all of it in setup_boot.h, unit-tested). A board that is neither is left
 // exactly as it was: `setupBoot` then does nothing at all.
 void setupSettings() {
-  PreferencesStore flash;
-  // Every setting that used to be fixed in the code has a default: the board uses it until something is stored.
-  esp32cam_settings::DefaultingStore store(flash, esp32cam_settings::RECORDER_META, esp32cam_settings::RECORDER_META_COUNT);
+  PreferencesStore store;   // the schema carries the defaults of the settings that used to be fixed in the code
   SerialConsole console;
-  if (!flash.ok()) {
+  if (!store.ok()) {
     Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
   }
 
@@ -913,14 +913,12 @@ void setupSettings() {
 // settings_sync.h is only the HTTP part. Names only in the log: values can be passwords.
 #include "settings_sync.h"
 
-static PreferencesStore* g_syncFlash = nullptr;
-static esp32cam_settings::DefaultingStore* g_syncStore = nullptr;
+static PreferencesStore* g_syncStore = nullptr;
 static SettingsSync* g_sync = nullptr;
 
 void settingsSyncTick() {
   if (!g_sync) {   // created on first use, in the task that uses it
-    g_syncFlash = new PreferencesStore();
-    g_syncStore = new esp32cam_settings::DefaultingStore(*g_syncFlash, esp32cam_settings::RECORDER_META, esp32cam_settings::RECORDER_META_COUNT);
+    g_syncStore = new PreferencesStore();
     g_sync = new SettingsSync(esp32cam_settings::RECORDER_SCHEMA, *g_syncStore, "recorder", esp32cam_settings::recorderLockedKeys());
   }
   if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId)) {
@@ -939,7 +937,6 @@ void settingsSyncTick() {
 #define RELAY_FIND_WARN(...) RLOG_WARN(__VA_ARGS__)
 #include "relay_find.h"
 
-static const uint32_t RELAY_DOWN_MS = 30000;
 static PreferencesStore* g_findStore = nullptr;
 static RelayFind* g_find = nullptr;
 
@@ -948,7 +945,7 @@ void relayFindTick() {
     g_findStore = new PreferencesStore();
     g_find = new RelayFind(*g_findStore);
   }
-  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), RELAY_DOWN_MS))) restartBoard();
+  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), g_cfg.relayDownMs))) restartBoard();
 }
 // ── end of finding the relay again ──────────────────────────────────────
 
@@ -1096,7 +1093,7 @@ void readRelayBytes() {
 void reportWifiIfDue() {
   if (!relaySupportsWifiInfo || !pushClient.connected() || WiFi.status() != WL_CONNECTED) return;
   unsigned long now = millis();
-  if (!wifiReportDue(now, g_wifiReportedAt, g_wifiReported)) return;
+  if (!wifiReportDue(now, g_wifiReportedAt, g_wifiReported, g_cfg.wifiReportMs)) return;
   uint8_t msg[WIFI_MESSAGE_MAX_LEN];
   size_t len = encodeWifiMessage(std::string(WiFi.SSID().c_str()), WiFi.RSSI(), msg);
   g_wifiReported = true;   // whether or not there was something to say: the next look is one interval away
@@ -1143,7 +1140,7 @@ bool applyFrameSize(int rung) {
 // of a connection that keeps breaking.
 void adaptJpegQualityToLink(unsigned long pushMs, bool pushOk) {
   int before = jpegQuality.current;
-  int after = adaptJpegQuality(jpegQuality, pushMs, pushOk, PUSH_SLOW_WARN_MS, PUSH_FAST_MS);
+  int after = adaptJpegQuality(jpegQuality, pushMs, pushOk, g_cfg.pushSlowMs, g_cfg.pushFastMs);
   if (after == before) return;
 
   applyJpegQuality(after);
@@ -1167,7 +1164,7 @@ void adaptFrameSizeToLink(unsigned long pushMs, bool pushOk) {
   adaptFrameSize(frameSize,
                  qualityExhausted,
                  jpegQuality.current == jpegQuality.best,
-                 pushMs, pushOk, PUSH_SLOW_WARN_MS, PUSH_FAST_MS);
+                 pushMs, pushOk, g_cfg.pushSlowMs, g_cfg.pushFastMs);
   if (frameSize.current == before) return;
 
   if (!applyFrameSize(frameSize.current)) {
@@ -1208,7 +1205,7 @@ unsigned long pushFrame(const camera_fb_t *fb) {
     pushClient.stop();
     return pushMs;
   }
-  if (pushMs > PUSH_SLOW_WARN_MS) warnSlowPush(pushMs, len);
+  if (pushMs > g_cfg.pushSlowMs) warnSlowPush(pushMs, len);
   return pushMs;
 }
 
@@ -1256,5 +1253,5 @@ void loop() {
   // it -> backs off automatically instead of adding to the jam — but only up
   // to PUSH_MAX_GAP_MS: on a weak link the push itself is already the slow
   // part, and a long pause just makes the picture older.
-  delay(computePushDelayMs(pushMs, g_cfg.pushGapMul, PUSH_MAX_GAP_MS));
+  delay(computePushDelayMs(pushMs, g_cfg.pushGapMul, g_cfg.pushMaxGapMs));
 }

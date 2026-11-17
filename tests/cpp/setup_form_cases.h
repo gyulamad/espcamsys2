@@ -55,6 +55,8 @@ struct ExtendedSchema {
         schema.keys = keys.data();
         schema.count = keys.size();
         schema.crossCheck = base.crossCheck;
+        schema.meta = base.meta;
+        schema.metaCount = base.metaCount;
     }
 private:
     ExtendedSchema(const ExtendedSchema&);
@@ -166,11 +168,14 @@ static FormConfig makeConfig() {
 }
 
 struct Env {
-    RecordingStore st;
+    RecordingStore st;          // the flash itself: what was really stored
+    DefaultingStore view;       // what the board reads: the flash, else the defaults (as in the sketches)
     SetupForm form;
-    Env() : form(extended(), st, makeConfig(), TOKEN) {}
-    explicit Env(const std::string& token) : form(extended(), st, makeConfig(), token) {}
-    Env(const Schema& schema, bool) : form(schema, st, makeConfig(), TOKEN) {}
+    Env() : view(st, SetupFixture::meta(), SetupFixture::metaCount()), form(extended(), st, makeConfig(), TOKEN) {}
+    explicit Env(const std::string& token)
+        : view(st, SetupFixture::meta(), SetupFixture::metaCount()), form(extended(), st, makeConfig(), token) {}
+    Env(const Schema& schema, bool)
+        : view(st, SetupFixture::meta(), SetupFixture::metaCount()), form(schema, st, makeConfig(), TOKEN) {}
 
     HttpReply get(const std::string& path = "/") { return form.handle("GET", path, ""); }
     HttpReply post(const std::string& path, const Post& p) { return form.handle("POST", path, p.body()); }
@@ -195,7 +200,8 @@ static const std::string* header(const HttpReply& r, const std::string& name) {
 
 static std::map<std::string, std::string> snapshot(RecordingStore& st) { return st.m; }
 
-static std::string stored(Env& e, const std::string& key) { return e.st.has(key) ? e.st.get(key) : std::string("<absent>"); }
+// The value the board has for a setting: what is in the flash, else its default (as the sketch reads it).
+static std::string stored(Env& e, const std::string& key) { return e.view.has(key) ? e.view.get(key) : std::string("<absent>"); }
 
 // ── a blank board ───────────────────────────────────────────────────────
 
@@ -230,7 +236,7 @@ TEST(a_complete_form_on_a_blank_board_is_stored_and_ends_setup) {
     TEST_ASSERT(e.form.saved(), "saved() is set");
     TEST_ASSERT(!e.form.exited(), "not exited");
     TEST_ASSERT(has(r.body, "restarting"), "the page says the board restarts");
-    TEST_ASSERT(findProblems(extended(), e.st).empty(), "the board is complete");
+    TEST_ASSERT(findProblems(extended(), e.view).empty(), "the board is complete");
     TEST_ASSERT_EQ(stored(e, "SETUP_MODE"), std::string("0"), "SETUP_MODE is switched off");
     TEST_ASSERT_EQ(stored(e, "SETUP_PASSWORD"), std::string(OWN_PW), "the new master password is stored");
     CheckedLine typical = checkLine(extended(), SetupFixture::typical());
@@ -543,10 +549,10 @@ TEST(submitting_the_page_as_it_was_served_changes_nothing_but_the_switch) {
 TEST(a_configured_board_that_is_still_incomplete_can_be_filled_in_later) {
     Env e;
     e.configure();
-    e.st.m.erase(SetupFixture::changeKey());                  // something the relay would still fill in
+    e.st.m.erase(SetupFixture::missingKey());                 // something the relay would still fill in (a setting with no default)
     TEST_ASSERT_EQ(e.save(Post().add("csrf", TOKEN)).status, 422, "saving without it is refused (the engine says it is needed)");
     TEST_ASSERT(e.st.m.count("SETUP_MODE") == 0 || e.st.m["SETUP_MODE"] != "0", "and does not end setup");
-    TEST_ASSERT_EQ(e.save(Post().add("csrf", TOKEN).add("v." + SetupFixture::changeKey(), SetupFixture::changeNew())).status, 200, "typing it fixes that");
+    TEST_ASSERT_EQ(e.save(Post().add("csrf", TOKEN).add("v." + SetupFixture::missingKey(), SetupFixture::missingValue())).status, 200, "typing it fixes that");
 }
 
 TEST(the_locked_settings_can_be_changed_here_because_the_user_is_at_the_board) {
@@ -916,11 +922,11 @@ TEST(exit_is_refused_on_a_blank_board) {
 TEST(exit_works_on_a_board_that_only_lacks_what_the_relay_still_fills_in) {
     Env e;
     e.configure(true, true);
-    e.st.m.erase(SetupFixture::changeKey());
+    e.st.m.erase(SetupFixture::missingKey());
     HttpReply r = e.post("/exit", Post().add("csrf", TOKEN));
     TEST_ASSERT_EQ(r.status, 200, "accepted: an incomplete board must still be able to leave setup");
     TEST_ASSERT_EQ(stored(e, "SETUP_MODE"), std::string("0"), "switched off");
-    TEST_ASSERT_EQ(stored(e, SetupFixture::changeKey()), std::string("<absent>"), "and nothing else was added");
+    TEST_ASSERT_EQ(stored(e, SetupFixture::missingKey()), std::string("<absent>"), "and nothing else was added");
 }
 
 TEST(a_flash_failure_on_exit_is_reported_and_the_board_stays_in_setup) {

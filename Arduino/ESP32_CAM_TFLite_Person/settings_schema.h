@@ -147,7 +147,9 @@ static const KeyDef PERSON_KEYS[] = {
 static const Schema PERSON_SCHEMA = {
     PERSON_KEYS,
     sizeof(PERSON_KEYS) / sizeof(PERSON_KEYS[0]),
-    personRulesHold
+    personRulesHold,
+    nullptr,   // no defaulted settings yet
+    0
 };
 
 // The settings as the sketch uses them.

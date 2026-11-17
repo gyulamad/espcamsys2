@@ -49,12 +49,49 @@ static const KeyDef RECORDER_KEYS[] = {
     { "SIZE_DROP",       Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
       "1: when even the coarsest quality cannot get a frame through, also drop the resolution a step (down to QQVGA 160x120) and climb back when the link recovers; 0: never change the resolution" },
 
+    // The pacing of the push and the two adapters (JPEG quality, frame size). They were fixed in the sketch;
+    // the defaults are those values. Times are milliseconds.
+    { "PUSH_WR_TMO_MS",  Kind::Int,       1000, 60000,   Cond::Always,        nullptr,           nullptr,
+      "give up on a push that makes no progress for this long (ms). Keep it LONGER than the relay's live window (LIVE_WINDOW_MS)" },
+    { "PUSH_SLOW_MS",    Kind::Int,       100,  60000,   Cond::Always,        nullptr,           nullptr,
+      "a frame that takes longer than this to push (ms) is slow: warn, and start making the frames smaller" },
+    { "PUSH_FAST_MS",    Kind::Int,       50,   60000,   Cond::Always,        nullptr,           nullptr,
+      "pushes faster than this (ms), for a while, let the picture improve again. Below PUSH_SLOW_MS" },
+    { "PUSH_MAX_GAP_MS", Kind::Int,       0,    60000,   Cond::Always,        nullptr,           nullptr,
+      "the pause after a push never exceeds this (ms), however slow the push was" },
+    { "Q_DEGRADE_STEP",  Kind::Int,       1,    62,      Cond::WhenEquals,    "JPEG_Q_DROP",    "1",
+      "how many quality numbers coarser per slow frame (twice as many when very slow)" },
+    { "Q_RECOVER_STEP",  Kind::Int,       1,    62,      Cond::WhenEquals,    "JPEG_Q_DROP",    "1",
+      "how many quality numbers finer after a run of fast frames" },
+    { "Q_FAST_STREAK",   Kind::Int,       1,    1000,    Cond::WhenEquals,    "JPEG_Q_DROP",    "1",
+      "fast frames in a row before the picture improves a step" },
+    { "Q_VSLOW_FACTOR",  Kind::Int,       2,    100,     Cond::Always,        nullptr,           nullptr,
+      "a push this many times slower than PUSH_SLOW_MS counts as very slow (and a frame size is dropped)" },
+    { "SIZE_UP_STREAK",  Kind::Int,       1,    1000,    Cond::WhenEquals,    "SIZE_DROP",      "1",
+      "fast pushes in a row before the frame size goes up a step again" },
+    { "WIFI_REPORT_MS",  Kind::Int,       200,  3600000, Cond::Always,        nullptr,           nullptr,
+      "how often the camera tells the relay its Wi-Fi network and signal (ms)" },
+    { "HTTP_TMO_MS",     Kind::Int,       500,  60000,   Cond::Always,        nullptr,           nullptr,
+      "how long a plain HTTP call to the relay (log, settings) may take (ms)" },
+    { "RELAY_DOWN_MS",   Kind::Int,       5000, 3600000, Cond::Always,        nullptr,           nullptr,
+      "the push connection has been down this long (ms): look for the relay on the network again" },
+    { "CAM_VFLIP",       Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
+      "1: flip the picture upside down (with CAM_HMIRROR 1 = turned 180 degrees). Set the detector the same" },
+    { "CAM_HMIRROR",     Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
+      "1: mirror the picture left to right. Set the detector the same" },
+    { "WIFI_SLEEP",      Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
+      "1: let the Wi-Fi modem sleep (saves power, adds latency); 0: stay awake" },
+
     { "ALARM_GPIO_PIN",  Kind::PinOrOff,  0,    0,       Cond::Always,        nullptr,           nullptr,
       "GPIO the alarm input is wired to; -1 turns the alarm feature off" },
     { "ALARM_ACTIVE",    Kind::Level,     0,    0,       Cond::WhenNotEquals, "ALARM_GPIO_PIN",  "-1",
       "pin level that means alarm (LOW with a button to GND)" },
     { "ALARM_ALL_CAMS",  Kind::Bool,      0,    0,       Cond::WhenNotEquals, "ALARM_GPIO_PIN",  "-1",
       "1: an alarm starts recording on every camera; 0: only this one" },
+    { "ALARM_DEBOUNCE",  Kind::Int,       0,    5000,    Cond::WhenNotEquals, "ALARM_GPIO_PIN",  "-1",
+      "ignore further edges of the alarm input for this long after one (ms): contact bounce" },
+    { "ALARM_HOLD_MS",   Kind::Int,       100,  60000,   Cond::WhenNotEquals, "ALARM_GPIO_PIN",  "-1",
+      "while the alarm line stays active the alarm is sent again this often (ms). Must stay below the relay's alarmRecordSeconds" },
 
     { "LOG_ENABLED",     Kind::Bool,      0,    0,       Cond::Always,        nullptr,           nullptr,
       "1: also send the log to the relay; 0: serial port only" },
@@ -85,8 +122,8 @@ static const KeyDef RECORDER_KEYS[] = {
 // The readable name, group and fallback of each setting (see KeyMeta in settings_logic.h). A setting with a
 // default is no longer asked for on a blank board: it simply uses that value, which is what the sketch used
 // before the value became a setting, until somebody changes it. The settings that say WHERE and WHO this board
-// is (WIFI, SERVER_HOST, ports, CAMERA_ID, API_KEY) and the safety switches (ALARM_GPIO_PIN, LOG_ENABLED) have
-// no default and stay required.
+// is (WIFI, SERVER_HOST, ports, CAMERA_ID, API_KEY), the safety switches (ALARM_GPIO_PIN, LOG_ENABLED) and what
+// depends on how the sensor is wired (ALARM_ACTIVE, ALARM_ALL_CAMS) have no default and stay required.
 static const KeyMeta RECORDER_META[] = {
     // name             default  label                                   category          tier          apply
     { "PUSH_GAP_MUL",   "1.5",   "Pause after each frame (x last push)", "Picture & link", Tier::Basic,    Apply::Live },
@@ -94,8 +131,8 @@ static const KeyMeta RECORDER_META[] = {
     { "JPEG_Q_MIN",     "12",    "Best JPEG quality",                    "Picture & link", Tier::Basic,    Apply::Live },
     { "JPEG_Q_MAX",     "63",    "Coarsest JPEG quality",                "Picture & link", Tier::Basic,    Apply::Live },
     { "SIZE_DROP",      "1",     "Also shrink the frame size",           "Picture & link", Tier::Basic,    Apply::Live },
-    { "ALARM_ACTIVE",   "LOW",   "Pin level that means alarm",           "Alarm input",    Tier::Basic,    Apply::Reboot },
-    { "ALARM_ALL_CAMS", "0",     "Alarm records on every camera",        "Alarm input",    Tier::Basic,    Apply::Reboot },
+    { "ALARM_ACTIVE",   nullptr,   "Pin level that means alarm",           "Alarm input",    Tier::Basic,    Apply::Reboot },
+    { "ALARM_ALL_CAMS", nullptr, "Alarm records on every camera",        "Alarm input",    Tier::Basic,    Apply::Reboot },
     { "LOG_MIN_LEVEL",  "1",     "Lowest level sent to the relay",       "Logging",        Tier::Basic,    Apply::Live },
     { "LOG_ECHO",       "1",     "Show everything on serial",            "Logging",        Tier::Advanced, Apply::Live },
     { "LOG_RETRY_MAX",  "3",     "Retries after a failed delivery",      "Logging",        Tier::Advanced, Apply::Live },
@@ -104,6 +141,23 @@ static const KeyMeta RECORDER_META[] = {
     { "LOG_REPEAT_SEC", "30",    "Window for counting repeats",          "Logging",        Tier::Advanced, Apply::Live },
     { "LOG_HEARTBEAT",  "600",   "Seconds between status lines",         "Logging",        Tier::Advanced, Apply::Live },
     { "LOG_LOW_HEAP",   "30000", "Warn below this free heap (bytes)",    "Logging",        Tier::Advanced, Apply::Live },
+    { "PUSH_WR_TMO_MS", "8000",  "Push write timeout (ms)",              "Picture & link", Tier::Advanced, Apply::Reboot },
+    { "PUSH_SLOW_MS",   "2000",  "Slow push (ms)",                       "Picture & link", Tier::Advanced, Apply::Reboot },
+    { "PUSH_FAST_MS",   "600",   "Fast push (ms)",                       "Picture & link", Tier::Advanced, Apply::Reboot },
+    { "PUSH_MAX_GAP_MS","1000",  "Longest pause after a push (ms)",      "Picture & link", Tier::Advanced, Apply::Reboot },
+    { "Q_DEGRADE_STEP", "6",     "Quality steps coarser per slow frame", "Picture & link", Tier::Expert,   Apply::Reboot },
+    { "Q_RECOVER_STEP", "2",     "Quality steps finer per fast run",     "Picture & link", Tier::Expert,   Apply::Reboot },
+    { "Q_FAST_STREAK",  "5",     "Fast frames before the picture improves", "Picture & link", Tier::Expert, Apply::Reboot },
+    { "Q_VSLOW_FACTOR", "4",     "Very slow = this many times slow",     "Picture & link", Tier::Expert,   Apply::Reboot },
+    { "SIZE_UP_STREAK", "10",    "Fast pushes before the size goes up",  "Picture & link", Tier::Expert,   Apply::Reboot },
+    { "WIFI_REPORT_MS", "1000",  "Wi-Fi report interval (ms)",           "Connection",     Tier::Advanced, Apply::Reboot },
+    { "HTTP_TMO_MS",    "5000",  "HTTP call timeout (ms)",               "Connection",     Tier::Advanced, Apply::Reboot },
+    { "RELAY_DOWN_MS",  "30000", "Relay considered gone after (ms)",     "Connection",     Tier::Advanced, Apply::Reboot },
+    { "CAM_VFLIP",      "0",     "Flip the picture upside down",         "Picture & link", Tier::Basic,    Apply::Reboot },
+    { "CAM_HMIRROR",    "0",     "Mirror the picture",                   "Picture & link", Tier::Basic,    Apply::Reboot },
+    { "WIFI_SLEEP",     "0",     "Let the Wi-Fi modem sleep",            "Connection",     Tier::Advanced, Apply::Reboot },
+    { "ALARM_DEBOUNCE", "50",    "Alarm contact debounce (ms)",          "Alarm input",    Tier::Advanced, Apply::Reboot },
+    { "ALARM_HOLD_MS",  "1000",  "Alarm repeat while active (ms)",       "Alarm input",    Tier::Advanced, Apply::Reboot },
 };
 static const size_t RECORDER_META_COUNT = sizeof(RECORDER_META) / sizeof(RECORDER_META[0]);
 
@@ -127,10 +181,32 @@ inline bool jpegQualityRangeHolds(const IValues& v, std::string& err) {
     return true;
 }
 
+// PUSH_FAST_MS must be below PUSH_SLOW_MS: between them the quality holds, and a fast threshold at or above the
+// slow one would leave no "hold" zone, so the picture would flip between coarser and finer on every frame.
+inline bool pushSpeedRangeHolds(const IValues& v, std::string& err) {
+    std::string sfast, sslow;
+    if (!v.get("PUSH_FAST_MS", sfast) || !v.get("PUSH_SLOW_MS", sslow)) return true;
+    long long fast = 0, slow = 0;
+    if (!parseInt(sfast, fast) || !parseInt(sslow, slow)) return true;
+    if (fast >= slow) {
+        err = "PUSH_FAST_MS (" + sfast + ") must be below PUSH_SLOW_MS (" + sslow +
+              ") - send both in one line to change them together";
+        return false;
+    }
+    return true;
+}
+
+// Every rule over several settings of the Recorder, in turn; the first that fails refuses the line.
+inline bool recorderRulesHold(const IValues& v, std::string& err) {
+    return jpegQualityRangeHolds(v, err) && pushSpeedRangeHolds(v, err);
+}
+
 static const Schema RECORDER_SCHEMA = {
     RECORDER_KEYS,
     sizeof(RECORDER_KEYS) / sizeof(RECORDER_KEYS[0]),
-    jpegQualityRangeHolds   // JPEG_Q_MIN <= JPEG_Q_MAX (both must be numbers first)
+    recorderRulesHold,  // JPEG_Q_MIN <= JPEG_Q_MAX and PUSH_FAST_MS < PUSH_SLOW_MS (numbers first)
+    RECORDER_META,
+    RECORDER_META_COUNT
 };
 
 // The settings as the sketch uses them. Values of settings that are "not
@@ -154,6 +230,24 @@ struct RecorderSettings {
     int alarmGpioPin = -1;            // -1: alarm feature off
     bool alarmActiveHigh = false;     // false: the pin is LOW when the alarm is on
     bool alarmRecordAll = false;
+    uint32_t alarmDebounceMs = 50;
+    uint32_t alarmHoldMs = 1000;
+
+    uint32_t pushWriteTimeoutMs = 8000;
+    uint32_t pushSlowMs = 2000;
+    uint32_t pushFastMs = 600;
+    uint32_t pushMaxGapMs = 1000;
+    int qualityDegradeStep = 6;
+    int qualityRecoverStep = 2;
+    int qualityFastStreak = 5;
+    uint32_t qualityVerySlowFactor = 4;
+    int sizeUpStreak = 10;
+    uint32_t wifiReportMs = 1000;
+    uint32_t httpTimeoutMs = 5000;
+    uint32_t relayDownMs = 30000;
+    bool camVflip = false;
+    bool camHmirror = false;
+    bool wifiSleep = false;
 
     bool logEnabled = false;
     int logMinLevel = 1;
@@ -207,7 +301,7 @@ inline std::vector<std::string> recorderLockedKeys() {
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.
 inline bool loadRecorderSettings(ISettingsStore& flash, RecorderSettings& out, std::string& err) {
-    DefaultingStore store(flash, RECORDER_META, RECORDER_META_COUNT);   // what is stored, else the default
+    DefaultingStore store(flash, RECORDER_SCHEMA.meta, RECORDER_SCHEMA.metaCount);   // what is stored, else the default
     std::vector<Problem> problems = findProblems(RECORDER_SCHEMA, store);
     if (!problems.empty()) {
         err = problems[0].key + (problems[0].missing ? " is not set" : " is invalid: " + problems[0].reason);
@@ -226,17 +320,35 @@ inline bool loadRecorderSettings(ISettingsStore& flash, RecorderSettings& out, s
     parseFloat(store.get("PUSH_GAP_MUL"), mul);
     s.pushGapMul = static_cast<float>(mul);
 
+    s.pushWriteTimeoutMs = static_cast<uint32_t>(storedInt(store, "PUSH_WR_TMO_MS"));
+    s.pushSlowMs = static_cast<uint32_t>(storedInt(store, "PUSH_SLOW_MS"));
+    s.pushFastMs = static_cast<uint32_t>(storedInt(store, "PUSH_FAST_MS"));
+    s.pushMaxGapMs = static_cast<uint32_t>(storedInt(store, "PUSH_MAX_GAP_MS"));
+    s.qualityVerySlowFactor = static_cast<uint32_t>(storedInt(store, "Q_VSLOW_FACTOR"));
+    s.wifiReportMs = static_cast<uint32_t>(storedInt(store, "WIFI_REPORT_MS"));
+    s.httpTimeoutMs = static_cast<uint32_t>(storedInt(store, "HTTP_TMO_MS"));
+    s.relayDownMs = static_cast<uint32_t>(storedInt(store, "RELAY_DOWN_MS"));
+    s.camVflip = store.get("CAM_VFLIP") == "1";
+    s.camHmirror = store.get("CAM_HMIRROR") == "1";
+    s.wifiSleep = store.get("WIFI_SLEEP") == "1";
+
     s.jpegQualityDrop = store.get("JPEG_Q_DROP") == "1";
     s.frameSizeDrop = store.get("SIZE_DROP") == "1";
     if (s.jpegQualityDrop) {
         s.jpegQualityMin = static_cast<int>(storedInt(store, "JPEG_Q_MIN"));
         s.jpegQualityMax = static_cast<int>(storedInt(store, "JPEG_Q_MAX"));
+        s.qualityDegradeStep = static_cast<int>(storedInt(store, "Q_DEGRADE_STEP"));
+        s.qualityRecoverStep = static_cast<int>(storedInt(store, "Q_RECOVER_STEP"));
+        s.qualityFastStreak = static_cast<int>(storedInt(store, "Q_FAST_STREAK"));
     }
+    if (s.frameSizeDrop) s.sizeUpStreak = static_cast<int>(storedInt(store, "SIZE_UP_STREAK"));
 
     s.alarmGpioPin = static_cast<int>(storedInt(store, "ALARM_GPIO_PIN"));
     if (s.alarmGpioPin >= 0) {
         s.alarmActiveHigh = store.get("ALARM_ACTIVE") == "HIGH";
         s.alarmRecordAll = store.get("ALARM_ALL_CAMS") == "1";
+        s.alarmDebounceMs = static_cast<uint32_t>(storedInt(store, "ALARM_DEBOUNCE"));
+        s.alarmHoldMs = static_cast<uint32_t>(storedInt(store, "ALARM_HOLD_MS"));
     }
 
     s.logEnabled = store.get("LOG_ENABLED") == "1";

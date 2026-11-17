@@ -20,6 +20,9 @@ struct SetupFixture {
                "LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;"
                "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000";
     }
+    // the settings that have a default (a board that stored nothing for them still has a value)
+    static const KeyMeta* meta() { return esp32cam_settings::RECORDER_META; }
+    static size_t metaCount() { return esp32cam_settings::RECORDER_META_COUNT; }
     static std::vector<std::string> prerequisites() { return esp32cam_settings::recorderRemotePrerequisites(); }
     static std::vector<std::string> locked() { return esp32cam_settings::recorderLockedKeys(); }
     static std::string idKey() { return "CAMERA_ID"; }
@@ -30,6 +33,9 @@ struct SetupFixture {
     static std::string changeKey() { return "PUSH_GAP_MUL"; }
     static std::string changeOld() { return "1.5"; }
     static std::string changeNew() { return "2"; }
+    // a setting that has NO default and is stored in typical(): a board without it is still incomplete
+    static std::string missingKey() { return "PUSH_PORT"; }
+    static std::string missingValue() { return "8081"; }
     // a value that breaks a cross-setting rule against typical(): JPEG_Q_MIN (12) must not exceed JPEG_Q_MAX
     static std::string ruleKey() { return "JPEG_Q_MAX"; }
     static std::string ruleBadValue() { return "5"; }

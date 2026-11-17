@@ -220,31 +220,6 @@ public:
 // needs aren't all known yet; false with `err` set to refuse the line.
 typedef bool (*CrossCheckFn)(const IValues& values, std::string& err);
 
-struct Schema {
-    const KeyDef* keys;
-    size_t count;
-    CrossCheckFn crossCheck;   // nullptr: no such rule
-};
-
-inline const KeyDef* findKey(const Schema& schema, const std::string& upperName) {
-    for (size_t i = 0; i < schema.count; ++i) {
-        if (upperName == schema.keys[i].name) return &schema.keys[i];
-    }
-    return nullptr;
-}
-
-// ── The two things the hardware provides ────────────────────────────────
-
-// Flash storage. Values are stored as text under the setting's own name.
-class ISettingsStore {
-public:
-    virtual ~ISettingsStore() {}
-    virtual bool has(const std::string& key) = 0;
-    virtual std::string get(const std::string& key) = 0;   // call only when has(key)
-    virtual bool set(const std::string& key, const std::string& value) = 0;
-    virtual void clearAll() = 0;
-};
-
 // ── What a setting looks like on a settings page, and what it falls back to ──
 
 // How the dashboard groups a setting: the simple ones first, the risky ones behind "Expert".
@@ -275,6 +250,33 @@ inline const KeyMeta* findMeta(const KeyMeta* metas, size_t count, const std::st
     return nullptr;
 }
 
+struct Schema {
+    const KeyDef* keys;
+    size_t count;
+    CrossCheckFn crossCheck;   // nullptr: no such rule
+    const KeyMeta* meta;       // the defaults and labels (KeyMeta); nullptr: none, every setting is as the table says
+    size_t metaCount;
+};
+
+inline const KeyDef* findKey(const Schema& schema, const std::string& upperName) {
+    for (size_t i = 0; i < schema.count; ++i) {
+        if (upperName == schema.keys[i].name) return &schema.keys[i];
+    }
+    return nullptr;
+}
+
+// ── The two things the hardware provides ────────────────────────────────
+
+// Flash storage. Values are stored as text under the setting's own name.
+class ISettingsStore {
+public:
+    virtual ~ISettingsStore() {}
+    virtual bool has(const std::string& key) = 0;
+    virtual std::string get(const std::string& key) = 0;   // call only when has(key)
+    virtual bool set(const std::string& key, const std::string& value) = 0;
+    virtual void clearAll() = 0;
+};
+
 // A view of the flash in which every setting that has a default always has a value: what is stored, else
 // its default. Reading through it is how a board keeps working with the values that used to be #defines
 // until somebody changes them; writing goes straight to the flash, so a default is never stored by itself.
@@ -293,6 +295,7 @@ public:
     }
     bool set(const std::string& key, const std::string& value) override { return flash_.set(key, value); }
     void clearAll() override { flash_.clearAll(); }
+    ISettingsStore& flash() { return flash_; }   // what is really stored (an export lists only that)
 
 private:
     const char* defaultOf(const std::string& key) const {
@@ -609,8 +612,9 @@ private:
     ISettingsStore& store_;
 };
 
-inline void checkCrossRules(const Schema& schema, ISettingsStore& store, const std::vector<Pair>& pairs,
+inline void checkCrossRules(const Schema& schema, ISettingsStore& flash, const std::vector<Pair>& pairs,
                             std::vector<std::string>& errors) {
+    DefaultingStore store(flash, schema.meta, schema.metaCount);   // what is stored, else the default
     if (!schema.crossCheck) return;
     PendingValues values(pairs, store);
     std::string err;
@@ -644,7 +648,8 @@ struct Problem {
     std::string reason;   // for invalid ones
 };
 
-inline std::vector<Problem> findProblems(const Schema& schema, ISettingsStore& store) {
+inline std::vector<Problem> findProblems(const Schema& schema, ISettingsStore& flash) {
+    DefaultingStore store(flash, schema.meta, schema.metaCount);   // what is stored, else the default
     std::vector<Problem> out;
     for (size_t i = 0; i < schema.count; ++i) {
         const KeyDef& def = schema.keys[i];
@@ -720,7 +725,8 @@ inline std::string renderSetting(const KeyDef& def, ISettingsStore& store, bool 
     return line;
 }
 
-inline std::vector<std::string> renderAll(const Schema& schema, ISettingsStore& store, bool mask) {
+inline std::vector<std::string> renderAll(const Schema& schema, ISettingsStore& flash, bool mask) {
+    DefaultingStore store(flash, schema.meta, schema.metaCount);   // what is stored, else the default
     std::vector<std::string> out;
     for (size_t i = 0; i < schema.count; ++i) out.push_back(renderSetting(schema.keys[i], store, mask));
     return out;
@@ -728,7 +734,7 @@ inline std::vector<std::string> renderAll(const Schema& schema, ISettingsStore& 
 
 // One line that sets this camera's settings on another board:
 // KEY=value;KEY=value;... (unmasked, fully escaped). Empty if nothing is stored.
-inline std::string renderExport(const Schema& schema, ISettingsStore& store) {
+inline std::string renderExport(const Schema& schema, ISettingsStore& store) {   // what is STORED: an unset setting is not exported
     std::string out;
     for (size_t i = 0; i < schema.count; ++i) {
         const KeyDef& def = schema.keys[i];
@@ -844,8 +850,9 @@ public:
 
 // True when every one of `prerequisites` is stored and valid — i.e. the board has
 // what it needs to reach the relay. An empty list means "can't".
-inline bool remoteFillPossible(const Schema& schema, ISettingsStore& store,
+inline bool remoteFillPossible(const Schema& schema, ISettingsStore& flash,
                                const std::vector<std::string>& prerequisites) {
+    DefaultingStore store(flash, schema.meta, schema.metaCount);   // what is stored, else the default
     if (prerequisites.empty()) return false;
     for (size_t i = 0; i < prerequisites.size(); ++i) {
         const KeyDef* def = findKey(schema, prerequisites[i]);
@@ -867,7 +874,8 @@ struct RemoteApplyResult {
 // Takes the settings that are missing or invalid out of a staged line, checks
 // them as if they had been typed, and stores them — or stores nothing, with the
 // reasons in `errors`. Everything else in the line is ignored (and named).
-inline RemoteApplyResult applyRemoteLine(const Schema& schema, ISettingsStore& store, const std::string& line) {
+inline RemoteApplyResult applyRemoteLine(const Schema& schema, ISettingsStore& flash, const std::string& line) {
+    DefaultingStore store(flash, schema.meta, schema.metaCount);   // what is stored, else the default
     RemoteApplyResult out;
     ParsedLine parsed = parseLine(line);
     if (!parsed.errors.empty()) { out.errors = parsed.errors; return out; }
@@ -912,7 +920,7 @@ public:
     RemoteFill(const Schema& schema, ISettingsStore& store, IRemoteLink& link, IConsole& console,
                const std::vector<std::string>& prerequisites,
                uint32_t connectTimeoutMs, uint32_t windowMs, uint32_t pollGapMs)
-        : schema_(schema), store_(store), link_(link), console_(console), prerequisites_(prerequisites),
+        : schema_(schema), store_(store, schema.meta, schema.metaCount), link_(link), console_(console), prerequisites_(prerequisites),
           connectTimeoutMs_(connectTimeoutMs), windowMs_(windowMs), pollGapMs_(pollGapMs),
           phase_(Begin), result_(Running), deadline_(0), nextPoll_(0) {}
 
@@ -1020,7 +1028,7 @@ private:
     }
 
     const Schema& schema_;
-    ISettingsStore& store_;
+    mutable DefaultingStore store_;   // the flash with the schema's defaults (a view: reading through it changes nothing)
     IRemoteLink& link_;
     IConsole& console_;
     std::vector<std::string> prerequisites_;
@@ -1051,7 +1059,7 @@ public:
     enum Status { Running, Proceed, Restart };
 
     BootConfigFlow(const Schema& schema, ISettingsStore& store, IConsole& console, uint32_t windowMs)
-        : schema_(schema), store_(store), console_(console), windowMs_(windowMs),
+        : schema_(schema), store_(store, schema.meta, schema.metaCount), console_(console), windowMs_(windowMs),
           phase_(Begin), result_(Running), deadline_(0), changed_(false), mustComplete_(false),
           eraseArmed_(false), lastWasCR_(false), overflow_(false),
           remote_(0), remoteDelayMs_(0), editingSince_(0), touched_(false), remoteOver_(false) {}
@@ -1296,7 +1304,7 @@ private:
             }
 
             case Command::Export: {
-                std::string line = renderExport(schema_, store_);
+                std::string line = renderExport(schema_, store_.flash());
                 say(line.empty() ? "(nothing is stored yet)" : line);
                 return Running;
             }
@@ -1327,7 +1335,7 @@ private:
     }
 
     const Schema& schema_;
-    ISettingsStore& store_;
+    mutable DefaultingStore store_;   // the flash with the schema's defaults (a view: reading through it changes nothing)
     IConsole& console_;
     uint32_t windowMs_;
     Phase phase_;
@@ -1393,8 +1401,9 @@ struct ChangeResult {
     bool ok() const { return errors.empty(); }
 };
 
-inline ChangeResult applyChangeLine(const Schema& schema, ISettingsStore& store, const std::string& line,
+inline ChangeResult applyChangeLine(const Schema& schema, ISettingsStore& flash, const std::string& line,
                                     const std::vector<std::string>& lockedKeys) {
+    DefaultingStore store(flash, schema.meta, schema.metaCount);   // what is stored, else the default
     ChangeResult out;
     CheckedLine cl = checkLine(schema, line);
     if (!cl.ok()) { out.errors = cl.errors; return out; }
@@ -1448,7 +1457,7 @@ inline ChangeResult applyChangeLine(const Schema& schema, ISettingsStore& store,
 // What the board tells the relay it holds: KEY=value;... for every stored setting, with
 // secrets and Wi-Fi passwords masked (displayValue) — the relay and the dashboard never
 // receive a password. Values are escaped like a typed line (\; \\).
-inline std::string renderReport(const Schema& schema, ISettingsStore& store) {
+inline std::string renderReport(const Schema& schema, ISettingsStore& store) {   // what is STORED: the dashboard knows the defaults from the schema
     std::string out;
     for (size_t i = 0; i < schema.count; ++i) {
         const KeyDef& def = schema.keys[i];
@@ -1510,7 +1519,7 @@ public:
 
     ChangePoller(const Schema& schema, ISettingsStore& store, IChangeLink& link,
                  const std::vector<std::string>& lockedKeys, uint32_t firstDelayMs, uint32_t gapMs)
-        : schema_(schema), store_(store), link_(link), locked_(lockedKeys), firstDelayMs_(firstDelayMs),
+        : schema_(schema), store_(store, schema.meta, schema.metaCount), link_(link), locked_(lockedKeys), firstDelayMs_(firstDelayMs),
           gapMs_(gapMs), armed_(false), nextAt_(0), reported_(false), rebootRequested_(false) {}
 
     Status tick(uint32_t nowMs) {
@@ -1519,7 +1528,7 @@ public:
         nextAt_ = nowMs + gapMs_;
         if (!link_.online()) return Idle;
 
-        if (!reported_) reported_ = link_.report("0", "boot", "", renderReport(schema_, store_));
+        if (!reported_) reported_ = link_.report("0", "boot", "", renderReport(schema_, store_.flash()));
 
         std::string rev, line;
         if (link_.fetchChange(rev, line) != FetchResult::Got) return Idle;
@@ -1540,7 +1549,7 @@ public:
         }
         lastResult_ = result;
         lastMessage_ = oneLine(message);
-        link_.report(rev, result, lastMessage_, renderReport(schema_, store_));
+        link_.report(rev, result, lastMessage_, renderReport(schema_, store_.flash()));
         return (r.ok() && !r.changed.empty()) ? Restart : Idle;
     }
 
@@ -1559,13 +1568,13 @@ private:
         changed_.clear();
         lastResult_ = "applied";
         lastMessage_ = "restarting on request from the dashboard";
-        rebootRequested_ = link_.report(rev, lastResult_, lastMessage_, renderReport(schema_, store_));
+        rebootRequested_ = link_.report(rev, lastResult_, lastMessage_, renderReport(schema_, store_.flash()));
         if (!rebootRequested_) lastMessage_ = "restart asked for, but the relay could not be told - not restarting yet";
         return rebootRequested_ ? Restart : Idle;
     }
 
     const Schema& schema_;
-    ISettingsStore& store_;
+    mutable DefaultingStore store_;   // the flash with the schema's defaults (a view: reading through it changes nothing)
     IChangeLink& link_;
     std::vector<std::string> locked_;
     uint32_t firstDelayMs_, gapMs_;

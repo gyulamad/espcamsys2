@@ -21,6 +21,9 @@ struct SetupFixture {
                "API_KEY=s3cret;DETECTOR_ID=detector-1;"
                "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
     }
+    // the detector has no defaulted settings yet
+    static const KeyMeta* meta() { return nullptr; }
+    static size_t metaCount() { return 0; }
     static std::vector<std::string> prerequisites() { return esp32cam_settings::personRemotePrerequisites(); }
     static std::vector<std::string> locked() { return esp32cam_settings::personLockedKeys(); }
     static std::string idKey() { return "DETECTOR_ID"; }
@@ -30,6 +33,9 @@ struct SetupFixture {
     static std::string changeKey() { return "LOOP_DELAY_MS"; }
     static std::string changeOld() { return "10"; }
     static std::string changeNew() { return "20"; }
+    // a setting that has no default and is stored in typical(): a board without it is still incomplete
+    static std::string missingKey() { return changeKey(); }
+    static std::string missingValue() { return changeNew(); }
     // CLEAR_THRESH (0.5) must not exceed DETECT_THRESH (0.6)
     static std::string ruleKey() { return "CLEAR_THRESH"; }
     static std::string ruleBadValue() { return "0.9"; }

@@ -325,6 +325,9 @@ static bool listed(const std::vector<Problem>& ps, const char* key, bool missing
     for (size_t i = 0; i < ps.size(); ++i) if (ps[i].key == key) return ps[i].missing == missing;
     return false;
 }
+// How many settings the typical line sets (a board that was typed it has exactly these stored; the settings with a
+// default are not among them unless the line sets them).
+static size_t typicalPairCount() { return checkLine(RECORDER_SCHEMA, TYPICAL).pairs.size(); }
 static bool notListed(const std::vector<Problem>& ps, const char* key) {
     for (size_t i = 0; i < ps.size(); ++i) if (ps[i].key == key) return false;
     return true;
@@ -335,7 +338,8 @@ TEST(a_blank_board_is_missing_every_setting_and_the_flash_is_only_read_where_a_v
     std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
     TEST_ASSERT_EQ((int)ps.size(), (int)requiredKeyCount(RECORDER_SCHEMA), "everything required is listed (switches are unset, so their dependents are needed)");
     TEST_ASSERT(notListed(ps, "SETUP_MODE") && notListed(ps, "SETUP_PASSWORD"), "the optional settings are not listed: they may stay absent");
-    TEST_ASSERT(listed(ps, "WIFI", true) && listed(ps, "LOG_HEARTBEAT", true) && listed(ps, "ALARM_ACTIVE", true), "including dependents");
+    TEST_ASSERT(listed(ps, "WIFI", true) && listed(ps, "ALARM_ACTIVE", true), "including dependents");
+    TEST_ASSERT(notListed(ps, "LOG_HEARTBEAT") && notListed(ps, "PUSH_GAP_MUL"), "but not the settings that have a default");
     TEST_ASSERT_EQ(st.badGets, 0, "get() was never called for a key that isn't there");
 }
 
@@ -362,18 +366,20 @@ TEST(switching_a_feature_on_makes_its_settings_required_again) {
     TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "complete");
     store(st, "LOG_ENABLED=1;ALARM_GPIO_PIN=13");
     std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
-    TEST_ASSERT(listed(ps, "LOG_MIN_LEVEL", true) && listed(ps, "LOG_LOW_HEAP", true), "the LOG_* settings are missing now");
-    TEST_ASSERT(listed(ps, "ALARM_ACTIVE", true) && listed(ps, "ALARM_ALL_CAMS", true), "so are the alarm ones");
+    TEST_ASSERT(notListed(ps, "LOG_MIN_LEVEL") && notListed(ps, "LOG_LOW_HEAP"), "the LOG_* settings are not missing: they have defaults");
+    TEST_ASSERT(listed(ps, "ALARM_ACTIVE", true) && listed(ps, "ALARM_ALL_CAMS", true), "the alarm ones are (no default: it depends on the wiring)");
     TEST_ASSERT(notListed(ps, "WIFI") && notListed(ps, "CAMERA_ID"), "and nothing else");
-    TEST_ASSERT_EQ((int)ps.size(), 2 + 8, "exactly 2 alarm + 8 log settings");
+    TEST_ASSERT_EQ((int)ps.size(), 2, "exactly the 2 alarm settings");
 }
 
 TEST(a_new_firmware_that_adds_a_setting_only_asks_for_that_one) {
     MemoryStore st;
     store(st, TYPICAL);
-    st.m.erase("LOG_LOW_HEAP");   // as if this key had just been introduced
+    st.m.erase("ALARM_ACTIVE");   // as if this key had just been introduced (and has no default)
     std::vector<Problem> ps = findProblems(RECORDER_SCHEMA, st);
-    TEST_ASSERT(ps.size() == 1 && listed(ps, "LOG_LOW_HEAP", true), "only the new one");
+    TEST_ASSERT(ps.size() == 1 && listed(ps, "ALARM_ACTIVE", true), "only the new one");
+    st.m.erase("LOG_LOW_HEAP");   // a new key WITH a default is not asked for at all
+    TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).size() == 1, "a defaulted one is not asked for");
 }
 
 TEST(a_stored_value_that_is_no_longer_valid_is_a_problem_not_a_crash) {
@@ -492,7 +498,7 @@ TEST(text_and_plain_pin_kinds_validate_too) {
         { "NOTE", Kind::Text, 0, 0, Cond::Always, nullptr, nullptr, "free text" },
         { "OUT_PIN", Kind::Pin, 0, 0, Cond::Always, nullptr, nullptr, "an output pin" },
     };
-    Schema toy = { keys, 2, nullptr };
+    Schema toy = { keys, 2, nullptr, nullptr, 0 };
     CheckedLine c = checkLine(toy, "NOTE=hello world;OUT_PIN=13");
     TEST_ASSERT(c.ok() && valueOf(c, "NOTE") == "hello world" && valueOf(c, "OUT_PIN") == "13", "valid values");
     TEST_ASSERT(anyError(checkLine(toy, "NOTE="), "must not be empty"), "text may not be empty");
@@ -516,7 +522,7 @@ static const KeyDef TOY_KEYS[] = {
     { "HIGH_V", Kind::Int, 1, 100, Cond::Always, nullptr, nullptr, "upper value" },
     { "LOW_V",  Kind::Int, 1, 100, Cond::Always, nullptr, nullptr, "lower value" },
 };
-static const Schema TOY_RULE_SCHEMA = { TOY_KEYS, 2, lowNotAboveHigh };
+static const Schema TOY_RULE_SCHEMA = { TOY_KEYS, 2, lowNotAboveHigh, nullptr, 0 };
 
 static std::vector<std::string> crossErrors(MemoryStore& st, const std::string& line) {
     CheckedLine c = checkLine(TOY_RULE_SCHEMA, line);
@@ -592,7 +598,13 @@ TEST(the_recorder_schema_is_consistent) {
 TEST(the_typical_line_covers_every_recorder_setting) {
     CheckedLine c = checkLine(RECORDER_SCHEMA, TYPICAL);
     TEST_ASSERT(c.ok(), "valid");
-    TEST_ASSERT_EQ((int)c.pairs.size(), (int)RECORDER_SCHEMA.count, "one value for every setting in the table");
+    for (size_t i = 0; i < RECORDER_SCHEMA.count; ++i) {
+        const KeyDef& k = RECORDER_SCHEMA.keys[i];
+        if (k.cond == Cond::Optional || hasDefault(RECORDER_SCHEMA, k.name)) continue;
+        bool there = false;
+        for (size_t j = 0; j < c.pairs.size(); ++j) if (c.pairs[j].key == k.name) there = true;
+        TEST_ASSERT(there, (std::string(k.name) + " (no default) has a value in the typical line").c_str());
+    }
 }
 
 TEST(the_committed_example_template_is_a_valid_complete_configuration) {
@@ -604,7 +616,13 @@ TEST(the_committed_example_template_is_a_valid_complete_configuration) {
     CheckedLine c = checkLine(RECORDER_SCHEMA, line);
     for (size_t i = 0; i < c.errors.size(); ++i) TEST_ASSERT(false, c.errors[i].c_str());
     TEST_ASSERT(c.ok(), "it is valid input");
-    TEST_ASSERT_EQ((int)c.pairs.size(), (int)requiredKeyCount(RECORDER_SCHEMA), "and covers every required setting (the optional ones are left out on purpose)");
+    for (size_t i = 0; i < RECORDER_SCHEMA.count; ++i) {
+        const KeyDef& k = RECORDER_SCHEMA.keys[i];
+        if (k.cond == Cond::Optional || hasDefault(RECORDER_SCHEMA, k.name)) continue;
+        bool there = false;
+        for (size_t j = 0; j < c.pairs.size(); ++j) if (c.pairs[j].key == k.name) there = true;
+        TEST_ASSERT(there, (std::string(k.name) + " is covered by the template").c_str());
+    }
     for (size_t i = 0; i < c.pairs.size(); ++i) TEST_ASSERT(c.pairs[i].key != "SETUP_MODE" && c.pairs[i].key != "SETUP_PASSWORD", "no optional setting in the template: a password placeholder there would become a real password");
 }
 
@@ -700,7 +718,7 @@ TEST(a_blank_board_lists_what_is_missing_and_waits_for_ever) {
     BootConfigFlow::Status s = r.run(60000);   // a minute of silence
     TEST_ASSERT(s == BootConfigFlow::Running, "no timeout when settings are missing: it waits for the user");
     TEST_ASSERT(r.con.said("These settings need a value (" + std::to_string(requiredKeyCount(RECORDER_SCHEMA)) + ")"), "says how many");
-    TEST_ASSERT(r.con.said("WIFI - ") && r.con.said("CAMERA_ID - ") && r.con.said("LOG_LOW_HEAP - "), "lists them with their help");
+    TEST_ASSERT(r.con.said("WIFI - ") && r.con.said("CAMERA_ID - ") && r.con.said("ALARM_ACTIVE - "), "lists them with their help");
     TEST_ASSERT(r.con.said("KEY=value, several at once separated by ;"), "explains the format");
     TEST_ASSERT(!r.con.said("Change settings?"), "does not offer the y/N window");
 }
@@ -710,7 +728,7 @@ TEST(a_whole_configuration_in_one_line_is_stored_and_the_board_restarts) {
     BootConfigFlow::Status s = r.send(std::string(TYPICAL) + "\n");
     TEST_ASSERT(s == BootConfigFlow::Restart, "restart requested");
     TEST_ASSERT(r.con.said("All settings are stored. Restarting"), "says so");
-    TEST_ASSERT(r.st.m.size() == RECORDER_SCHEMA.count, "everything stored");
+    TEST_ASSERT(r.st.m.size() == typicalPairCount(), "everything that was typed is stored");
     TEST_ASSERT(r.st.m["CAMERA_ID"] == "cam2" && r.st.m["WIFI"] == "extender-1:password1:extender-2:pass\\;word2", "with the right values");
     TEST_ASSERT(findProblems(RECORDER_SCHEMA, r.st).empty(), "and nothing is missing any more");
     TEST_ASSERT(!r.con.said("s3cret"), "the stored secret is not echoed back");
@@ -862,7 +880,7 @@ TEST(a_line_arriving_in_small_pieces_is_assembled) {
     std::string line = std::string(TYPICAL) + "\n";
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (size_t i = 0; i < line.size(); i += 7) s = r.send(line.substr(i, 7), 10);
-    TEST_ASSERT(s == BootConfigFlow::Restart && r.st.m.size() == RECORDER_SCHEMA.count, "a slow paste works");
+    TEST_ASSERT(s == BootConfigFlow::Restart && r.st.m.size() == typicalPairCount(), "a slow paste works");
 }
 
 TEST(backspace_edits_the_line_for_raw_terminals) {
@@ -992,7 +1010,7 @@ TEST(a_blank_store_with_failing_flash_still_reports_instead_of_hanging_silently)
     Rig r;
     r.st.failWrites = true;
     TEST_ASSERT(r.send(std::string(TYPICAL) + "\n") == BootConfigFlow::Running, "nothing could be stored, so it can't finish");
-    TEST_ASSERT(r.con.count("ERROR: could not write") == (int)RECORDER_SCHEMA.count, "each write failure is reported");
+    TEST_ASSERT(r.con.count("ERROR: could not write") == (int)typicalPairCount(), "each write failure is reported");
 }
 
 // ── optional settings (F-21: SETUP_MODE, SETUP_PASSWORD) ────────────────

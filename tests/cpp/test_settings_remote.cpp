@@ -25,7 +25,7 @@ static const char* TYPICAL =
     "CAMERA_ID=cam2;API_KEY=s3cret;PUSH_GAP_MUL=1.5;JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63;SIZE_DROP=1;"
     "ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;"
     "LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;"
-    "LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000";
+    "LOG_REPEAT_SEC=30;ALARM_ACTIVE=600;ALARM_ALL_CAMS=30000";
 
 // A complete board, from which tests remove what a newer firmware would add.
 static void fill(MemoryStore& st) {
@@ -42,7 +42,7 @@ using esp32cam_settings::FetchResult;
 TEST(possible_when_everything_needed_to_reach_the_relay_is_stored_and_valid) {
     MemoryStore st; fill(st);
     TEST_ASSERT(remoteFillPossible(RECORDER_SCHEMA, st, prereq()), "complete board");
-    st.m.erase("LOG_HEARTBEAT");
+    st.m.erase("ALARM_ACTIVE");
     TEST_ASSERT(remoteFillPossible(RECORDER_SCHEMA, st, prereq()), "a missing OTHER setting is exactly the case it is for");
     TEST_ASSERT_EQ(st.badGets, 0, "only keys that exist were read");
 }
@@ -81,19 +81,19 @@ TEST(the_recorder_prerequisites_are_real_settings_and_exactly_what_reaches_the_r
 // ── applyRemoteLine: only gaps are filled ───────────────────────────────
 
 TEST(a_missing_setting_is_filled_from_the_line) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "LOG_HEARTBEAT=900");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT_EQ((int)r.stored, 1, "one stored");
     TEST_ASSERT(r.errors.empty() && r.ignored.empty(), "nothing wrong");
-    TEST_ASSERT(r.keys.size() == 1 && r.keys[0] == "LOG_HEARTBEAT", "named");
-    TEST_ASSERT_EQ(st.m["LOG_HEARTBEAT"], std::string("900"), "in flash");
+    TEST_ASSERT(r.keys.size() == 1 && r.keys[0] == "ALARM_ACTIVE", "named");
+    TEST_ASSERT_EQ(st.m["ALARM_ACTIVE"], std::string("HIGH"), "in flash");
     TEST_ASSERT(findProblems(RECORDER_SCHEMA, st).empty(), "the board is complete again");
 }
 
 TEST(settings_that_are_stored_and_valid_are_never_changed_by_the_relay) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE");
     RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st,
-        "API_KEY=evil;SERVER_HOST=10.6.6.6;WIFI=evil-net:pw;CAMERA_ID=cam99;HTTP_PORT=1;LOG_HEARTBEAT=900");
+        "API_KEY=evil;SERVER_HOST=10.6.6.6;WIFI=evil-net:pw;CAMERA_ID=cam99;HTTP_PORT=1;ALARM_ACTIVE=HIGH");
     TEST_ASSERT_EQ((int)r.stored, 1, "only the missing one");
     TEST_ASSERT_EQ(st.m["API_KEY"], std::string("s3cret"), "API key untouched");
     TEST_ASSERT_EQ(st.m["SERVER_HOST"], std::string("192.168.4.9"), "server untouched");
@@ -104,37 +104,37 @@ TEST(settings_that_are_stored_and_valid_are_never_changed_by_the_relay) {
 }
 
 TEST(an_invalid_value_for_a_setting_that_is_not_missing_is_ignored_not_an_error) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "PUSH_PORT=notanumber;LOG_HEARTBEAT=900");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "PUSH_PORT=notanumber;ALARM_ACTIVE=HIGH");
     TEST_ASSERT(r.errors.empty(), "not an error: that setting was never going to be used");
     TEST_ASSERT_EQ((int)r.stored, 1, "the needed one is stored");
     TEST_ASSERT_EQ(st.m["PUSH_PORT"], std::string("8081"), "the stored one is untouched");
 }
 
 TEST(a_stored_but_now_invalid_value_is_replaced) {
-    MemoryStore st; fill(st); st.m["LOG_HEARTBEAT"] = "garbage";
+    MemoryStore st; fill(st); st.m["ALARM_ACTIVE"] = "garbage";
     TEST_ASSERT(!findProblems(RECORDER_SCHEMA, st).empty(), "precondition: it is a problem");
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "LOG_HEARTBEAT=900");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT_EQ((int)r.stored, 1, "replaced");
-    TEST_ASSERT_EQ(st.m["LOG_HEARTBEAT"], std::string("900"), "with the staged value");
+    TEST_ASSERT_EQ(st.m["ALARM_ACTIVE"], std::string("HIGH"), "with the staged value");
 }
 
 TEST(it_is_all_or_nothing_one_bad_value_stores_nothing) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT"); st.m.erase("LOG_LOW_HEAP");
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "LOG_HEARTBEAT=900;LOG_LOW_HEAP=banana");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE"); st.m.erase("ALARM_ALL_CAMS");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "ALARM_ACTIVE=HIGH;ALARM_ALL_CAMS=banana");
     TEST_ASSERT_EQ((int)r.stored, 0, "nothing stored");
     TEST_ASSERT(!r.errors.empty(), "with a reason");
-    TEST_ASSERT(!st.has("LOG_HEARTBEAT") && !st.has("LOG_LOW_HEAP"), "not even the good one");
+    TEST_ASSERT(!st.has("ALARM_ACTIVE") && !st.has("ALARM_ALL_CAMS"), "not even the good one");
 }
 
 TEST(a_line_that_does_not_parse_stores_nothing) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE");
     RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "this is not a settings line");
     TEST_ASSERT(r.stored == 0 && !r.errors.empty(), "refused with a reason");
 }
 
 TEST(a_line_with_nothing_the_board_is_missing_does_nothing_quietly) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE");
     RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "SOME_FUTURE_KEY=1;LOG_ECHO=0");
     TEST_ASSERT(r.stored == 0 && r.errors.empty(), "no store, no error");
     TEST_ASSERT_EQ((int)r.ignored.size(), 2, "both named as ignored (unknown and not-missing)");
@@ -143,13 +143,13 @@ TEST(a_line_with_nothing_the_board_is_missing_does_nothing_quietly) {
 
 TEST(a_complete_board_takes_nothing_from_any_line) {
     MemoryStore st; fill(st);
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "API_KEY=evil;LOG_HEARTBEAT=1");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "API_KEY=evil;ALARM_ACTIVE=1");
     TEST_ASSERT_EQ((int)r.stored, 0, "nothing is missing, so nothing is taken");
     TEST_ASSERT_EQ(st.m["API_KEY"], std::string("s3cret"), "untouched");
 }
 
 TEST(escapes_in_a_staged_value_are_handled_exactly_like_typed_input) {
-    MemoryStore a; fill(a); a.m.erase("LOG_HEARTBEAT");
+    MemoryStore a; fill(a); a.m.erase("ALARM_ACTIVE");
     // Compare against typing the same text: a missing WIFI would be the natural escape case,
     // but WIFI is a prerequisite, so use a stand-alone check of the transformation on a secret.
     MemoryStore typed;
@@ -162,8 +162,8 @@ TEST(escapes_in_a_staged_value_are_handled_exactly_like_typed_input) {
 }
 
 TEST(a_failing_flash_write_is_reported) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT"); st.failWrites = true;
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "LOG_HEARTBEAT=900");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE"); st.failWrites = true;
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT_EQ((int)r.stored, 0, "not stored");
     TEST_ASSERT(!r.errors.empty() && r.errors[0].find("flash") != std::string::npos, "says so");
 }
@@ -176,7 +176,7 @@ struct Rig {
     ScriptConsole con;
     RemoteFill* fill;
     Rig(bool complete = true) : fill(nullptr) {
-        if (complete) { ::fill(st); st.m.erase("LOG_HEARTBEAT"); }
+        if (complete) { ::fill(st); st.m.erase("ALARM_ACTIVE"); }
         fill = new RemoteFill(RECORDER_SCHEMA, st, link, con, prereq(), 20000, 30000, 5000);
     }
     ~Rig() { delete fill; }
@@ -190,24 +190,24 @@ struct Rig {
 
 TEST(it_connects_asks_and_stores_what_the_relay_sends) {
     Rig r; uint32_t now = 0;
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT(r.run(now, 60000) == RemoteFill::Filled, "Filled");
     TEST_ASSERT_EQ(r.link.connects, 1, "joined Wi-Fi once");
     TEST_ASSERT_EQ(r.link.fetches, 1, "asked once");
-    TEST_ASSERT_EQ(r.link.needSeen[0], std::string("LOG_HEARTBEAT"), "and said what it was missing");
-    TEST_ASSERT_EQ(r.st.m["LOG_HEARTBEAT"], std::string("900"), "stored");
+    TEST_ASSERT_EQ(r.link.needSeen[0], std::string("ALARM_ACTIVE"), "and said what it was missing");
+    TEST_ASSERT_EQ(r.st.m["ALARM_ACTIVE"], std::string("HIGH"), "stored");
     TEST_ASSERT(r.con.said("Asking the relay") && r.con.said("Wi-Fi connected") && r.con.said("Stored 1 setting(s)") &&
-                r.con.said("LOG_HEARTBEAT") && r.con.said("Restarting"), "the serial log tells the story");
+                r.con.said("ALARM_ACTIVE") && r.con.said("Restarting"), "the serial log tells the story");
 }
 
 TEST(a_complete_missing_list_is_sent_as_names_only) {
     Rig r; uint32_t now = 0;
-    r.st.m.erase("LOG_LOW_HEAP");
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900;LOG_LOW_HEAP=20000");
+    r.st.m.erase("ALARM_ALL_CAMS");
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH;ALARM_ALL_CAMS=1");
     r.run(now, 60000);
-    TEST_ASSERT(r.link.needSeen[0] == "LOG_HEARTBEAT,LOG_LOW_HEAP" || r.link.needSeen[0] == "LOG_LOW_HEAP,LOG_HEARTBEAT" ||
-                r.link.needSeen[0].find("LOG_HEARTBEAT") != std::string::npos, "both named, comma separated");
-    TEST_ASSERT(r.link.needSeen[0].find("900") == std::string::npos && r.link.needSeen[0].find("s3cret") == std::string::npos, "never a value");
+    TEST_ASSERT(r.link.needSeen[0] == "ALARM_ACTIVE,ALARM_ALL_CAMS" || r.link.needSeen[0] == "ALARM_ALL_CAMS,ALARM_ACTIVE" ||
+                r.link.needSeen[0].find("ALARM_ACTIVE") != std::string::npos, "both named, comma separated");
+    TEST_ASSERT(r.link.needSeen[0].find("HIGH") == std::string::npos && r.link.needSeen[0].find("s3cret") == std::string::npos, "never a value");
 }
 
 TEST(not_possible_without_the_settings_needed_to_reach_the_relay) {
@@ -237,25 +237,25 @@ TEST(it_waits_the_whole_window_for_a_relay_with_nothing_staged_then_gives_up) {
     TEST_ASSERT(r.link.fetches >= 6 && r.link.fetches <= 7, "asking every 5 s");
     TEST_ASSERT_EQ(r.con.count("no settings staged"), 1, "said once, not every 5 s");
     TEST_ASSERT(r.con.said("Restarting to try again"), "and that it restarts");
-    TEST_ASSERT(r.st.m.count("LOG_HEARTBEAT") == 0, "nothing stored");
+    TEST_ASSERT(r.st.m.count("ALARM_ACTIVE") == 0, "nothing stored");
 }
 
 TEST(an_unreachable_relay_is_retried_and_reported_once) {
     Rig r; uint32_t now = 0;
     r.link.reply(FetchResult::Failed); r.link.reply(FetchResult::Failed); r.link.reply(FetchResult::Failed);
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT(r.run(now, 120000) == RemoteFill::Filled, "gets there on the fourth try");
     TEST_ASSERT_EQ(r.con.count("could not be reached"), 1, "reported once");
 }
 
 TEST(a_refused_line_is_reported_once_and_a_corrected_one_is_accepted) {
     Rig r; uint32_t now = 0;
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=banana");
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=banana");
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=banana");
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=banana");
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT(r.run(now, 120000) == RemoteFill::Filled, "Filled after the operator fixed the line");
     TEST_ASSERT_EQ(r.con.count("were refused"), 1, "the same refusal is not repeated");
-    TEST_ASSERT_EQ(r.st.m["LOG_HEARTBEAT"], std::string("900"), "the good value is the one stored");
+    TEST_ASSERT_EQ(r.st.m["ALARM_ACTIVE"], std::string("HIGH"), "the good value is the one stored");
 }
 
 TEST(a_line_without_the_missing_settings_is_waited_out) {
@@ -270,17 +270,17 @@ TEST(a_line_without_the_missing_settings_is_waited_out) {
 
 TEST(partial_progress_renews_the_window_for_the_rest) {
     Rig r; uint32_t now = 0;
-    r.st.m.erase("LOG_LOW_HEAP");
+    r.st.m.erase("ALARM_ALL_CAMS");
     // First answer supplies one of the two, late in the window; the second the other, after the old deadline.
     r.link.reply(FetchResult::NothingStaged); r.link.reply(FetchResult::NothingStaged); r.link.reply(FetchResult::NothingStaged);
     r.link.reply(FetchResult::NothingStaged); r.link.reply(FetchResult::NothingStaged);
-    r.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");           // ~25 s in
+    r.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");           // ~25 s in
     for (int i = 0; i < 4; ++i) r.link.reply(FetchResult::NothingStaged);   // 20 s more: past the ORIGINAL 30 s deadline
-    r.link.reply(FetchResult::Got, "LOG_LOW_HEAP=20000");
+    r.link.reply(FetchResult::Got, "ALARM_ALL_CAMS=1");
     TEST_ASSERT(r.run(now, 120000) == RemoteFill::Filled, "Filled");
     TEST_ASSERT(now > 30000, "it took longer than one window, because progress renewed it");
-    TEST_ASSERT(r.con.said("Still missing: LOG_LOW_HEAP"), "said what was still missing");
-    TEST_ASSERT(r.st.has("LOG_HEARTBEAT") && r.st.has("LOG_LOW_HEAP"), "both stored");
+    TEST_ASSERT(r.con.said("Still missing: ALARM_ALL_CAMS"), "said what was still missing");
+    TEST_ASSERT(r.st.has("ALARM_ACTIVE") && r.st.has("ALARM_ALL_CAMS"), "both stored");
 }
 
 // ── inside BootConfigFlow ───────────────────────────────────────────────
@@ -295,7 +295,7 @@ struct FlowRig {
     FlowRig(bool attach = true, bool complete = true)
         : st(), link(), con(), fill(RECORDER_SCHEMA, st, link, con, prereq(), 20000, 30000, 5000),
           flow(RECORDER_SCHEMA, st, con, 5000), now(1000) {
-        if (complete) { ::fill(st); st.m.erase("LOG_HEARTBEAT"); }
+        if (complete) { ::fill(st); st.m.erase("ALARM_ACTIVE"); }
         if (attach) flow.attachRemote(&fill, 5000);
     }
     BootConfigFlow::Status run(uint32_t untilMs) {
@@ -307,11 +307,11 @@ struct FlowRig {
 
 TEST(a_board_missing_a_setting_that_nobody_types_asks_the_relay_after_five_seconds) {
     FlowRig f;
-    f.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");
+    f.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");
     BootConfigFlow::Status s = f.run(1000 + 60000);
     TEST_ASSERT(s == BootConfigFlow::Restart, "restart so the new setting takes effect");
     TEST_ASSERT(f.flow.changed(), "flagged as changed");
-    TEST_ASSERT_EQ(f.st.m["LOG_HEARTBEAT"], std::string("900"), "stored");
+    TEST_ASSERT_EQ(f.st.m["ALARM_ACTIVE"], std::string("HIGH"), "stored");
     TEST_ASSERT(f.con.said("These settings need a value (1)") && f.con.said("asks the relay for these"), "the serial log explains what will happen");
 }
 
@@ -355,13 +355,13 @@ TEST(a_relay_that_never_answers_restarts_the_board_to_try_again_and_changes_noth
     BootConfigFlow::Status s = f.run(1000 + 120000);
     TEST_ASSERT(s == BootConfigFlow::Restart, "restart (the next boot asks again)");
     TEST_ASSERT(!f.flow.changed(), "nothing was changed");
-    TEST_ASSERT(!f.st.has("LOG_HEARTBEAT"), "still missing");
+    TEST_ASSERT(!f.st.has("ALARM_ACTIVE"), "still missing");
     TEST_ASSERT(f.now >= 1000 + 5000 + 30000 && f.now <= 1000 + 5000 + 30000 + 600, "after 5 s serial + 30 s waiting");
 }
 
 TEST(a_complete_board_never_asks_the_relay_it_just_offers_the_change_window) {
     FlowRig f(true, true);
-    f.st.m["LOG_HEARTBEAT"] = "600";      // complete
+    f.st.m["ALARM_ACTIVE"] = "LOW";      // complete
     BootConfigFlow::Status s = f.run(1000 + 20000);
     TEST_ASSERT(s == BootConfigFlow::Proceed, "boots normally after the 5 s window");
     TEST_ASSERT_EQ(f.link.connects, 0, "no Wi-Fi");
@@ -378,15 +378,15 @@ TEST(a_board_without_a_remote_attached_behaves_exactly_as_before) {
 
 TEST(an_invalid_stored_value_is_fixed_from_the_relay_too) {
     FlowRig f;
-    f.st.m["LOG_HEARTBEAT"] = "garbage";   // e.g. a newer firmware tightened the range
-    f.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");
+    f.st.m["ALARM_ACTIVE"] = "garbage";   // e.g. a newer firmware tightened the range
+    f.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");
     TEST_ASSERT(f.run(1000 + 60000) == BootConfigFlow::Restart, "restart");
-    TEST_ASSERT_EQ(f.st.m["LOG_HEARTBEAT"], std::string("900"), "replaced");
+    TEST_ASSERT_EQ(f.st.m["ALARM_ACTIVE"], std::string("HIGH"), "replaced");
 }
 
 TEST(after_the_fix_the_next_boot_is_normal) {
     FlowRig f;
-    f.link.reply(FetchResult::Got, "LOG_HEARTBEAT=900");
+    f.link.reply(FetchResult::Got, "ALARM_ACTIVE=HIGH");
     f.run(1000 + 60000);
     // "Reboot": a fresh flow on the same flash.
     ScriptConsole con2; ScriptLink link2;
@@ -402,8 +402,8 @@ TEST(after_the_fix_the_next_boot_is_normal) {
 // ── optional settings are never filled in by the relay (F-21) ───────────
 
 TEST(the_relay_can_not_switch_on_the_setup_mode_or_set_the_setup_password) {
-    MemoryStore st; fill(st); st.m.erase("LOG_HEARTBEAT");
-    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "SETUP_MODE=1;SETUP_PASSWORD=evil-master-pw;LOG_HEARTBEAT=900");
+    MemoryStore st; fill(st); st.m.erase("ALARM_ACTIVE");
+    RemoteApplyResult r = applyRemoteLine(RECORDER_SCHEMA, st, "SETUP_MODE=1;SETUP_PASSWORD=evil-master-pw;ALARM_ACTIVE=HIGH");
     TEST_ASSERT_EQ((int)r.stored, 1, "only the missing setting is filled");
     TEST_ASSERT(r.errors.empty(), "no error");
     TEST_ASSERT_EQ((int)r.ignored.size(), 2, "the optional ones are ignored, and named");
