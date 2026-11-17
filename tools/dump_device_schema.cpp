@@ -1,5 +1,6 @@
 // dump_device_schema.cpp — prints one sketch's settings table (settings_schema.h) as a JSON member, so
-// the dashboard's settings pages know every setting's kind, limits, conditions and help text without a
+// the dashboard's settings pages know every setting's kind, limits, conditions, help text, default, label, group and
+// tier without a
 // second copy of the table to keep in sync. Built twice by tools/gen_device_schema.sh: as is, it dumps
 // the Recorder ("recorder"); with -DDUMP_DETECTOR it dumps the person detector ("detector"). The two
 // members are joined (and wrapped) into php/cameras/lib/device_schema.php.
@@ -64,6 +65,23 @@ static const char* condName(Cond c) {
     return "always";
 }
 
+static const char* tierName(Tier t) {
+    switch (t) {
+        case Tier::Basic: return "basic";
+        case Tier::Advanced: return "advanced";
+        case Tier::Expert: return "expert";
+    }
+    return "basic";
+}
+
+static const char* applyName(Apply a) {
+    switch (a) {
+        case Apply::Live: return "live";
+        case Apply::Reboot: return "reboot";
+    }
+    return "reboot";
+}
+
 int main() {
     std::vector<std::string> locked = DUMP_LOCKED();
     std::printf("  \"" DUMP_NAME "\": {\n    \"keys\": [\n");
@@ -71,9 +89,14 @@ int main() {
         const KeyDef& d = DUMP_SCHEMA.keys[i];
         bool isLocked = false;
         for (size_t j = 0; j < locked.size(); ++j) if (locked[j] == d.name) isLocked = true;
-        std::printf("      {\"name\": %s, \"kind\": \"%s\", \"min\": %s, \"max\": %s, \"cond\": \"%s\", \"condKey\": %s, \"condValue\": %s, \"locked\": %s, \"help\": %s}%s\n",
+        const KeyMeta* m = findMeta(DUMP_SCHEMA.meta, DUMP_SCHEMA.metaCount, d.name);   // nullptr: no default, label or group yet
+        std::printf("      {\"name\": %s, \"kind\": \"%s\", \"min\": %s, \"max\": %s, \"cond\": \"%s\", \"condKey\": %s, \"condValue\": %s, \"locked\": %s, \"help\": %s, "
+                    "\"default\": %s, \"label\": %s, \"category\": %s, \"tier\": %s, \"apply\": %s}%s\n",
                     jstr(d.name).c_str(), kindName(d.kind), numText(d.min).c_str(), numText(d.max).c_str(), condName(d.cond),
                     jstr(d.condKey).c_str(), jstr(d.condValue).c_str(), isLocked ? "true" : "false", jstr(d.help).c_str(),
+                    jstr(m ? m->defaultValue : nullptr).c_str(), jstr(m ? m->label : nullptr).c_str(),
+                    jstr(m ? m->category : nullptr).c_str(), jstr(m ? tierName(m->tier) : nullptr).c_str(),
+                    jstr(m ? applyName(m->apply) : nullptr).c_str(),
                     i + 1 < DUMP_SCHEMA.count ? "," : "");
     }
     // The pins the firmware accepts for a Pin / PinOrOff setting (isUsableGpio), so the dashboard never

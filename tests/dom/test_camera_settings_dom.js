@@ -3,12 +3,13 @@
 // test_camera_settings_dom.js — the camera SETTINGS page (camera-settings-page.php) in jsdom, with its
 // scripts running against a real PHP server and a fake relay, about SAVING a change:
 //   * a board that predates the JPEG quality keys (JPEG_Q_DROP / JPEG_Q_MIN / JPEG_Q_MAX / SIZE_DROP,
-//     never reported — firmware from before the F-14 link tuning) can still save: no value is demanded
-//     for settings such a board cannot have yet, neither for a plain change nor when the quality drop
-//     itself is switched on (the version-skew regression: the page used to block every save with
-//     "JPEG_Q_DROP is needed too — give it a value", mirroring the buildDeviceChange bug)
-//   * a board that HAS the keys with the drop off still has to give the range when it switches the
-//     drop on (a feature just switched on must bring its companions — the MOTION_EMA rule)
+//     never reported — firmware from before the F-14 link tuning) can still save: the page shows the
+//     schema's DEFAULTS for them, tagged "default" (what such a board uses), and nothing is demanded
+//     for them, neither for a plain change nor when the quality drop is changed (the version-skew
+//     regression: the page used to block every save with "JPEG_Q_DROP is needed too — give it a value")
+//   * a board that HAS the keys with the drop off needs no range either when it switches the drop on:
+//     the range has defaults, so it is shown filled in and only what differs is posted (a companion
+//     WITHOUT a default is still demanded — the MOTION_EMA rule, tested on the detector and in test_logic.php)
 //   * what the page posts is what Logic.php accepted all along: only what differs, and the relay is
 //     handed the final "KEY=value;..." line
 // Needs `php` and the jsdom package (cd tests/dom && npm install); skips if either is missing.
@@ -186,7 +187,11 @@ async function main() {
     let window = dom.window;
     const $ = (id) => window.document.getElementById(id);
     check('the page fills in what the board reported', $('f-LOG_ECHO').value === '1' && $('f-LOG_HEARTBEAT').value === '600');
-    check('the JPEG quality rows are shown but empty (the board predates them)', $('f-JPEG_Q_DROP') !== null && $('f-JPEG_Q_DROP').value === '' && !$('r-JPEG_Q_DROP').hidden);
+    check('the JPEG quality rows show their defaults, tagged (the board predates them)',
+      $('f-JPEG_Q_DROP') !== null && $('f-JPEG_Q_DROP').value === '1' && $('f-JPEG_Q_MIN').value === '12' && $('f-JPEG_Q_MAX').value === '63'
+        && !$('r-JPEG_Q_DROP').hidden && $('r-JPEG_Q_DROP').querySelector('.tag.default') !== null,
+      JSON.stringify([$('f-JPEG_Q_DROP').value, $('f-JPEG_Q_MIN').value, $('f-JPEG_Q_MAX').value]));
+    check('a setting the board did report carries no default tag', $('r-LOG_ECHO').querySelector('.tag.default') === null);
 
     setField(window, 'LOG_ECHO', '0');
     check('one edit unlocks the save button', !$('save').disabled);
@@ -197,10 +202,10 @@ async function main() {
     check('…and no toast complains about a missing value', !toasts.some((t) => /needed too/.test(t)), JSON.stringify(toasts));
 
     await waitFor(() => window.document.getElementById('f-LOG_ECHO'));   // the page re-renders after saving
-    setField(window, 'JPEG_Q_DROP', '1');   // the drop itself, range left empty
+    setField(window, 'JPEG_Q_DROP', '0');   // away from its default (1): the one change
     await clickSave(window, toasts, posts.length);
-    check('switching the quality drop on queues without a range on such a board (it was needed before the change too)',
-      posts.length === 2 && posts[1].body === '{"values":{"JPEG_Q_DROP":"1"}}' && staged === 'JPEG_Q_DROP=1',
+    check('changing the quality drop away from its default queues just that on such a board',
+      posts.length === 2 && posts[1].body === '{"values":{"JPEG_Q_DROP":"0"}}' && staged === 'JPEG_Q_DROP=0',
       JSON.stringify({ posted: posts[1] && posts[1].body, staged }));
     check('…still no toast demanding a value', !toasts.some((t) => /needed too/.test(t)), JSON.stringify(toasts));
     closeWindow(dom);
@@ -211,19 +216,23 @@ async function main() {
     dom = await openPage(toasts);
     window = dom.window;
     setField(window, 'JPEG_Q_DROP', '1');
+    check('switching the drop on brings its range along, filled with the defaults',
+      !window.document.getElementById('r-JPEG_Q_MIN').hidden && window.document.getElementById('f-JPEG_Q_MIN').value === '12'
+        && window.document.getElementById('f-JPEG_Q_MAX').value === '63');
     await clickSave(window, toasts, posts.length);
-    const demanded = toasts.find((t) => /needed too/.test(t));
-    check('switching the drop on demands the range first: nothing is posted',
-      posts.length === 2 && demanded === 'JPEG_Q_MIN is needed too — give it a value',
-      JSON.stringify({ toasts, posted: posts[2] && posts[2].body }));
+    check('switching the drop on demands nothing (the range has defaults) and posts just the switch',
+      posts.length === 3 && posts[2].body === '{"values":{"JPEG_Q_DROP":"1"}}' && staged === 'JPEG_Q_DROP=1' && !toasts.some((t) => /needed too/.test(t)),
+      JSON.stringify({ toasts, posted: posts[2] && posts[2].body, staged }));
 
-    setField(window, 'JPEG_Q_MIN', '12');
-    setField(window, 'JPEG_Q_MAX', '63');
+    await waitFor(() => window.document.getElementById('f-LOG_ECHO'));   // the page re-renders after saving
+    setField(window, 'JPEG_Q_DROP', '1');
+    setField(window, 'JPEG_Q_MIN', '10');
+    setField(window, 'JPEG_Q_MAX', '50');
     await clickSave(window, toasts, posts.length);
-    check('with the range given, the whole quality setting goes out in one change',
-      posts.length === 3 && posts[2].body === '{"values":{"JPEG_Q_DROP":"1","JPEG_Q_MIN":"12","JPEG_Q_MAX":"63"}}'
-        && staged === 'JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63',
-      JSON.stringify({ posted: posts[2] && posts[2].body, staged }));
+    check('with its own range given, the whole quality setting goes out in one change',
+      posts.length === 4 && posts[3].body === '{"values":{"JPEG_Q_DROP":"1","JPEG_Q_MIN":"10","JPEG_Q_MAX":"50"}}'
+        && staged === 'JPEG_Q_DROP=1;JPEG_Q_MIN=10;JPEG_Q_MAX=50',
+      JSON.stringify({ posted: posts[3] && posts[3].body, staged }));
     closeWindow(dom);
   } finally {
     if (php) await stopProc(php);

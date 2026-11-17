@@ -864,21 +864,47 @@ camtest_test('buildDeviceChange: values are normalised like the board does (bool
 // would block EVERY change on it (the version-skew regression). But switching the quality drop
 // on must still bring its range along, exactly like the detector's MOTION_EMA pair above.
 
-camtest_test('buildDeviceChange: a board that predates the JPEG quality keys can still be changed (nothing is demanded for settings it never reported)', function () {
+camtest_test('buildDeviceChange: a board that predates the JPEG quality keys holds their defaults, so it can still be changed and the same value is no change', function () {
     $r = camtest_change(camtest_reported(), ['LOG_ECHO' => '0']);
     camtest_assert_equal([$r['ok'], $r['line']], [true, 'LOG_ECHO=0']);
+    // JPEG_Q_DROP (1) and JPEG_Q_MIN (12) are what the board uses until something is stored: giving them again changes nothing
     $r = camtest_change(camtest_reported(), ['JPEG_Q_DROP' => '1', 'JPEG_Q_MIN' => '12', 'JPEG_Q_MAX' => '40']);
-    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=40']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_MAX=40']);
+    // a different value is a change, defaults or not
+    $r = camtest_change(camtest_reported(), ['JPEG_Q_DROP' => '0']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=0']);
 });
 
-camtest_test('buildDeviceChange: switching the quality drop on needs its range, and all of it can be queued together', function () {
+camtest_test('buildDeviceChange: switching the quality drop on needs no range - the range has defaults - and all of it can be queued together', function () {
     $rep = camtest_reported();
-    $rep['JPEG_Q_DROP'] = '0';   // a board that has the keys with the drop off: the range is not needed yet
+    $rep['JPEG_Q_DROP'] = '0';   // a board that has the key with the drop off and never stored the range
     $r = camtest_change($rep, ['JPEG_Q_DROP' => '1']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=1']);
+    $r = camtest_change($rep, ['JPEG_Q_DROP' => '1', 'JPEG_Q_MIN' => '10', 'JPEG_Q_MAX' => '50']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=1;JPEG_Q_MIN=10;JPEG_Q_MAX=50']);
+});
+
+function camtest_companion_keys(?string $companionDefault): array {
+    return [
+        ['name' => 'FEATURE', 'kind' => 'bool', 'min' => 0, 'max' => 0, 'cond' => 'always', 'condKey' => null, 'condValue' => null, 'locked' => false, 'help' => '', 'default' => null],
+        ['name' => 'COMPANION', 'kind' => 'int', 'min' => 1, 'max' => 100, 'cond' => 'equals', 'condKey' => 'FEATURE', 'condValue' => '1', 'locked' => false, 'help' => '', 'default' => $companionDefault],
+    ];
+}
+
+camtest_test('buildDeviceChange: switching a feature on must bring a companion that has NO default - and needs nothing for one that has', function () {
+    $rep = ['FEATURE' => '0'];
+    $r = CamLogic::buildDeviceChange(camtest_companion_keys(null), [], $rep, ['FEATURE' => '1']);
     camtest_assert_equal($r['ok'], false);
-    camtest_assert_true(strpos($r['error'], 'JPEG_Q_MIN') !== false, 'the error names the missing range');
-    $r = camtest_change($rep, ['JPEG_Q_DROP' => '1', 'JPEG_Q_MIN' => '12', 'JPEG_Q_MAX' => '63']);
-    camtest_assert_equal([$r['ok'], $r['line']], [true, 'JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=63']);
+    camtest_assert_true(strpos($r['error'], 'COMPANION') !== false, 'the error names the missing companion');
+    $r = CamLogic::buildDeviceChange(camtest_companion_keys(null), [], $rep, ['FEATURE' => '1', 'COMPANION' => '5']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'FEATURE=1;COMPANION=5']);
+    $r = CamLogic::buildDeviceChange(camtest_companion_keys('7'), [], $rep, ['FEATURE' => '1']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'FEATURE=1']);
+    // the default is what the board holds: the same value is no change, another one is
+    $r = CamLogic::buildDeviceChange(camtest_companion_keys('7'), [], ['FEATURE' => '1'], ['COMPANION' => '7']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, '']);
+    $r = CamLogic::buildDeviceChange(camtest_companion_keys('7'), [], ['FEATURE' => '1'], ['COMPANION' => '8']);
+    camtest_assert_equal([$r['ok'], $r['line']], [true, 'COMPANION=8']);
 });
 
 camtest_test('buildDeviceChange: switching the quality drop off stops needing the range (no stranded board)', function () {

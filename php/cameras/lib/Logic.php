@@ -1787,6 +1787,15 @@ class CamLogic
         foreach ($schemaKeys as $k) {
             $byName[$k['name']] = $k;
         }
+        // What the board really holds: what it reported, and for a setting it never stored (and so never reported)
+        // its default - the value the firmware uses until something is stored, which used to be fixed in the code.
+        // Submitting that same value is therefore no change, and a setting with a default is never "missing".
+        $held = $reported;
+        foreach ($schemaKeys as $k) {
+            if (!array_key_exists($k['name'], $held) && isset($k['default']) && is_string($k['default'])) {
+                $held[$k['name']] = $k['default'];
+            }
+        }
         $changes = [];
         foreach ($values as $name => $raw) {
             $name = (string) $name;
@@ -1821,7 +1830,7 @@ class CamLogic
                     // be accepted, when in fact the key is locked regardless.
                     return ['ok' => false, 'error' => $name . ' can only be changed over the serial port (a wrong value would cut the camera off from the relay)'];
                 }
-                if (isset($reported[$name]) && $reported[$name] === $n['value']) {
+                if (isset($held[$name]) && $held[$name] === $n['value']) {
                     continue;   // unchanged: silently ignore, like the camera does
                 }
                 return ['ok' => false, 'error' => $name . ' can only be changed over the serial port (a wrong value would cut the camera off from the relay)'];
@@ -1830,7 +1839,7 @@ class CamLogic
             if (!$n['ok']) {
                 return $n;
             }
-            if (isset($reported[$name]) && $reported[$name] === $n['value']) {
+            if (isset($held[$name]) && $held[$name] === $n['value']) {
                 continue;
             }
             $changes[$name] = $n['value'];
@@ -1845,7 +1854,7 @@ class CamLogic
         // So only a setting that this change has just made needed (it was not needed with the values
         // the camera itself reported) is an error: switching a feature on must bring its companions,
         // exactly like the detector's MOTION_EMA pair (see isDeviceSettingRequired).
-        $after = array_merge($reported, $changes);
+        $after = array_merge($held, $changes);
         foreach ($schemaKeys as $def) {
             if (isset($after[$def['name']])) {
                 continue;
@@ -1853,7 +1862,7 @@ class CamLogic
             if (!self::isDeviceSettingRequired($def, $after)) {
                 continue;
             }
-            if (self::isDeviceSettingRequired($def, $reported)) {
+            if (self::isDeviceSettingRequired($def, $held)) {
                 continue;   // needed before the change as well: not this change's doing
             }
             return ['ok' => false, 'error' => $def['name'] . ' is needed too — it has no value yet'];

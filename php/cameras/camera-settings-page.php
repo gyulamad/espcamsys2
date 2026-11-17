@@ -202,7 +202,9 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     for (const d of keys) {
       const id = 'f-' + d.name, fixed = isFixed(d);
       // an absent optional on/off setting reads as Off (and is not a change until it is switched On)
-      const value = reported[d.name] === undefined && isOptional(d) && d.kind === 'bool' ? '0' : reported[d.name];
+      // a setting the board has not stored uses its default (the value that used to be fixed in the firmware): show that
+      const usesDefault = reported[d.name] === undefined && d.default !== undefined && d.default !== null;
+      const value = usesDefault ? d.default : reported[d.name] === undefined && isOptional(d) && d.kind === 'bool' ? '0' : reported[d.name];
       const input = makeInput(d, value);
       input.id = id; input.name = d.name;
       if (fixed) input.disabled = true;
@@ -212,7 +214,8 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       input.addEventListener('change', () => { refresh(); });
       const tags = el('span', { className: 'tags' });
       if (fixed) tags.append(el('span', { className: 'tag lock', textContent: 'serial only' }));
-      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name }), tags), input, el('div', { className: 'help', textContent: d.help + (reported[d.name] === undefined && isOptional(d) ? ' — not set on this ' + WHO + ' (treated as off)' : '') + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '') }));
+      if (usesDefault) tags.append(el('span', { className: 'tag default', textContent: 'default' }));
+      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name, title: d.label || '' }), d.label ? el('div', { className: 'help', textContent: d.label }) : '', tags), input, el('div', { className: 'help', textContent: d.help + (reported[d.name] === undefined && isOptional(d) ? ' — not set on this ' + WHO + ' (treated as off)' : '') + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '') }));
       fs.append(row);
     }
     form.append(fs);

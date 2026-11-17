@@ -174,12 +174,13 @@ async function main() {
     // ── the F-14 link-tuning keys on a board that predates them ──
     // The board above runs firmware from before JPEG_Q_DROP / JPEG_Q_MIN / JPEG_Q_MAX / SIZE_DROP and
     // never reports them: a change must not be refused over settings such a board cannot have yet
-    // (the version-skew regression — this used to fail with "JPEG_Q_DROP is needed too").
+    // (the version-skew regression — this used to fail with "JPEG_Q_DROP is needed too"). Such a board holds
+    // their DEFAULTS (JPEG_Q_DROP 1, JPEG_Q_MIN 12), so giving those again is no change and only the one that differs is queued.
     const f14 = await dash('POST', api, { body: { values: { JPEG_Q_DROP: '1', JPEG_Q_MIN: '12', JPEG_Q_MAX: '40' } } });
-    check('the JPEG quality keys queue on a board that predates them', f14.status === 200 && f14.json.queued === true && f14.json.changed.join() === 'JPEG_Q_DROP,JPEG_Q_MIN,JPEG_Q_MAX', f14.text);
+    check('the JPEG quality keys queue on a board that predates them — only what differs from the defaults', f14.status === 200 && f14.json.queued === true && f14.json.changed.join() === 'JPEG_Q_MAX', f14.text);
     const gotF14 = await board.ask();
     const [, lineF14] = gotF14.text.split('\n');
-    check('the board is offered the whole quality range in one line', gotF14.status === 200 && lineF14 === 'JPEG_Q_DROP=1;JPEG_Q_MIN=12;JPEG_Q_MAX=40', JSON.stringify(gotF14.text));
+    check('the board is offered that change in one line', gotF14.status === 200 && lineF14 === 'JPEG_Q_MAX=40', JSON.stringify(gotF14.text));
     check('…and it can be withdrawn again like any change', (await dash('POST', api, { body: { cancel: true } })).status === 200 && (await board.ask()).status === 404);
 
     // ── a refusal by the board ──
