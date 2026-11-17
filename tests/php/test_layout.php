@@ -509,10 +509,11 @@ camtest_test('simple pages: a hostile icon is plain text, never markup', functio
     }
 });
 
-camtest_test('simple view: the slideshow\'s time-left indicator is in the page, hidden until the script shows it — a bar under the picture and the seconds in the status line', function () use ($SIMPLE_CAMS) {
+camtest_test('simple view: the slideshow\'s time-left indicator is in the page — a bar under the picture, the seconds in the status line delivered in their room (.off, never display:none: a display:none item would leave the wrapping row\'s flow, F-35)', function () use ($SIMPLE_CAMS) {
     $html = CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10);
     camtest_assert_true(strpos($html, '<div class="countdown-bar" id="countdown-bar" aria-hidden="true" hidden><div class="countdown-fill" id="countdown-fill"></div></div>') !== false);
-    camtest_assert_true(strpos($html, 'id="countdown"') !== false && preg_match('/id="countdown"[^>]*\bhidden>/', $html) === 1);
+    camtest_assert_true(strpos($html, '<span class="countdown off" id="countdown"') !== false, 'the seconds start invisible but IN the row (visibility, not hidden)');
+    camtest_assert_true(strpos(layout_css_rule($html, '.status .countdown.off'), 'visibility: hidden') !== false, 'the CSS keeps the reserved room in the row');
     camtest_assert_true(strpos($html, 'id="countdown-bar"') < strpos($html, 'class="status"'), 'the bar is under the picture, above the status line');
     camtest_assert_true(strpos($html, 'id="picture-box"') < strpos($html, 'id="countdown-bar"'));
 });

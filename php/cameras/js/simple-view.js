@@ -111,8 +111,12 @@
   }
 
   // The slideshow's "time left" indicator: seconds in the status line and a bar under the picture that runs
-  // out. The seconds hide when there is nothing to count (their room is reserved, so hiding moves nothing).
-  // The bar cannot hide with them: it belongs to the slideshow MODE, not to whether a countdown runs this
+  // out. The seconds hide when there is nothing to count — with visibility, never with `hidden`: this
+  // status line is a flex row that wraps, and a display:none item would LEAVE the row's flow, letting the
+  // remaining items re-break their lines by a whole row on the fonts whose widths allow it (the hold hopped
+  // the picture by 32px on the CI runner, F-35). The item stands in the row instead, invisible, at the room
+  // its reservation keeps — the row's breaking then depends on the screen's width alone. The bar cannot
+  // hide with them: it belongs to the slideshow MODE, not to whether a countdown runs this
   // second — a camera that records (or saw somebody) holds the slideshow, and hiding the bar then would
   // grow the picture by the bar's four pixels and hop the page, at the very moment the red recording frame
   // lights up around it. While the slideshow holds, the bar freezes where it stands and runs on when the
@@ -121,7 +125,7 @@
   function renderCountdown(now, prio) {
     const left = slideshow ? S.countdown(slideshow.remainingMs(now, prio), slideshowMs) : null;
     el('countdown-bar').hidden = !slideshow;
-    el('countdown').hidden = left === null;
+    el('countdown').classList.toggle('off', left === null);
     if (left === null) return;
     el('countdown').textContent = S.countdownText(left.seconds);
     // Back to full after a switch must not slide up slowly: only the running-out is animated.

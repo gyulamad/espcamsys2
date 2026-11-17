@@ -495,6 +495,12 @@ CSS . "\n";
   .countdown-bar { flex: 0 0 auto; height: 4px; background: var(--border); }
   .countdown-fill { height: 100%; width: 100%; background: var(--accent); transition: width 1s linear; }
   .status .countdown { color: var(--muted); }
+  /* The seconds' room stands in the row even while they hide: `hidden` is display:none, and a display:none
+     item of this wrapping row LEAVES its flow — the remaining items re-break their lines, by a whole row on
+     the fonts whose widths allow it (the hold hopped the picture by 32px on the CI runner, F-35). `off` is
+     only visibility: the item stays in the row at the room js/stable-text.js reserved for it, invisible and
+     out of the accessibility tree, and the row's breaking depends on the screen's width alone. */
+  .status .countdown.off { visibility: hidden; }
   @media (prefers-reduced-motion: reduce) { .countdown-fill { transition: none; } }
   .status { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 14px; background: var(--surface); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 1.1rem; }
   .status .grow { flex: 1 1 auto; }
@@ -548,7 +554,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             . '<span class="cam-title">' . self::iconSpan($summary['icon'], 'cam-icon') . '<span id="cam-name">' . self::esc($summary['name']) . '</span></span>'
             . '<span id="rec" class="rec-off">RECORDING: –</span>'
             . '<span class="countdown" id="screen-state" title="Whether this page keeps the device screen on" hidden></span>'
-            . '<span class="countdown" id="countdown" title="Time left before the slideshow shows the next camera" hidden></span>'
+            . '<span class="countdown off" id="countdown" title="Time left before the slideshow shows the next camera"></span>'
             . '<span class="grow"></span>'
             . '<button class="btn" type="button" id="slideshow" aria-pressed="false" title="Show the cameras one after the other, every ' . $slideshowSeconds . ' s (set on the SETTINGS page); a camera that records or sees motion is shown first">▶ SLIDESHOW</button>'
             // hidden until js/simple-view.js knows the browser can do it (the status line is part of what goes full screen here)

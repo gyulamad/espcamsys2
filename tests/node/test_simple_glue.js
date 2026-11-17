@@ -108,7 +108,8 @@ function makeEnv({ cameras = CAMS, current = 'a', seconds = 10, dataCameras, ful
   env.offlineHelper = offlineHelper;   // false: js/camera-offline.js is not on the page
   const els = {};
   for (const id of ['view', 'picture', 'picture-box', 'prev', 'next', 'slideshow', 'fullscreen', 'clock', 'cam-name', 'cam-icon', 'rec', 'countdown', 'countdown-bar', 'countdown-fill', 'offline', 'screen-state']) els[id] = makeEl();
-  for (const id of ['countdown', 'countdown-bar', 'offline', 'fullscreen', 'screen-state']) els[id].hidden = true;   // as the page is delivered
+  for (const id of ['countdown-bar', 'offline', 'fullscreen', 'screen-state']) els[id].hidden = true;   // as the page is delivered
+  els.countdown.classList.add('off');   // the seconds as the page is delivered: invisible but IN the row (.off, F-35) — `hidden` would take the item out of the wrapping row's flow
   els.view.dataset = {
     cameras: dataCameras !== undefined ? dataCameras : JSON.stringify(cameras), current, slideshowSeconds: String(seconds),
   };
@@ -229,15 +230,15 @@ test('view: the icon follows the name when the camera changes; a camera without 
 
 // ── the slideshow's time-left indicator ─────────────────────────────
 
-const shown = (env) => ({ text: env.els.countdown.textContent, hidden: env.els.countdown.hidden, barHidden: env.els['countdown-bar'].hidden, width: env.els['countdown-fill'].style.width });
+const shown = (env) => ({ text: env.els.countdown.textContent, hidden: env.els.countdown.classList.contains('off'), barHidden: env.els['countdown-bar'].hidden, width: env.els['countdown-fill'].style.width });
 
 test('countdown: nothing is shown until the slideshow runs, and it goes away when the slideshow stops', async () => {
   const env = await started({ seconds: 5 });
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true], 'hidden while the slideshow is stopped');
+  assertEqual([env.els.countdown.classList.contains('off'), env.els['countdown-bar'].hidden], [true, true], 'hidden while the slideshow is stopped');
   env.els.slideshow.fire('click');
   assertEqual(shown(env), { text: 'NEXT IN 5 s', hidden: false, barHidden: false, width: '100%' }, 'at once, not at the next second');
   env.els.slideshow.fire('click');
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true]);
+  assertEqual([env.els.countdown.classList.contains('off'), env.els['countdown-bar'].hidden], [true, true]);
 });
 
 test('countdown: the seconds and the bar run down with the time, and start over after the switch', async () => {
@@ -287,19 +288,19 @@ test('countdown: while the slideshow holds (the only recording camera stays) the
   env.relay.status = { a: { recording: true } };
   await env.poll();
   env.els.slideshow.fire('click');
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, false], 'the seconds hide, the bar stays with the slideshow (F-35: the bar\'s four pixels would move the picture at the very moment the recording frame lights up)');
+  assertEqual([env.els.countdown.classList.contains('off'), env.els['countdown-bar'].hidden], [true, false], 'the seconds hide, the bar stays with the slideshow (F-35: the bar\'s four pixels would move the picture at the very moment the recording frame lights up)');
   env.relay.status = { a: { recording: true }, b: { recording: true } };
   await env.poll();
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [false, false], 'both back when there is somewhere to go');
+  assertEqual([env.els.countdown.classList.contains('off'), env.els['countdown-bar'].hidden], [false, false], 'both back when there is somewhere to go');
 });
 
 test('countdown: one camera only — the seconds hide (nowhere to go) while the bar stays with the slideshow', async () => {
   const env = await started({ cameras: [CAMS[0]], seconds: 5 });
   env.els.slideshow.fire('click');
   await env.advance(1000, 2);
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, false]);
+  assertEqual([env.els.countdown.classList.contains('off'), env.els['countdown-bar'].hidden], [true, false]);
   env.els.slideshow.fire('click');
-  assertEqual([env.els.countdown.hidden, env.els['countdown-bar'].hidden], [true, true], 'the bar goes with the mode the user switched off');
+  assertEqual([env.els.countdown.classList.contains('off'), env.els['countdown-bar'].hidden], [true, true], 'the bar goes with the mode the user switched off');
 });
 
 test('view: the pager and the slideshow button do not touch full screen', async () => {
@@ -546,7 +547,7 @@ test('view: the slideshow is ON when the page opens (button pressed, running, co
   assertEqual(env.els.slideshow.attrs['aria-pressed'], 'true');
   assertTrue(env.els.slideshow.classList.contains('on'));
   assertTrue(/ON/.test(env.els.slideshow.textContent), env.els.slideshow.textContent);
-  assertTrue(env.els.countdown.hidden === false, 'the time-left indicator is shown');
+  assertTrue(env.els.countdown.classList.contains('off') === false, 'the time-left indicator is shown');
   await env.advance(1000, 5);
   assertEqual(shownId(env), 'b');   // moved on by itself, nothing was clicked
 });

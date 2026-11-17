@@ -173,20 +173,29 @@ async function main() {
     await page.evaluate(() => window.__cameraStatus({ 'cam-a': { recording: false }, 'cam-b': { recording: true } }));
     await page.waitForFunction(() => document.getElementById('rec').textContent === 'RECORDING: ON');
     const atHold = await page.evaluate(LAYOUT);
-    const holdState = await page.evaluate(() => ({
-      textHidden: document.getElementById('countdown').hidden,
-      barHidden: document.getElementById('countdown-bar').hidden,
-      frameOn: document.getElementById('picture-box').classList.contains('recording'),
-    }));
+    const holdState = await page.evaluate(() => {
+      const cd = document.getElementById('countdown');
+      const cs = getComputedStyle(cd);
+      return {
+        // The seconds are invisible but still IN the wrapping row: display:none (the `hidden`
+        // attribute) would take the item out of the row's flow and let the remaining items
+        // re-break their lines by a whole row, on the fonts whose widths allow it (F-35).
+        textHidden: cs.visibility === 'hidden' && cs.display !== 'none',
+        roomKept: cs.display !== 'none' && cd.getBoundingClientRect().width > 0,
+        barHidden: document.getElementById('countdown-bar').hidden,
+        frameOn: document.getElementById('picture-box').classList.contains('recording'),
+      };
+    });
     check('the hold (the camera on screen records) moves nothing',
       same(before.statusTop, atHold.statusTop) && same(before.statusHeight, atHold.statusHeight) && same(before.pictureTop, atHold.pictureTop) && same(before.pictureHeight, atHold.pictureHeight),
       JSON.stringify({ before, atHold }));
-    check('during the hold the seconds hide but the bar and the red frame stay', holdState.textHidden === true && holdState.barHidden === false && holdState.frameOn === true, JSON.stringify(holdState));
+    check('during the hold the seconds hide (in the row, their room standing) and the bar and the red frame stay',
+      holdState.textHidden === true && holdState.roomKept === true && holdState.barHidden === false && holdState.frameOn === true, JSON.stringify(holdState));
 
     // The hold lifts the way it does live: the recording moves to the OTHER camera — the slideshow follows
     // it (a camera that records is shown first), the countdown runs again, and nothing has moved.
     await page.evaluate(() => window.__cameraStatus({ 'cam-a': { recording: true }, 'cam-b': { recording: false } }));
-    await page.waitForFunction(() => !document.getElementById('countdown').hidden && document.getElementById('countdown').textContent.startsWith('NEXT IN'));
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('countdown')).visibility === 'visible' && document.getElementById('countdown').textContent.startsWith('NEXT IN'));
     const afterHold = await page.evaluate(LAYOUT);
     check('when the hold lifts the countdown is back and nothing has moved',
       same(before.statusTop, afterHold.statusTop) && same(before.statusHeight, afterHold.statusHeight) && same(before.pictureTop, afterHold.pictureTop) && same(before.pictureHeight, afterHold.pictureHeight),
