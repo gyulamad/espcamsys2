@@ -21,22 +21,43 @@ if [ -f ./php/cameras/config.php ] && [ -f "$DEST/config.php" ] && [ ! -d "$DEST
     echo "        copied them back into php/cameras/config.php."
 fi
 
-mkdir -p "$DEST/lib"
-cp ./php/cameras/*.php "$DEST"
-cp ./php/cameras/lib/*.php "$DEST/lib"
+# Everything the web server serves or runs is installed with an explicit mode (files 644, folders 755),
+# not whatever the umask of the shell that ran this script happens to give: under a strict umask (077,
+# common for root) plain cp makes new files 600 and new folders 700, owned by root, and Apache (www-data)
+# then answers "Permission denied" for every file this release ADDED (files that already existed kept their
+# old mode, which is why only the new ones failed). Running it again repairs a folder that was left so.
+FILE_MODE=644
+DIR_MODE=755
+
+# install_files DIR FILE...: copy the files into DIR, each with FILE_MODE
+install_files() {
+    local dir="$1"
+    shift
+    install -m "$FILE_MODE" -t "$dir" "$@"
+}
+
+install -d -m "$DIR_MODE" "$DEST" "$DEST/lib" "$DEST/fonts" "$DEST/js"
+
+# config.php (gitignored, holds the login) is NOT given a mode here: it keeps the one it has, and below
+# the root-run part makes it 640 root:www-data. Never world-readable by this loop.
+PAGES=()
+for page in ./php/cameras/*.php; do
+    [ "$(basename "$page")" = config.php ] || PAGES+=("$page")
+done
+install_files "$DEST" "${PAGES[@]}"
+[ -f ./php/cameras/config.php ] && cp ./php/cameras/config.php "$DEST"
+install_files "$DEST/lib" ./php/cameras/lib/*.php
 # the footage list's script is not a page: PHP reads it and writes it into the pages (lib/ is never served)
-cp ./php/cameras/lib/*.js "$DEST/lib"
+install_files "$DEST/lib" ./php/cameras/lib/*.js
 # the two typefaces (Share Tech Mono, Barlow) are served from here, not from Google Fonts (review F-19)
-mkdir -p "$DEST/fonts"
-cp ./php/cameras/fonts/* "$DEST/fonts"
+install_files "$DEST/fonts" ./php/cameras/fonts/*
 # the page icon (every page's <head> names favicon.svg and favicon.ico)
-cp ./php/cameras/favicon.svg ./php/cameras/favicon.ico "$DEST"
+install_files "$DEST" ./php/cameras/favicon.svg ./php/cameras/favicon.ico
 # the scripts of the simple camera pages (plain files, no secrets; the logic is also run by the unit tests)
-mkdir -p "$DEST/js"
-cp ./php/cameras/js/*.js "$DEST/js"
+install_files "$DEST/js" ./php/cameras/js/*.js
 # .htaccess denies config.php.bak and similar copies of the config if the server allows overrides
-# (cp *.php does not pick it up); apache/camdash-protect.conf denies them on its own too.
-cp ./php/cameras/.htaccess "$DEST/.htaccess"
+# (the *.php copy does not pick it up); apache/camdash-protect.conf denies them on its own too.
+install -m "$FILE_MODE" ./php/cameras/.htaccess "$DEST/.htaccess"
 # an older version left config.php.bak (password + control key) in the web folder: remove it
 rm -f "$DEST/config.php.bak"
 # control.php (camera power on/off) was retired — cp never deletes, so remove the stale copy

@@ -14,6 +14,9 @@
 //     (data/settings.json) are never touched by a deploy, and the owner is told which of them win over
 //     config.php. As a normal user: nothing is changed and the owner is told to use sudo
 //   - a missing config.php is said out loud
+//   - whatever umask the shell has (077 gives 600 files / 700 folders that Apache cannot read), everything
+//     the web server serves ends up files 644, folders 755 — new files and old ones left 600 by an earlier
+//     deploy alike — while a config.php that came along is never made world-readable
 //   - a stray second folder (what an earlier version of the script made) is pointed out, with how to
 //     check which folder is live before deleting it — and no such note when there is none
 //   - the default destination is /var/www/html/camdash, and the script mentions no other folder as a target
@@ -50,6 +53,21 @@ function makeRepo(base, name, repoConfig) {
 function deploy(repo, dest, stray) {
   const r = spawnSync('bash', ['./deploy.sh'], { cwd: repo, encoding: 'utf8', env: { ...process.env, CAMDASH_DIR: dest, CAMDASH_STRAY_DIR: stray } });
   return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+function deployUnderUmask(umask, repo, dest, stray) {
+  const r = spawnSync('bash', ['-c', `umask ${umask}; exec bash ./deploy.sh`], { cwd: repo, encoding: 'utf8', env: { ...process.env, CAMDASH_DIR: dest, CAMDASH_STRAY_DIR: stray } });
+  return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+// every file and folder under dir (relative paths), except the ones in skip
+function walk(dir, skip = []) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = e.name;
+    if (skip.includes(rel)) continue;
+    out.push(rel);
+    if (e.isDirectory()) out.push(...walk(path.join(dir, e.name)).map((c) => path.join(rel, c)));
+  }
+  return out;
 }
 const mode = (f) => (fs.statSync(f).mode & 0o777).toString(8);
 
@@ -151,7 +169,40 @@ try {
   r = deploy(repo, stray, stray);
   check('no note when the stray folder IS the destination', !/NOTE .*exists/.test(r.out), r.out);
 
-  // ── 5. the script itself ──
+  // ── 5. a strict umask must not lock the web server out (new files used to come out 600, folders 700) ──
+  repo = makeRepo(base, 'repo5', null);
+  const served = (d) => walk(d, ['data', 'config.php']);
+  const wrongModes = (d) => served(d).filter((rel) => {
+    const full = path.join(d, rel);
+    return mode(full) !== (fs.statSync(full).isDirectory() ? '755' : '644');
+  });
+  let strict = path.join(base, 'strict-fresh');
+  r = deployUnderUmask('077', repo, strict, noStray);
+  check('umask 077, fresh install: deploy.sh succeeds', r.status === 0, r.out);
+  check('umask 077, fresh install: every served file is 644 and every folder 755 (incl. the newest: lib/Sounds.php, js/alarm-sounds.js)', fs.existsSync(path.join(strict, 'lib/Sounds.php')) && fs.existsSync(path.join(strict, 'js/alarm-sounds.js')) && wrongModes(strict).length === 0 && mode(strict) === '755', wrongModes(strict).join(', '));
+  check('umask 077, fresh install: .htaccess and the web folder itself are readable by the web server', mode(path.join(strict, '.htaccess')) === '644' && mode(strict) === '755');
+
+  // an install an older deploy left unreadable is repaired by deploying again
+  strict = path.join(base, 'strict-broken');
+  fs.mkdirSync(path.join(strict, 'js'), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(strict, 'index.php'), '<?php // OLD\n', { mode: 0o600 });
+  fs.chmodSync(path.join(strict, 'index.php'), 0o600);
+  fs.chmodSync(path.join(strict, 'js'), 0o700);
+  r = deployUnderUmask('077', repo, strict, noStray);
+  check('umask 077, over files an earlier deploy left 600 / a folder left 700: they are repaired to 644 / 755', r.status === 0 && wrongModes(strict).length === 0, wrongModes(strict).join(', ') + ' ' + r.out);
+
+  // the same under the usual umask: nothing different
+  strict = path.join(base, 'strict-022');
+  r = deployUnderUmask('022', repo, strict, noStray);
+  check('umask 022: the same modes (644 / 755)', r.status === 0 && wrongModes(strict).length === 0, wrongModes(strict).join(', '));
+
+  // a config.php that comes along from the repo is not opened up by the new modes
+  const repoWithConfig = makeRepo(base, 'repo5c', '<?php return ["auth_pass" => "s3cret-secret"];\n');
+  strict = path.join(base, 'strict-config');
+  r = deployUnderUmask('077', repoWithConfig, strict, noStray);
+  check('umask 077: a config.php copied along is not world- or group-readable by this script (root: 640 root:www-data)', IS_ROOT && HAS_WWW_DATA ? mode(path.join(strict, 'config.php')) === '640' : (fs.statSync(path.join(strict, 'config.php')).mode & 0o077) === 0, mode(path.join(strict, 'config.php')));
+
+  // ── 6. the script itself ──
   const src = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
   check('the default destination is /var/www/html/camdash, as it always was', /DEST="\$\{CAMDASH_DIR:-\/var\/www\/html\/camdash\}"/.test(src));
   check('the script copies only into $DEST (no other folder is ever a target)', !/\bcp\b[^\n]*\/var\/www\/camdash\b/.test(src) && !/\bmkdir\b[^\n]*\/var\/www\/camdash\b/.test(src));
