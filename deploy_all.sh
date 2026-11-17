@@ -279,8 +279,11 @@ setup_relay_calls() {
     trap 'rm -rf "$TMP"' EXIT
     trap 'exit 130' INT TERM
     # The key goes into a header file (mode 600), not onto curl's command line where `ps` shows it.
-    umask 077
-    printf 'X-Control-Key: %s\n' "$CONTROL_KEY" > "$TMP/control-header"
+    # The strict umask is for that one file only (a subshell): set here for the whole script it was
+    # inherited by `sudo ./deploy.sh`, which then made every NEW file of the web folder 600 and every
+    # new folder 700 — unreadable by Apache — and by ota-deploy.sh and run_tests.sh.
+    ( umask 077 && printf 'X-Control-Key: %s\n' "$CONTROL_KEY" > "$TMP/control-header" ) \
+        || die "could not write the control key file in $TMP"
 }
 
 # relay_call METHOD PATH [curl args...] — prints the HTTP status (000: no answer); the body is in $TMP/reply.

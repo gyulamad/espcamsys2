@@ -7,7 +7,9 @@
 #   - the settings are staged BEFORE the firmware, without the Wi-Fi/key/id lines, and never as an empty
 #     body (which would remove what is staged)
 #   - a missing input is found before the first step runs; a failed step stops the deploy
-#   - the control key never appears on a command line
+#   - the control key never appears on a command line, and its file is private (600) — without the strict
+#     umask used for it leaking into the steps: deploy.sh, ota-deploy.sh and run_tests.sh run with the
+#     umask the caller has (077 made every NEW file of the web folder 600, unreadable by Apache)
 #   - --dry-run changes nothing; the deployed revision is recorded only after a clean, complete run
 # Usage: tests/shell/test_deploy_all.sh      Exit code: 0 if all pass.
 
@@ -83,6 +85,7 @@ for s in deploy.sh ota-deploy.sh run_tests.sh; do
     cat > "$SB/$s" <<EOF
 #!/usr/bin/env bash
 echo "$s \$*" >> "\$FAKE_LOG"
+echo "$s umask=\$(umask)" >> "\${FAKE_UMASK_LOG:-/dev/null}"
 case " \${FAKE_FAIL:-} " in *" $s "*) exit 1 ;; esac
 exit 0
 EOF
@@ -103,7 +106,8 @@ while [ $# -gt 0 ]; do
         -o) out="$2"; shift 2 ;;
         -w) wfmt="$2"; shift 2 ;;
         --data-binary) body="$2"; shift 2 ;;
-        -H|--max-time) shift 2 ;;
+        -H) case "$2" in @*) stat -c %a "${2#@}" >> "${FAKE_HDRMODE:-/dev/null}" ;; esac; shift 2 ;;
+        --max-time) shift 2 ;;
         -*) shift ;;
         *) url="$1"; shift ;;
     esac
@@ -137,8 +141,9 @@ commit_change() {   # commit_change FILE... — change each file and commit
 reset_to_base() { git -C "$SB" reset -q --hard "$BASE_REV"; rm -f "$SB/.deployed-rev"; git -C "$SB" update-ref -d ORIG_HEAD 2>/dev/null; }
 
 run_deploy() {   # run_deploy ARGS... — sets rc; the log of the fakes is $LOG, the script's words are $OUT
-    : > "$LOG"; : > "$TMP/argv.log"
-    (cd "$SB" && PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_ARGV="$TMP/argv.log" \
+    : > "$LOG"; : > "$TMP/argv.log"; : > "$TMP/umask.log"; : > "$TMP/hdrmode.log"
+    (cd "$SB" && umask "${CASE_UMASK:-0022}" && PATH="$BIN:$PATH" FAKE_LOG="$LOG" FAKE_ARGV="$TMP/argv.log" \
+        FAKE_UMASK_LOG="$TMP/umask.log" FAKE_HDRMODE="$TMP/hdrmode.log" \
         DEPLOY_RESTART_PAUSE=0 DEPLOY_POLL_SECONDS=1 DEPLOY_RELAY_WAIT="${CASE_RELAY_WAIT:-3}" \
         bash ./deploy_all.sh "$@") > "$OUT" 2>&1
     rc=$?
@@ -203,6 +208,18 @@ run_deploy --run-tests
     && before "$LOG" "curl PUT" "ota-deploy.sh recorder" && before "$LOG" "ota-deploy.sh recorder" "curl POST"
 check "everything: tests -> dashboard -> settings -> firmware -> relay restart" $?
 has "$LOG" "run_tests.sh" && ! has "$LOG" "run_tests.sh --no-sketch-compile"; check "--run-tests: the sketches are compiled when a sketch changed" $?
+
+# ── 7b. the umask of the caller reaches every step; only the key file is private ──
+for um in 0022 0002; do
+    reset_to_base; echo "$BASE_REV" > "$SB/.deployed-rev"
+    commit_change php/cameras/index.php $REC/settings_schema.h nodejs/camera-relay/server.js
+    CASE_UMASK=$um run_deploy --run-tests
+    [ $rc -eq 0 ] && [ "$(grep -c . "$TMP/umask.log")" -eq 3 ] && ! grep -qv "umask=$um\$" "$TMP/umask.log"
+    check "umask $um: run_tests.sh, deploy.sh and ota-deploy.sh all run with the caller's umask (the key file's 077 must not leak)" $?
+    [ "$(cat "$TMP/hdrmode.log" | sort -u)" = 600 ]; check "umask $um: the file holding the control key is mode 600" $?
+done
+CASE_UMASK=0077 run_deploy --run-tests   # a caller who really has a strict umask keeps it: it is theirs to choose
+[ $rc -eq 0 ] && ! grep -qv "umask=0077\$" "$TMP/umask.log"; check "umask 0077 of the caller is passed on as it is (no more, no less)" $?
 
 # ── 8. --run-tests without a sketch change ───────────────────────────────
 reset_to_base; echo "$BASE_REV" > "$SB/.deployed-rev"; commit_change php/cameras/index.php
