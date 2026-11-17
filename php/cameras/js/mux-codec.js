@@ -18,6 +18,7 @@
   const TYPE_STATE = 3;
   const STATE_DETECTORS = 'state:detectors';
   const STATE_CAMERAS = 'state:cameras';
+  const STATE_ALARMS = 'state:alarms';
   const CONTENT_TYPE = 'application/x-espcam-mux';
 
   const LENGTH_BYTES = 4;
@@ -78,7 +79,7 @@
     return source.startsWith(prefix) ? source.slice(prefix.length) : null;
   }
 
-  const api = { VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, STATE_DETECTORS, STATE_CAMERAS, CONTENT_TYPE, ProtocolError, createParser, idOf };
+  const api = { VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, STATE_DETECTORS, STATE_CAMERAS, STATE_ALARMS, CONTENT_TYPE, ProtocolError, createParser, idOf };
   root.CamMuxCodec = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -21,7 +21,7 @@ function setup() {
     imgs[id] = makeImg();
     detImgs[id] = makeImg();
   }
-  const page = { down: [], status: [], cameraStatus: [] };
+  const page = { down: [], status: [], cameraStatus: [], alarms: [] };
   let clientOptions = null;
   let state = 'idle';
   const fakeClient = {
@@ -35,6 +35,7 @@ function setup() {
     imgFor: (kind, id) => (kind === 'det' ? detImgs : imgs)[id] || null,
     onStatus: (data) => page.status.push(data),
     onCameraStatus: (data) => page.cameraStatus.push(data),
+    onAlarms: (data) => page.alarms.push(data),
     onDown: (ids) => page.down.push(ids),
     env: {
       createClient: (options) => { clientOptions = options; return fakeClient; },
@@ -265,6 +266,46 @@ test('the cameras\' recording state: not asked for, not JSON, or turned off agai
   t.sendState('{"a":1}', 'state:cameras');
   assertEqual(t.page.cameraStatus, []);
   assertEqual(t.calls, ['restart', 'restart', 'restart'], 'each change of what is asked for reopens the connection once');
+});
+
+test('the alarm sound events: asked for with alarms=1, delivered to the page, ignored when not asked for, not JSON, or turned off again', () => {
+  const t = setup();
+  t.pictures.show('a'); t.settle();
+  t.sendState('{"epoch":1,"now":2,"events":[]}', 'state:alarms');
+  t.pictures.watchAlarms(true); t.settle();
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a&alarms=1');
+  t.sendState('{"epoch":1,"now":2,"events":[]}', 'state:alarms');
+  t.sendState('nope {', 'state:alarms');
+  t.pictures.watchAlarms(false); t.settle();
+  t.sendState('{"epoch":1,"now":3,"events":[]}', 'state:alarms');
+  assertEqual(t.page.alarms, [{ epoch: 1, now: 2, events: [] }]);
+  assertEqual(t.calls, ['restart', 'restart', 'restart'], 'each change of what is asked for reopens the connection once');
+});
+
+test('a page that only plays alarm sounds (no picture, nothing else) opens the connection for alarms=1 alone', () => {
+  const t = setup();
+  t.pictures.watchAlarms(true); t.settle();
+  assertEqual(t.calls, ['restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?alarms=1');
+  t.pictures.watchAlarms(false); t.settle();
+  assertEqual(t.calls, ['restart', 'stop']);
+});
+
+test('alarms ride on the same connection as the other readings: ONE address for all of them', () => {
+  const t = setup();
+  t.pictures.show('a'); t.pictures.watchStatus(true); t.pictures.watchCameraStatus(true); t.pictures.watchAlarms(true); t.settle();
+  assertEqual(t.calls, ['restart']);
+  assertEqual(t.options().buildUrl(), 'mux.php?cams=a&alarms=1&rec=1&status=1');
+});
+
+test('a page that gives no onAlarms is not hurt by an alarm message', () => {
+  const calls = [];
+  let options = null;
+  const p = Pictures.create({ url: 'mux.php', imgFor: () => null, onStatus() {}, onCameraStatus() {}, onDown() {},
+    env: { createClient: (o) => { options = o; return { start() {}, restart() { calls.push('restart'); }, stop() {}, state: () => 'idle' }; }, codec, defer: (fn) => fn() } });
+  p.watchAlarms(true);
+  options.onMessage({ type: codec.TYPE_STATE, source: 'state:alarms', payload: new TextEncoder().encode('{"epoch":1,"now":1,"events":[]}') });
+  assertEqual(calls, ['restart']);
 });
 
 test('hiding the last camera keeps the connection while readings or detector pictures are wanted: reopened without cams=', () => {

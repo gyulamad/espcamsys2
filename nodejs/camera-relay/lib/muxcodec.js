@@ -35,6 +35,7 @@ const CAMERA_KIND = 'cam';
 const DETECTOR_KIND = 'det';
 const STATE_DETECTORS = 'state:detectors';
 const STATE_CAMERAS = 'state:cameras';
+const STATE_ALARMS = 'state:alarms';
 
 function cameraSource(id) {
   return `${CAMERA_KIND}:${id}`;
@@ -69,7 +70,7 @@ function encodeHeartbeat() {
 }
 
 module.exports = {
-  VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, CONTENT_TYPE, STATE_DETECTORS, STATE_CAMERAS,
+  VERSION, TYPE_FRAME, TYPE_HEARTBEAT, TYPE_STATE, CONTENT_TYPE, STATE_DETECTORS, STATE_CAMERAS, STATE_ALARMS,
   LENGTH_BYTES, FIXED_BODY_BYTES, MAX_SOURCE_BYTES, MAX_PAYLOAD_BYTES,
   cameraSource, detectorSource, encodeFrame, encodeState, encodeHeartbeat,
 };

@@ -523,7 +523,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
         }
         $body = '<div class="bar"><span>' . count($cameras) . ' CAMERA' . (count($cameras) === 1 ? '' : 'S') . '</span></div>'
             . ($items === '' ? '<p class="empty">No cameras are configured.</p>' : '<main class="thumbs" id="thumbs" data-count="' . count($cameras) . '">' . $items . '</main>');
-        return self::simplePage('Cameras', 'simple-list', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'simple-list.js']);
+        return self::simplePage('Cameras', 'simple-list', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'toast.js', 'alarm-sounds.js', 'simple-list.js']);
     }
 
     // simple-view.php: one camera large (a click on it shows the picture alone full screen), the pager, the status line,
@@ -554,7 +554,7 @@ CSS . "\n" . self::navBarStyle() . self::recordingFrameStyle() . self::offlineCo
             // hidden until js/simple-view.js knows the browser can do it (the status line is part of what goes full screen here)
             . '<button class="btn" type="button" id="fullscreen" aria-pressed="false" title="Show the whole page full screen, with this status line (a click on the picture shows the picture alone)" hidden>⛶ FULL SCREEN</button>'
             . '</div></div>';
-        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'fullscreen.js', 'screen-keeper.js', 'stable-text.js', 'simple-view.js']);
+        return self::simplePage($summary['name'], 'simple-view', $body, ['busy.js', 'camera-offline.js', 'simple-logic.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'toast.js', 'alarm-sounds.js', 'fullscreen.js', 'screen-keeper.js', 'stable-text.js', 'simple-view.js']);
     }
 
     // What logout.php shows. It is sent with a 401 and a login prompt (that is what makes the browser

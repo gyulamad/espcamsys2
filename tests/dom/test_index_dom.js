@@ -160,11 +160,14 @@ async function main() {
 
     // The browser side: scripts run, fetch goes to the real PHP; raw=true skips PHP's list filter on purpose.
     let bypassFilter = false;
+    let mux = null;
     dom = new JSDOM(html, {
-      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'alarm-chain.js', 'busy.js', 'device-info.js', 'stable-text.js', 'switch-status.js']), pretendToBeVisual: true,
+      url: `${BASE}/index.php`, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'wifi-info.js', 'camera-offline.js', 'alarm-chain.js', 'busy.js', 'device-info.js', 'stable-text.js', 'switch-status.js', 'alarm-sounds.js']), pretendToBeVisual: true,
       beforeParse(window) {
         window.__pwned = undefined;
-        installFakeMux(window);
+        mux = installFakeMux(window);
+        window.__audioPlays = [];   // the alarm sounds this page plays (no real audio in jsdom)
+        window.Audio = class { constructor(url) { this.url = url; } addEventListener() {} play() { window.__audioPlays.push(this.url); return Promise.resolve(); } };
         window.confirm = () => false;
         window.alert = () => {};
         window.fetch = (u, opts = {}) => {
@@ -294,6 +297,17 @@ async function main() {
     // The fake relay answers {} to /restart, so the dashboard refuses — the message is an error toast
     // ("Sending…" may still be on the screen next to it). No note is printed next to the menu either way.
     check('the reboot menu answers as a toast too', toastsOf().length >= 1 && /Sending|relay|reach|failed|Reboot/i.test(rebootToasts.join(' ')), rebootToasts.join(' | '));
+
+    // ── alarm sounds in the browser: asked for on the one connection, played once per new event ──
+    check('the page asks for the alarm events on the same connection', mux.calls.includes('watchAlarms true'), mux.calls.join(', '));
+    const alarmList = (now, events) => ({ epoch: 5, now, events });
+    const startEvent = (seq, at) => ({ seq, at, kind: 'recordStart', camId: 'cam1', sound: 'siren.wav' });
+    mux.pushAlarms(alarmList(1000, [startEvent(1, 990)]));
+    check('the first list the page gets is not played (an alarm from before the page opened)', w.__audioPlays.length === 0, JSON.stringify(w.__audioPlays));
+    mux.pushAlarms(alarmList(1100, [startEvent(1, 990), startEvent(2, 1090)]));
+    check('a new event plays its sound from sounds.php', JSON.stringify(w.__audioPlays) === JSON.stringify(['sounds.php?name=siren.wav']), JSON.stringify(w.__audioPlays));
+    mux.pushAlarms(alarmList(1100, [startEvent(1, 990), startEvent(2, 1090)]));
+    check('the same list again plays nothing more', w.__audioPlays.length === 1);
   } catch (err) {
     check('the test ran without an unexpected error', false, String(err && err.stack || err));
   } finally {

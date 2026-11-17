@@ -11,6 +11,7 @@
 // what the page asked for is passed on, whatever the relay sends.
 
 require_once __DIR__ . '/Logic.php';
+require_once __DIR__ . '/Sounds.php';
 
 final class CamMuxStream
 {
@@ -20,6 +21,7 @@ final class CamMuxStream
     public const TYPE_STATE = 3;
     public const STATE_DETECTORS = 'state:detectors';
     public const STATE_CAMERAS = 'state:cameras';
+    public const STATE_ALARMS = 'state:alarms';
     public const MAX_SOURCE_BYTES = 80;
     public const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024;   // the largest picture the relay accepts from a camera
 
@@ -91,10 +93,11 @@ final class CamMuxStream
         return $allowed;
     }
 
-    // The state sources a request asks for: the detectors' readings (status=1), the cameras' recording state (rec=1).
-    public static function wantedStates(bool $detectors, bool $cameras): array
+    // The state sources a request asks for: the detectors' readings (status=1), the cameras' recording state (rec=1),
+    // the alarm sound events (alarms=1).
+    public static function wantedStates(bool $detectors, bool $cameras, bool $alarms = false): array
     {
-        return array_merge($detectors ? [self::STATE_DETECTORS] : [], $cameras ? [self::STATE_CAMERAS] : []);
+        return array_merge($detectors ? [self::STATE_DETECTORS] : [], $cameras ? [self::STATE_CAMERAS] : [], $alarms ? [self::STATE_ALARMS] : []);
     }
 
     // The readings of the detectors for one relay message: the { camId: status } map detector-status.php answers
@@ -118,8 +121,20 @@ final class CamMuxStream
         return is_array(json_decode($relayData, true)) ? CamLogic::shapeCameraStatuses($relayData) : null;
     }
 
+    // One state message's payload -> the JSON the browser gets, or null when it is not what that source carries.
+    private static function shapeState(string $source, string $payload, array $cameras): ?string
+    {
+        if ($source === self::STATE_DETECTORS) {
+            return self::detectorReadingsJson($payload, $cameras);
+        }
+        if ($source === self::STATE_ALARMS) {
+            return CamSounds::shapeAlarmState($payload);
+        }
+        return self::cameraStatusJson($payload);
+    }
+
     // What the browser gets for the messages of one read: heartbeats, and pictures from the $allowed sources (renamed);
-    // of each kind of readings in $states (STATE_DETECTORS, STATE_CAMERAS) the newest only (the older ones are out of
+    // of each kind of readings in $states (STATE_DETECTORS, STATE_CAMERAS, STATE_ALARMS) the newest only (the older ones are out of
     // date), the detectors' shaped like detector-status.php's answer; nothing else, so a type or source this page
     // never asked for does not get through.
     public static function forward(array $messages, array $allowed, array $states, array $cameras): string
@@ -136,7 +151,7 @@ final class CamMuxStream
             }
         }
         foreach ($newest as $source => $payload) {
-            $json = $source === self::STATE_DETECTORS ? self::detectorReadingsJson($payload, $cameras) : self::cameraStatusJson($payload);
+            $json = self::shapeState($source, $payload, $cameras);
             if ($json !== null) {
                 $out .= self::encode(self::TYPE_STATE, $source, $json);
             }

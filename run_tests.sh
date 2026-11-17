@@ -509,6 +509,17 @@ fi
 #     alarm records for the length stored via /settings rather than a
 #     hardcoded value, that it persists across a restart, etc. Override the
 #     ports with E2E_SETTINGS_PORT / E2E_SETTINGS_PUSH_PORT if they collide.
+#   - tests/e2e/test_alarm_sounds_e2e.js: F-28 on a real relay with a fake audio player — the sound library (upload of a
+#     real WAV / MP3 / OGG, a renamed web page, a bad name, a file over the limit and a 21st sound refused; list,
+#     download, replace, delete, refused while an alarm uses the sound), the six alarm settings, "play it here" (502
+#     with the reason when the player fails, 409 while busy), a recording START and a person FOUND in a fresh
+#     recording (real ffmpeg, a fake detector) reaching the relay's player and a /mux?alarms=1 viewer, each only where
+#     its switch is ON. Needs ffmpeg and python3. Override the port with E2E_SOUNDS_PORT (and the next one up).
+#   - tests/e2e/test_dashboard_sounds_e2e.js: F-28 through the real dashboard (php -S) in front of that relay — login and
+#     the dashboard's own header, what PHP refuses itself (name, action, size, no control key), upload / list / download
+#     with a type decided by the name, the sound choices on system-settings.php, a used sound cannot be deleted, an
+#     alarm event relay -> mux.php -> a client, and (with jsdom) the real SETTINGS page: upload, choose, SAVE, PLAY, DELETE.
+#     Needs php and ffmpeg. Override the port with E2E_SOUNDSDASH_PORT (and the two above it).
 #   - tests/e2e/test_recording_switch_e2e.js: the recording ON/OFF switch on a
 #     real relay — control-key authentication, every way a recording can start
 #     is blocked while OFF, per-camera and all-cameras, minutes semantics,
@@ -562,6 +573,9 @@ fi
 #   - tests/dom/test_wifi_dom.js: the Wi-Fi chips on the real dashboard page in jsdom — a chip per camera and a
 #     line per detector (a resting one too), a hostile network name shown as text only, chips following the data.
 #     Needs php and jsdom. Override the port with E2E_WIFIDOM_PORT (and the next one up).
+#   - tests/dom/test_sound_library_dom.js: the alarm sound library of the settings page in jsdom, against a scripted
+#     fetch — the list, hostile names shown as text, PLAY / ON RELAY / DELETE / UPLOAD and what each asks of the server
+#     and says when it is refused. Needs jsdom.
 #   - tests/dom/test_offline_preloader_dom.js: F-25 on the real dashboard page in jsdom — the CAMERA OFFLINE cover
 #     and the page's own CONNECTING… / STREAM ERROR / FEED PAUSED overlay never show at once (an offline camera
 #     keeps the cover alone through a RELOAD and a connection drop, CONNECTING… returns when it is back, a paused
@@ -712,6 +726,25 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_alarm_settings_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (alarm sounds, relay) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_alarm_sounds_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (alarm sounds through the dashboard) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the settings page part (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_sounds_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
@@ -1021,6 +1054,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_wifi_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the alarm sound library of the settings page) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_sound_library_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

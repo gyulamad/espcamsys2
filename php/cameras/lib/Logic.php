@@ -537,15 +537,15 @@ class CamLogic
 
     // Whether a mux request asks for anything at all: pictures of cameras or detectors, the readings, or the
     // recording state. The relay refuses a request for nothing; refusing it here too means no connection is opened.
-    public static function muxWantsAnything(array $ids, array $detectorCams, bool $status, bool $recording): bool
+    public static function muxWantsAnything(array $ids, array $detectorCams, bool $status, bool $recording, bool $alarms = false): bool
     {
-        return $ids !== [] || $detectorCams !== [] || $status || $recording;
+        return $ids !== [] || $detectorCams !== [] || $status || $recording || $alarms;
     }
 
     // Where the relay serves the mux stream: the pictures of these cameras (none is fine), of these detectors (their
     // own ids), and when $status also the readings of the detectors, when $recording the recording state of the
     // cameras. Only what is asked for is in the address.
-    public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false, bool $recording = false): string
+    public static function muxUrl(string $relayUrl, array $ids, array $detectorIds = [], bool $status = false, bool $recording = false, bool $alarms = false): string
     {
         $params = [];
         if ($ids) {
@@ -559,6 +559,9 @@ class CamLogic
         }
         if ($recording) {
             $params[] = 'rec=1';
+        }
+        if ($alarms) {
+            $params[] = 'alarms=1';
         }
         return rtrim($relayUrl, '/') . '/mux' . ($params ? '?' . implode('&', $params) : '');
     }
@@ -977,17 +980,20 @@ class CamLogic
     //   -> ['ok' => true, 'dashboard' => [...], 'relay' => [...]] | ['ok' => false, 'error' => ...]
     // The relay settings the dashboard is allowed to change (review F-09). An ALLOW-list, so a setting the
     // relay gains later stays out of reach until it is added here on purpose. Numbers, ports and keys only
-    // (personScanConfidence is a decimal and personScanEnabled a true/false switch sent as text: the relay checks both).
+    // (personScanConfidence is a decimal and personScanEnabled a true/false switch sent as text: the relay checks both;
+    // the alarm sound settings are a sound's NAME or a true/false switch: the relay checks the name against its folder).
     const RELAY_SETTING_KEYS = [
         'alarmRecordSeconds', 'minFreeStorageMB', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort',
         'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles', 'personScanEnabled', 'personScanConfidence',
+        'alarmSoundRecordStart', 'alarmSoundRecordStartRelay', 'alarmSoundRecordStartBrowser',
+        'alarmSoundPersonDetected', 'alarmSoundPersonDetectedRelay', 'alarmSoundPersonDetectedBrowser',
     ];
 
     // Free-text FILE and FOLDER paths on the Pi. Whoever can save settings here must not be able to point
     // the relay (which runs with its own rights) at an arbitrary place — a log written into another
     // program's folder, firmware served from /etc, the on/off state file overwritten. These are changed
     // on the Pi itself: config.js or the relay's environment (MANUAL.md).
-    const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile'];
+    const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile'];
 
     // The fields from the relay's GET /system-settings that the page may show and change: the others
     // (the paths, and anything unknown) are dropped, so the page never offers them.

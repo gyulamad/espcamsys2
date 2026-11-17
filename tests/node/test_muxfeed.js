@@ -9,6 +9,7 @@ const feedLib = require('../../nodejs/camera-relay/lib/muxfeed');
 const codec = require('../../nodejs/camera-relay/lib/muxcodec');
 const decoder = require('../../php/cameras/js/mux-codec');
 const { CAMERA_ID_RE } = require('../../nodejs/camera-relay/lib/logentry');
+const { createAlarmFeed } = require('../../nodejs/camera-relay/lib/alarmfeed');
 
 const RULES = { idPattern: CAMERA_ID_RE, maxCameras: 3, maxDetectors: 2 };
 const pic = (n) => Buffer.from([0xff, 0xd8, n]);
@@ -22,7 +23,7 @@ function recorder(answers = []) {
 }
 
 test('parseRequest: a comma-separated list of cameras, each once, in the order given', () => {
-  assertEqual(feedLib.parseRequest({ cams: 'a,b,c' }, RULES), { cams: ['a', 'b', 'c'], dets: [], status: false, rec: false });
+  assertEqual(feedLib.parseRequest({ cams: 'a,b,c' }, RULES), { cams: ['a', 'b', 'c'], dets: [], status: false, rec: false, alarms: false });
   assertEqual(feedLib.parseRequest({ cams: 'b,a,b' }, RULES).cams, ['b', 'a']);
   assertEqual(feedLib.parseRequest({ cams: 'cam-1.x_2' }, RULES).cams, ['cam-1.x_2']);
 });
@@ -35,7 +36,7 @@ test('parseRequest: the cameras\' recording state is an optional extra, asked fo
 });
 
 test('parseRequest: detectors and the readings are optional extras', () => {
-  assertEqual(feedLib.parseRequest({ cams: 'a', dets: 'd1,d2', status: '1' }, RULES), { cams: ['a'], dets: ['d1', 'd2'], status: true, rec: false });
+  assertEqual(feedLib.parseRequest({ cams: 'a', dets: 'd1,d2', status: '1' }, RULES), { cams: ['a'], dets: ['d1', 'd2'], status: true, rec: false, alarms: false });
   assertEqual(feedLib.parseRequest({ cams: 'a', status: '0' }, RULES).status, false);
   assertEqual(feedLib.parseRequest({ cams: 'a', status: 'yes' }, RULES).status, false, 'only "1" asks for the readings');
 });
@@ -57,10 +58,10 @@ test('parseRequest: everything else is an error that says why', () => {
 });
 
 test('parseRequest: cams is optional, but a request must ask for something', () => {
-  assertEqual(feedLib.parseRequest({ status: '1' }, RULES), { cams: [], dets: [], status: true, rec: false });
-  assertEqual(feedLib.parseRequest({ rec: '1' }, RULES), { cams: [], dets: [], status: false, rec: true });
-  assertEqual(feedLib.parseRequest({ dets: 'd1' }, RULES), { cams: [], dets: ['d1'], status: false, rec: false });
-  assertEqual(feedLib.parseRequest({ status: '1', rec: '1' }, RULES), { cams: [], dets: [], status: true, rec: true });
+  assertEqual(feedLib.parseRequest({ status: '1' }, RULES), { cams: [], dets: [], status: true, rec: false, alarms: false });
+  assertEqual(feedLib.parseRequest({ rec: '1' }, RULES), { cams: [], dets: [], status: false, rec: true, alarms: false });
+  assertEqual(feedLib.parseRequest({ dets: 'd1' }, RULES), { cams: [], dets: ['d1'], status: false, rec: false, alarms: false });
+  assertEqual(feedLib.parseRequest({ status: '1', rec: '1' }, RULES), { cams: [], dets: [], status: true, rec: true, alarms: false });
   for (const query of [{}, { status: '0' }, { status: 'yes' }, { rec: 'true' }, { rec: ['1', '1'] }, { status: '' }]) {
     const r = feedLib.parseRequest(query, RULES);
     assertTrue(typeof r.error === 'string' && /at least one/.test(r.error), `${JSON.stringify(query)} asks for nothing`);
@@ -293,6 +294,55 @@ test('openSession: not asked for = not subscribed; close() unsubscribes', () => 
   assertEqual([shared.listeners.size, shared.unsubscribed], [0, 1]);
   const written = r.writes.length;
   shared.push('{}');
+  assertEqual(r.writes.length, written);
+});
+
+test('parseRequest: alarms=1 alone is a valid request (a page that only plays alarm sounds); anything else but "1" is not', () => {
+  assertEqual(feedLib.parseRequest({ alarms: '1' }, RULES), { cams: [], dets: [], status: false, rec: false, alarms: true });
+  assertEqual(feedLib.parseRequest({ cams: 'a', alarms: '1' }, RULES).alarms, true);
+  for (const alarms of ['0', 'true', '', ['1', '1']]) assertEqual(feedLib.parseRequest({ cams: 'a', alarms }, RULES).alarms, false, JSON.stringify(alarms));
+  assertTrue(/alarms=1/.test(feedLib.parseRequest({}, RULES).error), 'the error names every way to ask');
+});
+
+function alarmStates(r) {
+  return r.writes.flatMap((x) => decoder.createParser().push(new Uint8Array(x)))
+    .filter((m) => m.type === codec.TYPE_STATE)
+    .map((m) => [m.source, JSON.parse(Buffer.from(m.payload).toString())]);
+}
+
+test('openSession: the alarm events are sent as state:alarms at once, and again for every new event', () => {
+  const r = recorder();
+  const alarmFeed = createAlarmFeed({ now: () => 7000 });
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), alarms: { snapshot: alarmFeed.snapshot, bus: alarmFeed.bus }, setTimer: () => 't', clearTimer: () => {} });
+  alarmFeed.publish({ kind: 'recordStart', camId: 'a', sound: 's.wav' });
+  const states = alarmStates(r);
+  assertEqual(states.map(([source]) => source), ['state:alarms', 'state:alarms']);
+  assertEqual(states[0][1], { epoch: 7000, now: 7000, events: [] });
+  assertEqual(states[1][1].events, [{ seq: 1, at: 7000, kind: 'recordStart', camId: 'a', sound: 's.wav' }]);
+});
+
+test('openSession: a viewer that is behind gets the newest alarm list, which still holds the events it missed', () => {
+  const r = recorder([false, true]);   // the first write backs up, the next one drains
+  const alarmFeed = createAlarmFeed({ now: () => 1 });
+  const session = feedLib.openSession({ write: r.write, cameras: [], alarms: { snapshot: alarmFeed.snapshot, bus: alarmFeed.bus }, setTimer: () => 't', clearTimer: () => {} });
+  alarmFeed.publish({ kind: 'recordStart', camId: 'a', sound: 'one.wav' });
+  alarmFeed.publish({ kind: 'personDetected', camId: 'b', sound: 'two.wav' });
+  session.drain();
+  const last = alarmStates(r).pop()[1];
+  assertEqual(last.events.map((e) => e.seq), [1, 2]);
+});
+
+test('openSession: alarms not asked for = not subscribed; close() unsubscribes', () => {
+  const r = recorder();
+  const alarmFeed = createAlarmFeed();
+  feedLib.openSession({ write: r.write, cameras: cameras('a'), setTimer: () => 't', clearTimer: () => {} });
+  assertEqual(alarmFeed.bus.listenerCount('change'), 0);
+  const session = feedLib.openSession({ write: r.write, cameras: [], alarms: { snapshot: alarmFeed.snapshot, bus: alarmFeed.bus }, setTimer: () => 't', clearTimer: () => {} });
+  assertEqual(alarmFeed.bus.listenerCount('change'), 1);
+  session.close();
+  assertEqual(alarmFeed.bus.listenerCount('change'), 0);
+  const written = r.writes.length;
+  alarmFeed.publish({ kind: 'recordStart', camId: 'a', sound: 's.wav' });
   assertEqual(r.writes.length, written);
 });
 

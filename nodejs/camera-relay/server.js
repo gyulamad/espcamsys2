@@ -30,6 +30,11 @@ const detectorview = require('./lib/detectorview');
 const wifiinfo = require('./lib/wifiinfo');
 const deviceinfo = require('./lib/deviceinfo');
 const muxfeed = require('./lib/muxfeed');
+const sounds = require('./lib/sounds');
+const soundplayer = require('./lib/soundplayer');
+const { createSoundStore } = require('./lib/soundstore');
+const { createAlarmFeed } = require('./lib/alarmfeed');
+const { createAlarmSounds } = require('./lib/alarmsound');
 const { createFrameWriter } = require('./lib/framequeue');
 const { createLoopWatch } = require('./lib/loopwatch');
 const sharedsnapshot = require('./lib/sharedsnapshot');
@@ -453,6 +458,7 @@ function startRecording(cam, id, seconds) {
   rec.timer = setTimeout(() => stopRecording(cam), seconds * 1000);
   cam.recording = rec;
   camLog('INFO', id, `recording started (${seconds}s, with ${preFrames.length} pre-roll frames)`);
+  alarmSounds.trigger('recordStart', id);   // never throws, never waits for a speaker
   return rec;
 }
 
@@ -741,6 +747,7 @@ app.get('/mux', requireReadKey, (req, res) => {
     detectors: request.dets.length ? { ids: request.dets, lookup: knownDetector, bus: detectorBus } : null,
     status: request.status ? { snapshot: detectorViews, bus: detectorBus } : null,
     cameraStatus: request.rec ? cameraStatusFeed : null,
+    alarms: request.alarms ? { snapshot: alarmFeed.snapshot, bus: alarmFeed.bus } : null,
   });
   res.on('drain', session.drain);
   req.on('close', () => {
@@ -1184,6 +1191,12 @@ function systemSettingsState() {
   return { base: baseConfig, overrides: systemOverrides, alarmRecordSeconds: settings.alarmRecordSeconds, env: process.env };
 }
 
+// The same, plus the sounds in the folder right now (what a sound setting may be set to): only the settings page
+// needs them, so the folder is read for it and not every time a setting is.
+function settingsStateWithSounds() {
+  return { ...systemSettingsState(), soundNames: soundStore.names() };
+}
+
 // (review NODE-004) the last time POST /restart was accepted, used to enforce a
 // minimum gap (default 30s) between two accepted restart requests. A captured
 // control key, or a runaway dashboard tab, could otherwise loop the endpoint
@@ -1191,11 +1204,11 @@ function systemSettingsState() {
 let lastRestartRequestAt = 0;
 
 app.get('/system-settings', requireControlKey, (req, res) => {
-  res.json({ ...sysconfig.buildView(systemSettingsState()), supervised: sysconfig.isSupervised(process.env) });
+  res.json({ ...sysconfig.buildView(settingsStateWithSounds()), supervised: sysconfig.isSupervised(process.env) });
 });
 
 app.post('/system-settings', requireControlKey, express.json({ limit: '16kb' }), (req, res) => {
-  const r = sysconfig.applyUpdate(systemSettingsState(), req.body);
+  const r = sysconfig.applyUpdate(settingsStateWithSounds(), req.body);
   if (r.error) return res.status(400).json({ error: r.error });
   if (r.changed.length === 0) return res.json({ ok: true, changed: [], restartRequired: false });
   try {
@@ -1248,6 +1261,131 @@ app.post('/restart', requireControlKey, (req, res) => {
     }, 200);
   });
 });
+
+// ── Alarm sounds (lib/sounds.js, lib/soundstore.js, lib/alarmsound.js, lib/soundplayer.js, lib/alarmfeed.js) ──
+// A folder of sound files; two events (a recording starts, a person is found in a fresh recording) each pick one,
+// and whether it plays on THIS machine's speaker and/or in the browsers that have the dashboard open — all of that
+// are system settings (alarmSound*, applied at once). The files are managed from the dashboard's settings page:
+//
+//   GET    /sounds              read key      { sounds: [{ name, bytes }], maxBytes, maxSounds }
+//   GET    /sounds/:name        read key      the file (what the browser plays for a preview or an alarm)
+//   PUT    /sounds/:name        control key   upload (raw body: WAV, MP3 or OGG up to maxBytes); replaces one of that name
+//   DELETE /sounds/:name        control key   refused (409) while an alarm still uses it: it must not fall silent unnoticed
+//   POST   /sounds/:name/play   control key   plays it on this machine now (to try the speaker); 409 while one is playing
+//
+// The folder is config.soundsDir (default sounds/ next to server.js; SOUNDS_DIR overrides it). The player is
+// config.alarmSounds (see example.config.js) — only the owner of the machine can change what gets run.
+const SOUNDS_DIR = path.resolve(__dirname, fromEnv('SOUNDS_DIR', config.soundsDir || 'sounds'));
+const soundStore = createSoundStore(SOUNDS_DIR);
+const soundPlayerConfig = soundplayer.resolvePlayerConfig(config.alarmSounds);
+for (const w of soundPlayerConfig.warnings) console.warn(`[config] ${w}`);
+const soundPlayer = soundplayer.createSoundPlayer({
+  config: soundPlayerConfig,
+  pathOf: soundStore.pathOf,
+  run: (program, args, { timeoutMs }) => runProcess(program, args, { env: process.env, timeoutMs }),
+  log: relayLog,
+});
+const alarmFeed = createAlarmFeed({ maxListeners: muxfeed.MAX_VIEWERS + 4 });   // /mux viewers that asked for alarms=1
+const alarmSounds = createAlarmSounds({
+  setting: (key) => sysconfig.currentValue(key, systemSettingsState()),
+  soundExists: soundStore.has,
+  player: soundPlayer,
+  feed: alarmFeed,
+  log: relayLog,
+});
+const PLAY_FAILURE_WAIT_MS = 1500;   // how long "play it here" waits to learn that the player could not even start
+
+// Every route below takes the sound's name from the URL: anything that is not a sound's name is answered 400 before
+// the disk is touched.
+function soundNameOr400(req, res) {
+  if (sounds.isSoundName(req.params.name)) return req.params.name;
+  res.status(400).json({ error: 'not the name of a sound (letters, digits . _ - and ending in .wav, .mp3 or .ogg)' });
+  return null;
+}
+
+app.get('/sounds', requireReadKey, (req, res) => {
+  try {
+    return res.set('Cache-Control', 'no-store').json({ sounds: soundStore.list(), maxBytes: sounds.MAX_SOUND_BYTES, maxSounds: sounds.MAX_SOUNDS });
+  } catch (err) {
+    relayLog('ERROR', `could not list the sounds: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not read the sounds folder' });
+  }
+});
+
+app.get('/sounds/:name', requireReadKey, (req, res) => {
+  const name = soundNameOr400(req, res);
+  if (name === null) return undefined;
+  let bytes;
+  try {
+    bytes = soundStore.read(name);
+  } catch (err) {
+    relayLog('ERROR', `could not read the sound ${name}: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not read the sound' });
+  }
+  if (bytes === null) return res.status(404).json({ error: 'no such sound' });
+  return res.set({ 'Content-Type': sounds.contentTypeOf(name), 'Cache-Control': 'private, no-cache' }).send(bytes);
+});
+
+app.put('/sounds/:name', requireDashboardKey, express.raw({ type: '*/*', limit: sounds.MAX_SOUND_BYTES }), (req, res) => {
+  const name = soundNameOr400(req, res);
+  if (name === null) return undefined;
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  const checked = sounds.checkSound(name, body);
+  if (!checked.ok) {
+    relayLog('WARN', `${actorOf(req)} tried to upload the sound ${name} but it was refused: ${checked.error}`);
+    return res.status(400).json({ error: checked.error });
+  }
+  try {
+    if (!soundStore.has(name) && soundStore.list().length >= sounds.MAX_SOUNDS) {
+      return res.status(409).json({ error: `there are already ${sounds.MAX_SOUNDS} sounds — delete one first` });
+    }
+    const { replaced } = soundStore.write(name, body);
+    relayLog('INFO', `${actorOf(req)} ${replaced ? 'replaced' : 'uploaded'} the sound ${name} (${body.length} bytes)`);
+    return res.json({ ok: true, name, bytes: body.length, replaced });
+  } catch (err) {
+    relayLog('ERROR', `could not store the sound ${name}: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not store the sound' });
+  }
+});
+
+app.delete('/sounds/:name', requireDashboardKey, (req, res) => {
+  const name = soundNameOr400(req, res);
+  if (name === null) return undefined;
+  const users = alarmSounds.eventsUsing(name);
+  if (users.length) {
+    return res.status(409).json({ error: `the sound ${name} is chosen for when ${users.join(' and when ')} — choose another sound (or none) there first, so that alarm does not fall silent` });
+  }
+  try {
+    if (!soundStore.remove(name)) return res.status(404).json({ error: 'no such sound' });
+  } catch (err) {
+    relayLog('ERROR', `could not delete the sound ${name}: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not delete the sound' });
+  }
+  relayLog('INFO', `${actorOf(req)} deleted the sound ${name}`);
+  return res.json({ ok: true });
+});
+
+app.post('/sounds/:name/play', requireDashboardKey, async (req, res) => {
+  const name = soundNameOr400(req, res);
+  if (name === null) return undefined;
+  if (!soundStore.has(name)) return res.status(404).json({ error: 'no such sound' });
+  const started = soundPlayer.play(name);
+  if (started.status === 'busy') return res.status(409).json({ error: 'a sound is already playing on the relay machine' });
+  if (started.status !== 'started') return res.status(400).json({ error: 'not the name of a sound' });
+  // A player that cannot start (not installed, no sound card) fails within moments: tell the dashboard now, so
+  // "I hear nothing" has an answer on the page. One that is still running then is playing: the answer does not wait
+  // for the end of the sound.
+  const early = await Promise.race([started.done, new Promise((resolve) => setTimeout(resolve, PLAY_FAILURE_WAIT_MS, null))]);
+  if (early && !early.ok) return res.status(502).json({ error: early.error });
+  return res.json({ ok: true });
+});
+
+app.use('/sounds', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: `request too large (limit ${sounds.MAX_SOUND_BYTES} bytes)` });
+  return next(err);
+});
+
 
 // ── Recording switch: changing it (authenticated) and reading it ──
 //   POST /recording/camera/:id/off?minutes=N   switch ONE camera OFF for N minutes (default 60; 0 or negative = until ON)
@@ -2185,6 +2323,7 @@ const scanQueue = new ScanQueue({
   work: (job) => sorter.sort(job.payload.clipPath),
   onFinished: (job, outcome) => {
     detectionNotifier.onScanFinished(job, outcome);   // never throws, never rejects
+    alarmSounds.onScanFinished(job, outcome);          // likewise
     const name = path.basename(job.payload.clipPath);
     const detail = { state: outcome.state, ...(outcome.reason ? { reason: outcome.reason } : {}) };
     relayLog(outcome.state === 'error' ? 'WARN' : 'INFO', `person check of ${name}: ${detail.state}${detail.reason ? ` (${detail.reason})` : ''}`, { sender: job.payload.camId });

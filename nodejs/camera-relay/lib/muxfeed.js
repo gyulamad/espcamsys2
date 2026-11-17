@@ -1,7 +1,7 @@
 'use strict';
 
 // muxfeed.js — what GET /mux does for ONE viewer, kept out of server.js so it can be tested without sockets:
-//   parseRequest(query, rules)  the ?cams= ?dets= ?status= ?rec= of the request, checked
+//   parseRequest(query, rules)  the ?cams= ?dets= ?status= ?rec= ?alarms= of the request, checked
 //   createFeed(write)           delivery that never queues: a viewer on a slow link (Tor) gets the NEWEST
 //                               picture of each camera and detector and the newest readings, so its delay stays
 //                               small and the relay's memory never grows with a slow viewer
@@ -38,17 +38,18 @@ function parseIdList(name, raw, { idPattern, max, optional }) {
 //   dets    the detectors whose pictures are wanted (none by default)
 //   status  "1": the readings of every detector are wanted
 //   rec     "1": the recording state of every camera (what GET /status answers) is wanted
-// At least one of the four must ask for something: a page that shows no picture (every camera hidden) still needs its
+//   alarms  "1": the alarm sound events (lib/alarmfeed.js) are wanted: a page that plays alarm sounds in the browser
+// At least one of the five must ask for something: a page that shows no picture (every camera hidden) still needs its
 // readings and recording state pushed, but a request for nothing is a mistake, not a connection worth holding open.
-// -> { cams, dets, status, rec } or { error } saying what is wrong.
+// -> { cams, dets, status, rec, alarms } or { error } saying what is wrong.
 function parseRequest(query, { idPattern, maxCameras, maxDetectors }) {
   const cams = parseIdList('cams', query.cams, { idPattern, max: maxCameras, optional: true });
   if (cams.error) return cams;
   const dets = parseIdList('dets', query.dets, { idPattern, max: maxDetectors, optional: true });
   if (dets.error) return dets;
-  const request = { cams: cams.ids, dets: dets.ids, status: query.status === '1', rec: query.rec === '1' };
-  if (!request.cams.length && !request.dets.length && !request.status && !request.rec) {
-    return { error: 'ask for at least one of cams, dets, status=1, rec=1' };
+  const request = { cams: cams.ids, dets: dets.ids, status: query.status === '1', rec: query.rec === '1', alarms: query.alarms === '1' };
+  if (!request.cams.length && !request.dets.length && !request.status && !request.rec && !request.alarms) {
+    return { error: 'ask for at least one of cams, dets, status=1, rec=1, alarms=1' };
   }
   return request;
 }
@@ -143,11 +144,19 @@ function followCameraStatus(feed, { subscribe }) {
   return subscribe((text) => feed.offerState(codec.STATE_CAMERAS, () => text));
 }
 
+// The latest alarm sound events (lib/alarmfeed.js), sent again whenever one is added. alarms: { snapshot, bus }.
+function followAlarms(feed, { snapshot, bus }) {
+  const send = () => feed.offerState(codec.STATE_ALARMS, snapshot);
+  send();
+  bus.on('change', send);
+  return () => bus.off('change', send);
+}
+
 // cameras: [{ id, cam }] where cam has `emitter` ('frame' events) and `frame` (the last picture, or null).
-// detectors, status, cameraStatus: as above, or null for "not asked for". -> { drain(), close() }. Nothing is left
+// detectors, status, cameraStatus, alarms: as above, or null for "not asked for". -> { drain(), close() }. Nothing is left
 // subscribed after close().
 function openSession({
-  write, cameras, detectors = null, status = null, cameraStatus = null,
+  write, cameras, detectors = null, status = null, cameraStatus = null, alarms = null,
   heartbeatMs = HEARTBEAT_MS, setTimer = setInterval, clearTimer = clearInterval,
 }) {
   const feed = createFeed(write);
@@ -157,6 +166,7 @@ function openSession({
   if (detectors) stops.push(followDetectorPictures(feed, detectors));
   if (status) stops.push(followStatus(feed, status, setTimer, clearTimer));
   if (cameraStatus) stops.push(followCameraStatus(feed, cameraStatus));
+  if (alarms) stops.push(followAlarms(feed, alarms));
   const heartbeat = setTimer(feed.heartbeat, heartbeatMs);
 
   return {

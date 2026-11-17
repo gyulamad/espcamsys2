@@ -636,6 +636,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 <script src="js/mux-codec.js"></script>
 <script src="js/mux-client.js"></script>
 <script src="js/mux-pictures.js"></script>
+<script src="js/alarm-sounds.js"></script>
 <script src="js/wifi-info.js"></script>
 <script src="js/camera-offline.js"></script>
 <script src="js/alarm-chain.js"></script>
@@ -729,11 +730,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // used to leave no room for the other requests of this page. js/mux-client.js reopens it for ever when it drops, so
   // nothing here asks for live data by itself: it arrives, or the page says there is none (onDown).
   // <pictures-source>
+  const alarmSounds = typeof CamAlarmSounds !== 'undefined' ? CamAlarmSounds.create() : null;   // plays the alarm sounds the relay asks the browsers for
   const pictures = CamMuxPictures.create({
     url: 'mux.php',
     imgFor: (kind, id) => document.getElementById((kind === 'det' ? 'detimg-' : 'img-') + id),
     onStatus: (data) => onLiveDetectorData(data),
     onCameraStatus: (data) => onLiveCameraStatus(data),
+    ...(alarmSounds ? { onAlarms: alarmSounds.handle } : {}),   // (js/alarm-sounds.js: without it the page just has no alarm sounds)
     onDown: (ids) => {   // it is reopened by itself; pictures and numbers resume on their own
       ids.forEach((id) => onStreamError(id));
       onLiveDataDown();
@@ -747,6 +750,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // The images have no src: start every camera now, and ask for what rides along on the connection.
   getAllCameraIds().forEach((id) => reloadStream(id));
   pictures.watchCameraStatus(true);   // recording state, FILES counts, switch: pushed on the same connection
+  if (alarmSounds) pictures.watchAlarms(true);   // an alarm sound is due: also on the same connection
   const detectorRows = document.querySelectorAll('.det-row');
   detectorRows.forEach((row) => pictures.showDetector(row.dataset.cam));
   if (detectorRows.length > 0) pictures.watchStatus(true);   // the readings come on the same connection, whatever the tab does

@@ -166,8 +166,10 @@
 
   const asMap = (data) => (data && typeof data === 'object' && !Array.isArray(data) ? data : null);
 
+  const alarmSounds = window.CamAlarmSounds ? window.CamAlarmSounds.create() : null;   // plays the alarm sounds the relay asks the browsers for
   const pictures = window.CamMuxPictures.create({
     url: 'mux.php',
+    onAlarms: alarmSounds ? alarmSounds.handle : undefined,
     // Only the camera on screen has an image; a frame of any other is dropped by the caller.
     imgFor: (kind, id) => (kind === 'cam' && id === current ? picture : null),
     onStatus: (data) => { detectors = asMap(data); refresh(); },
@@ -253,6 +255,7 @@
   if (current !== undefined) pictures.show(current);   // (no usable camera list: nothing to show)
   pictures.watchCameraStatus(true);
   pictures.watchStatus(true);
+  if (alarmSounds) pictures.watchAlarms(true);
   setSlideshow(true);   // the slideshow runs from the moment the page opens; the button stops it
   tick();
   setInterval(tick, TICK_MS);

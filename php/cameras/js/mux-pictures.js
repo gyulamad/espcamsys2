@@ -1,20 +1,22 @@
 'use strict';
 // mux-pictures.js — shows the live pictures of the cameras and of their person detectors, and delivers the
-// detectors' readings and the cameras' recording state, from ONE mux.php connection. The pictures go onto the page's existing <img> elements: an
+// detectors' readings, the cameras' recording state and the alarm sound events, from ONE mux.php connection. The pictures go onto the page's existing <img> elements: an
 // image whose source is replaced for every picture, so the page's load / error handling, fullscreen and
 // styling work as they would with a plain picture per image. The page says what it wants to see; this keeps the
 // connection open for exactly that and paints each arriving picture onto its image.
 //
-//   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onStatus, onCameraStatus, onDown });
+//   const pictures = CamMuxPictures.create({ url: 'mux.php', imgFor, onStatus, onCameraStatus, onAlarms, onDown });
 //   pictures.show('cam1');           pictures.hide('cam1');            the camera's picture
 //   pictures.showDetector('cam1');   pictures.hideDetector('cam1');    the picture of the detector paired with that camera
 //   pictures.watchStatus(true);      the detectors' readings (onStatus gets { camId: status }, as detector-status.php)
 //   pictures.watchCameraStatus(true) the cameras' recording state (onCameraStatus gets { camId: status }, as status.php)
+//   pictures.watchAlarms(true);      the alarm sound events (onAlarms gets { epoch, now, events }, see js/alarm-sounds.js)
 //   pictures.reconnect();   pictures.close();
 //
 //   imgFor(kind, id)  the <img> of a camera ('cam') or of the detector paired with it ('det'), or null
 //   onStatus(data)    the newest readings of the detectors
 //   onCameraStatus(data)  the newest recording state of the cameras
+//   onAlarms(data)    the newest list of alarm sound events (optional: a page that does not play alarm sounds leaves it out)
 //   onDown(ids)       the connection ended (it is reopened by itself, for ever, see js/mux-client.js): the cameras that were being shown
 //
 // The connection exists while ANYTHING is wanted: a camera picture, a detector picture, the detectors' readings or the
@@ -26,7 +28,7 @@
 (function (root) {
   const KINDS = ['cam', 'det'];
 
-  function create({ url, imgFor, onStatus, onCameraStatus, onDown, env = {} }) {
+  function create({ url, imgFor, onStatus, onCameraStatus, onAlarms = () => {}, onDown, env = {} }) {
     const io = Object.assign({
       createClient: (options) => root.CamMuxClient.create(options),
       codec: root.CamMuxCodec,
@@ -37,7 +39,7 @@
     }, env);
 
     const wanted = { cam: new Set(), det: new Set() };   // camera ids whose picture / whose detector's picture is wanted
-    const wantedStates = new Set();   // the sources of the readings the page wants: STATE_DETECTORS, STATE_CAMERAS
+    const wantedStates = new Set();   // the sources of the readings the page wants: STATE_DETECTORS, STATE_CAMERAS, STATE_ALARMS
     const objectUrls = new Map();   // "kind:id" -> the object URL of the picture now on that image
     let subscribed = '';            // what the open connection was made for
     let syncScheduled = false;
@@ -49,6 +51,7 @@
     const states = {
       [io.codec.STATE_DETECTORS]: { param: 'status=1', deliver: (data) => onStatus(data) },
       [io.codec.STATE_CAMERAS]: { param: 'rec=1', deliver: (data) => onCameraStatus(data) },
+      [io.codec.STATE_ALARMS]: { param: 'alarms=1', deliver: (data) => onAlarms(data) },
     };
 
     function buildUrl() {
@@ -149,6 +152,7 @@
       hideDetector: (id) => remove('det', id),
       watchStatus: (on) => watch(io.codec.STATE_DETECTORS, on),
       watchCameraStatus: (on) => watch(io.codec.STATE_CAMERAS, on),
+      watchAlarms: (on) => watch(io.codec.STATE_ALARMS, on),
       // Opens the connection again even if it looks open (a locked phone drops it without a sound).
       reconnect() {
         if (!wantsAnything()) return;

@@ -19,10 +19,12 @@
 // all of this is unit tested with plain `node` — see tests/node/test_sysconfig.js.
 
 const personscan = require('./personscan');
+const sounds = require('./sounds');
 
 const MIB = 1024 * 1024;
 
-// One entry per setting. `type`: int | float | bool | string | secret.
+// One entry per setting. `type`: int | float | bool | string | secret | sound (the name of a file in the sounds folder, or
+// '' for none: its name is checked here, that the file exists when a save is made — see applyUpdate).
 //   config   where config.js keeps it when that is not a top-level key of the same name (a path into it)
 //   minExclusive  a float's min is not itself allowed (0 < c <= 1)
 //   env      the environment variable that overrides it (or null)
@@ -43,6 +45,19 @@ const FIELDS = [
     label: 'Person check (sort out recordings without a person)', help: 'ON: every new recording is checked by the person detector, and a clip with nobody in it is moved to the archive (or deleted — personScan.action in config.js); the check can also be started by hand on a recording. OFF: nothing is checked or moved, and clips already waiting for their check are left alone. Needs the detector model installed first (MANUAL.md, "Sorting out footage without a person"); without it every check just reports an error and no clip is touched. Applies at once — no restart.' },
   { key: 'personScanConfidence', type: 'float', min: personscan.CONFIDENCE.min, max: personscan.CONFIDENCE.max, minExclusive: true, step: 0.05, default: personscan.CONFIDENCE.default, config: ['personScan', 'confidence'], env: null, group: 'Person check', restart: false,
     label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check above is ON. Applies to the next clip checked — no restart.' },
+
+  { key: 'alarmSoundRecordStart', type: 'sound', default: '', env: null, group: 'Alarm sounds', restart: false,
+    label: 'Sound when a recording starts', help: 'Played when a camera starts a recording — its alarm input, the person detector, or the RECORD button. None = no sound. Pick one from the sound files below (upload them there). Applies at once — no restart.' },
+  { key: 'alarmSoundRecordStartRelay', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
+    label: 'Recording starts: play it on the relay machine', help: 'ON: the machine the relay runs on (the Pi) plays the sound through its own speaker. Needs a speaker and an audio player on it (ffplay by default — MANUAL.md, \"Alarm sounds\"). Only has an effect while a sound is chosen above.' },
+  { key: 'alarmSoundRecordStartBrowser', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
+    label: 'Recording starts: play it in the browser', help: 'ON: every browser that has the live dashboard, the camera list or a camera view open plays the sound. A browser only allows sound once you have clicked or tapped on its page. Only has an effect while a sound is chosen above.' },
+  { key: 'alarmSoundPersonDetected', type: 'sound', default: '', env: null, group: 'Alarm sounds', restart: false,
+    label: 'Sound when a person is found in a recording', help: 'Played when the person check finds somebody in a NEW recording (so it needs the person check above to be ON and its detector installed). None = no sound. Applies at once — no restart.' },
+  { key: 'alarmSoundPersonDetectedRelay', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
+    label: 'Person found: play it on the relay machine', help: 'ON: the machine the relay runs on (the Pi) plays the sound through its own speaker. Only has an effect while a sound is chosen above.' },
+  { key: 'alarmSoundPersonDetectedBrowser', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
+    label: 'Person found: play it in the browser', help: 'ON: every browser that has the live dashboard, the camera list or a camera view open plays the sound. Only has an effect while a sound is chosen above.' },
 
   { key: 'port', type: 'int', min: 1, max: 65535, default: 8080, env: 'PORT', group: 'Network', restart: true,
     label: 'HTTP port', help: 'The relay\'s HTTP port (/mux, /snapshot, /status ...). The dashboard\'s relay address is updated to match when you change it here.' },
@@ -65,6 +80,8 @@ const FIELDS = [
     label: 'Staged device settings folder', help: 'Where settings staged for boards missing some are kept. A folder inside the relay\'s own folder; for one elsewhere, set deviceSettingsDir in config.js.' },
   { key: 'firmwareDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'firmware', env: 'FIRMWARE_DIR', group: 'Folders', restart: true,
     label: 'Firmware folder', help: 'Where the over-the-air firmware is published. A folder inside the relay\'s own folder; for one elsewhere, set firmwareDir in config.js.' },
+  { key: 'soundsDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'sounds', env: 'SOUNDS_DIR', group: 'Folders', restart: true,
+    label: 'Alarm sounds folder', help: 'Where the alarm sound files are kept. A folder inside the relay\'s own folder; for one elsewhere, set soundsDir in config.js.' },
   { key: 'switchFile', type: 'string', path: 'file', ext: '.json', min: 1, max: 300, default: 'recording-switch.json', env: 'SWITCH_FILE', group: 'Folders', restart: true,
     label: 'Recording on/off state file', help: 'Where the recording ON/OFF state is kept so it survives a restart. A .json file inside the relay\'s own folder; for one elsewhere, set switchFile in config.js.' },
 ];
@@ -115,6 +132,7 @@ function checkValue(field, raw) {
     return { value: raw };
   }
   const v = raw.trim();
+  if (field.type === 'sound') return v === '' || sounds.isSoundName(v) ? { value: v } : { error: `${field.key} must be the name of a sound file (or empty for no sound)` };
   if (v.length < field.min || v.length > field.max) return { error: `${field.key} must be ${field.min}-${field.max} characters long` };
   return { value: v };
 }
@@ -208,9 +226,9 @@ function effective(field, base, overrides, env) {
   return { value: field.default, source: 'default' };
 }
 
-// The value a setting (a number or a true/false switch) has right now, checked like a saved one. A value that is
-// no longer valid (config.js edited by hand, an environment variable with text in it) falls back to the default,
-// so a bad value can never break the code that reads it.   -> number | boolean
+// The value a setting (a number, a true/false switch or a sound's name) has right now, checked like a saved one. A
+// value that is no longer valid (config.js edited by hand, an environment variable with text in it) falls back to the
+// default, so a bad value can never break the code that reads it.   -> number | boolean | string
 function currentValue(key, { base, overrides, env }) {
   const f = BY_KEY[key];
   const r = checkValue(f, effective(f, base, overrides, env).value);
@@ -220,9 +238,10 @@ function currentValue(key, { base, overrides, env }) {
 // What GET /system-settings returns: the schema plus the current values. Secrets are
 // NEVER sent back — only whether one is set.
 // How a value is shown to the settings page, per type (a switch is the text "true" / "false", like the page sends it).
-const VIEW_VALUE = { int: Number, float: Number, bool: Boolean, string: String, secret: String };
+const VIEW_VALUE = { int: Number, float: Number, bool: Boolean, string: String, secret: String, sound: String };
 
-function buildView({ base, overrides, alarmRecordSeconds, env }) {
+// soundNames: the sounds in the folder right now — what a `sound` setting can be set to (sent as its `options`).
+function buildView({ base, overrides, alarmRecordSeconds, env, soundNames = [] }) {
   const fields = FIELDS.map((f) => {
     const out = { key: f.key, type: f.type, label: f.label, help: f.help, group: f.group, restart: f.restart };
     if (f.type === 'secret') {
@@ -236,6 +255,7 @@ function buildView({ base, overrides, alarmRecordSeconds, env }) {
       const e = effective(f, base, overrides, env);
       out.min = f.min; out.max = f.max; out.value = VIEW_VALUE[f.type](e.value); out.source = e.source;
       if (f.type === 'float') { out.step = f.step; out.minExclusive = Boolean(f.minExclusive); }
+      if (f.type === 'sound') out.options = soundNames.slice();
     }
     out.envOverride = Boolean(f.env && env[f.env] !== undefined);
     if (out.envOverride) out.envName = f.env;
@@ -246,9 +266,11 @@ function buildView({ base, overrides, alarmRecordSeconds, env }) {
 
 // Applies an update ({ key: value, ... }) on top of the current state. All-or-nothing:
 // any invalid value, unknown key, or a read-only (environment) field means nothing changes.
-// Empty text for a secret means "keep the current one".
+// Empty text for a secret means "keep the current one". A sound can only be set to one that is in the folder
+// (`soundNames`; left out = not checked, which is what a caller without a folder gets): one that was deleted since
+// but is still the saved choice is not an error until somebody picks it again.
 //   -> { error } | { overrides, alarmRecordSeconds, changed: [keys], restartRequired }
-function applyUpdate({ base, overrides, alarmRecordSeconds, env }, values) {
+function applyUpdate({ base, overrides, alarmRecordSeconds, env, soundNames }, values) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) return { error: 'send the settings as a JSON object: { "key": value, ... }' };
   const nextOverrides = { ...overrides };
   let nextAlarm = alarmRecordSeconds;
@@ -269,6 +291,9 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env }, values) {
     const current = key === 'alarmRecordSeconds' ? alarmRecordSeconds : effective(f, base, overrides, env).value;
     if (f.type !== 'secret' && (f.type === 'float' ? Number(current) === r.value : String(current) === String(r.value))) continue; // unchanged
     if (f.type === 'secret' && current === r.value) continue;
+    if (f.type === 'sound' && r.value !== '' && Array.isArray(soundNames) && !soundNames.includes(r.value)) {
+      return { error: `there is no sound called \"${r.value}\" in the sounds folder — upload it first` };
+    }
     let value = r.value;
     if (f.path) {
       const pr = checkRelayPath(f, value);

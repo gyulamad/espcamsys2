@@ -17,7 +17,7 @@ tools/                            compile_sketches.sh, gen_device_schema.sh, dum
                                   sketch_build_lib.sh, test_output.sh
 ```
 
-Runtime state (all next to `server.js`, gitignored, all redirectable in `config.js` or the environment — see the settings pages in [MANUAL.md](MANUAL.md)): `logs/camera.log` (`logFile`/`LOG_FILE`), `recordings/`, `firmware/` (`firmwareDir`), `device-settings/` (`deviceSettingsDir`), `recording-switch.json` (`switchFile`), `system-settings.json` (the dashboard's SETTINGS page). The dashboard keeps what is saved on its pages in `data/settings.json` under the web folder (see [SETUP.md, *Where settings live*](SETUP.md#where-settings-live)).
+Runtime state (all next to `server.js`, gitignored, all redirectable in `config.js` or the environment — see the settings pages in [MANUAL.md](MANUAL.md)): `logs/camera.log` (`logFile`/`LOG_FILE`), `recordings/`, `firmware/` (`firmwareDir`), `device-settings/` (`deviceSettingsDir`), `sounds/` (`soundsDir`, the uploaded alarm sounds), `recording-switch.json` (`switchFile`), `system-settings.json` (the dashboard's SETTINGS page). The dashboard keeps what is saved on its pages in `data/settings.json` under the web folder (see [SETUP.md, *Where settings live*](SETUP.md#where-settings-live)).
 
 The firmware version is `fw_version.h`, written by `ota-deploy.sh` (gitignored, removed afterwards); a sketch built by hand reports `dev`.
 

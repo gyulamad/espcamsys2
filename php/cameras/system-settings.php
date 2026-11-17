@@ -30,6 +30,7 @@
 
 require_once __DIR__ . '/auth.php';      // dashboard login; also defines $config
 require_once __DIR__ . '/lib/Logic.php';
+require_once __DIR__ . '/lib/Sounds.php';
 require_once __DIR__ . '/relay.php';
 require_once __DIR__ . '/config_file.php';
 
@@ -75,7 +76,7 @@ if ($method === 'GET') {
         exit;
     }
     // Only the settings the dashboard may change are shown (not the file and folder paths, review F-09).
-    $fields = CamLogic::visibleRelayFields($relay['fields']);
+    $fields = CamSounds::cleanSoundFields(CamLogic::visibleRelayFields($relay['fields']));
     foreach (CamLogic::dashboardFields() as $f) {
         if ($f['type'] === 'secret') {
             $f['isSet'] = (string) ($config[$f['key']] ?? '') !== '';

@@ -1,11 +1,12 @@
 <?php
 // mux.php — the live pictures of several cameras, of their person detectors, and the detectors' readings, on ONE
 // connection.
-// Usage: mux.php?[cams=cam1,cam2][&dets=cam1][&status=1][&rec=1]   (at least one of the four, else 400)
+// Usage: mux.php?[cams=cam1,cam2][&dets=cam1][&status=1][&rec=1][&alarms=1]   (at least one of the five, else 400)
 //   cams    the cameras whose picture is wanted (every id must match a camera in config.php)
 //   dets    the cameras whose paired DETECTOR's picture is wanted too (ids of cameras that have a detector)
 //   status  1 = also the readings of the detectors, the { camId: status } map detector-status.php answers
 //   rec     1 = also the recording state of the cameras, the map status.php answers
+//   alarms  1 = also the alarm sound events (a recording started, a person found) for the page to play in the browser
 //
 // This is the only long-lived request of every page: a browser allows only about 6 connections per address over
 // HTTP/1.1, so a connection per camera would leave no room for anything else. This page passes the relay's /mux stream
@@ -34,7 +35,7 @@ function mux_refuse(string $logKey, string $problem): void
 }
 
 // ?cams[]=x is an array, not a list: refuse it plainly instead of crashing (review F-16)
-if (CamLogic::firstNonStringParam($_GET, ['cams', 'dets', 'status', 'rec']) !== null) {
+if (CamLogic::firstNonStringParam($_GET, ['cams', 'dets', 'status', 'rec', 'alarms']) !== null) {
     http_response_code(400);
     exit('Invalid parameter');
 }
@@ -51,14 +52,15 @@ if ($detectorCams === null) {
 $detectorByCamera = CamLogic::detectorIdsByCamera($cameras, $detectorCams);
 $status = ($_GET['status'] ?? '') === '1';
 $recording = ($_GET['rec'] ?? '') === '1';
-if (!CamLogic::muxWantsAnything($ids, $detectorCams, $status, $recording)) {
+$alarms = ($_GET['alarms'] ?? '') === '1';
+if (!CamLogic::muxWantsAnything($ids, $detectorCams, $status, $recording, $alarms)) {
     http_response_code(400);
-    exit('ask for at least one of cams, dets, status=1, rec=1');
+    exit('ask for at least one of cams, dets, status=1, rec=1, alarms=1');
 }
 
 // (no redirects: review F-08)
 $ctx = stream_context_create(['http' => CamLogic::relayHttpOptions('GET', 10, relay_read_headers($config))]);
-$stream = @fopen(CamLogic::muxUrl($config['relay_url'], $ids, array_values($detectorByCamera), $status, $recording), 'rb', false, $ctx);
+$stream = @fopen(CamLogic::muxUrl($config['relay_url'], $ids, array_values($detectorByCamera), $status, $recording, $alarms), 'rb', false, $ctx);
 if (!$stream) {
     mux_refuse('unreachable', CamLogic::muxRelayProblem(null, last_php_error()));
 }
@@ -79,7 +81,7 @@ header('Cache-Control: no-cache, no-store');
 header('X-Accel-Buffering: no'); // tell nginx not to buffer either
 
 $allowed = CamMuxStream::allowedSources($ids, $detectorByCamera);
-$states = CamMuxStream::wantedStates($status, $recording);
+$states = CamMuxStream::wantedStates($status, $recording, $alarms);
 $buffer = '';
 relay_pipe_stream($stream, function (string $chunk) use (&$buffer, $allowed, $states, $cameras): ?string {
     $buffer .= $chunk;

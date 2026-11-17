@@ -10,7 +10,7 @@ const state = (extra = {}) => Object.assign({ base: BASE, overrides: {}, alarmRe
 test('every field has a unique key, a group, a label and a help text', () => {
   const keys = sc.FIELDS.map((f) => f.key);
   assertEqual(new Set(keys).size, keys.length);
-  for (const f of sc.FIELDS) { assertTrue(f.group && f.label && f.help, f.key); assertTrue(['int', 'float', 'bool', 'string', 'secret'].includes(f.type), f.key); }
+  for (const f of sc.FIELDS) { assertTrue(f.group && f.label && f.help, f.key); assertTrue(['int', 'float', 'bool', 'string', 'secret', 'sound'].includes(f.type), f.key); }
 });
 
 test('checkValue: integers are range checked and parsed from text or numbers', () => {
@@ -278,8 +278,62 @@ test('parseOverrides: a saved path is still honoured as before (only changes mad
 
 test('every path setting is marked with what kind it is (so none is missed by the check)', () => {
   const paths = sc.FIELDS.filter((f) => f.path).map((f) => f.key).sort();
-  assertEqual(paths, ['deviceSettingsDir', 'firmwareDir', 'logFile', 'switchFile']);
+  assertEqual(paths, ['deviceSettingsDir', 'firmwareDir', 'logFile', 'soundsDir', 'switchFile']);
   for (const f of sc.FIELDS.filter((x) => x.type === 'string')) assertTrue(f.path, `${f.key} is a text setting that is not confined`);
+});
+
+// ── alarm sounds ──
+
+const ALARM_KEYS = ['alarmSoundRecordStart', 'alarmSoundRecordStartRelay', 'alarmSoundRecordStartBrowser',
+  'alarmSoundPersonDetected', 'alarmSoundPersonDetectedRelay', 'alarmSoundPersonDetectedBrowser'];
+const emptyState = (extra = {}) => ({ base: {}, overrides: {}, alarmRecordSeconds: 20, env: {}, ...extra });
+const fieldOf = (view, key) => view.fields.find((f) => f.key === key);
+
+test('alarm sounds: six settings in their own group, applied without a restart, silent by default with both places ON', () => {
+  for (const key of ALARM_KEYS) {
+    const f = sc.FIELDS.find((x) => x.key === key);
+    assertEqual([f.group, f.restart, f.env], ['Alarm sounds', false, null], key);
+  }
+  assertEqual(ALARM_KEYS.map((k) => sc.currentValue(k, emptyState())), ['', true, true, '', true, true]);
+});
+
+test('checkValue: a sound is empty or the name of a sound file; anything else is refused', () => {
+  const f = sc.FIELDS.find((x) => x.key === 'alarmSoundRecordStart');
+  assertEqual(sc.checkValue(f, ''), { value: '' });
+  assertEqual(sc.checkValue(f, '  siren.wav '), { value: 'siren.wav' });
+  for (const bad of ['../x.wav', 'a/b.wav', 'siren', 'x.exe', '.wav', 'a\nb.wav', 5, null]) assertTrue(sc.checkValue(f, bad).error, String(bad));
+});
+
+test('applyUpdate: a sound must be in the folder when it is chosen; none is always allowed', () => {
+  const state = emptyState({ soundNames: ['siren.wav'] });
+  const ok = sc.applyUpdate(state, { alarmSoundRecordStart: 'siren.wav' });
+  assertEqual([ok.error, ok.changed, ok.overrides.alarmSoundRecordStart], [undefined, ['alarmSoundRecordStart'], 'siren.wav']);
+  assertTrue(/no sound called "gone\.wav".*upload it first/.test(sc.applyUpdate(state, { alarmSoundRecordStart: 'gone.wav' }).error));
+  assertEqual(sc.applyUpdate(emptyState({ overrides: { alarmSoundRecordStart: 'siren.wav' }, soundNames: ['siren.wav'] }), { alarmSoundRecordStart: '' }).changed, ['alarmSoundRecordStart']);
+});
+
+test('applyUpdate: a saved choice whose file was deleted does not block saving something else, and is not an error to re-send', () => {
+  const state = emptyState({ overrides: { alarmSoundRecordStart: 'gone.wav' }, soundNames: [] });
+  const r = sc.applyUpdate(state, { alarmSoundRecordStart: 'gone.wav', alarmSoundRecordStartRelay: 'false' });
+  assertEqual([r.error, r.changed], [undefined, ['alarmSoundRecordStartRelay']]);
+});
+
+test('applyUpdate: without a list of sounds the existence is not checked (callers that have no folder)', () => {
+  assertEqual(sc.applyUpdate(emptyState(), { alarmSoundRecordStart: 'anything.wav' }).error, undefined);
+});
+
+test('buildView: a sound setting carries the available sounds as its options; others carry none', () => {
+  const v = sc.buildView(emptyState({ soundNames: ['a.wav', 'b.mp3'], overrides: { alarmSoundRecordStart: 'a.wav' } }));
+  const f = fieldOf(v, 'alarmSoundRecordStart');
+  assertEqual([f.type, f.value, f.options], ['sound', 'a.wav', ['a.wav', 'b.mp3']]);
+  assertEqual(fieldOf(v, 'alarmSoundRecordStartRelay').options, undefined);
+  assertEqual(fieldOf(sc.buildView(emptyState()), 'alarmSoundPersonDetected').options, []);
+});
+
+test('parseOverrides: a saved sound is kept when its name is valid and dropped with a warning when not', () => {
+  const r = sc.parseOverrides(JSON.stringify({ alarmSoundRecordStart: 'siren.wav', alarmSoundPersonDetected: '../evil' }));
+  assertEqual(r.overrides, { alarmSoundRecordStart: 'siren.wav' });
+  assertEqual(r.warnings.length, 1);
 });
 
 // ── camKey vs controlKey (review NODE-013) ──

@@ -25,6 +25,8 @@ test('both sides use the same constants', () => {
   assertEqual(dec.TYPE_STATE, enc.TYPE_STATE);
   assertEqual(dec.STATE_DETECTORS, enc.STATE_DETECTORS);
   assertEqual(dec.STATE_CAMERAS, enc.STATE_CAMERAS);
+  assertEqual(dec.STATE_ALARMS, enc.STATE_ALARMS);
+  assertEqual(enc.STATE_ALARMS, 'state:alarms');
   assertEqual(dec.CONTENT_TYPE, enc.CONTENT_TYPE);
 });
 

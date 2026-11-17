@@ -117,8 +117,9 @@ require_once __DIR__ . '/lib/Layout.php';
 <script src="js/busy.js"></script>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
+<script src="js/sound-library.js"></script>
 <script>
-  const GROUP_ORDER = ['Recording', 'Person check', 'Network', 'Keys', 'Log', 'Folders', 'Dashboard'];
+  const GROUP_ORDER = ['Recording', 'Person check', 'Alarm sounds', 'Network', 'Keys', 'Log', 'Folders', 'Dashboard'];
   const BREAKING = ['camKey', 'pushPort'];
   const NUMERIC = ['int', 'float'];   // drawn as a number input (a float's step comes from the relay)
   const AJAX = { 'X-Requested-With': 'camdash' };
@@ -154,6 +155,7 @@ require_once __DIR__ . '/lib/Layout.php';
     const order = GROUP_ORDER.filter((g) => groups[g]).concat(Object.keys(groups).filter((g) => !GROUP_ORDER.includes(g)));
     for (const g of order) {
       const fs = el('fieldset', {}, el('legend', { textContent: g }));
+      if (g === 'Alarm sounds') fs.append(soundLibraryBox());   // the sound files first: the choices below are made from them
       for (const f of groups[g]) fs.append(renderField(f));
       form.append(fs);
     }
@@ -200,10 +202,46 @@ require_once __DIR__ . '/lib/Layout.php';
     return el('select', { id, name }, el('option', { value: 'true', textContent: 'ON' }), el('option', { value: 'false', textContent: 'OFF' }));
   }
 
+  // A sound setting is a choice among the sound files (what the relay sent as `options`), or none. The value saved
+  // for it is always shown, even if its file is gone, so the form tells the truth; `wanted` is what stays selected.
+  function fillSoundOptions(select, names, saved, wanted) {
+    select.textContent = '';
+    select.append(el('option', { value: '', textContent: '(no sound)' }));
+    for (const name of names) select.append(el('option', { value: name, textContent: name }));
+    if (saved && !names.includes(saved)) select.append(el('option', { value: saved, textContent: saved + ' (file missing)' }));
+    select.value = [...select.options].some((o) => o.value === wanted) ? wanted : '';
+  }
+  function soundInput(id, f) {
+    const select = el('select', { id, name: f.key });
+    fillSoundOptions(select, f.options || [], String(f.value), String(f.value));
+    return select;
+  }
+  // The library changed (a sound uploaded or deleted): every sound choice offers the new list, keeping what is chosen.
+  function refreshSoundOptions(names) {
+    for (const f of fields.filter((x) => x.type === 'sound')) {
+      const select = $('f-' + f.key);
+      if (!select) continue;
+      fillSoundOptions(select, names, original[f.key], select.value);
+      select.classList.toggle('changed', select.value !== original[f.key]);
+    }
+    updateButtons();
+  }
+  // The sound files themselves: list, try, upload, delete (js/sound-library.js). They act at once, like the cameras.
+  function soundLibraryBox() {
+    const box = el('div', { className: 'cams sound-library' });
+    if (window.CamSoundLibrary) {
+      window.CamSoundLibrary.mount(box, { fetch: window.fetch.bind(window), notify, confirm: (text) => confirm(text), onChange: refreshSoundOptions, run: CamBusy.run }).refresh();
+    }
+    return box;
+  }
+
   function renderField(f) {
     const id = 'f-' + f.key;
     const secret = f.type === 'secret';
-    const input = f.type === 'bool' ? switchInput(id, f.key) : el('input', {
+    let input;
+    if (f.type === 'sound') input = soundInput(id, f);
+    else if (f.type === 'bool') input = switchInput(id, f.key);
+    else input = el('input', {
       id, name: f.key,
       type: secret ? 'password' : (NUMERIC.includes(f.type) ? 'number' : 'text'),
       autocomplete: 'off', spellcheck: false,

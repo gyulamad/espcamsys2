@@ -238,4 +238,40 @@ camtest_test('forward: recording state that is not a JSON object is skipped, the
     camtest_assert_equal(array_map(function ($m) { return $m[0]; }, $read), [CamMuxStream::TYPE_HEARTBEAT]);
 });
 
+// ── alarms=1: the alarm sound events ──
+
+camtest_test('wantedStates: alarms=1 adds the alarm events, after the other two', function () {
+    camtest_assert_equal(CamMuxStream::wantedStates(false, false, true), ['state:alarms']);
+    camtest_assert_equal(CamMuxStream::wantedStates(true, true, true), ['state:detectors', 'state:cameras', 'state:alarms']);
+    camtest_assert_equal(CamMuxStream::STATE_ALARMS, 'state:alarms');
+});
+
+$alarmJson = '{"epoch":1000,"now":2000,"events":[{"seq":1,"at":1500,"kind":"recordStart","camId":"cam1","sound":"siren.wav"}]}';
+
+camtest_test('forward: the alarm events are passed on, rebuilt from checked fields (and only when asked for)', function () use ($alarmJson, $cams) {
+    $bytes = CamMuxStream::encode(CamMuxStream::TYPE_STATE, 'state:alarms', $alarmJson);
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($bytes), [], [CamMuxStream::STATE_ALARMS], $cams));
+    camtest_assert_equal(count($read), 1);
+    camtest_assert_equal($read[0][1], 'state:alarms');
+    camtest_assert_equal(json_decode($read[0][2], true), json_decode($alarmJson, true));
+    $notAsked = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($bytes), [], [CamMuxStream::STATE_CAMERAS], $cams));
+    camtest_assert_equal($notAsked, []);
+});
+
+camtest_test('forward: an alarm message that is not an alarm list is skipped, and the newest of several is the one passed on', function () use ($cams) {
+    $junk = CamMuxStream::encode(CamMuxStream::TYPE_STATE, 'state:alarms', '{"events":"x"}');
+    camtest_assert_equal(mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($junk), [], [CamMuxStream::STATE_ALARMS], $cams)), []);
+    $old = CamMuxStream::encode(CamMuxStream::TYPE_STATE, 'state:alarms', '{"epoch":1,"now":1,"events":[]}');
+    $new = CamMuxStream::encode(CamMuxStream::TYPE_STATE, 'state:alarms', '{"epoch":1,"now":9,"events":[]}');
+    $both = $old . $new;
+    $read = mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($both), [], [CamMuxStream::STATE_ALARMS], $cams));
+    camtest_assert_equal(count($read), 1);
+    camtest_assert_equal(json_decode($read[0][2], true)['now'], 9);
+});
+
+camtest_test('forward: an unexpected source is still dropped when alarms are asked for', function () use ($cams) {
+    $other = CamMuxStream::encode(CamMuxStream::TYPE_STATE, 'state:evil', '{"epoch":1,"now":1,"events":[]}');
+    camtest_assert_equal(mux_read(CamMuxStream::forward(CamMuxStream::takeMessages($other), [], [CamMuxStream::STATE_ALARMS], $cams)), []);
+});
+
 exit(camtest_summarize());

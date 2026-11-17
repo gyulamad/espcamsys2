@@ -302,7 +302,7 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 9, 'only our seven script files, the storage warning and the setup-mode alert');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 11, 'only our nine script files (the list page\'s seven, toast.js and alarm-sounds.js for the alarm sounds), the storage warning and the setup-mode alert');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
@@ -342,7 +342,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 12);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, fullscreen.js, screen-keeper.js, stable-text.js, simple-view.js, the storage warning and the setup-mode alert
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 14);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, toast.js, alarm-sounds.js, fullscreen.js, screen-keeper.js, stable-text.js, simple-view.js, the storage warning and the setup-mode alert
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);

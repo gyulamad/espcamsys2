@@ -11,17 +11,18 @@
 //   v.pause() / v.resume()       stop / go on reading (a stalled link); v.close() ends the connection
 //   muxViewer.framesOf(v, id) ...  the messages of one source, see the helpers below
 // view() resolves as soon as the head has arrived, so a request the relay answers at once is seen at once.
+// A fourth argument names another route (the dashboard's '/mux.php', with its login in `headers`); default '/mux'.
 
 const nodeHttp = require('http');
 const decoder = require('../../php/cameras/js/mux-codec');
 
 const CONTENT_TYPE = decoder.CONTENT_TYPE;
 
-function view(port, query, headers = {}) {
+function view(port, query, headers = {}, route = '/mux') {
   return new Promise((resolve, reject) => {
     const v = { status: 0, headers: {}, text: '', messages: [], times: [], pause: () => {}, resume: () => {}, close: () => {} };
     const parser = decoder.createParser();
-    const req = nodeHttp.get({ host: '127.0.0.1', port, path: `/mux${query}`, headers }, (res) => {
+    const req = nodeHttp.get({ host: '127.0.0.1', port, path: `${route}${query}`, headers }, (res) => {
       v.status = res.statusCode; v.headers = res.headers;
       const isMux = res.headers['content-type'] === CONTENT_TYPE;
       res.on('data', (c) => {
@@ -41,7 +42,8 @@ const detFrames = (v, id) => framesFrom(v, `det:${id}`);       // a detector's p
 const statesOf = (v, source) => v.messages.filter((m) => m.type === decoder.TYPE_STATE && m.source === source);
 const states = (v) => statesOf(v, decoder.STATE_DETECTORS);    // the readings of every detector
 const cameraStates = (v) => statesOf(v, decoder.STATE_CAMERAS);   // the recording state of every camera
+const alarmStates = (v) => statesOf(v, decoder.STATE_ALARMS);     // the latest alarm sound events
 const readings = (m) => JSON.parse(Buffer.from(m.payload).toString('utf8'));
 const sameBytes = (m, bytes) => Buffer.from(m.payload).equals(bytes);   // is this message's payload exactly `bytes` (the JPEG that was sent)?
 
-module.exports = { view, framesOf, detFrames, states, cameraStates, readings, sameBytes, codec: decoder, CONTENT_TYPE };
+module.exports = { view, framesOf, detFrames, states, cameraStates, alarmStates, readings, sameBytes, codec: decoder, CONTENT_TYPE };

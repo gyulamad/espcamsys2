@@ -17,13 +17,15 @@ const SOURCE = m[1];
 assertTrue(!/<\?/.test(SOURCE), 'the block has no PHP in it: it is the same for every page');
 
 // Runs the block as the page would, with `withScripts` = whether js/mux-pictures.js was loaded.
-function run({ withScripts = true, ids = ['a', 'b'], detectorRows = [] } = {}) {
+// `withAlarmSounds` = whether js/alarm-sounds.js was loaded.
+function run({ withScripts = true, withAlarmSounds = false, ids = ['a', 'b'], detectorRows = [] } = {}) {
   const log = [];
   const imgs = {};
   for (const id of ids) imgs[id] = { src: '' };
   const detImgs = {};
   for (const id of detectorRows) detImgs[id] = { src: '' };
   const created = [];
+  const alarmHandler = () => {};
   const fakePictures = {
     show: (id) => log.push(`show ${id}`),
     hide: (id) => log.push(`hide ${id}`),
@@ -31,6 +33,7 @@ function run({ withScripts = true, ids = ['a', 'b'], detectorRows = [] } = {}) {
     hideDetector: (id) => log.push(`hideDetector ${id}`),
     watchStatus: (on) => log.push(`watchStatus ${on}`),
     watchCameraStatus: (on) => log.push(`watchCameraStatus ${on}`),
+    watchAlarms: (on) => log.push(`watchAlarms ${on}`),
     close: () => log.push('close'),
   };
   const env = {
@@ -46,10 +49,11 @@ function run({ withScripts = true, ids = ['a', 'b'], detectorRows = [] } = {}) {
     onStreamError: (id) => log.push(`error ${id}`),
   };
   if (withScripts) env.CamMuxPictures = { create: (options) => { created.push(options); return fakePictures; } };
+  if (withAlarmSounds) env.CamAlarmSounds = { create: () => ({ handle: alarmHandler }) };
   const names = Object.keys(env);
   // (CamMuxPictures is a global of the page: without its script the name is simply not defined)
   const api = new Function(...names, `${SOURCE}\nreturn { openPicture, closePicture, closeDetectorPicture, pictures };`)(...names.map((n) => env[n]));
-  return { api, log, imgs, detImgs, created };
+  return { api, log, imgs, detImgs, created, alarmHandler };
 }
 
 test('one mux object for the whole page, pointed at mux.php, finding each camera\'s image', () => {
@@ -69,6 +73,19 @@ test('there is no fallback: the mux object is given no way to give up, and the p
 test('the images have no source yet, so every camera is started at load, and their recording state is asked for', () => {
   const t = run();
   assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true']);
+});
+
+test('alarm sounds: with js/alarm-sounds.js the page hands the mux object the player and asks for the alarm events', () => {
+  const t = run({ withAlarmSounds: true, detectorRows: ['a'] });
+  assertEqual(t.created[0].onAlarms, t.alarmHandler);
+  assertEqual(Object.keys(t.created[0]).sort(), ['imgFor', 'onAlarms', 'onCameraStatus', 'onDown', 'onStatus', 'url']);
+  assertEqual(t.log, ['reload a', 'reload b', 'watchCameraStatus true', 'watchAlarms true', 'showDetector a', 'watchStatus true']);
+});
+
+test('alarm sounds: without js/alarm-sounds.js the page works as before — no handler, no alarm events asked for', () => {
+  const t = run();
+  assertTrue(!('onAlarms' in t.created[0]));
+  assertTrue(!t.log.some((l) => /watchAlarms/.test(l)));
 });
 
 test('opening and closing a picture go to the mux object, never to the image', () => {

@@ -1500,7 +1500,9 @@ camtest_test('sanitizeStorageStatus: text the relay sends along is never passed 
 
 camtest_test('splitSettingsValues passes every allowed relay setting on, and the dashboard\'s own to the dashboard', function () {
     $values = ['alarmRecordSeconds' => 60, 'minFreeStorageMB' => '1024', 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608, 'port' => 8080, 'pushPort' => 8081,
-               'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'personScanEnabled' => 'true', 'personScanConfidence' => '0.55', 'auth_user' => 'bob'];
+               'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'personScanEnabled' => 'true', 'personScanConfidence' => '0.55',
+               'alarmSoundRecordStart' => 'siren.wav', 'alarmSoundRecordStartRelay' => 'true', 'alarmSoundRecordStartBrowser' => 'false',
+               'alarmSoundPersonDetected' => '', 'alarmSoundPersonDetectedRelay' => 'true', 'alarmSoundPersonDetectedBrowser' => 'true', 'auth_user' => 'bob'];
     $r = CamLogic::splitSettingsValues($values);
     camtest_assert_true($r['ok'] === true);
     camtest_assert_equal(array_keys($r['relay']), CamLogic::RELAY_SETTING_KEYS);
@@ -1515,7 +1517,7 @@ camtest_test('splitSettingsValues refuses every file and folder path, saving not
             camtest_assert_true(strpos($r['error'], $key) !== false && strpos($r['error'], 'nothing was saved') !== false && !isset($r['relay']), $r['error'] ?? '');
         }
     }
-    camtest_assert_equal(CamLogic::RELAY_PATH_SETTING_KEYS, ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile']);
+    camtest_assert_equal(CamLogic::RELAY_PATH_SETTING_KEYS, ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile']);
 });
 
 camtest_test('splitSettingsValues refuses a setting it does not know (allow-list, not deny-list)', function () {
@@ -1870,6 +1872,14 @@ camtest_test('muxWantsAnything: true when any of cameras, detectors, readings or
     camtest_assert_true(CamLogic::muxWantsAnything([], [], true, false));
     camtest_assert_true(CamLogic::muxWantsAnything([], [], false, true));
     camtest_assert_true(!CamLogic::muxWantsAnything([], [], false, false));
+});
+
+camtest_test('muxWantsAnything / muxUrl: alarms=1 is a request of its own and goes to the relay as alarms=1', function () {
+    camtest_assert_true(CamLogic::muxWantsAnything([], [], false, false, true));
+    camtest_assert_true(!CamLogic::muxWantsAnything([], [], false, false, false));
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080/', [], [], false, false, true), 'http://r:8080/mux?alarms=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a'], [], false, true, true), 'http://r:8080/mux?cams=a&rec=1&alarms=1');
+    camtest_assert_equal(CamLogic::muxUrl('http://r:8080', ['a']), 'http://r:8080/mux?cams=a');
 });
 
 camtest_test('muxUrl: the relay address without a double slash, the list in one escaped parameter', function () {

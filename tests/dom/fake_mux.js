@@ -9,6 +9,7 @@
 //   const mux = installFakeMux(window);   // before the page's scripts run
 //   mux.pushCameraStatus({ cam1: { recording: false, ... } });   // what the relay pushes every 2 s: the cameras' state
 //   mux.pushStatus({ 'cam1': { state: 'online', ... } });        // ... and the detectors' readings
+//   mux.pushAlarms({ epoch, now, events: [...] });               // ... and the alarm sound events (js/alarm-sounds.js)
 //   mux.paint('cam', 'cam1');   // a picture arrives: it goes onto the <img> and fires its load event, like the real one
 //   mux.down();                 // the connection ended (the real client reopens it by itself)
 //   mux.calls                   // every call the page made on the pictures object, in order: 'show cam1', 'reconnect', ...
@@ -26,6 +27,7 @@ function installFakeMux(window) {
     shown: (kind) => [...wanted[kind]].sort(),
     pushStatus: (data) => mux.options.onStatus(data),
     pushCameraStatus: (data) => mux.options.onCameraStatus(data),
+    pushAlarms: (data) => mux.options.onAlarms(data),
     down: () => mux.options.onDown(mux.shown('cam')),
     paint(kind, id) {
       const img = mux.options.imgFor(kind, id);
@@ -44,6 +46,7 @@ function installFakeMux(window) {
     hideDetector: (id) => { record(`hideDetector ${id}`); wanted.det.delete(id); },
     watchStatus: (on) => record(`watchStatus ${on}`),
     watchCameraStatus: (on) => record(`watchCameraStatus ${on}`),
+    watchAlarms: (on) => record(`watchAlarms ${on}`),
     reconnect: () => record('reconnect'),
     close: () => record('close'),
   };

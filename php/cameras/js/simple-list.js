@@ -55,9 +55,11 @@
   const thumbs = new Map(Array.from(grid.children).map((thumb) => [thumb.dataset.cam, thumb]));
   const imgOf = (id) => (thumbs.has(id) ? thumbs.get(id).querySelector('img') : null);
   const asMap = (data) => (data && typeof data === 'object' && !Array.isArray(data) ? data : null);
+  const alarmSounds = window.CamAlarmSounds ? window.CamAlarmSounds.create() : null;   // plays the alarm sounds the relay asks the browsers for
   const pictures = window.CamMuxPictures.create({
     url: 'mux.php',
     imgFor: (kind, id) => (kind === 'cam' ? imgOf(id) : null),
+    onAlarms: alarmSounds ? alarmSounds.handle : undefined,
     onCameraStatus: (data) => { const status = asMap(data); markRecording(status); markOffline(status); },
     // Down: no state is known (no frame, no cover) and the last pictures are blanked rather than left standing as if live.
     onDown: (ids) => {
@@ -72,4 +74,5 @@
   // All the thumbnails go in one go: they become ONE (re)connection, not one per camera.
   for (const id of thumbs.keys()) pictures.show(id);
   pictures.watchCameraStatus(true);
+  if (alarmSounds) pictures.watchAlarms(true);
 })();

@@ -46,6 +46,16 @@ module.exports = {
   // poll for them with the camera key. A relative path is relative to this folder; optional.
   // firmwareDir: 'firmware',   // default
 
+  // Alarm sounds (see "Alarm sounds" in MANUAL.md): which sound plays when a recording starts or a person is found,
+  // and where (this machine's speaker and/or the browsers) is chosen on the dashboard's SETTINGS page, where the
+  // sound files are uploaded too. Only what runs on THIS machine is set here (the dashboard cannot change it):
+  // soundsDir: 'sounds',          // where the sound files are kept (default; relative to this folder; SOUNDS_DIR)
+  // alarmSounds: {
+  //   player: ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'error'],   // default; the file is added last.
+  //                                 // Others: ['aplay', '-q'] (WAV only), ['mpg123', '-q'], ['paplay']
+  //   timeoutSeconds: 30,           // a sound still playing after this long is stopped (1-300)
+  // },
+
   // Recording ON/OFF switch (dashboard buttons: switch recording OFF per camera, or for every
   // camera at once, for N minutes or until switched back ON — e.g. while people are on site).
   // Changing it needs this key, sent by the dashboard's server as an X-Control-Key header.
