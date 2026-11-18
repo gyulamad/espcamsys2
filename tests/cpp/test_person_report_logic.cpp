@@ -124,8 +124,12 @@ TEST(status_json_carries_both_the_set_motion_threshold_and_the_one_in_force) {
 
 TEST(status_json_scores) {
     Snapshot s = snap();
-    TEST_ASSERT(has(buildStatusJson(cfg(), s, 1000 + SCORE_FRESH_MS, "x", 0, 0, link()), "\"score\":0.740"), "a score exactly at the freshness limit is shown");
-    TEST_ASSERT(has(buildStatusJson(cfg(), s, 1000 + SCORE_FRESH_MS + 1, "x", 0, 0, link()), "\"score\":null"), "an older score is not shown (model paused)");
+    // SCORE_FRESH_MS is the cfg's field (a setting since F-29); the default is 1500.
+    TEST_ASSERT_EQ((int)cfg().scoreFreshMs, 1500, "the default freshness (SCORE_FRESH_MS's default)");
+    TEST_ASSERT(has(buildStatusJson(cfg(), s, 1000 + cfg().scoreFreshMs, "x", 0, 0, link()), "\"score\":0.740"), "a score exactly at the freshness limit is shown");
+    TEST_ASSERT(has(buildStatusJson(cfg(), s, 1000 + cfg().scoreFreshMs + 1, "x", 0, 0, link()), "\"score\":null"), "an older score is not shown (model paused)");
+    Config fresh = cfg(); fresh.scoreFreshMs = 60000;
+    TEST_ASSERT(has(buildStatusJson(fresh, s, 30000, "x", 0, 0, link()), "\"score\":0.740"), "a longer SCORE_FRESH_MS keeps the score fresh for longer");
     s.hasScore = false;
     TEST_ASSERT(has(buildStatusJson(cfg(), s, 1000, "x", 0, 0, link()), "\"score\":null"), "no score yet");
     s = snap(); s.score = 1.7f;

@@ -152,11 +152,8 @@ struct Config {
     person_scene::MotionArea motionArea;   // the part of the picture the motion reading is taken from
     float detectAt = 0.6f;
     float clearAt = 0.5f;
+    uint32_t scoreFreshMs = 1500;   // SCORE_FRESH_MS: a score older than this is not shown
 };
-
-// A score older than this is not shown: the model is paused (dark / nothing moving), so the old
-// number would mislead someone aiming the detector. The model runs every loop when it runs at all.
-constexpr uint32_t SCORE_FRESH_MS = 1500;
 
 // How the uplink is doing, reported with every message so the relay (and the dashboard) can show
 // trouble the board itself has noticed.
@@ -214,7 +211,9 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
              cfg.motionArea.x0, cfg.motionArea.y0, cfg.motionArea.x1, cfg.motionArea.y1);
     out += buf;
 
-    bool fresh = s.hasScore && (uint32_t)(nowMs - s.scoreAtMs) <= SCORE_FRESH_MS;
+    // A score older than SCORE_FRESH_MS is not shown: the model is paused (dark / nothing moving), so
+    // the old number would mislead someone aiming the detector.
+    bool fresh = s.hasScore && (uint32_t)(nowMs - s.scoreAtMs) <= cfg.scoreFreshMs;
     out += ",\"person\":{\"score\":";
     out += fresh ? fixed3(s.score) : std::string("null");
     out += ",\"detectAt\":" + fixed3(cfg.detectAt) + ",\"clearAt\":" + fixed3(cfg.clearAt);

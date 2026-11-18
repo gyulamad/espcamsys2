@@ -115,13 +115,13 @@ new	both	Serial.setRxBufferSize(2048)	SER_RXBUF_B	Serial receive buffer (bytes)	
 new	det	config.fb_count	CAM_FB_COUNT	Camera frame buffers	T5c
 new	det	initCamera ATTEMPTS	CAM_INIT_TRIES	Camera start attempts	T5c
 new	det	STARTUP_FAILURE_RESTART_MS	BOOT_FAIL_MS	Restart after a failed start (ms)	T5c
-new	det	DARK_HYSTERESIS	DARK_HYST	Darkness hysteresis	T5a
-new	det	SCORE_FRESH_MS	SCORE_FRESH_MS	Detection score stays fresh for (ms)	T5a
-new	det	CLIP_FACTOR	MOTION_CLIP	Motion spike clip factor	T5a
-new	det	UplinkConfig.connectTimeoutMs	STREAM_CONN_MS	Relay connect timeout (ms)	T5a
-new	det	UplinkConfig.answerTimeoutMs	STREAM_ANS_MS	Relay answer timeout (ms)	T5a
-new	det	UplinkConfig.heartbeatMs	STREAM_BEAT_MS	Live view keep-alive (ms)	T5a
-new	det	UplinkConfig.retryFirstMs	ANN_FIRST_S	First wait before reaching the relay again (s)	T5a
+new	det	DARK_HYSTERESIS	DARK_HYST	Darkness hysteresis	done
+new	det	SCORE_FRESH_MS	SCORE_FRESH_MS	Detection score stays fresh for (ms)	done
+new	det	CLIP_FACTOR	MOTION_CLIP	Motion spike clip factor	done
+new	det	UplinkConfig.connectTimeoutMs	STREAM_CONN_MS	Relay connect timeout (ms)	done
+new	det	UplinkConfig.answerTimeoutMs	STREAM_ANS_MS	Relay answer timeout (ms)	done
+new	det	UplinkConfig.heartbeatMs	STREAM_BEAT_MS	Live view keep-alive (ms)	done
+new	det	UplinkConfig.retryFirstMs	ANN_FIRST_S	First wait before reaching the relay again (s)	done
 new	det	ViewGate idlePollMs	VIEW_IDLE_MS	Live view poll when idle (ms)	T5b
 new	det	ViewGate livePollMs	VIEW_LIVE_MS	Live view poll while watched (ms)	T5b
 new	det	ViewGate retryMs	VIEW_RETRY_MS	Live view poll retry (ms)	T5b
@@ -134,5 +134,5 @@ new	det	remoteLogConfigFor.maxRetries	LOG_RETRY_MAX	Retries after a failed deliv
 new	det	remoteLogConfigFor.retryPeriodMs	LOG_RETRY_SEC	Seconds between retries	T5b
 new	det	remoteLogConfigFor.flushIntervalMs	LOG_FLUSH_SEC	Seconds routine entries wait	T5b
 new	det	remoteLogConfigFor.repeatWindowMs	LOG_REPEAT_SEC	Window for counting repeats	T5b
-new	det	config.sccb/vflip (set_vflip 0)	CAM_VFLIP	Flip the picture upside down	T5a
-new	det	set_hmirror 0	CAM_HMIRROR	Mirror the picture	T5a
+new	det	config.sccb/vflip (set_vflip 0)	CAM_VFLIP	Flip the picture upside down	done
+new	det	set_hmirror 0	CAM_HMIRROR	Mirror the picture	done

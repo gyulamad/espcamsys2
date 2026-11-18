@@ -16,7 +16,7 @@
 // enough that a person walking through the picture for some seconds barely moves it. It is counted in
 // frames, not seconds, so there is no clock to get wrong.
 //
-// What it learns is the motion of an EMPTY scene, so one reading counts for at most CLIP_FACTOR times the
+// What it learns is the motion of an EMPTY scene, so one reading counts for at most MOTION_CLIP times the
 // threshold in force (it is clipped). Without that, the very thing to be detected raises the bar against
 // itself: a camera warm-up (auto exposure settling) seeded the average with thousands and blinded the
 // detector for minutes, and a person busy in the picture for a minute and a half raised the threshold above
@@ -33,8 +33,9 @@
 
 namespace person_scene {
 
-// One reading is learnt as at most this many times the threshold in force.
-constexpr double CLIP_FACTOR = 2.0;
+// MOTION_CLIP's usual value (the setting's default, see settings_schema.h): one reading counts for at
+// most twice the threshold in force.
+constexpr double DEFAULT_CLIP_FACTOR = 2.0;
 
 // MOTION_EMA_PCT's usual value (the setting itself has no default, see settings_schema.h): the
 // threshold lies 30% above the average.
@@ -49,10 +50,12 @@ class MotionBaseline {
 public:
     // `lengthFrames`: how many frames the average spans, 0 = off.
     // `percentAbove`: how far above the average the threshold lies, in percent.
+    // `clipFactor`: one reading counts for at most this many times the threshold in force (MOTION_CLIP).
     // Starts over: a new configuration must not inherit what an old one learnt.
-    void configure(uint32_t lengthFrames, uint32_t percentAbove) {
+    void configure(uint32_t lengthFrames, uint32_t percentAbove, double clipFactor = DEFAULT_CLIP_FACTOR) {
         alpha_ = lengthFrames == 0 ? 0.0 : 2.0 / (static_cast<double>(lengthFrames) + 1.0);
         factor_ = 1.0 + static_cast<double>(percentAbove) / 100.0;
+        clipFactor_ = clipFactor;
         average_ = 0.0;
         seeded_ = false;
     }
@@ -62,9 +65,9 @@ public:
     // The average so far (0 while off or before the first reading).
     double average() const { return average_; }
 
-    // Learns one motion reading (at most twice the threshold in force, see above). `floor` is MOTION_THRESH, the
-    // same as for threshold(). Call it for real readings only: the very first frame has nothing to be compared
-    // to (SceneReading::hasPrevious) and its 0 would drag the average down for nothing.
+    // Learns one motion reading (at most clipFactor times the threshold in force, see above). `floor` is
+    // MOTION_THRESH, the same as for threshold(). Call it for real readings only: the very first frame has
+    // nothing to be compared to (SceneReading::hasPrevious) and its 0 would drag the average down for nothing.
     void observe(uint32_t motion, uint32_t floor) {
         if (!enabled()) return;
         const double reading = static_cast<double>(motion);
@@ -74,7 +77,7 @@ public:
             seeded_ = true;
             return;
         }
-        const double most = limit(floor) * CLIP_FACTOR;
+        const double most = limit(floor) * clipFactor_;
         average_ += alpha_ * ((reading < most ? reading : most) - average_);
     }
 
@@ -97,6 +100,7 @@ private:
 
     double alpha_ = 0.0;     // smoothing factor 2 / (length + 1); 0 = off
     double factor_ = 1.0;    // 1 + percent / 100
+    double clipFactor_ = DEFAULT_CLIP_FACTOR;   // a reading counts for at most this many times the threshold (MOTION_CLIP)
     double average_ = 0.0;
     bool seeded_ = false;    // has the first reading arrived
 };

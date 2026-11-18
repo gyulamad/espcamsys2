@@ -20,18 +20,14 @@
 // New with the motion auto-calibration (motion_baseline.h): MOTION_EMA_LEN (0 = off, the fixed
 // MOTION_THRESH as before) and, only while that is not 0, MOTION_EMA_PCT.
 //
-// There are no defaults. The live view is not optional: every detector joins Wi-Fi and
-// pushes to the relay, so its Wi-Fi, the relay it pushes to and the tuning of that stream
-// are always asked for. (There used to be a STREAM_ENABLED switch for a detector that
-// must not use Wi-Fi at all; it is gone, and a board that still has it stored in flash
-// simply ignores it, like the STREAM_USER/STREAM_PASS/STREAM_PORT of the LAN server below.)
-//
-// The live view is PUSHED: the detector connects out to the relay and keeps one
-// connection open, sending its 96x96 picture and the numbers behind its alarm
-// line up it (see report_logic.h). It serves nothing, so there is no port,
-// user or password for a viewer to be given. (STREAM_USER, STREAM_PASS and
-// STREAM_PORT belonged to the LAN server this replaced; a board that still has
-// them stored in flash simply ignores them.)
+// Settings that used to be fixed in the code have a default (PERSON_META below): a board
+// that has none stored uses it. The defaults of the detection settings are the values the
+// example template (Arduino/templates/example.person.template.txt) and the old config.h
+// always carried, so a blank board now asks only for the live view's identity (its Wi-Fi,
+// the relay it pushes to, its own name) - the tuning is there to be CHANGED, not typed in.
+// The values that say where and who this board is (WIFI, SERVER_HOST, HTTP_PORT, API_KEY,
+// DETECTOR_ID) and the alarm pin (PERSON_GPIO, which depends on how the board is wired)
+// have no default and stay required.
 //
 // What is NOT a setting (developer switches, edit and re-flash): TENSOR_ARENA_SIZE
 // (tied to the model), PRINT_DETECTION_SCORES, PRINT_STARTUP_INFO — see the top
@@ -115,6 +111,16 @@ static const KeyDef PERSON_KEYS[] = {
       "motion auto-calibration: the motion threshold follows a moving average of the motion over this many frames (a few minutes' worth), so wind and rain raise it; MOTION_THRESH stays its lowest value; 0 = off, the threshold stays fixed" },
     { "MOTION_EMA_PCT", Kind::Int,      0,    person_scene::MAX_MOTION_EMA_PERCENT, Cond::WhenNotEquals, "MOTION_EMA_LEN", "0",
       "motion auto-calibration: how far above the moving average the threshold lies, in percent (30 is a good start)" },
+    { "MOTION_CLIP",    Kind::Float,    1.1,  10,      Cond::Always,     nullptr,          nullptr,
+      "motion auto-calibration: one motion reading is learnt as at most this many times the threshold in force, so a person walking through the picture barely raises the bar against the next one" },
+    { "DARK_HYST",      Kind::Int,      0,    255,     Cond::Always,     nullptr,          nullptr,
+      "darkness is left again only when the brightness is this much above the DARK_THRESH it was entered at, so dusk or a flickering lamp does not flip the gate on every frame" },
+    { "SCORE_FRESH_MS", Kind::Int,      100,  60000,   Cond::Always,     nullptr,          nullptr,
+      "a detection score older than this is not shown (the model is paused: dark or nothing moving), so an old number cannot mislead someone aiming the detector" },
+    { "CAM_VFLIP",      Kind::Bool,     0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: flip the picture upside down (with CAM_HMIRROR 1 = turned 180 degrees). Set the camera the same" },
+    { "CAM_HMIRROR",    Kind::Bool,     0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: mirror the picture left to right. Set the camera the same" },
 
     { "WIFI",            Kind::Wifi,      0,    0,       Cond::Always,     nullptr,          nullptr,
       "the networks to join (strongest one in range wins, fails over if it drops)" },
@@ -132,10 +138,18 @@ static const KeyDef PERSON_KEYS[] = {
       "JPEG quality of the picture, higher = better picture" },
     { "STREAM_WR_TMO_S", Kind::Int,       1,    60,      Cond::Always,     nullptr,          nullptr,
       "a relay connection that accepts nothing for this many seconds is dropped and opened again" },
+    { "STREAM_CONN_MS",  Kind::Int,       500,  60000,   Cond::Always,     nullptr,          nullptr,
+      "giving up on opening the TCP connection to the relay after this long (ms)" },
+    { "STREAM_ANS_MS",   Kind::Int,       500,  60000,   Cond::Always,     nullptr,          nullptr,
+      "the relay has this long (ms) to answer the uplink request before the connection is given up on" },
+    { "STREAM_BEAT_MS",  Kind::Int,       100,  60000,   Cond::Always,     nullptr,          nullptr,
+      "while nobody watches a frame: a heartbeat (the readings, no picture) goes out at least this often (ms), so the relay keeps the detector online while it is paused" },
     { "ANN_HEARTBEAT",   Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
       "seconds between status lines (Wi-Fi, link, memory) in the relay's log" },
     { "ANN_RETRY",       Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
       "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)" },
+    { "ANN_FIRST_S",     Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
+      "first wait, in seconds, before the relay is tried again after a failure (a relay restart should cost seconds, not half a minute); the later waits double up to ANN_RETRY" },
     // F-21, the cable-free first setup (see the setup mode of the sketch). Both settings are OPTIONAL: a board
     // that has neither is still complete, so boards deployed before this feature keep working untouched.
     { "SETUP_MODE",      Kind::Bool,      0,    0,       Cond::Optional,    nullptr,          nullptr,
@@ -144,26 +158,76 @@ static const KeyDef PERSON_KEYS[] = {
       "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
 };
 
+// The readable name, group and fallback of each setting (see KeyMeta in settings_logic.h). A setting with a
+// default is no longer asked for on a blank board: it simply uses that value - the one the example template
+// and the old config.h always carried, or the constant that used to be fixed in the code - until somebody
+// changes it. The values that say WHERE and WHO this board is (WIFI, SERVER_HOST, HTTP_PORT, API_KEY,
+// DETECTOR_ID) and the alarm pin (PERSON_GPIO: it depends on how the board is wired, and driving the wrong
+// pin would mean rewiring) have no default and stay required. MOTION_EMA_PCT has none either: it is only
+// asked for while the auto-calibration is on, and its usual value (30) is in the help text - the same
+// arrangement LOG_MIN_LEVEL has on the recorder, but there the fixed default always applied; here a board
+// that predates the feature must keep being asked, because nothing else tells the owner the choice exists.
+//
+// Categories follow the Atlas design's detector page: Detection, Picture & live view, Connection (the
+// detector's share of Connection - Wi-Fi sleep, HTTP timeouts - arrives with T5b).
+static const KeyMeta PERSON_META[] = {
+    // name              default  label                                   category          tier          apply
+    { "DETECT_THRESH",   "0.6",   "Person detected above (score)",        "Detection",      Tier::Basic,    Apply::Live },
+    { "CLEAR_THRESH",    "0.5",   "Person cleared below (score)",         "Detection",      Tier::Basic,    Apply::Live },
+    { "LOOP_DELAY_MS",   "10",    "Pause between detections (ms)",        "Detection",      Tier::Advanced, Apply::Live },
+    { "DARK_THRESH",     "40",    "Darkness threshold (0 = off)",         "Detection",      Tier::Basic,    Apply::Live },
+    { "DARK_HYST",       "5",     "Darkness hysteresis",                  "Detection",      Tier::Advanced, Apply::Live },
+    { "MOTION_THRESH",   "300",   "Motion threshold (0 = off)",           "Detection",      Tier::Basic,    Apply::Live },
+    { "MOTION_HOLD_S",   "10",    "Detection hold after motion (s)",      "Detection",      Tier::Basic,    Apply::Live },
+    { "MOTION_X0",       "0",     "Motion area left edge",                "Detection",      Tier::Basic,    Apply::Live },
+    { "MOTION_Y0",       "0",     "Motion area top edge",                 "Detection",      Tier::Basic,    Apply::Live },
+    { "MOTION_X1",       "96",    "Motion area right edge",               "Detection",      Tier::Basic,    Apply::Live },
+    { "MOTION_Y1",       "96",    "Motion area bottom edge",              "Detection",      Tier::Basic,    Apply::Live },
+    { "MOTION_EMA_LEN",  "0",     "Motion auto-calibration length (frames)", "Detection",   Tier::Advanced, Apply::Live },
+    { "MOTION_EMA_PCT",  nullptr, "Auto-calibration margin (%)",          "Detection",      Tier::Advanced, Apply::Live },
+    { "MOTION_CLIP",     "2.0",   "Motion spike clip factor",             "Detection",      Tier::Expert,   Apply::Live },
+    { "SCORE_FRESH_MS",  "1500",  "Detection score stays fresh for (ms)", "Detection",      Tier::Advanced, Apply::Live },
+    { "CAM_VFLIP",       "0",     "Flip the picture upside down",         "Detection",      Tier::Basic,    Apply::Reboot },
+    { "CAM_HMIRROR",     "0",     "Mirror the picture",                   "Detection",      Tier::Basic,    Apply::Reboot },
+    { "STREAM_MAX_FPS",  "10",    "Live view frames per second (max)",    "Picture & live view", Tier::Basic,    Apply::Reboot },
+    { "STREAM_JPEG_Q",   "80",    "Live view JPEG quality",               "Picture & live view", Tier::Basic,    Apply::Reboot },
+    { "STREAM_WR_TMO_S", "3",     "Relay write timeout (s)",              "Picture & live view", Tier::Advanced, Apply::Reboot },
+    { "STREAM_CONN_MS",  "4000",  "Relay connect timeout (ms)",           "Picture & live view", Tier::Advanced, Apply::Reboot },
+    { "STREAM_ANS_MS",   "5000",  "Relay answer timeout (ms)",            "Picture & live view", Tier::Advanced, Apply::Reboot },
+    { "STREAM_BEAT_MS",  "1000",  "Live view keep-alive (ms)",            "Picture & live view", Tier::Advanced, Apply::Reboot },
+    { "ANN_HEARTBEAT",   "600",   "Seconds between status lines",         "Picture & live view", Tier::Advanced, Apply::Reboot },
+    { "ANN_RETRY",       "30",    "Longest wait before reaching the relay again (s)", "Picture & live view", Tier::Advanced, Apply::Reboot },
+    { "ANN_FIRST_S",     "2",     "First wait before reaching the relay again (s)",   "Picture & live view", Tier::Advanced, Apply::Reboot },
+};
+static const size_t PERSON_META_COUNT = sizeof(PERSON_META) / sizeof(PERSON_META[0]);
+
 static const Schema PERSON_SCHEMA = {
     PERSON_KEYS,
     sizeof(PERSON_KEYS) / sizeof(PERSON_KEYS[0]),
     personRulesHold,
-    nullptr,   // no defaulted settings yet
-    0
+    PERSON_META,
+    PERSON_META_COUNT
 };
 
-// The settings as the sketch uses them.
+// The settings as the sketch uses them. The in-struct defaults mirror PERSON_META: they are what
+// a PersonSettings built without loading (the glue tests' g_cfg) starts with, and loadPersonSettings
+// overwrites every field from the store anyway.
 struct PersonSettings {
     int personGpio = 13;
     float detectThreshold = 0.60f;
     float clearThreshold = 0.50f;
     int loopDelayMs = 10;
-    int darkThreshold = 0;          // 0 = darkness check off
-    uint32_t motionThreshold = 0;   // 0 = motion check off
-    uint32_t motionHoldSec = 0;
+    int darkThreshold = 40;         // DARK_THRESH: brightness below this = dark; 0 = darkness check off
+    int darkHysteresis = 5;         // DARK_HYST: brightness must rise this far above the threshold to count as light again
+    uint32_t motionThreshold = 300; // MOTION_THRESH: 0 = motion check off
+    uint32_t motionHoldSec = 10;
     person_scene::MotionArea motionArea;   // the part of the picture watched for motion; default = all of it
     uint32_t motionEmaLength = 0;   // frames the motion average spans; 0 = auto-calibration off
     uint32_t motionEmaPercent = person_scene::DEFAULT_MOTION_EMA_PERCENT;   // only read while the above is not 0
+    double motionClipFactor = person_scene::DEFAULT_CLIP_FACTOR;   // MOTION_CLIP: one reading counts for at most this many times the threshold in force
+    uint32_t scoreFreshMs = 1500;   // SCORE_FRESH_MS: an older score is not shown (the model is paused)
+    bool camVflip = false;          // CAM_VFLIP
+    bool camHmirror = false;        // CAM_HMIRROR
 
     std::vector<WifiNet> wifi;
     std::string serverHost;
@@ -173,8 +237,12 @@ struct PersonSettings {
     int streamMaxFps = 10;
     int streamJpegQuality = 80;
     int streamWriteTimeoutSec = 3;
+    uint32_t streamConnectTimeoutMs = 4000;   // STREAM_CONN_MS: opening the TCP connection
+    uint32_t streamAnswerTimeoutMs = 5000;    // STREAM_ANS_MS: the relay's answer to the uplink request
+    uint32_t streamHeartbeatMs = 1000;        // STREAM_BEAT_MS: the keep-alive while nobody watches
     uint32_t announceHeartbeatSec = 600;
     uint32_t announceRetrySec = 30;
+    uint32_t announceFirstRetrySec = 2;       // ANN_FIRST_S: the first backoff wait (the later ones double, up to ANN_RETRY)
 };
 
 // The settings this board needs before it can ask the relay for the OTHERS
@@ -202,7 +270,8 @@ inline std::vector<std::string> personLockedKeys() {
 
 // Fills `out` from flash. false (with `err` naming the first problem) if any
 // needed setting is missing or no longer valid — the caller must not run then.
-inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::string& err) {
+inline bool loadPersonSettings(ISettingsStore& flash, PersonSettings& out, std::string& err) {
+    DefaultingStore store(flash, PERSON_SCHEMA.meta, PERSON_SCHEMA.metaCount);   // what is stored, else the default
     std::vector<Problem> problems = findProblems(PERSON_SCHEMA, store);
     if (!problems.empty()) {
         err = problems[0].key + (problems[0].missing ? " is not set" : " is invalid: " + problems[0].reason);
@@ -218,6 +287,7 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
     s.clearThreshold = static_cast<float>(c);
     s.loopDelayMs = static_cast<int>(storedInt(store, "LOOP_DELAY_MS"));
     s.darkThreshold = static_cast<int>(storedInt(store, "DARK_THRESH"));
+    s.darkHysteresis = static_cast<int>(storedInt(store, "DARK_HYST"));
     s.motionThreshold = static_cast<uint32_t>(storedInt(store, "MOTION_THRESH"));
     s.motionHoldSec = static_cast<uint32_t>(storedInt(store, "MOTION_HOLD_S"));
     s.motionArea = person_scene::MotionArea(static_cast<int>(storedInt(store, "MOTION_X0")),
@@ -226,6 +296,12 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
                                             static_cast<int>(storedInt(store, "MOTION_Y1")));
     s.motionEmaLength = static_cast<uint32_t>(storedInt(store, "MOTION_EMA_LEN"));
     if (s.motionEmaLength > 0) s.motionEmaPercent = static_cast<uint32_t>(storedInt(store, "MOTION_EMA_PCT"));   // not asked for while off
+    double clip = person_scene::DEFAULT_CLIP_FACTOR;
+    parseFloat(store.get("MOTION_CLIP"), clip);
+    s.motionClipFactor = clip;
+    s.scoreFreshMs = static_cast<uint32_t>(storedInt(store, "SCORE_FRESH_MS"));
+    s.camVflip = store.get("CAM_VFLIP") == "1";
+    s.camHmirror = store.get("CAM_HMIRROR") == "1";
 
     std::string wifiErr;
     parseWifiList(store.get("WIFI"), s.wifi, wifiErr);
@@ -236,8 +312,12 @@ inline bool loadPersonSettings(ISettingsStore& store, PersonSettings& out, std::
     s.streamMaxFps = static_cast<int>(storedInt(store, "STREAM_MAX_FPS"));
     s.streamJpegQuality = static_cast<int>(storedInt(store, "STREAM_JPEG_Q"));
     s.streamWriteTimeoutSec = static_cast<int>(storedInt(store, "STREAM_WR_TMO_S"));
+    s.streamConnectTimeoutMs = static_cast<uint32_t>(storedInt(store, "STREAM_CONN_MS"));
+    s.streamAnswerTimeoutMs = static_cast<uint32_t>(storedInt(store, "STREAM_ANS_MS"));
+    s.streamHeartbeatMs = static_cast<uint32_t>(storedInt(store, "STREAM_BEAT_MS"));
     s.announceHeartbeatSec = static_cast<uint32_t>(storedInt(store, "ANN_HEARTBEAT"));
     s.announceRetrySec = static_cast<uint32_t>(storedInt(store, "ANN_RETRY"));
+    s.announceFirstRetrySec = static_cast<uint32_t>(storedInt(store, "ANN_FIRST_S"));
 
     out = s;
     return true;

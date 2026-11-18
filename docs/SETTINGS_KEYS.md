@@ -191,13 +191,13 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `config.fb_count` | `CAM_FB_COUNT` | Camera frame buffers | det | new | T5c |
 | `initCamera ATTEMPTS` | `CAM_INIT_TRIES` | Camera start attempts | det | new | T5c |
 | `STARTUP_FAILURE_RESTART_MS` | `BOOT_FAIL_MS` | Restart after a failed start (ms) | det | new | T5c |
-| `DARK_HYSTERESIS` | `DARK_HYST` | Darkness hysteresis | det | new | T5a |
-| `SCORE_FRESH_MS` | `SCORE_FRESH_MS` | Detection score stays fresh for (ms) | det | new | T5a |
-| `CLIP_FACTOR` | `MOTION_CLIP` | Motion spike clip factor | det | new | T5a |
-| `UplinkConfig.connectTimeoutMs` | `STREAM_CONN_MS` | Relay connect timeout (ms) | det | new | T5a |
-| `UplinkConfig.answerTimeoutMs` | `STREAM_ANS_MS` | Relay answer timeout (ms) | det | new | T5a |
-| `UplinkConfig.heartbeatMs` | `STREAM_BEAT_MS` | Live view keep-alive (ms) | det | new | T5a |
-| `UplinkConfig.retryFirstMs` | `ANN_FIRST_S` | First wait before reaching the relay again (s) | det | new | T5a |
+| `DARK_HYSTERESIS` | `DARK_HYST` | Darkness hysteresis | det | new | done |
+| `SCORE_FRESH_MS` | `SCORE_FRESH_MS` | Detection score stays fresh for (ms) | det | new | done |
+| `CLIP_FACTOR` | `MOTION_CLIP` | Motion spike clip factor | det | new | done |
+| `UplinkConfig.connectTimeoutMs` | `STREAM_CONN_MS` | Relay connect timeout (ms) | det | new | done |
+| `UplinkConfig.answerTimeoutMs` | `STREAM_ANS_MS` | Relay answer timeout (ms) | det | new | done |
+| `UplinkConfig.heartbeatMs` | `STREAM_BEAT_MS` | Live view keep-alive (ms) | det | new | done |
+| `UplinkConfig.retryFirstMs` | `ANN_FIRST_S` | First wait before reaching the relay again (s) | det | new | done |
 | `ViewGate idlePollMs` | `VIEW_IDLE_MS` | Live view poll when idle (ms) | det | new | T5b |
 | `ViewGate livePollMs` | `VIEW_LIVE_MS` | Live view poll while watched (ms) | det | new | T5b |
 | `ViewGate retryMs` | `VIEW_RETRY_MS` | Live view poll retry (ms) | det | new | T5b |
@@ -210,7 +210,7 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `remoteLogConfigFor.retryPeriodMs` | `LOG_RETRY_SEC` | Seconds between retries | det | new | T5b |
 | `remoteLogConfigFor.flushIntervalMs` | `LOG_FLUSH_SEC` | Seconds routine entries wait | det | new | T5b |
 | `remoteLogConfigFor.repeatWindowMs` | `LOG_REPEAT_SEC` | Window for counting repeats | det | new | T5b |
-| `config.sccb/vflip (set_vflip 0)` | `CAM_VFLIP` | Flip the picture upside down | det | new | T5a |
-| `set_hmirror 0` | `CAM_HMIRROR` | Mirror the picture | det | new | T5a |
+| `config.sccb/vflip (set_vflip 0)` | `CAM_VFLIP` | Flip the picture upside down | det | new | done |
+| `set_hmirror 0` | `CAM_HMIRROR` | Mirror the picture | det | new | done |
 
 <!-- END GENERATED TABLE -->

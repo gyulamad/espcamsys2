@@ -62,33 +62,42 @@ Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 42 settings: 30 with a d
 
 ## Detector (ESP32_CAM_TFLite_Person)
 
-Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 25 settings: 0 with a default, 25 without.
+Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 34 settings: 25 with a default, 9 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
 | `PERSON_GPIO` | — | — | — | — | — |
-| `DETECT_THRESH` | — | — | — | — | — |
-| `CLEAR_THRESH` | — | — | — | — | — |
-| `LOOP_DELAY_MS` | — | — | — | — | — |
-| `DARK_THRESH` | — | — | — | — | — |
-| `MOTION_THRESH` | — | — | — | — | — |
-| `MOTION_HOLD_S` | — | — | — | — | — |
-| `MOTION_X0` | — | — | — | — | — |
-| `MOTION_Y0` | — | — | — | — | — |
-| `MOTION_X1` | — | — | — | — | — |
-| `MOTION_Y1` | — | — | — | — | — |
-| `MOTION_EMA_LEN` | — | — | — | — | — |
-| `MOTION_EMA_PCT` | — | — | — | — | — |
+| `DETECT_THRESH` | Person detected above (score) | `0.6` | basic | live | Detection |
+| `CLEAR_THRESH` | Person cleared below (score) | `0.5` | basic | live | Detection |
+| `LOOP_DELAY_MS` | Pause between detections (ms) | `10` | advanced | live | Detection |
+| `DARK_THRESH` | Darkness threshold (0 = off) | `40` | basic | live | Detection |
+| `MOTION_THRESH` | Motion threshold (0 = off) | `300` | basic | live | Detection |
+| `MOTION_HOLD_S` | Detection hold after motion (s) | `10` | basic | live | Detection |
+| `MOTION_X0` | Motion area left edge | `0` | basic | live | Detection |
+| `MOTION_Y0` | Motion area top edge | `0` | basic | live | Detection |
+| `MOTION_X1` | Motion area right edge | `96` | basic | live | Detection |
+| `MOTION_Y1` | Motion area bottom edge | `96` | basic | live | Detection |
+| `MOTION_EMA_LEN` | Motion auto-calibration length (frames) | `0` | advanced | live | Detection |
+| `MOTION_EMA_PCT` | Auto-calibration margin (%) | — | advanced | live | Detection |
+| `MOTION_CLIP` | Motion spike clip factor | `2.0` | expert | live | Detection |
+| `DARK_HYST` | Darkness hysteresis | `5` | advanced | live | Detection |
+| `SCORE_FRESH_MS` | Detection score stays fresh for (ms) | `1500` | advanced | live | Detection |
+| `CAM_VFLIP` | Flip the picture upside down | `0` | basic | reboot | Detection |
+| `CAM_HMIRROR` | Mirror the picture | `0` | basic | reboot | Detection |
 | `WIFI` | — | — | — | — | — |
 | `SERVER_HOST` | — | — | — | — | — |
 | `HTTP_PORT` | — | — | — | — | — |
 | `API_KEY` | — | — | — | — | — |
 | `DETECTOR_ID` | — | — | — | — | — |
-| `STREAM_MAX_FPS` | — | — | — | — | — |
-| `STREAM_JPEG_Q` | — | — | — | — | — |
-| `STREAM_WR_TMO_S` | — | — | — | — | — |
-| `ANN_HEARTBEAT` | — | — | — | — | — |
-| `ANN_RETRY` | — | — | — | — | — |
+| `STREAM_MAX_FPS` | Live view frames per second (max) | `10` | basic | reboot | Picture & live view |
+| `STREAM_JPEG_Q` | Live view JPEG quality | `80` | basic | reboot | Picture & live view |
+| `STREAM_WR_TMO_S` | Relay write timeout (s) | `3` | advanced | reboot | Picture & live view |
+| `STREAM_CONN_MS` | Relay connect timeout (ms) | `4000` | advanced | reboot | Picture & live view |
+| `STREAM_ANS_MS` | Relay answer timeout (ms) | `5000` | advanced | reboot | Picture & live view |
+| `STREAM_BEAT_MS` | Live view keep-alive (ms) | `1000` | advanced | reboot | Picture & live view |
+| `ANN_HEARTBEAT` | Seconds between status lines | `600` | advanced | reboot | Picture & live view |
+| `ANN_RETRY` | Longest wait before reaching the relay again (s) | `30` | advanced | reboot | Picture & live view |
+| `ANN_FIRST_S` | First wait before reaching the relay again (s) | `2` | advanced | reboot | Picture & live view |
 | `SETUP_MODE` | — | — | — | — | — |
 | `SETUP_PASSWORD` | — | — | — | — | — |
 

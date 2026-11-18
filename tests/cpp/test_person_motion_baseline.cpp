@@ -113,7 +113,13 @@ TEST(a_reading_counts_for_at_most_twice_the_threshold_in_force) {
     TEST_ASSERT(near(b.average(), 600.0, 1e-9), "5000 counts as 2 * 300");
     b.observe(5000, 300);
     TEST_ASSERT(near(b.average(), 1200.0, 1e-9), "now the threshold is 600 (average + 0%), so 2 * 600");
-    TEST_ASSERT_EQ((int)CLIP_FACTOR, 2, "the factor");
+    TEST_ASSERT_EQ((int)DEFAULT_CLIP_FACTOR, 2, "the default factor (MOTION_CLIP's default, what the fixed constant used to be)");
+    // MOTION_CLIP (the setting) is the factor: with a clip of 1.5 the same reading counts for less.
+    MotionBaseline clipped;
+    clipped.configure(1, 0, 1.5);
+    clipped.observe(100, 300);
+    clipped.observe(5000, 300);
+    TEST_ASSERT(near(clipped.average(), 450.0, 1e-9), "with a clip of 1.5 the same reading counts as 1.5 * 300");
 }
 
 // ── the threshold ───────────────────────────────────────────────────────

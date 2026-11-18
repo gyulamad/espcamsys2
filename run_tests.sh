@@ -356,6 +356,8 @@ else
     run_cpp_test test_setup_fuzz -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_defaults
+    # ...and the person detector's PERSON_META likewise (F-29 T5a).
+    run_cpp_test test_person_settings_defaults
     # The short stored keys (docs/settings_keys.tsv): at most 15 characters, no duplicate, every schema key has a row.
     run_cpp_test test_settings_keys_recorder
     run_cpp_test test_settings_keys_person

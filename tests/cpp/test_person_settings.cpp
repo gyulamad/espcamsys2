@@ -18,16 +18,21 @@
 
 static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
 
-// The detection settings, then the live view's: every detector needs both (the live view is not optional).
+// The detection settings all have defaults (PERSON_META): a blank board is asked only for the live
+// view's identity. This is what a blank board's owner actually types: the identity line, the tuning
+// comes with the defaults and is changed later from the dashboard.
+static const char* IDENTITY =
+    "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
+    "API_KEY=s3cret;DETECTOR_ID=detector-1";
+
+// The detection settings, then the live view's: every setting stored, as the template keeps them.
 static const char* DETECTION =
     "PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0";
 static const char* LIVE_VIEW =
-    "WIFI=extender-1:password1:extender-2:pass\\;word2;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;"
-    "API_KEY=s3cret;DETECTOR_ID=detector-1;"
     "STREAM_MAX_FPS=10;STREAM_JPEG_Q=80;STREAM_WR_TMO_S=3;ANN_HEARTBEAT=600;ANN_RETRY=30";
 
 // A complete configuration, as one line.
-static const std::string COMPLETE = std::string(DETECTION) + ";" + LIVE_VIEW;
+static const std::string COMPLETE = std::string(DETECTION) + ";" + std::string(IDENTITY) + ";" + LIVE_VIEW;
 
 // Stores a line the way the conversation does (including the cross-setting rule).
 static std::vector<std::string> storeLine(MemoryStore& st, const std::string& line) {
@@ -80,9 +85,11 @@ TEST(the_example_person_template_is_a_valid_complete_configuration) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
     const char* file = "example.person.template.txt";
-    // Every required setting except MOTION_EMA_PCT: the template keeps the motion auto-calibration off
+    // Every setting except MOTION_EMA_PCT: the template keeps the motion auto-calibration off
     // (MOTION_EMA_LEN=0), and then its percentage is not asked for. The optional settings (SETUP_MODE,
     // SETUP_PASSWORD) are left out on purpose: a password placeholder in a template would become a real one.
+    // A template may carry defaulted settings too (they are stored, so the board shows them in its listing
+    // and EXPORT prints them); what matters is that it completes the configuration.
     const size_t expected = requiredKeyCount(PERSON_SCHEMA) - 1;
     std::ifstream f(dir + "../../Arduino/templates/" + file);
     std::string line;
@@ -92,29 +99,37 @@ TEST(the_example_person_template_is_a_valid_complete_configuration) {
     for (size_t e = 0; e < errs.size(); ++e) TEST_ASSERT(false, errs[e].c_str());
     TEST_ASSERT(errs.empty(), (std::string(file) + ": is valid input").c_str());
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), (std::string(file) + ": completes the configuration").c_str());
-    TEST_ASSERT_EQ((int)st.m.size(), (int)expected, (std::string(file) + ": sets exactly the settings it should").c_str());
+    TEST_ASSERT(st.m.size() >= expected, (std::string(file) + ": covers every setting without a default (defaulted ones may be there too)").c_str());
 }
 
 // ── what is needed when ─────────────────────────────────────────────────
 
-TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists) {
+TEST(a_blank_detector_is_asked_only_for_the_settings_without_a_default_and_the_flash_is_only_read_where_a_value_exists) {
     MemoryStore st;
-    TEST_ASSERT_EQ((int)findProblems(PERSON_SCHEMA, st).size(), (int)requiredKeyCount(PERSON_SCHEMA), "everything required is listed on a blank board (the optional settings may stay absent)");
+    // The identity (WIFI, SERVER_HOST, HTTP_PORT, API_KEY, DETECTOR_ID) and the alarm pin (PERSON_GPIO):
+    // 6 settings, none of them defaulted. Everything else - the thresholds, the scene gate, the motion
+    // area, the auto-calibration switch, the stream tuning - has a default and is not asked for.
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
+    TEST_ASSERT_EQ((int)ps.size(), (int)requiredKeyCount(PERSON_SCHEMA), "the settings without a default are listed on a blank board");
+    TEST_ASSERT_EQ((int)ps.size(), 6, "six of them: the identity five and the alarm pin");
+    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "SERVER_HOST") && listed(ps, "HTTP_PORT") && listed(ps, "API_KEY") && listed(ps, "DETECTOR_ID"), "the identity");
+    TEST_ASSERT(listed(ps, "PERSON_GPIO"), "the alarm pin (wiring, no default)");
+    TEST_ASSERT(!listed(ps, "DETECT_THRESH") && !listed(ps, "DARK_THRESH") && !listed(ps, "MOTION_X1") && !listed(ps, "STREAM_MAX_FPS"), "no defaulted setting is asked for");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
-TEST(the_live_view_settings_are_always_required) {
+TEST(the_live_view_identity_settings_are_always_required) {
     MemoryStore st;
     TEST_ASSERT(store(st, DETECTION), "the twelve detection settings are stored");
     std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 10, "the board is NOT complete without the live view: its 10 settings are needed");
-    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "API_KEY") && listed(ps, "ANN_RETRY") && listed(ps, "DETECTOR_ID") && listed(ps, "SERVER_HOST"), "including Wi-Fi, the relay and the detector's name");
-    TEST_ASSERT(!listed(ps, "PERSON_GPIO") && !listed(ps, "DETECT_THRESH"), "but not the detection ones");
+    TEST_ASSERT_EQ((int)ps.size(), 5, "the board is NOT complete without the live view: the identity settings are needed");
+    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "API_KEY") && listed(ps, "DETECTOR_ID") && listed(ps, "SERVER_HOST") && listed(ps, "HTTP_PORT"), "including Wi-Fi, the relay and the detector's name");
+    TEST_ASSERT(!listed(ps, "PERSON_GPIO") && !listed(ps, "DETECT_THRESH"), "but not the detection ones (the pin is stored, the thresholds have defaults)");
     bool allMissing = true;
     for (size_t i = 0; i < ps.size(); ++i) if (!ps[i].missing) allMissing = false;
     TEST_ASSERT(allMissing, "reported as not set");
-    TEST_ASSERT(store(st, LIVE_VIEW), "the live view's settings are stored");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and then the board is complete");
+    TEST_ASSERT(store(st, IDENTITY), "the live view's identity settings are stored");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and then the board is complete: the stream tuning all has defaults");
     TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
 }
 
@@ -136,11 +151,14 @@ TEST(the_old_stream_switch_is_gone_and_a_board_that_still_has_it_stored_ignores_
     TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
     TEST_ASSERT(s.serverHost == "192.168.4.9" && s.detectorId == "detector-1", "and loads as before");
 
-    // A board that was run with it OFF never had Wi-Fi settings: after the update it is incomplete, and says what it needs.
+    // A board that was run with it OFF never had the live view's identity settings: after the update it
+    // is incomplete, and says what it needs (only what has no default: the identity, not the stream tuning).
     MemoryStore off;
     TEST_ASSERT(store(off, DETECTION), "detection settings only");
     off.set("STREAM_ENABLED", "0");
-    TEST_ASSERT_EQ((int)findProblems(PERSON_SCHEMA, off).size(), 10, "it now needs the 10 live-view settings");
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, off);
+    TEST_ASSERT_EQ((int)ps.size(), 5, "it needs the 5 live-view identity settings (the tuning ones have defaults)");
+    TEST_ASSERT(listed(ps, "WIFI") && listed(ps, "SERVER_HOST") && listed(ps, "HTTP_PORT") && listed(ps, "API_KEY") && listed(ps, "DETECTOR_ID"), "all five named");
     TEST_ASSERT(!loadPersonSettings(off, s, err) && has(err, "WIFI is not set"), "and does not load without them");
 }
 
@@ -165,29 +183,33 @@ TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_che
     TEST_ASSERT(valid("MOTION_HOLD_S=0") && valid("MOTION_HOLD_S=3600") && !valid("MOTION_HOLD_S=3601") && !valid("MOTION_HOLD_S=-1"), "hold 0..3600 s");
 }
 
-TEST(the_scene_gate_settings_are_asked_for_on_a_board_that_predates_them) {
+TEST(a_board_that_predates_the_scene_gate_is_complete_and_uses_the_default_gate_values) {
     MemoryStore st;
-    TEST_ASSERT(store(st, std::string("PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;") + LIVE_VIEW), "an old five-setting configuration is stored");
-    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 9, "exactly the nine new ones are missing (what a firmware update to this version leaves behind)");
-    TEST_ASSERT(listed(ps, "DARK_THRESH") && listed(ps, "MOTION_THRESH") && listed(ps, "MOTION_HOLD_S"), "the scene gate's three");
-    TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "and the motion area's four");
-    TEST_ASSERT(listed(ps, "MOTION_EMA_LEN") && listed(ps, "MOTION_EMA_PCT"), "and the motion auto-calibration's two (its switch is unknown, so its percentage counts as needed)");
-    bool allMissing = true;
-    for (size_t i = 0; i < ps.size(); ++i) if (!ps[i].missing) allMissing = false;
-    TEST_ASSERT(allMissing, "reported as not set, not as invalid");
+    TEST_ASSERT(store(st, std::string("PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;") + IDENTITY), "an old five-setting configuration is stored");
+    // What a firmware update to this version leaves behind: the scene gate's three, the motion area's four
+    // and the auto-calibration's switch are no longer asked for - their defaults are what the template
+    // always carried, so the board keeps working exactly as its owner configured it by hand.
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), ("loads: " + err).c_str());
+    TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10, "the scene gate's defaults");
+    TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "the whole picture watched");
+    TEST_ASSERT_EQ((int)s.motionEmaLength, 0, "auto-calibration off");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "the board is complete");
+    TEST_ASSERT_EQ(st.badGets, 0, "and the defaults were not written to the flash");
 }
 
-TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_the_ema_pair) {
+TEST(a_board_from_before_the_motion_area_runs_on_the_default_whole_picture_area) {
     MemoryStore st;
-    TEST_ASSERT(store(st, std::string("PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;") + LIVE_VIEW), "the previous version's configuration is stored");
-    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, st);
-    TEST_ASSERT_EQ((int)ps.size(), 6, "six settings are missing");
-    TEST_ASSERT(listed(ps, "MOTION_X0") && listed(ps, "MOTION_Y0") && listed(ps, "MOTION_X1") && listed(ps, "MOTION_Y1"), "the area's corners");
-    TEST_ASSERT(listed(ps, "MOTION_EMA_LEN") && listed(ps, "MOTION_EMA_PCT"), "and the motion auto-calibration's two");
-    // The line DEPLOY.md tells you to stage on the relay (the whole picture and no auto-calibration = what the board did before).
-    TEST_ASSERT(store(st, "MOTION_X0=0;MOTION_Y0=0;MOTION_X1=96;MOTION_Y1=96;MOTION_EMA_LEN=0"), "the whole-picture, auto-calibration-off line is accepted");
-    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "and the board is complete again: MOTION_EMA_PCT is not asked for while the EMA is off");
+    TEST_ASSERT(store(st, std::string("PERSON_GPIO=13;DETECT_THRESH=0.6;CLEAR_THRESH=0.5;LOOP_DELAY_MS=10;DARK_THRESH=40;MOTION_THRESH=300;MOTION_HOLD_S=10;") + IDENTITY), "the previous version's configuration is stored");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), ("loads: " + err).c_str());
+    TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "the area's corners default to the whole picture");
+    TEST_ASSERT_EQ((int)s.motionEmaLength, 0, "the auto-calibration defaults to off");
+    // Narrowing the area is still a change the dashboard makes - the four numbers stay settings.
+    TEST_ASSERT(store(st, "MOTION_X0=20;MOTION_Y0=30;MOTION_X1=70;MOTION_Y1=80"), "a narrowed area is accepted");
+    TEST_ASSERT(loadPersonSettings(st, s, err) && s.motionArea == person_scene::MotionArea(20, 30, 70, 80), "and loads");
 }
 
 TEST(loop_delay_and_stream_tuning_ranges) {
@@ -244,8 +266,10 @@ TEST(clear_threshold_must_not_exceed_the_detect_threshold) {
     TEST_ASSERT(store(st, "DETECT_THRESH=0.2;CLEAR_THRESH=0.1"), "both together, lowering them: each alone would clash with the stored one");
     TEST_ASSERT(st.m["DETECT_THRESH"] == "0.2" && st.m["CLEAR_THRESH"] == "0.1", "stored");
     MemoryStore blank;
-    TEST_ASSERT(store(blank, "CLEAR_THRESH=0.9"), "on a blank board the other value isn't known yet: no complaint");
-    TEST_ASSERT(!store(blank, "DETECT_THRESH=0.5"), "...but entering the detect value then reveals it");
+    // The default detect threshold (0.6) is in force even on a blank board, so a clear threshold above it
+    // is refused at once - the days of "the other value isn't known yet" ended with the defaults.
+    TEST_ASSERT(!store(blank, "CLEAR_THRESH=0.9"), "on a blank board the default detect value (0.6) already forbids a higher clear value");
+    TEST_ASSERT(store(blank, "CLEAR_THRESH=0.5"), "a lower one is fine");
 }
 
 TEST(the_threshold_rule_works_in_the_boot_conversation) {
@@ -301,14 +325,14 @@ TEST(the_four_motion_area_numbers_must_make_a_usable_area) {
     TEST_ASSERT(store(st, "MOTION_X0=86;MOTION_Y0=86;MOTION_X1=96;MOTION_Y1=96"), "the smallest area, in a corner");
 }
 
-TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_threshold_rule_working) {
+TEST(the_motion_area_rule_waits_until_a_number_breaks_the_area_and_leaves_the_threshold_rule_working) {
     MemoryStore blank;
-    TEST_ASSERT(store(blank, "MOTION_X0=50"), "on a blank board the others are not known yet: no complaint");
-    TEST_ASSERT(store(blank, "MOTION_X1=40"), "still three unknown");
-    TEST_ASSERT(store(blank, "MOTION_Y0=0"), "still one unknown");
-    std::vector<std::string> e = storeLine(blank, "MOTION_Y1=96");
-    TEST_ASSERT(!e.empty() && anyError(e, "MOTION_X0/Y0/X1/Y1 (50,0,40,96)"), "the fourth reveals the clash");
-    TEST_ASSERT(!blank.m.count("MOTION_Y1"), "and it is not stored");
+    // The default area (0,0 - 96,96) is in force even on a blank board, so a single bad edge is caught at
+    // once: the rule judges the line's values against the defaults for the other three.
+    std::vector<std::string> e = storeLine(blank, "MOTION_X1=5");
+    TEST_ASSERT(!e.empty() && anyError(e, "at least 10 pixels") && anyError(e, "MOTION_X0/Y0/X1/Y1 (0,0,5,96)"), "the bad edge is judged against the default area");
+    TEST_ASSERT(!blank.m.count("MOTION_X1"), "and it is not stored");
+    TEST_ASSERT(store(blank, "MOTION_X0=50"), "a good edge alone is accepted (0,50 - 96,96 is usable)");
 
     MemoryStore st;
     store(st, COMPLETE);
@@ -404,8 +428,9 @@ TEST(a_blank_detector_is_configured_with_one_line_and_restarts) {
     BootConfigFlow::Status s = BootConfigFlow::Running;
     for (uint32_t t = 0; t < 200 && s == BootConfigFlow::Running; t += 10) s = flow.step(1000 + t);
     TEST_ASSERT(s == BootConfigFlow::Restart, "restart after all the settings");
-    TEST_ASSERT(con.said("These settings need a value (" + std::to_string(requiredKeyCount(PERSON_SCHEMA)) + ")"), "first it asked for all of them");
-    TEST_ASSERT(con.said("WIFI - ") && con.said("DETECT_THRESH - "), "with their help text");
+    TEST_ASSERT(con.said("These settings need a value (" + std::to_string(requiredKeyCount(PERSON_SCHEMA)) + ")"), "first it asked for the settings without a default");
+    TEST_ASSERT(con.said("WIFI - ") && con.said("DETECTOR_ID - "), "the identity ones, with their help text");
+    TEST_ASSERT(!con.said("DETECT_THRESH - "), "not a defaulted one");
 }
 
 TEST(secrets_of_the_live_view_are_masked_when_the_settings_are_shown) {
@@ -441,8 +466,9 @@ TEST(the_documented_typical_values_are_the_defaults_of_the_struct_the_glue_test_
     PersonSettings s;
     TEST_ASSERT(s.personGpio == 13 && s.detectThreshold == 0.60f && s.clearThreshold == 0.50f && s.loopDelayMs == 10,
                 "test_person_detect_glue.cpp is written around these values");
-    TEST_ASSERT(s.darkThreshold == 0 && s.motionThreshold == 0 && s.motionHoldSec == 0,
-                "and with the scene gate off, so that test sees every frame");
+    // The scene gate is ON with the template's usual values, so that test switches it per case (sceneGate()).
+    TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10,
+                "the gate's defaults are the template's values");
     TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "and the whole picture watched for motion");
 }
 
@@ -484,11 +510,11 @@ TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed) {
 int main() {
     RUN_TEST(the_person_schema_is_consistent);
     RUN_TEST(the_example_person_template_is_a_valid_complete_configuration);
-    RUN_TEST(a_blank_detector_needs_every_setting_and_the_flash_is_only_read_where_a_value_exists);
-    RUN_TEST(the_live_view_settings_are_always_required);
+    RUN_TEST(a_blank_detector_is_asked_only_for_the_settings_without_a_default_and_the_flash_is_only_read_where_a_value_exists);
+    RUN_TEST(the_live_view_identity_settings_are_always_required);
     RUN_TEST(the_scene_gate_settings_are_numbers_in_their_ranges_and_zero_switches_a_check_off);
-    RUN_TEST(the_scene_gate_settings_are_asked_for_on_a_board_that_predates_them);
-    RUN_TEST(a_board_from_before_the_motion_area_is_missing_the_four_area_settings_and_the_ema_pair);
+    RUN_TEST(a_board_that_predates_the_scene_gate_is_complete_and_uses_the_default_gate_values);
+    RUN_TEST(a_board_from_before_the_motion_area_runs_on_the_default_whole_picture_area);
     RUN_TEST(the_old_stream_switch_is_gone_and_a_board_that_still_has_it_stored_ignores_it);
     RUN_TEST(the_output_gpio_must_be_a_pin_the_board_leaves_free);
     RUN_TEST(thresholds_are_scores_between_0_01_and_1);
@@ -500,7 +526,7 @@ int main() {
     RUN_TEST(each_motion_area_number_is_a_whole_number_from_0_to_96);
     RUN_TEST(the_motion_area_settings_have_flash_safe_names_and_can_be_changed_from_the_dashboard);
     RUN_TEST(the_four_motion_area_numbers_must_make_a_usable_area);
-    RUN_TEST(the_motion_area_rule_waits_until_all_four_numbers_are_known_and_leaves_the_threshold_rule_working);
+    RUN_TEST(the_motion_area_rule_waits_until_a_number_breaks_the_area_and_leaves_the_threshold_rule_working);
     RUN_TEST(the_motion_area_loads_into_the_typed_settings);
     RUN_TEST(the_motion_ema_settings_are_whole_numbers_in_their_ranges_and_zero_length_switches_it_off);
     RUN_TEST(the_ema_percentage_is_only_asked_for_while_the_ema_is_on);

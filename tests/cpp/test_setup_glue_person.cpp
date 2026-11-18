@@ -46,7 +46,7 @@ TEST(a_detector_that_predates_the_always_on_live_view_opens_the_setup_wifi) {
     powerUp(); setupWorld().reset();
     typeAt(300, std::string(LIVE_VIEW) + "\n");
     setupSettings();
-    TEST_ASSERT(said("These settings need a value (10)"), "the serial prompt asks for the 10 live-view settings");
+    TEST_ASSERT(said("These settings need a value (5)"), "the serial prompt asks for the 5 live-view identity settings (the tuning has defaults)");
     TEST_ASSERT_EQ(setupWorld().starts, 1, "and the setup WiFi was open meanwhile");
     TEST_ASSERT_EQ(g_restarts, 1, "restarted once everything was typed");
     TEST_ASSERT(setupWorld().stops >= 1, "with the setup WiFi down");

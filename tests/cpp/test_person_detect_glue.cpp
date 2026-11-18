@@ -162,9 +162,14 @@ static void reset() {
     input = &g_inTensor;
     interpreter = &g_interp;
     personDetected = false;
-    // The scene gate starts switched off (the settings' neutral values), as in a
-    // detector configured with DARK_THRESH=0 and MOTION_THRESH=0.
+    // The scene gate starts switched off: the settings' neutral values (DARK_THRESH=0,
+    // MOTION_THRESH=0). PersonSettings' in-struct defaults are the template's usual values (the
+    // gate on), so the gate is switched off here on purpose - most of these tests want every
+    // frame to reach the model, and the ones about the gate itself switch it on per case.
     g_cfg = PersonSettings();
+    g_cfg.darkThreshold = 0;
+    g_cfg.motionThreshold = 0;
+    g_cfg.motionHoldSec = 0;
     g_millis = 0;
     g_sampler = person_scene::SceneSampler(IMAGE_WIDTH, IMAGE_HEIGHT);
     configureScene();

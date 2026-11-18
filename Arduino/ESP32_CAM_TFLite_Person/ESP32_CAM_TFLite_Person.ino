@@ -341,16 +341,18 @@ static_assert(IMAGE_WIDTH == person_scene::FRAME_SIZE && IMAGE_HEIGHT == person_
 person_scene::SceneSampler g_sampler(IMAGE_WIDTH, IMAGE_HEIGHT);
 person_scene::SceneGate g_gate;
 
-// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S / MOTION_EMA_LEN / MOTION_EMA_PCT settings to the
-// gate and the motion area (MOTION_X0 / Y0 / X1 / Y1) to the sampler.
+// Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S / MOTION_EMA_LEN / MOTION_EMA_PCT / MOTION_CLIP /
+// DARK_HYST settings to the gate and the motion area (MOTION_X0 / Y0 / X1 / Y1) to the sampler.
 void configureScene()
 {
     person_scene::SceneConfig scene;
     scene.darkBelow = g_cfg.darkThreshold;
+    scene.darkHysteresis = g_cfg.darkHysteresis;
     scene.motionAtLeast = g_cfg.motionThreshold;
     scene.holdMs = g_cfg.motionHoldSec * 1000UL;
     scene.motionEmaFrames = g_cfg.motionEmaLength;
     scene.motionEmaPercent = g_cfg.motionEmaPercent;
+    scene.motionClipFactor = g_cfg.motionClipFactor;
     g_gate.configure(scene);
 
     if (!g_sampler.setMotionArea(g_cfg.motionArea))
@@ -446,17 +448,16 @@ static bool initCameraOnce()
         return false;
     }
 
-    // Orientation: keep this identical to ESP32_CAM_Recorder, which leaves
-    // the sensor at its default (no flip/mirror) and looks upright in this
-    // mounting. The person-detection model also expects upright images.
-    // If your board is mounted differently, change BOTH sketches together
-    // (set_vflip + set_hmirror = 180-degree rotation).
+    // Orientation: keep this identical to ESP32_CAM_Recorder, which leaves the sensor at its default
+    // (no flip/mirror) and looks upright in this mounting. The person-detection model also expects
+    // upright images. CAM_VFLIP / CAM_HMIRROR (1 = on) are settings, the same names as the recorder's,
+    // so both boards of a camera are turned together (flip + mirror = 180-degree rotation).
     sensor_t *sensor = esp_camera_sensor_get();
 
     if (sensor)
     {
-        sensor->set_vflip(sensor, 0);
-        sensor->set_hmirror(sensor, 0);
+        sensor->set_vflip(sensor, g_cfg.camVflip ? 1 : 0);
+        sensor->set_hmirror(sensor, g_cfg.camHmirror ? 1 : 0);
     }
 
     return true;
@@ -1376,8 +1377,12 @@ void networkTask(void *)
     ucfg.detectorId = g_cfg.detectorId;
     ucfg.apiKey = g_cfg.apiKey;
     ucfg.frameBytes = IMAGE_SIZE;
+    ucfg.connectTimeoutMs = g_cfg.streamConnectTimeoutMs;
+    ucfg.answerTimeoutMs = g_cfg.streamAnswerTimeoutMs;
     ucfg.writeStallMs = (uint32_t)g_cfg.streamWriteTimeoutSec * 1000UL;
     ucfg.minFrameGapMs = 1000UL / (uint32_t)g_cfg.streamMaxFps;    // STREAM_MAX_FPS is 1..30
+    ucfg.heartbeatMs = g_cfg.streamHeartbeatMs;
+    ucfg.retryFirstMs = (uint32_t)g_cfg.announceFirstRetrySec * 1000UL;
     ucfg.retryMaxMs = (uint32_t)g_cfg.announceRetrySec * 1000UL;
     ucfg.report.detectorId = g_cfg.detectorId;
     ucfg.report.fw = FW_BUILD;
@@ -1388,6 +1393,7 @@ void networkTask(void *)
     ucfg.report.motionArea = g_cfg.motionArea;
     ucfg.report.detectAt = g_cfg.detectThreshold;
     ucfg.report.clearAt = g_cfg.clearThreshold;
+    ucfg.report.scoreFreshMs = g_cfg.scoreFreshMs;
 
     person_report::UplinkSession session(ucfg, env);
     person_report::WifiWatch wifiWatch(10000);

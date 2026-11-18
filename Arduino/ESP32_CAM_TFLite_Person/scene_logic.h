@@ -54,10 +54,10 @@ constexpr int SAMPLE_STEP = 10;
 // limits of the MOTION_* settings follow from it.
 constexpr int FRAME_SIZE = 96;
 
-// Darkness is left again only when the brightness is this much ABOVE the
-// threshold it was entered at, so a picture hovering around the threshold
-// (dusk, a flickering lamp) does not flip the gate on every frame.
-constexpr int DARK_HYSTERESIS = 5;
+// DARK_HYST's usual value (the setting's default, see settings_schema.h): darkness is left again
+// only when the brightness is this much ABOVE the threshold it was entered at, so a picture
+// hovering around the threshold (dusk, a flickering lamp) does not flip the gate on every frame.
+constexpr int DEFAULT_DARK_HYSTERESIS = 5;
 
 // The part of the picture that is watched for motion, in pixels: x0/y0 are the
 // first column/row inside it, x1/y1 the first column/row OUTSIDE it (so the whole
@@ -166,10 +166,12 @@ enum class SceneState { Dark, Idle, Active };
 
 struct SceneConfig {
     int darkBelow = 0;             // DARK_THRESH: brightness below this = dark; 0 = check off
+    int darkHysteresis = DEFAULT_DARK_HYSTERESIS;   // DARK_HYST: brightness must rise this far above darkBelow for light again
     uint32_t motionAtLeast = 0;    // MOTION_THRESH: motion at or above this = moving; 0 = check off (with an EMA: the lowest threshold)
     uint32_t holdMs = 0;           // MOTION_HOLD_S in ms: how long detection stays on after the last motion
     uint32_t motionEmaFrames = 0;  // MOTION_EMA_LEN: frames the motion average spans; 0 = threshold stays fixed
     uint32_t motionEmaPercent = DEFAULT_MOTION_EMA_PERCENT;   // MOTION_EMA_PCT: threshold = average + this many percent
+    double motionClipFactor = DEFAULT_CLIP_FACTOR;   // MOTION_CLIP: a reading counts for at most this many times the threshold in force
 };
 
 struct SceneVerdict {
@@ -187,7 +189,7 @@ public:
 
     void configure(const SceneConfig& cfg) {
         cfg_ = cfg;
-        baseline_.configure(cfg.motionEmaFrames, cfg.motionEmaPercent);
+        baseline_.configure(cfg.motionEmaFrames, cfg.motionEmaPercent, cfg.motionClipFactor);
         dark_ = false;
         motionSeen_ = false;
         lastMotionMs_ = 0;
@@ -210,7 +212,7 @@ public:
             dark_ = false;
         } else if (!dark_ && r.brightness < cfg_.darkBelow) {
             dark_ = true;
-        } else if (dark_ && r.brightness >= cfg_.darkBelow + DARK_HYSTERESIS) {
+        } else if (dark_ && r.brightness >= cfg_.darkBelow + darkHysteresis_()) {
             dark_ = false;
         }
 
@@ -230,6 +232,10 @@ public:
     }
 
 private:
+    // DARK_HYST as it applies this frame: the configured value, never negative (a negative hysteresis
+    // would make "a little above the threshold" darker than the threshold itself).
+    int darkHysteresis_() const { return cfg_.darkHysteresis > 0 ? cfg_.darkHysteresis : 0; }
+
     // Motion, held for holdMs after the last frame that moved. `limit` is the threshold this frame is
     // judged against; the frame is learnt by the average only afterwards.
     bool isMoving(uint32_t nowMs, const SceneReading& r, uint32_t limit) {
