@@ -413,4 +413,13 @@ inline bool writeStalled(unsigned long lastProgressMs, unsigned long nowMs, unsi
     return (nowMs - lastProgressMs) >= timeoutMs;
 }
 
+// How many frame buffers the camera driver is given. With PSRAM the configured CAM_FB_COUNT (default 2: the
+// newest finished frame is served while the next is captured); without it exactly one, whatever is configured:
+// the buffers then live in the board's small internal DRAM, where a second one is the "frame buffer malloc
+// failed" the camera init guards against.
+inline int frameBufferCount(bool hasPsram, int configured) {
+    if (!hasPsram) return 1;
+    return configured < 1 ? 1 : configured;
+}
+
 } // namespace esp32cam_logic

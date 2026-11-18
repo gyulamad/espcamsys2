@@ -106,23 +106,14 @@ void IRAM_ATTR onAlarmEdge() {
   alarmPending = true;
 }
 
-// AI-Thinker ESP32-CAM pin map (default board used by most ESP32-CAM modules)
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
+// The camera's pin map is a set of settings now (F-29 T3): PIN_PWDN, PIN_RESET, PIN_XCLK, PIN_SIOD, PIN_SIOC,
+// PIN_Y9..PIN_Y2, PIN_VSYNC, PIN_HREF, PIN_PCLK - loaded into g_cfg by setupSettings(), the defaults being
+// exactly the AI-Thinker ESP32-CAM wiring (the default board of most ESP32-CAM modules) the #defines here used to hold:
+//   PWDN 32   RESET -1  XCLK 0   SIOD 26  SIOC 27
+//   Y9 35  Y8 34  Y7 39  Y6 36  Y5 21  Y4 19  Y3 18  Y2 5
+//   VSYNC 25  HREF 23  PCLK 22
+// initCamera() reads them from g_cfg, so a rewired or different board can be re-mapped from the dashboard
+// (Expert tier, a restart applies it) instead of by re-flashing.
 
 // ── Remote logging glue ─────────────────────────────────────────────────
 // Assembled cameras have no serial monitor attached, so when something goes
@@ -281,7 +272,7 @@ void remoteLogPump() {
 
 void remoteLogTask(void *) {
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(250));
+    vTaskDelay(pdMS_TO_TICKS(g_cfg.logPumpMs));   // LOG_PUMP_MS (default 250)
     remoteLogPump();
   }
 }
@@ -292,7 +283,7 @@ void remoteLogStart() {
   remoteLogInstance.reconfigure(buildRemoteLogConfig());   // from the settings read in setupSettings()
   remoteLogMutex = xSemaphoreCreateMutex();
   if (!g_cfg.logEnabled || !remoteLogMutex) return;   // no mutex, no safe way to share: serial only
-  xTaskCreatePinnedToCore(remoteLogTask, "remoteLog", 8192, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(remoteLogTask, "remoteLog", g_cfg.stkLogBytes, nullptr, 1, nullptr, 0);   // STK_LOG_B (default 8192)
 }
 
 // The relay is reachable again (our push connection just came up): if remote
@@ -336,7 +327,7 @@ void otaTask(void *) {
 
 // Call once, after the settings are loaded. Pinned to core 0 (where the WiFi stack runs).
 void otaStart() {
-  xTaskCreatePinnedToCore(otaTask, "ota", 10240, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(otaTask, "ota", g_cfg.stkOtaBytes, nullptr, 1, nullptr, 0);   // STK_OTA_B (default 10240)
 }
 // ── end of firmware update glue ─────────────────────────────────────────
 
@@ -592,35 +583,35 @@ bool initCamera() {
   camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer   = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.pin_d0 = g_cfg.pinY2;
+  config.pin_d1 = g_cfg.pinY3;
+  config.pin_d2 = g_cfg.pinY4;
+  config.pin_d3 = g_cfg.pinY5;
+  config.pin_d4 = g_cfg.pinY6;
+  config.pin_d5 = g_cfg.pinY7;
+  config.pin_d6 = g_cfg.pinY8;
+  config.pin_d7 = g_cfg.pinY9;
+  config.pin_xclk = g_cfg.pinXclk;
+  config.pin_pclk = g_cfg.pinPclk;
+  config.pin_vsync = g_cfg.pinVsync;
+  config.pin_href = g_cfg.pinHref;
+  config.pin_sscb_sda = g_cfg.pinSiod;
+  config.pin_sscb_scl = g_cfg.pinSioc;
+  config.pin_pwdn = g_cfg.pinPwdn;
+  config.pin_reset = g_cfg.pinReset;
+  config.xclk_freq_hz = g_cfg.camXclkHz;   // CAM_XCLK_HZ (an Expert setting; the default is the 20 MHz the sketch always used)
   config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;   // 640x480 — bump up if bandwidth allows
     config.jpeg_quality = g_cfg.jpegQualityMin;  // the configured finest quality (LOWER = better picture)
-    config.fb_count = 2;
+    config.fb_count = frameBufferCount(true, g_cfg.camFbCount);   // CAM_FB_COUNT (default 2)
     config.fb_location = CAMERA_FB_IN_PSRAM; // VGA*2 buffers only fits in PSRAM
   } else {
     config.frame_size = FRAMESIZE_QVGA;  // 320x240 — safer without PSRAM
     config.jpeg_quality = g_cfg.jpegQualityMin;
-    config.fb_count = 1;
+    config.fb_count = frameBufferCount(false, g_cfg.camFbCount);  // always 1: DRAM has no room for more
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
@@ -833,6 +824,40 @@ private:
   bool ok_;
 };
 
+// ── The serial port's own settings (SER_BAUD, SER_RXBUF_B) ─────────────
+// These two are settings like every other (Hardware & internals, Expert tier, Apply::Reboot), but the boot
+// conversation itself needs the serial port, so they are read straight from flash BEFORE the settings engine
+// runs. A stored value is used while it is valid; otherwise - absent, damaged, or the flash unreadable - the
+// key's default is used, which is exactly what the sketch did before the value became a setting. Whatever is
+// wrong here is reported by the settings conversation right after (it refuses to run on a stored value it
+// cannot accept). The same code is in the detector's sketch.
+// Both are static, and the parameter type is written out in full: Arduino generates a prototype at the top of
+// the sketch, where the file's `using esp32cam_settings::ISettingsStore` has not happened yet - the qualified
+// name is the only spelling that compiles there.
+static long long earlySerialSetting(esp32cam_settings::ISettingsStore& flash, const char* key) {
+  const esp32cam_settings::KeyMeta* meta = esp32cam_settings::findMeta(RECORDER_SCHEMA.meta, RECORDER_SCHEMA.metaCount, key);
+  if (!meta || !meta->defaultValue) return 0;   // only defaulted keys are read here
+  const esp32cam_settings::KeyDef* def = esp32cam_settings::findKey(RECORDER_SCHEMA, key);
+  if (!def) return 0;
+  std::string value = meta->defaultValue;
+  if (flash.has(key)) {
+    std::string stored = flash.get(key);
+    std::string err;
+    if (esp32cam_settings::validateStored(*def, stored, err)) value = stored;
+  }
+  long long v = 0;
+  esp32cam_settings::parseInt(value, v);
+  return v;
+}
+
+// Opens the flash alone, reads the serial port's two settings and configures the port with them.
+// Call once, before Serial.begin() - this does the begin() too.
+static void earlySerialSetup() {
+  PreferencesStore store;
+  Serial.setRxBufferSize(static_cast<size_t>(earlySerialSetting(store, "SER_RXBUF_B")));
+  Serial.begin(static_cast<unsigned long>(earlySerialSetting(store, "SER_BAUD")));
+}
+
 // The serial port: bytes in without waiting, lines out.
 class SerialConsole : public IConsole {
 public:
@@ -961,11 +986,11 @@ void printCoreVersion() {
 }
 
 void setup() {
-  // The settings conversation can be fed a long pasted line (a camera's whole
-  // configuration); the default 256-byte receive buffer would lose part of it.
-  // Must be set before Serial.begin().
-  Serial.setRxBufferSize(2048);
-  Serial.begin(115200);
+  // SER_BAUD and SER_RXBUF_B are settings too (Hardware & internals), but the settings conversation below
+  // needs the serial port first, so they are read straight from flash (see the settings glue): stored values
+  // while valid, else the defaults the sketch always used. The receive buffer must be big enough for a pasted
+  // settings line (a camera's whole configuration) - the core's default 256 bytes would lose part of it.
+  earlySerialSetup();
   delay(200); // give the serial monitor a moment to attach
 
   printCoreVersion();

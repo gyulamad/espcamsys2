@@ -56,7 +56,7 @@ The table at the bottom is generated from `docs/settings_keys.tsv`
 The scheme uses upper case with `_MS`, `_S`, `_B` suffixes (not camel case such as `Ms`), because every stored key
 that exists today is written that way.
 
-## Not keys: values that stay compile-time (T5c confirmed its list; T3's confirmation pending)
+## Not keys: values that stay compile-time (T5c confirmed its list; T3's list awaits the owner's confirmation)
 
 These size static arrays or are protocol or hardware limits, so they have no row. Each task confirms its own list
 (decision 4 of the recap): `LOG_MSG_MAX`, `LOG_TRACE_MAX`, `LOG_QUEUE_CAPACITY`, `LOG_BATCH_MAX`,
@@ -84,7 +84,27 @@ DNS-rebinding guard assume it) and `SETUP_DNS_PORT` (53 — the port the phones 
 - `SETTINGS_NAMESPACE` (`"espcam"`, both sketches) — the NVS namespace every deployed board already holds its
   settings under; changing it would orphan those settings, so it is a frozen constant, not a key.
 
-(The same list, with the same reasons, sits in the header of the detector's `settings_schema.h`.)
+**Proposed by T3 (camera logging buffers, hardware and internals)** — to be confirmed by the owner, each with its reason:
+
+- `LOG_MSG_MAX`, `LOG_TRACE_MAX`, `LOG_QUEUE_CAPACITY`, `LOG_BATCH_MAX`, `LOG_BREADCRUMBS`,
+  `LOG_BREADCRUMB_TEXT`, `LOG_SITE_MAX` (`remote_log.h`) — each sizes a static array of the log queue (the whole
+  queue is one fixed block, no heap churn), so no run-time value can resize it.
+- `serialOnlyLogConfig()` — what the log object holds *before* the settings are read; there is nothing to read
+  yet. The real values are the `LOG_*` keys, applied by `remoteLogStart()`.
+- `NVS_KEY_MAX_LENGTH` (15), `WPA2_PASS_MIN` / `WPA2_PASS_MAX` (8 / 63), `SSID_MAX` (32) — limits of the flash
+  and of the Wi-Fi standard: facts of the protocol, not choices. (`SETTINGS_NAMESPACE` is on the T5c list above.)
+- `LEDC_CHANNEL_0` / `LEDC_TIMER_0`, `PIXFORMAT_JPEG`, `CAMERA_GRAB_WHEN_EMPTY`, `CAMERA_FB_IN_PSRAM` /
+  `_DRAM` — how the sketch drives the camera driver: the stream, the JPEG adapter and the frame-size ladder are
+  built around them, and the PSRAM/DRAM choice follows from `psramFound()`.
+- the first frame size (VGA with PSRAM, QVGA without) — decided by the memory that exists, not by a preference;
+  the frame-size ladder (a static table) and `SIZE_DROP` take it from there.
+- `delay(200)` after `Serial.begin`, the 250 ms / 500 ms restart and relay-wait pauses, the 10 s identity line —
+  the timing of the start-up mechanism and the cadence of one serial line, not tuning knobs of a deployment.
+
+(The same lists, with the same reasons, sit in the headers of the two `settings_schema.h` files.)
+
+**Behaviour to know:** `CAM_FB_COUNT` is the number of frame buffers on a board *with PSRAM* (default 2, as before);
+a board without PSRAM always uses 1, whatever is stored, because its buffers live in the small internal RAM.
 
 ## The table
 
@@ -184,29 +204,30 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `REMOTE_CONNECT_MS` | `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | both | new | T2,T5b |
 | `REMOTE_WINDOW_MS` | `BOOT_RELAY_MS` | Boot: wait for settings from the relay (ms) | both | new | T2,T5b |
 | `REMOTE_POLL_MS` | `BOOT_POLL_MS` | Boot: ask the relay every (ms) | both | new | T2,T5b |
-| `PWDN_GPIO_NUM` | `PIN_PWDN` | Camera pin: PWDN | both | new | T5c done, T3 |
-| `RESET_GPIO_NUM` | `PIN_RESET` | Camera pin: RESET | both | new | T5c done, T3 |
-| `XCLK_GPIO_NUM` | `PIN_XCLK` | Camera pin: XCLK | both | new | T5c done, T3 |
-| `SIOD_GPIO_NUM` | `PIN_SIOD` | Camera pin: SIOD | both | new | T5c done, T3 |
-| `SIOC_GPIO_NUM` | `PIN_SIOC` | Camera pin: SIOC | both | new | T5c done, T3 |
-| `Y9_GPIO_NUM` | `PIN_Y9` | Camera pin: Y9 | both | new | T5c done, T3 |
-| `Y8_GPIO_NUM` | `PIN_Y8` | Camera pin: Y8 | both | new | T5c done, T3 |
-| `Y7_GPIO_NUM` | `PIN_Y7` | Camera pin: Y7 | both | new | T5c done, T3 |
-| `Y6_GPIO_NUM` | `PIN_Y6` | Camera pin: Y6 | both | new | T5c done, T3 |
-| `Y5_GPIO_NUM` | `PIN_Y5` | Camera pin: Y5 | both | new | T5c done, T3 |
-| `Y4_GPIO_NUM` | `PIN_Y4` | Camera pin: Y4 | both | new | T5c done, T3 |
-| `Y3_GPIO_NUM` | `PIN_Y3` | Camera pin: Y3 | both | new | T5c done, T3 |
-| `Y2_GPIO_NUM` | `PIN_Y2` | Camera pin: Y2 | both | new | T5c done, T3 |
-| `VSYNC_GPIO_NUM` | `PIN_VSYNC` | Camera pin: VSYNC | both | new | T5c done, T3 |
-| `HREF_GPIO_NUM` | `PIN_HREF` | Camera pin: HREF | both | new | T5c done, T3 |
-| `PCLK_GPIO_NUM` | `PIN_PCLK` | Camera pin: PCLK | both | new | T5c done, T3 |
-| `config.xclk_freq_hz` | `CAM_XCLK_HZ` | Camera clock (Hz) | both | new | T5c done, T3 |
-| `remoteLog task stack (8192)` | `STK_LOG_B` | Log task stack (bytes) | both | new | T5c done, T3 |
-| `otaTask stack (10240)` | `STK_OTA_B` | Update task stack (bytes) | rec | new | T3 |
+| `PWDN_GPIO_NUM` | `PIN_PWDN` | Camera pin: PWDN | both | new | T5c done, T3 done |
+| `RESET_GPIO_NUM` | `PIN_RESET` | Camera pin: RESET | both | new | T5c done, T3 done |
+| `XCLK_GPIO_NUM` | `PIN_XCLK` | Camera pin: XCLK | both | new | T5c done, T3 done |
+| `SIOD_GPIO_NUM` | `PIN_SIOD` | Camera pin: SIOD | both | new | T5c done, T3 done |
+| `SIOC_GPIO_NUM` | `PIN_SIOC` | Camera pin: SIOC | both | new | T5c done, T3 done |
+| `Y9_GPIO_NUM` | `PIN_Y9` | Camera pin: Y9 | both | new | T5c done, T3 done |
+| `Y8_GPIO_NUM` | `PIN_Y8` | Camera pin: Y8 | both | new | T5c done, T3 done |
+| `Y7_GPIO_NUM` | `PIN_Y7` | Camera pin: Y7 | both | new | T5c done, T3 done |
+| `Y6_GPIO_NUM` | `PIN_Y6` | Camera pin: Y6 | both | new | T5c done, T3 done |
+| `Y5_GPIO_NUM` | `PIN_Y5` | Camera pin: Y5 | both | new | T5c done, T3 done |
+| `Y4_GPIO_NUM` | `PIN_Y4` | Camera pin: Y4 | both | new | T5c done, T3 done |
+| `Y3_GPIO_NUM` | `PIN_Y3` | Camera pin: Y3 | both | new | T5c done, T3 done |
+| `Y2_GPIO_NUM` | `PIN_Y2` | Camera pin: Y2 | both | new | T5c done, T3 done |
+| `VSYNC_GPIO_NUM` | `PIN_VSYNC` | Camera pin: VSYNC | both | new | T5c done, T3 done |
+| `HREF_GPIO_NUM` | `PIN_HREF` | Camera pin: HREF | both | new | T5c done, T3 done |
+| `PCLK_GPIO_NUM` | `PIN_PCLK` | Camera pin: PCLK | both | new | T5c done, T3 done |
+| `config.xclk_freq_hz` | `CAM_XCLK_HZ` | Camera clock (Hz) | both | new | T5c done, T3 done |
+| `remoteLog task stack (8192)` | `STK_LOG_B` | Log task stack (bytes) | both | new | T5c done, T3 done |
+| `otaTask stack (10240)` | `STK_OTA_B` | Update task stack (bytes) | rec | new | T3 done |
+| `remoteLogTask vTaskDelay (250)` | `LOG_PUMP_MS` | Log delivery check interval (ms) | rec | new | T3 done |
 | `networkTask stack (16384)` | `STK_NET_B` | Network task stack (bytes) | det | new | done |
-| `Serial.begin(115200)` | `SER_BAUD` | Serial speed (baud) | both | new | T5c done, T3 |
-| `Serial.setRxBufferSize(2048)` | `SER_RXBUF_B` | Serial receive buffer (bytes) | both | new | T5c done, T3 |
-| `config.fb_count` | `CAM_FB_COUNT` | Camera frame buffers | det | new | done |
+| `Serial.begin(115200)` | `SER_BAUD` | Serial speed (baud) | both | new | T5c done, T3 done |
+| `Serial.setRxBufferSize(2048)` | `SER_RXBUF_B` | Serial receive buffer (bytes) | both | new | T5c done, T3 done |
+| `config.fb_count` | `CAM_FB_COUNT` | Camera frame buffers | both | new | T5c done, T3 done |
 | `initCamera ATTEMPTS` | `CAM_INIT_TRIES` | Camera start attempts | det | new | done |
 | `STARTUP_FAILURE_RESTART_MS` | `BOOT_FAIL_MS` | Restart after a failed start (ms) | det | new | done |
 | `DARK_HYSTERESIS` | `DARK_HYST` | Darkness hysteresis | det | new | done |

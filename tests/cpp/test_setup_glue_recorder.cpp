@@ -21,6 +21,7 @@ static void powerUp() {
     g_now = 0; g_incoming.clear(); g_rx.clear(); g_serialOut.clear();
     g_restarts = 0; g_flushes = 0; g_cfg = RecorderSettings();
     g_flashBeginOk = true; g_flashWriteOk = true;
+    g_serialBaud = 0; g_serialRxBuffer = 0;
     resetLink();
 }
 
@@ -40,7 +41,18 @@ struct GlueFixture {
 
 #include "setup_glue_cases.h"
 
+// The serial port's own settings (F-29 T3): earlySerialSetup() reads SER_BAUD / SER_RXBUF_B from flash before
+// the settings engine runs, so the boot conversation can use the port. On a blank board (the one this suite
+// cares about) the defaults are applied.
+TEST(the_serial_setup_of_a_blank_board_uses_the_defaults) {
+    eraseFlash(); powerUp();
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "SER_BAUD's default");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "SER_RXBUF_B's default");
+}
+
 int main() {
     runSetupGlueCases();
+    RUN_TEST(the_serial_setup_of_a_blank_board_uses_the_defaults);
     return test::summarize();
 }

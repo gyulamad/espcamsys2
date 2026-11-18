@@ -87,29 +87,30 @@ new	both	SETTINGS_WINDOW_MS	BOOT_SER_WIN_MS	Boot wait for a serial "y" (ms)	T2,T
 new	both	REMOTE_CONNECT_MS	BOOT_WIFI_MS	Boot: time to join Wi-Fi (ms)	T2,T5b
 new	both	REMOTE_WINDOW_MS	BOOT_RELAY_MS	Boot: wait for settings from the relay (ms)	T2,T5b
 new	both	REMOTE_POLL_MS	BOOT_POLL_MS	Boot: ask the relay every (ms)	T2,T5b
-new	both	PWDN_GPIO_NUM	PIN_PWDN	Camera pin: PWDN	T5c done, T3
-new	both	RESET_GPIO_NUM	PIN_RESET	Camera pin: RESET	T5c done, T3
-new	both	XCLK_GPIO_NUM	PIN_XCLK	Camera pin: XCLK	T5c done, T3
-new	both	SIOD_GPIO_NUM	PIN_SIOD	Camera pin: SIOD	T5c done, T3
-new	both	SIOC_GPIO_NUM	PIN_SIOC	Camera pin: SIOC	T5c done, T3
-new	both	Y9_GPIO_NUM	PIN_Y9	Camera pin: Y9	T5c done, T3
-new	both	Y8_GPIO_NUM	PIN_Y8	Camera pin: Y8	T5c done, T3
-new	both	Y7_GPIO_NUM	PIN_Y7	Camera pin: Y7	T5c done, T3
-new	both	Y6_GPIO_NUM	PIN_Y6	Camera pin: Y6	T5c done, T3
-new	both	Y5_GPIO_NUM	PIN_Y5	Camera pin: Y5	T5c done, T3
-new	both	Y4_GPIO_NUM	PIN_Y4	Camera pin: Y4	T5c done, T3
-new	both	Y3_GPIO_NUM	PIN_Y3	Camera pin: Y3	T5c done, T3
-new	both	Y2_GPIO_NUM	PIN_Y2	Camera pin: Y2	T5c done, T3
-new	both	VSYNC_GPIO_NUM	PIN_VSYNC	Camera pin: VSYNC	T5c done, T3
-new	both	HREF_GPIO_NUM	PIN_HREF	Camera pin: HREF	T5c done, T3
-new	both	PCLK_GPIO_NUM	PIN_PCLK	Camera pin: PCLK	T5c done, T3
-new	both	config.xclk_freq_hz	CAM_XCLK_HZ	Camera clock (Hz)	T5c done, T3
-new	both	remoteLog task stack (8192)	STK_LOG_B	Log task stack (bytes)	T5c done, T3
-new	rec	otaTask stack (10240)	STK_OTA_B	Update task stack (bytes)	T3
+new	both	PWDN_GPIO_NUM	PIN_PWDN	Camera pin: PWDN	T5c done, T3 done
+new	both	RESET_GPIO_NUM	PIN_RESET	Camera pin: RESET	T5c done, T3 done
+new	both	XCLK_GPIO_NUM	PIN_XCLK	Camera pin: XCLK	T5c done, T3 done
+new	both	SIOD_GPIO_NUM	PIN_SIOD	Camera pin: SIOD	T5c done, T3 done
+new	both	SIOC_GPIO_NUM	PIN_SIOC	Camera pin: SIOC	T5c done, T3 done
+new	both	Y9_GPIO_NUM	PIN_Y9	Camera pin: Y9	T5c done, T3 done
+new	both	Y8_GPIO_NUM	PIN_Y8	Camera pin: Y8	T5c done, T3 done
+new	both	Y7_GPIO_NUM	PIN_Y7	Camera pin: Y7	T5c done, T3 done
+new	both	Y6_GPIO_NUM	PIN_Y6	Camera pin: Y6	T5c done, T3 done
+new	both	Y5_GPIO_NUM	PIN_Y5	Camera pin: Y5	T5c done, T3 done
+new	both	Y4_GPIO_NUM	PIN_Y4	Camera pin: Y4	T5c done, T3 done
+new	both	Y3_GPIO_NUM	PIN_Y3	Camera pin: Y3	T5c done, T3 done
+new	both	Y2_GPIO_NUM	PIN_Y2	Camera pin: Y2	T5c done, T3 done
+new	both	VSYNC_GPIO_NUM	PIN_VSYNC	Camera pin: VSYNC	T5c done, T3 done
+new	both	HREF_GPIO_NUM	PIN_HREF	Camera pin: HREF	T5c done, T3 done
+new	both	PCLK_GPIO_NUM	PIN_PCLK	Camera pin: PCLK	T5c done, T3 done
+new	both	config.xclk_freq_hz	CAM_XCLK_HZ	Camera clock (Hz)	T5c done, T3 done
+new	both	remoteLog task stack (8192)	STK_LOG_B	Log task stack (bytes)	T5c done, T3 done
+new	rec	otaTask stack (10240)	STK_OTA_B	Update task stack (bytes)	T3 done
+new	rec	remoteLogTask vTaskDelay (250)	LOG_PUMP_MS	Log delivery check interval (ms)	T3 done
 new	det	networkTask stack (16384)	STK_NET_B	Network task stack (bytes)	done
-new	both	Serial.begin(115200)	SER_BAUD	Serial speed (baud)	T5c done, T3
-new	both	Serial.setRxBufferSize(2048)	SER_RXBUF_B	Serial receive buffer (bytes)	T5c done, T3
-new	det	config.fb_count	CAM_FB_COUNT	Camera frame buffers	done
+new	both	Serial.begin(115200)	SER_BAUD	Serial speed (baud)	T5c done, T3 done
+new	both	Serial.setRxBufferSize(2048)	SER_RXBUF_B	Serial receive buffer (bytes)	T5c done, T3 done
+new	both	config.fb_count	CAM_FB_COUNT	Camera frame buffers	T5c done, T3 done
 new	det	initCamera ATTEMPTS	CAM_INIT_TRIES	Camera start attempts	done
 new	det	STARTUP_FAILURE_RESTART_MS	BOOT_FAIL_MS	Restart after a failed start (ms)	done
 new	det	DARK_HYSTERESIS	DARK_HYST	Darkness hysteresis	done

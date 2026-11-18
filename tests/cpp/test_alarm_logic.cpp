@@ -595,6 +595,18 @@ TEST(hold_survives_the_millis_counter_wrapping) {
     TEST_ASSERT(alarmHoldUpdate(st, false, true, nearWrap + 1000, 1000), "due 1000 ms after the send, across the wrap");
 }
 
+// ── frameBufferCount (F-29 T3: CAM_FB_COUNT) ────────────────────────────
+
+TEST(frame_buffers_follow_the_setting_with_psram_and_are_one_without) {
+    TEST_ASSERT_EQ(frameBufferCount(true, 2), 2, "PSRAM: the default setting, as the sketch always used");
+    TEST_ASSERT_EQ(frameBufferCount(true, 3), 3, "PSRAM: a changed setting is used");
+    TEST_ASSERT_EQ(frameBufferCount(true, 1), 1, "PSRAM: one is allowed");
+    TEST_ASSERT_EQ(frameBufferCount(false, 2), 1, "no PSRAM: always one, as the sketch always used");
+    TEST_ASSERT_EQ(frameBufferCount(false, 4), 1, "no PSRAM: whatever is configured");
+    TEST_ASSERT_EQ(frameBufferCount(true, 0), 1, "a nonsense value never gives the driver zero buffers");
+    TEST_ASSERT_EQ(frameBufferCount(true, -3), 1, "...or a negative one");
+}
+
 int main() {
     RUN_TEST(debounce_ignores_first_reading_at_boot);
     RUN_TEST(debounce_fires_once_on_clean_transition);
@@ -682,5 +694,6 @@ int main() {
     RUN_TEST(hold_a_line_already_active_at_boot_does_not_send);
     RUN_TEST(hold_survives_the_millis_counter_wrapping);
 
+    RUN_TEST(frame_buffers_follow_the_setting_with_psram_and_are_one_without);
     return test::summarize();
 }

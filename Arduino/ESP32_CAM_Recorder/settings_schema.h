@@ -12,6 +12,37 @@
 //
 // A setting listed "only needed when X" is skipped while X switches its feature off. Settings that used to be
 // fixed in the code have a default (RECORDER_META below): a board that has none stored uses it.
+//
+// The Hardware & internals keys (F-29 T3: PIN_*, CAM_*, STK_*, SER_*) and the log delivery period (LOG_PUMP_MS)
+// are the board's pin map and the boot-time values of the camera driver, its two background tasks and the serial
+// port. Every one is read once at boot, so a change takes effect at the next restart (Apply::Reboot, Expert tier
+// in RECORDER_META below), and every default is the value the sketch hard-coded before, so an updated board
+// behaves exactly as it did. SER_BAUD and SER_RXBUF_B are special: the boot conversation itself needs the serial
+// port, so the sketch reads them straight from flash before the settings engine runs (earlySerialSetup in the
+// .ino). The same keys exist, with the same labels, ranges and defaults, on the detector (T5c).
+//
+// What is NOT a setting — what T3 keeps compile-time, each with its reason (the same list is in
+// docs/SETTINGS_KEYS.md):
+//   LOG_MSG_MAX, LOG_TRACE_MAX, LOG_QUEUE_CAPACITY, LOG_BATCH_MAX, LOG_BREADCRUMBS, LOG_BREADCRUMB_TEXT,
+//   LOG_SITE_MAX (remote_log.h)
+//                          each sizes a static array of the log queue (RAM is tight: the whole queue is one fixed
+//                          block, no heap churn), so no run-time value can resize it.
+//   serialOnlyLogConfig()  what the log object holds BEFORE the settings are read: there is nothing to read yet.
+//                          The real values are the LOG_* keys, applied by remoteLogStart().
+//   SETTINGS_NAMESPACE     the NVS namespace ("espcam") every deployed board already holds its settings under;
+//                          changing it would orphan them. It cannot live in the settings it names.
+//   NVS_KEY_MAX_LENGTH, WPA2_PASS_MIN/MAX, SSID_MAX
+//                          limits of the flash (15 characters per key) and of the Wi-Fi standard (8-63 character
+//                          passphrase, 32 byte SSID): facts of the protocol, not choices.
+//   LEDC_CHANNEL_0/LEDC_TIMER_0, PIXFORMAT_JPEG, CAMERA_GRAB_WHEN_EMPTY, CAMERA_FB_IN_PSRAM/_DRAM
+//                          how the sketch drives the camera driver: the stream, the JPEG adapter and the frame-size
+//                          ladder are built around them, and the PSRAM/DRAM choice follows from psramFound().
+//   the first frame size (VGA with PSRAM, QVGA without)
+//                          decided by psramFound() (the memory that exists), not by a preference; the frame-size
+//                          ladder (a static table) and SIZE_DROP take it from there.
+//   delay(200) after Serial.begin, the 250 ms/500 ms restart and relay-wait pauses, the 10 s identity line
+//                          the timing of the start-up mechanism and the cadence of one serial line, not
+//                          tuning knobs of a deployment.
 
 #pragma once
 
@@ -117,6 +148,62 @@ static const KeyDef RECORDER_KEYS[] = {
       "1 = at the next restart this board opens its own setup WiFi and waits there, not working normally, until it is configured or exited; it switches itself off after use (absent or 0 = off)" },
     { "SETUP_PASSWORD",  Kind::Secret,    8,    63,      Cond::Optional,      nullptr,           nullptr,
       "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
+
+    // ── Hardware & internals (F-29 T3) ───────────────────────────────────
+    // The AI-Thinker board's pin map and the boot-time values of the camera driver, the two background
+    // tasks and the serial port. Each is read once at boot, so a change takes effect at the next restart
+    // (Apply::Reboot, Expert tier in RECORDER_META below), and each default is the value this sketch
+    // hard-coded before it became a setting, so an updated board behaves exactly as it did. A wrong pin
+    // map breaks the CAMERA — initCamera() fails and says why in the log — but not the board's relay link,
+    // so the dashboard can still repair it; that is why none of these are locked. The pins are plain whole
+    // numbers (not the ALARM_GPIO_PIN kind) because they are the board's wiring, not a choice among the
+    // pins a user may drive: any GPIO number, -1 = not wired. Same keys, labels and ranges as the detector's.
+    { "PIN_PWDN",       Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's PWDN (power down) line is wired to; the default is the AI-Thinker ESP32-CAM's wiring, so change this only for a rewired or a different board" },
+    { "PIN_RESET",      Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's RESET line is wired to (-1 = not wired, as on the AI-Thinker ESP32-CAM)" },
+    { "PIN_XCLK",       Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's XCLK (clock in) line is wired to" },
+    { "PIN_SIOD",       Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's SIOD (I2C data) line is wired to" },
+    { "PIN_SIOC",       Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's SIOC (I2C clock) line is wired to" },
+    { "PIN_Y9",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y9 is wired to" },
+    { "PIN_Y8",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y8 is wired to" },
+    { "PIN_Y7",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y7 is wired to" },
+    { "PIN_Y6",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y6 is wired to" },
+    { "PIN_Y5",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y5 is wired to" },
+    { "PIN_Y4",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y4 is wired to" },
+    { "PIN_Y3",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y3 is wired to" },
+    { "PIN_Y2",         Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's data line Y2 is wired to" },
+    { "PIN_VSYNC",      Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's VSYNC line is wired to" },
+    { "PIN_HREF",       Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's HREF line is wired to" },
+    { "PIN_PCLK",       Kind::Int,       -1,   39,      Cond::Always,        nullptr,           nullptr,
+      "camera pin: GPIO the sensor's PCLK (pixel clock) line is wired to" },
+    { "CAM_XCLK_HZ",     Kind::Int,       2000000, 40000000, Cond::Always,   nullptr,           nullptr,
+      "the sensor's clock in Hz (20000000 is what the sketch always ran it at; lower it only if the camera misbehaves)" },
+    { "CAM_FB_COUNT",    Kind::Int,       1,    4,       Cond::Always,        nullptr,           nullptr,
+      "frames the camera driver keeps ready on a board with PSRAM (2 is what the sketch always used: the newest finished frame is served while the next is captured). A board without PSRAM always uses 1" },
+    { "STK_LOG_B",       Kind::Int,       4096, 65536,   Cond::Always,        nullptr,           nullptr,
+      "stack of the task that delivers the log to the relay, bytes (8192 is what the sketch always used; too small a stack can crash the board)" },
+    { "STK_OTA_B",       Kind::Int,       8192, 65536,   Cond::Always,        nullptr,           nullptr,
+      "stack of the update task (firmware update, settings from the relay, relay search), bytes (10240 is what the sketch always used; too small a stack can crash the board)" },
+    { "SER_BAUD",        Kind::Int,       9600, 5000000, Cond::Always,        nullptr,           nullptr,
+      "serial console speed in baud (115200 is what the sketch always used; a change takes effect at the next boot — open the terminal at the new speed then)" },
+    { "SER_RXBUF_B",     Kind::Int,       256,  65536,   Cond::Always,        nullptr,           nullptr,
+      "serial receive buffer in bytes, big enough for a pasted settings line (2048 is what the sketch always used)" },
+    { "LOG_PUMP_MS",     Kind::Int,       50,   10000,   Cond::WhenEquals,    "LOG_ENABLED",     "1",
+      "how often the log task looks whether entries are due for delivery, in ms (250 is what the sketch always used; it does not change when entries are sent, only how promptly the task notices)" },
 };
 
 // The readable name, group and fallback of each setting (see KeyMeta in settings_logic.h). A setting with a
@@ -158,6 +245,34 @@ static const KeyMeta RECORDER_META[] = {
     { "WIFI_SLEEP",     "0",     "Let the Wi-Fi modem sleep",            "Connection",     Tier::Advanced, Apply::Reboot },
     { "ALARM_DEBOUNCE", "50",    "Alarm contact debounce (ms)",          "Alarm input",    Tier::Advanced, Apply::Reboot },
     { "ALARM_HOLD_MS",  "1000",  "Alarm repeat while active (ms)",       "Alarm input",    Tier::Advanced, Apply::Reboot },
+
+    // The Hardware & internals group (and the log delivery period), F-29 T3. A setting with a default is no
+    // longer asked for on a blank board: it simply uses that value, which is what the sketch did before the
+    // value became a setting, until somebody changes it. Every row is Expert tier and Apply::Reboot: the
+    // values are read once at boot.
+    { "PIN_PWDN",       "32",       "Camera pin: PWDN",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_RESET",      "-1",       "Camera pin: RESET",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_XCLK",       "0",        "Camera pin: XCLK",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_SIOD",       "26",       "Camera pin: SIOD",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_SIOC",       "27",       "Camera pin: SIOC",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y9",         "35",       "Camera pin: Y9",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y8",         "34",       "Camera pin: Y8",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y7",         "39",       "Camera pin: Y7",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y6",         "36",       "Camera pin: Y6",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y5",         "21",       "Camera pin: Y5",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y4",         "19",       "Camera pin: Y4",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y3",         "18",       "Camera pin: Y3",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y2",         "5",        "Camera pin: Y2",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_VSYNC",      "25",       "Camera pin: VSYNC",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_HREF",       "23",       "Camera pin: HREF",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_PCLK",       "22",       "Camera pin: PCLK",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "CAM_XCLK_HZ",    "20000000", "Camera clock (Hz)",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "CAM_FB_COUNT",   "2",        "Camera frame buffers",                  "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "STK_LOG_B",      "8192",     "Log task stack (bytes)",                "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "STK_OTA_B",      "10240",    "Update task stack (bytes)",             "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "SER_BAUD",       "115200",   "Serial speed (baud)",                   "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "SER_RXBUF_B",    "2048",     "Serial receive buffer (bytes)",         "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "LOG_PUMP_MS",    "250",      "Log delivery check interval (ms)",      "Logging", Tier::Expert, Apply::Reboot },
 };
 static const size_t RECORDER_META_COUNT = sizeof(RECORDER_META) / sizeof(RECORDER_META[0]);
 
@@ -258,6 +373,33 @@ struct RecorderSettings {
     uint32_t logRepeatSec = 30;
     uint32_t logHeartbeatSec = 600;
     uint32_t logLowHeapBytes = 30000;
+    uint32_t logPumpMs = 250;        // LOG_PUMP_MS: how often the log task looks for entries due
+
+    // Hardware & internals (F-29 T3): the pin map and the boot-time values of the camera driver and the two
+    // background tasks. Each is read once at boot, so a changed value needs a restart (Apply::Reboot);
+    // every default is the old hard-coded value. The serial port's two settings (SER_BAUD, SER_RXBUF_B) are
+    // NOT here: the boot conversation needs the port before the settings engine runs, so the sketch reads
+    // them straight from flash (earlySerialSetup in the .ino).
+    int pinPwdn = 32;             // PIN_PWDN
+    int pinReset = -1;            // PIN_RESET (-1: the board has no reset line)
+    int pinXclk = 0;              // PIN_XCLK
+    int pinSiod = 26;             // PIN_SIOD
+    int pinSioc = 27;             // PIN_SIOC
+    int pinY9 = 35;               // PIN_Y9
+    int pinY8 = 34;               // PIN_Y8
+    int pinY7 = 39;               // PIN_Y7
+    int pinY6 = 36;               // PIN_Y6
+    int pinY5 = 21;               // PIN_Y5
+    int pinY4 = 19;               // PIN_Y4
+    int pinY3 = 18;               // PIN_Y3
+    int pinY2 = 5;                // PIN_Y2
+    int pinVsync = 25;            // PIN_VSYNC
+    int pinHref = 23;             // PIN_HREF
+    int pinPclk = 22;             // PIN_PCLK
+    int camXclkHz = 20000000;     // CAM_XCLK_HZ
+    int camFbCount = 2;           // CAM_FB_COUNT (a board with PSRAM; without it the sketch uses 1)
+    uint32_t stkLogBytes = 8192;   // STK_LOG_B
+    uint32_t stkOtaBytes = 10240;  // STK_OTA_B
 };
 
 // The settings this board needs before it can ask the relay for the OTHERS
@@ -361,7 +503,30 @@ inline bool loadRecorderSettings(ISettingsStore& flash, RecorderSettings& out, s
         s.logRepeatSec = static_cast<uint32_t>(storedInt(store, "LOG_REPEAT_SEC"));
         s.logHeartbeatSec = static_cast<uint32_t>(storedInt(store, "LOG_HEARTBEAT"));
         s.logLowHeapBytes = static_cast<uint32_t>(storedInt(store, "LOG_LOW_HEAP"));
+        s.logPumpMs = static_cast<uint32_t>(storedInt(store, "LOG_PUMP_MS"));
     }
+
+    // Hardware & internals (F-29 T3): stored values, else the defaults the sketch always used.
+    s.pinPwdn = static_cast<int>(storedInt(store, "PIN_PWDN"));
+    s.pinReset = static_cast<int>(storedInt(store, "PIN_RESET"));
+    s.pinXclk = static_cast<int>(storedInt(store, "PIN_XCLK"));
+    s.pinSiod = static_cast<int>(storedInt(store, "PIN_SIOD"));
+    s.pinSioc = static_cast<int>(storedInt(store, "PIN_SIOC"));
+    s.pinY9 = static_cast<int>(storedInt(store, "PIN_Y9"));
+    s.pinY8 = static_cast<int>(storedInt(store, "PIN_Y8"));
+    s.pinY7 = static_cast<int>(storedInt(store, "PIN_Y7"));
+    s.pinY6 = static_cast<int>(storedInt(store, "PIN_Y6"));
+    s.pinY5 = static_cast<int>(storedInt(store, "PIN_Y5"));
+    s.pinY4 = static_cast<int>(storedInt(store, "PIN_Y4"));
+    s.pinY3 = static_cast<int>(storedInt(store, "PIN_Y3"));
+    s.pinY2 = static_cast<int>(storedInt(store, "PIN_Y2"));
+    s.pinVsync = static_cast<int>(storedInt(store, "PIN_VSYNC"));
+    s.pinHref = static_cast<int>(storedInt(store, "PIN_HREF"));
+    s.pinPclk = static_cast<int>(storedInt(store, "PIN_PCLK"));
+    s.camXclkHz = static_cast<int>(storedInt(store, "CAM_XCLK_HZ"));
+    s.camFbCount = static_cast<int>(storedInt(store, "CAM_FB_COUNT"));
+    s.stkLogBytes = static_cast<uint32_t>(storedInt(store, "STK_LOG_B"));
+    s.stkOtaBytes = static_cast<uint32_t>(storedInt(store, "STK_OTA_B"));
 
     out = s;
     return true;

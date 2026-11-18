@@ -44,6 +44,7 @@ static void powerUp() {
     g_now = 0; g_incoming.clear(); g_rx.clear(); g_serialOut.clear();
     g_restarts = 0; g_flushes = 0; g_cfg = RecorderSettings();
     g_flashBeginOk = true; g_flashWriteOk = true;
+    g_serialBaud = 0; g_serialRxBuffer = 0;
     resetLink();
 }
 // ── tests ───────────────────────────────────────────────────────────────
@@ -221,6 +222,44 @@ TEST(a_board_that_is_complete_never_touches_the_relay) {
     TEST_ASSERT(g_cfg.cameraId == "cam2", "settings loaded");
 }
 
+// ── the serial port's own settings (SER_BAUD, SER_RXBUF_B, F-29 T3) ────
+// They are settings, but the boot conversation needs the port first: earlySerialSetup() reads them
+// from flash before the settings engine runs. (The same four cases as the detector's, T5c.)
+
+TEST(the_serial_settings_start_at_the_defaults_on_a_blank_board) {
+    eraseFlash(); powerUp();
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "SER_BAUD's default");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "SER_RXBUF_B's default");
+    TEST_ASSERT_EQ(g_prefsOpen, 0, "the flash was closed again");
+}
+
+TEST(the_serial_settings_are_taken_from_flash_while_they_are_valid) {
+    eraseFlash(); powerUp();
+    g_flash["SER_BAUD"] = "9600";
+    g_flash["SER_RXBUF_B"] = "4096";
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 9600UL, "the stored speed");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)4096, "the stored buffer");
+}
+
+TEST(a_damaged_serial_setting_falls_back_to_its_default_not_to_the_damage) {
+    eraseFlash(); powerUp();
+    g_flash["SER_BAUD"] = "banana";                       // behind the rules' back, as flash damage
+    g_flash["SER_RXBUF_B"] = "100";                       // valid number, out of range
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "a value that is not a whole number: the default");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "a value out of range: the default");
+}
+
+TEST(an_unreadable_flash_still_gives_the_serial_defaults) {
+    eraseFlash(); powerUp();
+    g_flashBeginOk = false;
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "the defaults, so the console still talks");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "...");
+}
+
 int main() {
     RUN_TEST(the_first_boot_of_a_blank_board_stores_what_is_typed_in_flash_and_restarts);
     RUN_TEST(after_the_reboot_it_waits_five_seconds_then_loads_the_settings_and_carries_on);
@@ -238,5 +277,9 @@ int main() {
     RUN_TEST(typing_a_value_on_serial_means_the_relay_is_not_asked);
     RUN_TEST(a_blank_board_never_tries_wifi_it_has_no_wifi_settings_to_try);
     RUN_TEST(a_board_that_is_complete_never_touches_the_relay);
+    RUN_TEST(the_serial_settings_start_at_the_defaults_on_a_blank_board);
+    RUN_TEST(the_serial_settings_are_taken_from_flash_while_they_are_valid);
+    RUN_TEST(a_damaged_serial_setting_falls_back_to_its_default_not_to_the_damage);
+    RUN_TEST(an_unreadable_flash_still_gives_the_serial_defaults);
     return test::summarize();
 }
