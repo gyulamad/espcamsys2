@@ -75,7 +75,8 @@ if ($method === 'GET') {
         echo json_encode(['error' => is_array($relay) && isset($relay['error']) ? $relay['error'] : 'The relay did not answer with its settings (is it up to date? copy the new nodejs/camera-relay/ and restart it)']);
         exit;
     }
-    // Only the settings the dashboard may change are shown (not the file and folder paths, review F-09).
+    // Only the settings the dashboard may see are shown: the ones it may change, plus the locked ones
+    // (read-only). Not the file and folder paths (review F-09) — those stay on the Pi, in config.js.
     $fields = CamSounds::cleanSoundFields(CamLogic::visibleRelayFields($relay['fields']));
     foreach (CamLogic::dashboardFields() as $f) {
         if ($f['type'] === 'secret') {

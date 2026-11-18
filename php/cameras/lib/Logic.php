@@ -978,30 +978,68 @@ class CamLogic
     // Splits the submitted { key: value } into the dashboard's own settings and the
     // relay's. Only plain values are accepted (no arrays or objects).
     //   -> ['ok' => true, 'dashboard' => [...], 'relay' => [...]] | ['ok' => false, 'error' => ...]
-    // The relay settings the dashboard is allowed to change (review F-09). An ALLOW-list, so a setting the
-    // relay gains later stays out of reach until it is added here on purpose. Numbers, ports and keys only
-    // (personScanConfidence is a decimal and personScanEnabled a true/false switch sent as text: the relay checks both;
-    // the alarm sound settings are a sound's NAME or a true/false switch: the relay checks the name against its folder).
+    // The relay settings the dashboard may CHANGE (review F-09). An ALLOW-list, so a setting the
+    // relay gains later stays out of reach until it is added here on purpose — tests/php checks it
+    // against the relay's own table (lib/sysfields.js) after every change. Numbers, ports, keys,
+    // switches, chat ids, URLs and host names only; the relay is the authority on each value's shape.
+    // Every row of the relay's table that is neither a path nor locked ends up here (F-29 T6a put
+    // the old config.js- and environment-only values into the settings store; T6b opened them).
     const RELAY_SETTING_KEYS = [
-        'alarmRecordSeconds', 'minFreeStorageMB', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort',
-        'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles', 'personScanEnabled', 'personScanConfidence',
+        // Recording
+        'alarmRecordSeconds', 'minFreeStorageMB', 'preRollSeconds', 'preRollMaxBytes',
+        // Person check
+        'personScanEnabled', 'personScanConfidence', 'personScanAuto', 'personScanAction', 'personScanStride', 'personScanTimeoutSeconds',
+        // Alarm sounds
         'alarmSoundRecordStart', 'alarmSoundRecordStartRelay', 'alarmSoundRecordStartBrowser',
         'alarmSoundPersonDetected', 'alarmSoundPersonDetectedRelay', 'alarmSoundPersonDetectedBrowser',
+        'alarmSoundTimeoutSeconds',
+        // Network
+        'port', 'pushPort', 'discoveryPort', 'relayBind', 'pushAuthTimeoutMs', 'pushIdleTimeoutMs',
+        // Keys
+        'camKey', 'controlKey',
+        // Log
+        'logMaxBytes', 'logKeepFiles',
+        // Detectors
+        'detectorViewMinutes', 'detectorNoPictureWarnMs',
+        // Notifications
+        'telegramEnabled', 'telegramBotToken', 'telegramChatId', 'footageBaseUrl',
+        'notifyCooldownSeconds', 'storageReminderHours',
+        // Security
+        'maxAlarmRecordings', 'readKeyRequired', 'allowKeylessAlarm', 'keylessAlarmGapMs', 'relayHsts',
+        'authMaxFailures', 'authLockSeconds', 'authLockMaxSeconds', 'restartCooldownMs',
+        // Diagnostics
+        'loopWatch',
     ];
 
     // Free-text FILE and FOLDER paths on the Pi. Whoever can save settings here must not be able to point
     // the relay (which runs with its own rights) at an arbitrary place — a log written into another
-    // program's folder, firmware served from /etc, the on/off state file overwritten. These are changed
-    // on the Pi itself: config.js or the relay's environment (MANUAL.md).
-    const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile'];
+    // program's folder, firmware served from /etc, the on/off state file overwritten, a model file that
+    // is not one. These are changed on the Pi itself: config.js or the relay's environment (MANUAL.md).
+    const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile', 'personScanModel'];
 
-    // The fields from the relay's GET /system-settings that the page may show and change: the others
-    // (the paths, and anything unknown) are dropped, so the page never offers them.
+    // The relay's LOCKED settings (F-29 T6a): they decide which program the relay RUNS (the person
+    // detector's python and script, the sound player), so they are SHOWN read-only on the page and
+    // refused here — only config.js on the machine itself can change them. The relay refuses them too;
+    // this is the dashboard's own refusal, so a hostile relay cannot talk the page into editing them.
+    const RELAY_LOCKED_SETTING_KEYS = ['personScanPython', 'personScanScript', 'alarmSoundPlayer'];
+
+    // The fields from the relay's GET /system-settings that the page may see: the ones it may change,
+    // plus the locked ones (shown read-only, never changed). The others — the file and folder paths,
+    // and anything unknown — are dropped, so the page never offers them.
+    // The `locked` flag is set from THIS list, not from what the relay sent: a relay that marks an
+    // editable row locked (or forgets the flag on a locked one) cannot change what the page offers.
     public static function visibleRelayFields($fields): array
     {
         $out = [];
         foreach (is_array($fields) ? $fields : [] as $f) {
-            if (is_array($f) && isset($f['key']) && is_string($f['key']) && in_array($f['key'], self::RELAY_SETTING_KEYS, true)) {
+            if (!is_array($f) || !isset($f['key']) || !is_string($f['key'])) {
+                continue;
+            }
+            if (in_array($f['key'], self::RELAY_LOCKED_SETTING_KEYS, true)) {
+                $f['locked'] = true;
+                $out[] = $f;
+            } elseif (in_array($f['key'], self::RELAY_SETTING_KEYS, true)) {
+                unset($f['locked']);
                 $out[] = $f;
             }
         }
@@ -1025,6 +1063,8 @@ class CamLogic
                 $relay[$key] = $value;
             } elseif (in_array($key, self::RELAY_PATH_SETTING_KEYS, true)) {
                 return ['ok' => false, 'error' => $key . ' is a file or folder path on the Pi: it can only be changed there (in the relay\'s config.js or its environment, see MANUAL.md), never from the dashboard — nothing was saved'];
+            } elseif (in_array($key, self::RELAY_LOCKED_SETTING_KEYS, true)) {
+                return ['ok' => false, 'error' => $key . ' is locked: it decides what program the relay runs, so it can only be changed in config.js on the machine itself (see MANUAL.md) — nothing was saved'];
             } else {
                 $shown = substr(preg_replace('/[^\x20-\x7e]/', '?', $key), 0, 40);
                 return ['ok' => false, 'error' => 'unknown setting "' . $shown . '" — nothing was saved'];

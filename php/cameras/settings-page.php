@@ -4,6 +4,15 @@
 // the alarm length). The form is drawn from what system-settings.php sends, so a setting
 // added there shows up here without touching this file. Saving, and restarting the relay
 // when a change needs it, is done by system-settings.php.
+//
+// The rows come grouped by category (the relay's `group`), and carry their tier (basic /
+// advanced / expert): the LEVEL switch at the top hides the rows above the chosen level, so
+// the everyday settings come first and the expert ones are one click away. Every row shows
+// the default it would fall back to (highlighted while the saved value differs), and one
+// that has a default can be reset to it with the row's ↺ DEFAULT button — the default lands
+// in the input and goes through the same change tracking and SAVE as a hand-made change.
+// Rows the relay marks `locked` (the programs it runs) are shown read-only; the file and
+// folder paths are not on the page at all (F-09).
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/lib/Layout.php';
 ?><!DOCTYPE html>
@@ -42,6 +51,10 @@ require_once __DIR__ . '/lib/Layout.php';
   .banner.warn { border-color: var(--warn); color: var(--warn); }
   .banner.err  { border-color: var(--accent2); color: var(--accent2); }
   .banner.ok   { border-color: var(--ok); color: var(--ok); }
+  .tierbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 2px 0 16px; }
+  .tierbar .lbl { font-family: var(--mono); font-size: .65rem; letter-spacing: .14em; color: var(--muted); }
+  .btn.tier.on { border-color: var(--accent); color: var(--accent); }
+  #tierinfo { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
   fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px 6px; margin-bottom: 20px; background: var(--surface); }
   legend { font-family: var(--mono); font-size: .8rem; letter-spacing: .1em; color: var(--accent); padding: 0 8px; text-transform: uppercase; }
   .row { display: grid; grid-template-columns: 260px 1fr; gap: 6px 18px; padding: 10px 0; border-top: 1px solid var(--border); align-items: start; }
@@ -51,6 +64,8 @@ require_once __DIR__ . '/lib/Layout.php';
   .tag { font-family: var(--mono); font-size: .6rem; border: 1px solid var(--border-light); border-radius: 20px; padding: 1px 7px; margin-right: 4px; color: var(--muted); }
   .tag.restart { border-color: var(--warn); color: var(--warn); }
   .tag.danger  { border-color: var(--accent2); color: var(--accent2); }
+  .tag.lock { border-color: var(--warn); color: var(--warn); }
+  .tag.default.differs { border-color: var(--warn); color: var(--warn); }
   .row input, .row select {
     width: 100%; font-family: var(--mono); font-size: .85rem; padding: 7px 9px; border-radius: var(--radius);
     border: 1px solid var(--border-light); background: var(--bg); color: var(--text);
@@ -58,6 +73,9 @@ require_once __DIR__ . '/lib/Layout.php';
   .row input:focus, .row select:focus { outline: none; border-color: var(--accent); }
   .row input:disabled, .row select:disabled { opacity: .5; }
   .row input.changed, .row select.changed { border-color: var(--warn); }
+  .ctl { display: flex; gap: 8px; align-items: stretch; }
+  .ctl input, .ctl select { flex: 1; min-width: 0; width: auto; }
+  .btn.reset { flex: 0 0 auto; white-space: nowrap; }
   .help { grid-column: 2; font-size: .75rem; color: var(--muted); line-height: 1.4; }
   .cams .cam-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .cams .cam-row:first-of-type { border-top: 0; }
@@ -93,6 +111,13 @@ require_once __DIR__ . '/lib/Layout.php';
 
 <main>
   <div id="banners"></div>
+  <div class="tierbar" id="tierbar">
+    <span class="lbl">LEVEL</span>
+    <button class="btn tier on" type="button" data-tier="basic">BASIC</button>
+    <button class="btn tier" type="button" data-tier="advanced">ADVANCED</button>
+    <button class="btn tier" type="button" data-tier="expert">EXPERT</button>
+    <span id="tierinfo"></span>
+  </div>
   <form id="form" onsubmit="return false;"></form>
   <fieldset class="cams" id="cameras" hidden>
     <legend>Cameras on the dashboard</legend>
@@ -119,12 +144,14 @@ require_once __DIR__ . '/lib/Layout.php';
 <script src="js/icon-picker.js"></script>
 <script src="js/sound-library.js"></script>
 <script>
-  const GROUP_ORDER = ['Recording', 'Person check', 'Alarm sounds', 'Network', 'Keys', 'Log', 'Folders', 'Dashboard'];
+  const GROUP_ORDER = ['Recording', 'Person check', 'Alarm sounds', 'Network', 'Keys', 'Log', 'Folders', 'Detectors', 'Notifications', 'Security', 'Diagnostics', 'Dashboard'];
   const BREAKING = ['camKey', 'pushPort'];
   const NUMERIC = ['int', 'float'];   // drawn as a number input (a float's step comes from the relay)
   const AJAX = { 'X-Requested-With': 'camdash' };
+  const LEVELS = ['basic', 'advanced', 'expert'];   // who a row is for (the relay's `tier`); the level picks how many are shown
   let fields = [];
   let original = {};   // key -> the value loaded from the server (secrets: '')
+  let tierLevel = 'basic';   // the level shown: rows above it stay in the form but hidden
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert');
@@ -160,6 +187,7 @@ require_once __DIR__ . '/lib/Layout.php';
       form.append(fs);
     }
     renderCameras(data.cameras || []);
+    applyTier();
     updateButtons();
   }
 
@@ -235,12 +263,56 @@ require_once __DIR__ . '/lib/Layout.php';
     return box;
   }
 
+  // ── levels, defaults and locks (F-29 T6b) ──
+  // What one value looks like in the page's inputs: a switch as the text the relay takes
+  // ("true" / "false"), a command as one line, everything else as plain text.
+  const asText = (v) => (Array.isArray(v) ? v.join(' ') : typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v));
+  // The default as it goes into an input (undefined = the field has none: no reset, no default tag — secrets never have one).
+  const defaultEdit = (f) => (f.default === undefined ? undefined : asText(f.default));
+  // The default as it is shown in the row's tag: "default 60", "default ON", "default none".
+  function defaultLabel(f) {
+    const d = f.default;
+    if (d === undefined) return null;
+    if (d === '') return 'none';
+    if (typeof d === 'boolean') return d ? 'ON' : 'OFF';
+    return asText(d);
+  }
+
+  // A word choice (what to do with a clip without a person, ...): one of the relay's offered words.
+  // The saved word is always selectable, even when the relay did not list it (the same rule as the sounds).
+  function choiceInput(id, f) {
+    const select = el('select', { id, name: f.key });
+    for (const o of (f.options || [])) select.append(el('option', { value: o, textContent: o }));
+    const saved = asText(f.value);
+    if (saved !== '' && !(f.options || []).includes(saved)) select.append(el('option', { value: saved, textContent: saved + ' (not offered)' }));
+    return select;
+  }
+
+  // The chosen level hides every row above it (the relay's tiers: basic < advanced < expert). Rows
+  // without a tier — the dashboard's own settings — are shown at every level. Hidden rows keep their
+  // values, so a change made at a higher level is not lost by switching back: it is still tracked, and
+  // the save bar counts it. Nothing is dropped: the form stays complete and the level is only a view.
+  function applyTier() {
+    let hidden = 0;
+    for (const row of form.querySelectorAll('.row[data-tier]')) {
+      const hide = LEVELS.indexOf(row.dataset.tier) > LEVELS.indexOf(tierLevel);
+      row.hidden = hide;
+      if (hide) hidden += 1;
+    }
+    for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === tierLevel);
+    $('tierinfo').textContent = hidden === 0
+      ? 'every setting shown at ' + tierLevel
+      : hidden + ' hidden at ' + tierLevel + ' — a higher level shows them';
+  }
+
   function renderField(f) {
     const id = 'f-' + f.key;
     const secret = f.type === 'secret';
+    const locked = f.locked === true;          // read-only: the server decides this, never the page
     let input;
     if (f.type === 'sound') input = soundInput(id, f);
     else if (f.type === 'bool') input = switchInput(id, f.key);
+    else if (f.type === 'choice') input = choiceInput(id, f);
     else input = el('input', {
       id, name: f.key,
       type: secret ? 'password' : (NUMERIC.includes(f.type) ? 'number' : 'text'),
@@ -251,19 +323,45 @@ require_once __DIR__ . '/lib/Layout.php';
       input.placeholder = f.isSet ? '(set — leave empty to keep)' : '(not set)';
       original[f.key] = '';
     } else {
-      input.value = f.value;
-      original[f.key] = String(f.value);
+      input.value = asText(f.value);
+      original[f.key] = asText(f.value);
     }
-    if (f.envOverride) { input.disabled = true; }
-    input.addEventListener('input', () => { input.classList.toggle('changed', input.value !== original[f.key]); updateButtons(); });
+    if (locked || f.envOverride) { input.disabled = true; }
+
+    // Reset to default: the default goes into the input, and from there through the SAME change
+    // tracking and save as a hand-made change (no separate path to the relay). No button while the
+    // input already holds the default, and none for what has no default (secrets, locked rows,
+    // environment-read-only rows).
+    const defText = defaultEdit(f);
+    const reset = (defText === undefined || locked || f.envOverride) ? null : el('button', {
+      className: 'btn reset', type: 'button', title: 'Put the default back, then SAVE', textContent: '↺ DEFAULT',
+    });
+    input.addEventListener('input', () => {
+      input.classList.toggle('changed', input.value !== original[f.key]);
+      if (reset) reset.disabled = input.value === defText;
+      updateButtons();
+    });
+    if (reset) {
+      reset.disabled = input.value === defText;
+      reset.addEventListener('click', () => { input.value = defText; input.dispatchEvent(new Event('input', { bubbles: true })); });
+    }
 
     const tags = el('span', { className: 'tags' });
     if (f.restart) tags.append(el('span', { className: 'tag restart', textContent: 'restarts relay' }));
     if (BREAKING.includes(f.key)) tags.append(el('span', { className: 'tag danger', textContent: 'affects cameras' }));
+    if (locked) tags.append(el('span', { className: 'tag lock', textContent: 'locked — config.js only' }));
     if (f.envOverride) tags.append(el('span', { className: 'tag', textContent: 'set by ' + f.envName + ' (read-only)' }));
     else if (f.source && f.source !== 'settings') tags.append(el('span', { className: 'tag', textContent: 'from ' + f.source }));
+    const defLabel = defaultLabel(f);
+    if (defLabel !== null) {
+      const differs = asText(f.value) !== defText;
+      tags.append(el('span', { className: 'tag default' + (differs ? ' differs' : ''), textContent: 'default ' + defLabel }));
+    }
 
-    const row = el('div', { className: 'row' }, el('div', {}, el('label', { htmlFor: id, textContent: f.label }), tags), input);
+    const ctl = el('div', { className: 'ctl' }, input);
+    if (reset) ctl.append(reset);
+    const row = el('div', { className: 'row', id: 'r-' + f.key }, el('div', {}, el('label', { htmlFor: id, textContent: f.label }), tags), ctl);
+    if (f.tier) row.dataset.tier = f.tier;
     row.append(el('div', { className: 'help', textContent: f.help }));
     return row;
   }
@@ -321,7 +419,20 @@ require_once __DIR__ . '/lib/Layout.php';
   }
 
   saveBtn.addEventListener('click', () => CamBusy.run(saveBtn, save));
-  revertBtn.addEventListener('click', () => { for (const f of fields) { const i = $('f-' + f.key); i.value = original[f.key]; i.classList.remove('changed'); } updateButtons(); notify('Reverted.', 'ok'); });
+  // REVERT puts every input back to what the server sent (locked and read-only ones included —
+  // harmless, they cannot change anyway); the input event keeps the changed marks, the reset
+  // buttons and the save bar in step with what is on screen.
+  revertBtn.addEventListener('click', () => {
+    for (const f of fields) {
+      const i = $('f-' + f.key);
+      i.value = original[f.key];
+      i.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    notify('Reverted.', 'ok');
+  });
+  for (const b of document.querySelectorAll('#tierbar .btn.tier')) {
+    b.addEventListener('click', () => { tierLevel = b.dataset.tier; applyTier(); });
+  }
   // The new camera's icon input gets a chooser bubble with a search bar (js/icon-picker.js); without the scripts it stays a plain input.
   if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('c-icon'), window.CamIconCatalog.GROUPS);
 

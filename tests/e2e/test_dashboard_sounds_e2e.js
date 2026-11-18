@@ -289,7 +289,8 @@ async function settingsPage() {
     const legends = [...d.querySelectorAll('fieldset > legend')].map((l) => l.textContent);
     check('the page has an "Alarm sounds" group, between "Person check" and "Network"', legends.includes('Alarm sounds') && legends.indexOf('Alarm sounds') > legends.indexOf('Person check') && legends.indexOf('Alarm sounds') < legends.indexOf('Network'), legends.join(' | '));
     const group = [...d.querySelectorAll('fieldset')].find((f) => f.querySelector('legend').textContent === 'Alarm sounds');
-    check('the sound files are listed first in that group, then the six settings', group.firstElementChild.tagName === 'LEGEND' && group.children[1].classList.contains('sound-library') && group.querySelectorAll('.row').length === 6);
+    check('the sound files are listed first in that group, then the eight settings (F-29 T6a added the player lock and the time limit)',
+      group.firstElementChild.tagName === 'LEGEND' && group.children[1].classList.contains('sound-library') && group.querySelectorAll('.row').length === 8);
     check('the list shows the sounds on the relay', [...d.querySelectorAll('.sound-row .nm')].map((n) => n.firstChild.textContent).join() === 'beep.mp3,chime.ogg,siren.wav');
     const select = selectOf('alarmSoundRecordStart');
     check('a sound choice is a select: "(no sound)" first, then the files', select.tagName === 'SELECT' && [...select.options].map((o) => o.textContent).join(' | ') === '(no sound) | beep.mp3 | chime.ogg | siren.wav' && select.value === 'siren.wav');

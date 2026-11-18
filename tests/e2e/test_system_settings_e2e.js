@@ -12,6 +12,8 @@
 //   - a damaged settings file cannot stop the relay from starting
 // Dashboard (system-settings.php):
 //   - needs the login and the dashboard's own request header
+//   - the F-29 T6a rows reach the page with tier, default and restart flag; the locked rows
+//     are shown read-only and posting one is refused; a new row saves through the dashboard
 //   - one save can change relay settings AND config.php; the relay is restarted and the answer
 //     comes only once it is back
 //   - settings that disconnect the cameras need an explicit confirm
@@ -259,16 +261,32 @@ async function main() {
     check('non-plain values are refused', (await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: [1] } } })).status === 400);
 
     // ── F-09: the dashboard must not be able to point the relay at files and folders ──
-    const PATH_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'switchFile'];
+    const PATH_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile', 'personScanModel'];
     const OK_KEYS = ['alarmRecordSeconds', 'preRollSeconds', 'preRollMaxBytes', 'port', 'pushPort', 'camKey', 'controlKey', 'logMaxBytes', 'logKeepFiles', 'personScanEnabled', 'personScanConfidence'];
     check('the settings page is not offered the file and folder paths (no logFile, no Folders group)', PATH_KEYS.every((k) => !field(d1.json, k)) && !d1.json.fields.some((f) => f.group === 'Folders'), d1.json.fields.map((f) => f.key).join(','));
     check('...but still gets every setting it may change', OK_KEYS.every((k) => field(d1.json, k)), d1.json.fields.map((f) => f.key).join(','));
+
+    // ── F-29 T6b: the rows T6a moved into the store reach the page with tier, default and lock ──
+    const noDefault = d1.json.fields.filter((f) => f.default === undefined).map((f) => f.key).sort();
+    check('every row that can show a default does (only the secrets and the dashboard\'s login/address rows cannot)',
+      JSON.stringify(noDefault) === JSON.stringify(['auth_pass', 'auth_user', 'camKey', 'controlKey', 'relay_url', 'telegramBotToken']), noDefault.join(','));
+    const noTier = d1.json.fields.filter((f) => f.tier === undefined).map((f) => f.key).sort();
+    check('every relay row carries its tier; only the dashboard\'s own rows do not',
+      JSON.stringify(noTier) === JSON.stringify(['auth_pass', 'auth_user', 'record_seconds', 'relay_url', 'slideshow_seconds', 'switch_off_minutes']), noTier.join(','));
+    check('the locked rows are on the page, marked read-only (the programs the relay runs)',
+      ['personScanPython', 'personScanScript', 'alarmSoundPlayer'].every((k) => { const f = field(d1.json, k); return !!f && f.locked === true; }),
+      d1.json.fields.filter((f) => f.locked).map((f) => f.key).join(','));
+    check('a locked value is shown, so it is clear what runs',
+      field(d1.json, 'personScanPython').value === 'python3' && Array.isArray(field(d1.json, 'alarmSoundPlayer').value) && field(d1.json, 'alarmSoundPlayer').value.join(' ').startsWith('ffplay'));
+    check('a row that restarts the relay says so, one that applies at once does not',
+      field(d1.json, 'preRollSeconds').restart === true && field(d1.json, 'maxAlarmRecordings').restart === false);
+
     const relayDirect = (await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json;
-    check('(control) the relay itself still has those four settings', PATH_KEYS.every((k) => field(relayDirect, k)));
+    check('(control) the relay itself still has those path settings', PATH_KEYS.every((k) => field(relayDirect, k)));
     const relayView = async () => JSON.stringify((await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json.fields);
     const viewBefore = await relayView();
     const jsonBefore = fs.existsSync(path.join(relayDir, 'system-settings.json')) ? fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8') : '';
-    for (const [k, v] of [['switchFile', '/etc/passwd'], ['firmwareDir', '/'], ['deviceSettingsDir', '../../..'], ['logFile', '/etc/cron.d/camdash']]) {
+    for (const [k, v] of [['switchFile', '/etc/passwd'], ['firmwareDir', '/'], ['deviceSettingsDir', '../../..'], ['logFile', '/etc/cron.d/camdash'], ['personScanModel', '/etc/models/person.onnx']]) {
       const r = await dash('POST', 'system-settings.php', { body: { values: { [k]: v } } });
       check(`${k} = ${v} cannot be saved from the dashboard (400, names the setting)`, r.status === 400 && r.json && r.json.error.includes(k) && /nothing was saved/.test(r.json.error), r.text);
     }
@@ -278,9 +296,20 @@ async function main() {
     check('a setting that is not on the allow-list is refused too', unknown.status === 400 && /unknown setting/.test(unknown.json.error), unknown.text);
     check('the relay\'s own view of ALL its settings is unchanged after every attempt', (await relayView()) === viewBefore);
     check('...and no settings file was written or changed', (fs.existsSync(path.join(relayDir, 'system-settings.json')) ? fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8') : '') === jsonBefore);
+    const lockedPost = await dash('POST', 'system-settings.php', { body: { values: { personScanPython: 'python3.11' } } });
+    check('posting a locked row is refused (the programs the relay runs are config.js only) and saves nothing',
+      lockedPost.status === 400 && /locked/.test(lockedPost.json.error) && (fs.existsSync(path.join(relayDir, 'system-settings.json')) ? fs.readFileSync(path.join(relayDir, 'system-settings.json'), 'utf8') : '') === jsonBefore, lockedPost.text);
     const okSave = await dash('POST', 'system-settings.php', { body: { values: { alarmRecordSeconds: 31 } } });
     check('(control) a normal setting still saves through the dashboard', okSave.status === 200 && okSave.json.ok === true, okSave.text);
     await dash('POST', 'system-settings.php', { body: { values: { alarmRecordSeconds: 30 } } });
+
+    // a row T6a moved into the store: editable from the dashboard now, applies at once (no restart)
+    const beforeMax = relay.restarts;
+    const maxRec = await dash('POST', 'system-settings.php', { body: { values: { maxAlarmRecordings: 8 } } });
+    check('a setting T6a moved into the store saves through the dashboard with no restart',
+      maxRec.status === 200 && maxRec.json.ok === true && maxRec.json.restart === 'not-needed' && relay.restarts === beforeMax, maxRec.text);
+    check('...the page and the relay both show it, from the store',
+      field((await dash('GET', 'system-settings.php')).json, 'maxAlarmRecordings').value === 8 && field((await relayReq(RELAY_PORT, 'GET', '/system-settings', CONTROL)).json, 'maxAlarmRecordings').value === 8);
 
     const badRelay = await dash('POST', 'system-settings.php', { body: { values: { preRollSeconds: 'x', auth_user: 'changed-user' } } });
     check('a value the relay refuses is reported, and nothing is saved anywhere', badRelay.status === 400 && /preRollSeconds/.test(badRelay.json.error) && cfg().includes('dash-user') && !cfg().includes('changed-user'), badRelay.text);

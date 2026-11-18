@@ -1525,12 +1525,21 @@ camtest_test('sanitizeStorageStatus: text the relay sends along is never passed 
 // ── F-09: the dashboard must not set file or folder paths on the relay ─
 
 camtest_test('splitSettingsValues passes every allowed relay setting on, and the dashboard\'s own to the dashboard', function () {
-    $values = ['alarmRecordSeconds' => 60, 'minFreeStorageMB' => '1024', 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608, 'port' => 8080, 'pushPort' => 8081,
-               'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key', 'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'personScanEnabled' => 'true', 'personScanConfidence' => '0.55',
-               'alarmSoundRecordStart' => 'siren.wav', 'alarmSoundRecordStartRelay' => 'true', 'alarmSoundRecordStartBrowser' => 'false',
-               'alarmSoundPersonDetected' => '', 'alarmSoundPersonDetectedRelay' => 'true', 'alarmSoundPersonDetectedBrowser' => 'true', 'auth_user' => 'bob'];
+    // one entry per key of the allow-list (F-29 T6b opened the settings T6a moved into the store);
+    // the values are the relay's to check — splitSettingsValues only routes them
+    $values = array_fill_keys(CamLogic::RELAY_SETTING_KEYS, '1');
+    $values = array_merge($values, [
+        'alarmRecordSeconds' => 60, 'minFreeStorageMB' => '1024', 'preRollSeconds' => '10', 'preRollMaxBytes' => 8388608,
+        'port' => 8080, 'pushPort' => 8081, 'camKey' => 'a-camera-key', 'controlKey' => 'a-control-key',
+        'logMaxBytes' => 5242880, 'logKeepFiles' => 2, 'personScanEnabled' => 'true', 'personScanConfidence' => '0.55',
+        'personScanAction' => 'move', 'relayBind' => '0.0.0.0', 'telegramChatId' => '-100123456,456',
+        'footageBaseUrl' => 'http://raspberrypi.local/camdash', 'alarmSoundRecordStart' => 'siren.wav',
+        'alarmSoundRecordStartRelay' => 'true', 'alarmSoundRecordStartBrowser' => 'false',
+        'alarmSoundPersonDetected' => '', 'alarmSoundPersonDetectedRelay' => 'true', 'alarmSoundPersonDetectedBrowser' => 'true',
+        'auth_user' => 'bob',
+    ]);
     $r = CamLogic::splitSettingsValues($values);
-    camtest_assert_true($r['ok'] === true);
+    camtest_assert_true($r['ok'] === true, $r['error'] ?? '');
     camtest_assert_equal(array_keys($r['relay']), CamLogic::RELAY_SETTING_KEYS);
     camtest_assert_equal(array_keys($r['dashboard']), ['auth_user']);
 });
@@ -1543,7 +1552,18 @@ camtest_test('splitSettingsValues refuses every file and folder path, saving not
             camtest_assert_true(strpos($r['error'], $key) !== false && strpos($r['error'], 'nothing was saved') !== false && !isset($r['relay']), $r['error'] ?? '');
         }
     }
-    camtest_assert_equal(CamLogic::RELAY_PATH_SETTING_KEYS, ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile']);
+    camtest_assert_equal(CamLogic::RELAY_PATH_SETTING_KEYS, ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile', 'personScanModel']);
+});
+
+camtest_test('splitSettingsValues refuses the locked settings (the programs the relay runs), saving nothing', function () {
+    foreach (CamLogic::RELAY_LOCKED_SETTING_KEYS as $key) {
+        foreach (['python3', ''] as $value) {
+            $r = CamLogic::splitSettingsValues(['preRollSeconds' => 5, $key => $value]);
+            camtest_assert_true($r['ok'] === false, "$key = $value");
+            camtest_assert_true(strpos($r['error'], $key) !== false && strpos($r['error'], 'locked') !== false && strpos($r['error'], 'config.js') !== false && strpos($r['error'], 'nothing was saved') !== false && !isset($r['relay']), $r['error'] ?? '');
+        }
+    }
+    camtest_assert_equal(CamLogic::RELAY_LOCKED_SETTING_KEYS, ['personScanPython', 'personScanScript', 'alarmSoundPlayer']);
 });
 
 camtest_test('splitSettingsValues refuses a setting it does not know (allow-list, not deny-list)', function () {
@@ -1556,42 +1576,69 @@ camtest_test('splitSettingsValues refuses a setting it does not know (allow-list
     camtest_assert_true(strlen($m[1]) <= 40 && preg_match('/^[\x20-\x7e]*$/', $m[1]) === 1, 'a hostile key is cut short and printable in the message: ' . var_export($m[1], true));
 });
 
-camtest_test('the allow-list and the path list do not overlap, and the dashboard keys are not in either', function () {
+camtest_test('the three lists (allowed, paths, locked) do not overlap, and the dashboard keys are in none', function () {
     camtest_assert_equal(array_intersect(CamLogic::RELAY_SETTING_KEYS, CamLogic::RELAY_PATH_SETTING_KEYS), []);
+    camtest_assert_equal(array_intersect(CamLogic::RELAY_SETTING_KEYS, CamLogic::RELAY_LOCKED_SETTING_KEYS), []);
+    camtest_assert_equal(array_intersect(CamLogic::RELAY_PATH_SETTING_KEYS, CamLogic::RELAY_LOCKED_SETTING_KEYS), []);
     foreach (CamLogic::dashboardFields() as $f) {
-        camtest_assert_true(!in_array($f['key'], CamLogic::RELAY_SETTING_KEYS, true) && !in_array($f['key'], CamLogic::RELAY_PATH_SETTING_KEYS, true), $f['key']);
+        camtest_assert_true(!in_array($f['key'], CamLogic::RELAY_SETTING_KEYS, true) && !in_array($f['key'], CamLogic::RELAY_PATH_SETTING_KEYS, true) && !in_array($f['key'], CamLogic::RELAY_LOCKED_SETTING_KEYS, true), $f['key']);
     }
 });
 
-camtest_test('visibleRelayFields keeps the allowed fields in order and drops paths, unknowns and junk', function () {
+camtest_test('visibleRelayFields keeps the allowed and the locked fields in order, and drops paths, unknowns and junk', function () {
     $fields = [
         ['key' => 'alarmRecordSeconds', 'group' => 'Recording'], ['key' => 'logFile', 'group' => 'Log'], ['key' => 'port', 'group' => 'Network'],
         ['key' => 'firmwareDir', 'group' => 'Folders'], ['key' => 'switchFile', 'group' => 'Folders'], ['key' => 'deviceSettingsDir', 'group' => 'Folders'],
         ['key' => 'newThing'], ['nokey' => 1], 'junk', null, ['key' => ['port']], ['key' => 'controlKey', 'group' => 'Keys'],
+        ['key' => 'personScanPython', 'group' => 'Person check'], ['key' => 'personScanModel', 'group' => 'Person check'],
     ];
-    camtest_assert_equal(array_column(CamLogic::visibleRelayFields($fields), 'key'), ['alarmRecordSeconds', 'port', 'controlKey']);
+    $out = CamLogic::visibleRelayFields($fields);
+    camtest_assert_equal(array_column($out, 'key'), ['alarmRecordSeconds', 'port', 'controlKey', 'personScanPython']);
+    // the locked flag is this side's decision, not the relay's word: set on the locked row...
+    camtest_assert_true(($out[3]['locked'] ?? null) === true, 'a locked row the relay left unflagged is still locked');
+    // ...and never kept on an editable one, whatever the relay said
+    $editable = CamLogic::visibleRelayFields([['key' => 'port', 'locked' => true]])[0];
+    camtest_assert_true(!array_key_exists('locked', $editable), 'a relay that calls an editable row locked does not get it locked');
     camtest_assert_equal(CamLogic::visibleRelayFields('nonsense'), []);
     camtest_assert_equal(CamLogic::visibleRelayFields(null), []);
 });
 
-camtest_test('the allow-list matches the relay\'s real settings schema: every relay field is either allowed or a path, nothing else', function () {
-    // The relay (nodejs/camera-relay/lib/sysconfig.js) is where the keys are defined. If it gains a setting,
-    // this fails until someone decides on purpose whether the dashboard may change it.
-    $src = @file_get_contents(__DIR__ . '/../../nodejs/camera-relay/lib/sysconfig.js');
+camtest_test('the three lists match the relay\'s real settings table: every relay field is editable, a path, or locked — nothing else', function () {
+    // The relay's table (nodejs/camera-relay/lib/sysfields.js — F-29 T6a moved it out of sysconfig.js) is
+    // where the rows are defined: key, tier, group, restart, default, and the flags this decides from:
+    // `locked` (the programs the relay runs: shown read-only) and `path` (a file or folder the relay
+    // writes: not offered at all, F-09). If the relay gains a setting, this fails until someone decides
+    // on purpose which of the three it is here — the same guard the list has always been.
+    $src = @file_get_contents(__DIR__ . '/../../nodejs/camera-relay/lib/sysfields.js');
     if ($src === false) {
         camtest_assert_true(true, 'relay source not found (skipped)');
         return;
     }
-    $relayKeys = [];
+    $rows = [];
     if (preg_match('/const FIELDS = \[(.*?)\n\];/s', $src, $m)) {
-        preg_match_all("/\{ key: '([A-Za-z]+)'/", $m[1], $mm);
-        $relayKeys = $mm[1];
+        $table = preg_replace('/^\s*\/\/.*$/m', '', $m[1]);   // the comments between rows are not rows
+        if (preg_match_all('/\{ key: \'([A-Za-z]+)\'.*?(?=\{ key: |\z)/s', $table, $mm, PREG_SET_ORDER)) {
+            foreach ($mm as $row) {
+                $rows[$row[1]] = ['locked' => strpos($row[0], 'locked: true') !== false, 'path' => strpos($row[0], 'path:') !== false];
+            }
+        }
     }
-    camtest_assert_true(count($relayKeys) >= 10, 'found ' . count($relayKeys) . ' fields in sysconfig.js');
-    $known = array_merge(CamLogic::RELAY_SETTING_KEYS, CamLogic::RELAY_PATH_SETTING_KEYS);
-    sort($relayKeys);
+    camtest_assert_true(count($rows) >= 40, 'found ' . count($rows) . ' rows in sysfields.js');
+    foreach ($rows as $key => $flags) {
+        if ($flags['locked']) {
+            camtest_assert_true(in_array($key, CamLogic::RELAY_LOCKED_SETTING_KEYS, true) && !in_array($key, CamLogic::RELAY_PATH_SETTING_KEYS, true) && !in_array($key, CamLogic::RELAY_SETTING_KEYS, true), "$key: locked in the table must be locked here");
+        } elseif ($flags['path']) {
+            camtest_assert_true(in_array($key, CamLogic::RELAY_PATH_SETTING_KEYS, true) && !in_array($key, CamLogic::RELAY_SETTING_KEYS, true), "$key: a path in the table must be refused here");
+        } else {
+            camtest_assert_true(in_array($key, CamLogic::RELAY_SETTING_KEYS, true), "$key: an ordinary row must be editable here");
+        }
+    }
+    // and nothing stale the other way round: every key the dashboard knows is a row the relay really has
+    $known = array_merge(CamLogic::RELAY_SETTING_KEYS, CamLogic::RELAY_PATH_SETTING_KEYS, CamLogic::RELAY_LOCKED_SETTING_KEYS);
     sort($known);
-    camtest_assert_equal($relayKeys, $known);
+    $tableKeys = array_keys($rows);
+    sort($tableKeys);
+    camtest_assert_equal($tableKeys, $known);
 });
 
 // ── F-12 / F-14 / F-15 / F-16: small input and output checks ─────────
