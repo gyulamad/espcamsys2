@@ -351,6 +351,9 @@ else
     run_cpp_test test_setup_fuzz -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"
     run_cpp_test test_settings_logic
     run_cpp_test test_settings_defaults
+    # The short stored keys (docs/settings_keys.tsv): at most 15 characters, no duplicate, every schema key has a row.
+    run_cpp_test test_settings_keys_recorder
+    run_cpp_test test_settings_keys_person
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change
     run_cpp_test test_person_settings
@@ -366,6 +369,12 @@ else
     # The dashboard's copy of the Recorder's settings table is generated from the firmware's own.
     group_text "--- the dashboard's settings table is up to date with the firmware's"
     if ! "$ROOT_DIR/tools/gen_device_schema.sh" --check; then
+        overall_status=1
+    fi
+
+    # The table of short stored keys in docs/SETTINGS_KEYS.md is generated from docs/settings_keys.tsv.
+    group_text "--- the stored-key table in docs/SETTINGS_KEYS.md is up to date"
+    if ! "$ROOT_DIR/tools/gen_settings_keys_doc.sh" --check; then
         overall_status=1
     fi
 

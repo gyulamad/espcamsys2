@@ -1,0 +1,138 @@
+# Source of docs/SETTINGS_KEYS.md (the table) and of tests/cpp/test_settings_keys_*.cpp. Tab separated, one row per setting.
+# origin	sketch	old_name	stored_key	label	tasks
+stored	both	WIFI	WIFI	Wi-Fi networks	
+stored	both	SERVER_HOST	SERVER_HOST	Relay address	
+stored	rec	PUSH_PORT	PUSH_PORT	Relay push port	
+stored	both	HTTP_PORT	HTTP_PORT	Relay HTTP port	
+stored	rec	CAMERA_ID	CAMERA_ID	Camera ID	
+stored	both	API_KEY	API_KEY	API key (camKey)	
+stored	rec	PUSH_INTERVAL_MUL	PUSH_GAP_MUL	Pause after each frame (x last push)	
+stored	rec	JPEG_Q_DROP	JPEG_Q_DROP	Lower quality on a slow link	
+stored	rec	JPEG_Q_MIN	JPEG_Q_MIN	Best JPEG quality	
+stored	rec	JPEG_Q_MAX	JPEG_Q_MAX	Coarsest JPEG quality	
+stored	rec	SIZE_DROP	SIZE_DROP	Also shrink the frame size	
+new	rec	PUSH_WRITE_TIMEOUT_MS	PUSH_WR_TMO_MS	Push write timeout (ms)	done
+new	rec	PUSH_SLOW_WARN_MS	PUSH_SLOW_MS	Slow push (ms)	done
+new	rec	PUSH_FAST_MS	PUSH_FAST_MS	Fast push (ms)	done
+new	rec	PUSH_MAX_GAP_MS	PUSH_MAX_GAP_MS	Longest pause after a push (ms)	done
+new	rec	JPEG_QUALITY_DEGRADE_STEP	Q_DEGRADE_STEP	Quality steps coarser per slow frame	done
+new	rec	JPEG_QUALITY_RECOVER_STEP	Q_RECOVER_STEP	Quality steps finer per fast run	done
+new	rec	JPEG_QUALITY_FAST_STREAK	Q_FAST_STREAK	Fast frames before the picture improves	done
+new	rec	JPEG_QUALITY_VERY_SLOW_FACTOR	Q_VSLOW_FACTOR	Very slow = this many times slow	done
+new	rec	FRAME_SIZE_UP_FAST_STREAK	SIZE_UP_STREAK	Fast pushes before the size goes up	done
+new	rec	WIFI_REPORT_INTERVAL_MS	WIFI_REPORT_MS	Wi-Fi report interval (ms)	done
+new	rec	http.setTimeout(5000)	HTTP_TMO_MS	HTTP call timeout (ms)	done
+new	rec	RELAY_DOWN_MS	RELAY_DOWN_MS	Relay considered gone after (ms)	done
+new	rec	set_vflip(sensor, 0)	CAM_VFLIP	Flip the picture upside down	done
+new	rec	set_hmirror(sensor, 0)	CAM_HMIRROR	Mirror the picture	done
+new	rec	WiFi.setSleep(false)	WIFI_SLEEP	Let the Wi-Fi modem sleep	done
+stored	rec	ALARM_GPIO_PIN	ALARM_GPIO_PIN	Alarm input pin	
+stored	rec	ALARM_ACTIVE_STATE	ALARM_ACTIVE	Pin level that means alarm	
+stored	rec	ALARM_RECORD_ALL_CAMERAS	ALARM_ALL_CAMS	Alarm records on every camera	
+new	rec	ALARM_DEBOUNCE_MS	ALARM_DEBOUNCE	Alarm contact debounce (ms)	done
+new	rec	ALARM_HOLD_REFRESH_MS	ALARM_HOLD_MS	Alarm repeat while active (ms)	done
+stored	rec	REMOTE_LOG_ENABLED	LOG_ENABLED	Send the log to the relay	
+stored	rec	REMOTE_LOG_MIN_LEVEL	LOG_MIN_LEVEL	Lowest level sent to the relay	
+stored	rec	REMOTE_LOG_ECHO_TO_SERIAL	LOG_ECHO	Show everything on serial	
+stored	rec	REMOTE_LOG_RETRY_MAX	LOG_RETRY_MAX	Retries after a failed delivery	
+stored	rec	REMOTE_LOG_RETRY_PERIOD_SECONDS	LOG_RETRY_SEC	Seconds between retries	
+stored	rec	REMOTE_LOG_FLUSH_SECONDS	LOG_FLUSH_SEC	Seconds routine entries wait	
+stored	rec	REMOTE_LOG_REPEAT_WINDOW_SECONDS	LOG_REPEAT_SEC	Window for counting repeats	
+stored	rec	REMOTE_LOG_HEARTBEAT_SECONDS	LOG_HEARTBEAT	Seconds between status lines	
+stored	rec	REMOTE_LOG_LOW_HEAP_BYTES	LOG_LOW_HEAP	Warn below this free heap (bytes)	
+stored	both	SETUP_MODE	SETUP_MODE	Setup mode at next restart	
+stored	both	SETUP_PASSWORD	SETUP_PASSWORD	Setup Wi-Fi password	
+stored	det	PERSON_GPIO	PERSON_GPIO	Person output pin	
+stored	det	DETECT_THRESH	DETECT_THRESH	Person detected above (score)	
+stored	det	CLEAR_THRESH	CLEAR_THRESH	Person cleared below (score)	
+stored	det	LOOP_DELAY_MS	LOOP_DELAY_MS	Pause between detections (ms)	
+stored	det	DARK_THRESH	DARK_THRESH	Darkness threshold	
+stored	det	MOTION_THRESH	MOTION_THRESH	Motion threshold	
+stored	det	MOTION_HOLD_S	MOTION_HOLD_S	Detection hold after motion (s)	
+stored	det	MOTION_X0	MOTION_X0	Motion area left edge	
+stored	det	MOTION_Y0	MOTION_Y0	Motion area top edge	
+stored	det	MOTION_X1	MOTION_X1	Motion area right edge	
+stored	det	MOTION_Y1	MOTION_Y1	Motion area bottom edge	
+stored	det	MOTION_EMA_LEN	MOTION_EMA_LEN	Motion auto-calibration length (frames)	
+stored	det	MOTION_EMA_PCT	MOTION_EMA_PCT	Auto-calibration margin (%)	
+stored	det	DETECTOR_ID	DETECTOR_ID	Detector ID	
+stored	det	STREAM_MAX_FPS	STREAM_MAX_FPS	Live view frames per second (max)	
+stored	det	STREAM_JPEG_Q	STREAM_JPEG_Q	Live view JPEG quality	
+stored	det	STREAM_WR_TMO_S	STREAM_WR_TMO_S	Relay write timeout (s)	
+stored	det	ANN_HEARTBEAT	ANN_HEARTBEAT	Seconds between status lines	
+stored	det	ANN_RETRY	ANN_RETRY	Longest wait before reaching the relay again (s)	
+new	both	OTA_ENABLED	OTA_ENABLED	Firmware updates from the relay	T2,T5b
+new	both	OTA_CHECK_SECONDS	OTA_CHECK_S	Update check interval (s)	T2,T5b
+new	both	OTA_RETRY_SECONDS	OTA_RETRY_S	Update retry interval (s)	T2,T5b
+new	both	OTA_VERSION_REPLY_MAX_BYTES	OTA_VER_MAX_B	Version reply size limit (bytes)	T2,T5b
+new	both	OTA_FIRMWARE_MIN_BYTES	OTA_FW_MIN_B	Smallest firmware accepted (bytes)	T2,T5b
+new	both	OTA_FIRMWARE_MAX_BYTES	OTA_FW_MAX_B	Largest firmware accepted (bytes)	T2,T5b
+new	both	OTA_VERSION_REPLY_IDLE_MS	OTA_VER_IDLE_MS	Version reply idle timeout (ms)	T2,T5b
+new	both	OTA_DOWNLOAD_IDLE_MS	OTA_DL_IDLE_MS	Firmware download idle timeout (ms)	T2,T5b
+new	both	RELAY_FIND_ENABLED	RF_ENABLED	Look for the relay on the network	T2,T5b
+new	both	RELAY_FIND_PORT	RF_PORT	Relay discovery port	T2,T5b
+new	both	RELAY_FIND_FIRST_SECONDS	RF_FIRST_S	First relay search after (s)	T2,T5b
+new	both	RELAY_FIND_OK_SECONDS	RF_OK_S	Relay check interval while found (s)	T2,T5b
+new	both	RELAY_FIND_RETRY_MIN_SECONDS	RF_RETRY_MIN_S	Shortest wait between searches (s)	T2,T5b
+new	both	RELAY_FIND_RETRY_MAX_SECONDS	RF_RETRY_MAX_S	Longest wait between searches (s)	T2,T5b
+new	both	SETTINGS_SYNC_ENABLED	SYNC_ENABLED	Fetch settings from the relay	T2,T5b
+new	both	SETTINGS_SYNC_FIRST_SECONDS	SYNC_FIRST_S	First settings check after (s)	T2,T5b
+new	both	SETTINGS_SYNC_CHECK_SECONDS	SYNC_CHECK_S	Settings check interval (s)	T2,T5b
+new	both	SETUP_RETRY_MS	SETUP_RETRY_MS	Setup retry after a failure (ms)	T2,T5b
+new	both	SETUP_RESTART_GRACE_MS	SETUP_GRACE_MS	Wait before restart after setup (ms)	T2,T5b
+new	both	SETUP_AP_CHANNEL	SETUP_AP_CHAN	Setup Wi-Fi channel	T2,T5b
+new	both	SETUP_AP_MAX_STATIONS	SETUP_MAX_STA	Setup Wi-Fi: most devices at once	T2,T5b
+new	both	SETUP_HTTP_PORT	SETUP_HTTP_PORT	Setup page port	T2,T5b
+new	both	SETUP_DNS_PORT	SETUP_DNS_PORT	Setup DNS port	T2,T5b
+new	both	SETUP_MAX_CONNECTIONS	SETUP_MAX_CONN	Setup page: most connections at once	T2,T5b
+new	both	SETUP_REQUEST_TIMEOUT_MS	SETUP_RQ_TMO_MS	Setup page request timeout (ms)	T2,T5b
+new	both	SETTINGS_WINDOW_MS	BOOT_SER_WIN_MS	Boot wait for a serial "y" (ms)	T2,T5b
+new	both	REMOTE_CONNECT_MS	BOOT_WIFI_MS	Boot: time to join Wi-Fi (ms)	T2,T5b
+new	both	REMOTE_WINDOW_MS	BOOT_RELAY_MS	Boot: wait for settings from the relay (ms)	T2,T5b
+new	both	REMOTE_POLL_MS	BOOT_POLL_MS	Boot: ask the relay every (ms)	T2,T5b
+new	both	PWDN_GPIO_NUM	PIN_PWDN	Camera pin: PWDN	T3,T5c
+new	both	RESET_GPIO_NUM	PIN_RESET	Camera pin: RESET	T3,T5c
+new	both	XCLK_GPIO_NUM	PIN_XCLK	Camera pin: XCLK	T3,T5c
+new	both	SIOD_GPIO_NUM	PIN_SIOD	Camera pin: SIOD	T3,T5c
+new	both	SIOC_GPIO_NUM	PIN_SIOC	Camera pin: SIOC	T3,T5c
+new	both	Y9_GPIO_NUM	PIN_Y9	Camera pin: Y9	T3,T5c
+new	both	Y8_GPIO_NUM	PIN_Y8	Camera pin: Y8	T3,T5c
+new	both	Y7_GPIO_NUM	PIN_Y7	Camera pin: Y7	T3,T5c
+new	both	Y6_GPIO_NUM	PIN_Y6	Camera pin: Y6	T3,T5c
+new	both	Y5_GPIO_NUM	PIN_Y5	Camera pin: Y5	T3,T5c
+new	both	Y4_GPIO_NUM	PIN_Y4	Camera pin: Y4	T3,T5c
+new	both	Y3_GPIO_NUM	PIN_Y3	Camera pin: Y3	T3,T5c
+new	both	Y2_GPIO_NUM	PIN_Y2	Camera pin: Y2	T3,T5c
+new	both	VSYNC_GPIO_NUM	PIN_VSYNC	Camera pin: VSYNC	T3,T5c
+new	both	HREF_GPIO_NUM	PIN_HREF	Camera pin: HREF	T3,T5c
+new	both	PCLK_GPIO_NUM	PIN_PCLK	Camera pin: PCLK	T3,T5c
+new	both	config.xclk_freq_hz	CAM_XCLK_HZ	Camera clock (Hz)	T3,T5c
+new	both	remoteLog task stack (8192)	STK_LOG_B	Log task stack (bytes)	T3,T5c
+new	rec	otaTask stack (10240)	STK_OTA_B	Update task stack (bytes)	T3
+new	det	networkTask stack (16384)	STK_NET_B	Network task stack (bytes)	T5c
+new	both	Serial.begin(115200)	SER_BAUD	Serial speed (baud)	T3,T5c
+new	both	Serial.setRxBufferSize(2048)	SER_RXBUF_B	Serial receive buffer (bytes)	T3,T5c
+new	det	config.fb_count	CAM_FB_COUNT	Camera frame buffers	T5c
+new	det	initCamera ATTEMPTS	CAM_INIT_TRIES	Camera start attempts	T5c
+new	det	STARTUP_FAILURE_RESTART_MS	BOOT_FAIL_MS	Restart after a failed start (ms)	T5c
+new	det	DARK_HYSTERESIS	DARK_HYST	Darkness hysteresis	T5a
+new	det	SCORE_FRESH_MS	SCORE_FRESH_MS	Detection score stays fresh for (ms)	T5a
+new	det	CLIP_FACTOR	MOTION_CLIP	Motion spike clip factor	T5a
+new	det	UplinkConfig.connectTimeoutMs	STREAM_CONN_MS	Relay connect timeout (ms)	T5a
+new	det	UplinkConfig.answerTimeoutMs	STREAM_ANS_MS	Relay answer timeout (ms)	T5a
+new	det	UplinkConfig.heartbeatMs	STREAM_BEAT_MS	Live view keep-alive (ms)	T5a
+new	det	UplinkConfig.retryFirstMs	ANN_FIRST_S	First wait before reaching the relay again (s)	T5a
+new	det	ViewGate idlePollMs	VIEW_IDLE_MS	Live view poll when idle (ms)	T5b
+new	det	ViewGate livePollMs	VIEW_LIVE_MS	Live view poll while watched (ms)	T5b
+new	det	ViewGate retryMs	VIEW_RETRY_MS	Live view poll retry (ms)	T5b
+new	det	WifiWatch stillDownEveryMs	WIFI_DOWN_MS	Wi-Fi down: report every (ms)	T5b
+new	det	RELAY_DOWN_MS	RELAY_DOWN_MS	Relay considered gone after (ms)	T5b
+new	det	http.setTimeout(5000)	HTTP_TMO_MS	HTTP call timeout (ms)	T5b
+new	det	remoteLogConfigFor.remoteMinLevel	LOG_MIN_LEVEL	Lowest level sent to the relay	T5b
+new	det	remoteLogConfigFor.echoAlways	LOG_ECHO	Show everything on serial	T5b
+new	det	remoteLogConfigFor.maxRetries	LOG_RETRY_MAX	Retries after a failed delivery	T5b
+new	det	remoteLogConfigFor.retryPeriodMs	LOG_RETRY_SEC	Seconds between retries	T5b
+new	det	remoteLogConfigFor.flushIntervalMs	LOG_FLUSH_SEC	Seconds routine entries wait	T5b
+new	det	remoteLogConfigFor.repeatWindowMs	LOG_REPEAT_SEC	Window for counting repeats	T5b
+new	det	config.sccb/vflip (set_vflip 0)	CAM_VFLIP	Flip the picture upside down	T5a
+new	det	set_hmirror 0	CAM_HMIRROR	Mirror the picture	T5a
