@@ -1280,6 +1280,17 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
+heading "End-to-end (relay settings: every value in the store, empty store = today, edit through the API, live vs restart) test"
+# F-29 T6a on a real relay (supervised like systemd): the 54 rows, a locked row refused, a value that counts at once (no restart),
+# a startup value that counts after the restart, and the environment still winning. Node only. Port: E2E_RELAYSET_PORT (and the next one up).
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_relay_settings_inventory_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 heading "End-to-end (camera settings page: change queued on the relay, simulated board, cameras add/remove) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"

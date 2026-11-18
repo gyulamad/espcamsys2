@@ -10,89 +10,32 @@
 //     (system-settings.json) and is laid OVER config.js when the relay starts, so
 //     config.js is never rewritten by a program.
 //   - Environment variables (PORT, CAM_KEY, ...) still win over both; the page shows
-//     such a field as read-only, because saving it could not change anything.
-//   - Everything except `alarmRecordSeconds` is read once at startup, so saving a
-//     change to those means the relay has to restart (`restart: true` below) —
-//     the dashboard does that for you through POST /restart.
+//     such a field as read-only, because saving it could not change anything. Which
+//     variable belongs to which setting is in SETTINGS.md.
+//   - The rows themselves (key, type, default, tier, restart, ...) are in lib/sysfields.js. A value
+//     that is read once at startup has `restart: true`: saving a change to it means the relay has to
+//     restart — the dashboard does that for you through POST /restart. The few `restart: false` ones
+//     (alarmRecordSeconds, minFreeStorageMB, maxAlarmRecordings, ...) count at once.
+//   - A `locked` row (the programs the relay runs) is shown but never changed from here.
 //
 // No fs, no Express: server.js does the I/O and passes plain values in and out, so
 // all of this is unit tested with plain `node` — see tests/node/test_sysconfig.js.
 
-const personscan = require('./personscan');
 const sounds = require('./sounds');
-
-const MIB = 1024 * 1024;
-
-// One entry per setting. `type`: int | float | bool | string | secret | sound (the name of a file in the sounds folder, or
-// '' for none: its name is checked here, that the file exists when a save is made — see applyUpdate).
-//   config   where config.js keeps it when that is not a top-level key of the same name (a path into it)
-//   minExclusive  a float's min is not itself allowed (0 < c <= 1)
-//   env      the environment variable that overrides it (or null)
-//   group    the section of the settings page
-//   restart  does a change need a relay restart to take effect
-//   default  what the relay uses when neither config.js nor the settings file say anything
-const FIELDS = [
-  { key: 'alarmRecordSeconds', type: 'int', min: 1, max: 3600, default: 60, env: null, group: 'Recording', restart: false,
-    label: 'Alarm recording length (seconds)', help: 'How long a recording started by a camera\'s alarm input runs. Applies to the next alarm — no restart.' },
-  { key: 'minFreeStorageMB', type: 'int', min: 0, max: 1024 * 1024, default: 1024, env: 'MIN_FREE_STORAGE_MB', group: 'Recording', restart: false,
-    label: 'Minimum free recording storage (MB)', help: 'When the free space on the disk holding the recordings falls below this, every dashboard page warns you to delete old recordings, and a notification channel, if one is set up, sends you a message too. 0 switches the warning and the message off. Applies at once — no restart.' },
-  { key: 'preRollSeconds', type: 'int', min: 0, max: 60, default: 5, env: 'PREROLL_SECONDS', group: 'Recording', restart: true,
-    label: 'Pre-roll (seconds)', help: 'Footage from BEFORE the trigger that every recording starts with. 0 switches it off.' },
-  { key: 'preRollMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 8 * MIB, env: 'PREROLL_MAX_BYTES', group: 'Recording', restart: true,
-    label: 'Pre-roll RAM cap per camera (bytes)', help: 'The buffer drops its oldest frames first when it reaches this size. Default 8 MiB = 8388608.' },
-
-  { key: 'personScanEnabled', type: 'bool', default: personscan.DEFAULTS.enabled, config: ['personScan', 'enabled'], env: null, group: 'Person check', restart: false,
-    label: 'Person check (sort out recordings without a person)', help: 'ON: every new recording is checked by the person detector, and a clip with nobody in it is moved to the archive (or deleted — personScan.action in config.js); the check can also be started by hand on a recording. OFF: nothing is checked or moved, and clips already waiting for their check are left alone. Needs the detector model installed first (MANUAL.md, "Sorting out footage without a person"); without it every check just reports an error and no clip is touched. Applies at once — no restart.' },
-  { key: 'personScanConfidence', type: 'float', min: personscan.CONFIDENCE.min, max: personscan.CONFIDENCE.max, minExclusive: true, step: 0.05, default: personscan.CONFIDENCE.default, config: ['personScan', 'confidence'], env: null, group: 'Person check', restart: false,
-    label: 'Person detection sensitivity (confidence threshold)', help: 'How sure the person detector must be before a recording counts as having a person in it; the rest are sorted out to the archive. LOWER = MORE SENSITIVE: more doubtful clips are kept (a missed person costs more than a false alarm), 0.4 is the default. A different detector model may call for a different value. Only has an effect while the person check above is ON. Applies to the next clip checked — no restart.' },
-
-  { key: 'alarmSoundRecordStart', type: 'sound', default: '', env: null, group: 'Alarm sounds', restart: false,
-    label: 'Sound when a recording starts', help: 'Played when a camera starts a recording — its alarm input, the person detector, or the RECORD button. None = no sound. Pick one from the sound files below (upload them there). Applies at once — no restart.' },
-  { key: 'alarmSoundRecordStartRelay', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
-    label: 'Recording starts: play it on the relay machine', help: 'ON: the machine the relay runs on (the Pi) plays the sound through its own speaker. Needs a speaker and an audio player on it (ffplay by default — MANUAL.md, \"Alarm sounds\"). Only has an effect while a sound is chosen above.' },
-  { key: 'alarmSoundRecordStartBrowser', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
-    label: 'Recording starts: play it in the browser', help: 'ON: every browser that has the live dashboard, the camera list or a camera view open plays the sound. A browser only allows sound once you have clicked or tapped on its page. Only has an effect while a sound is chosen above.' },
-  { key: 'alarmSoundPersonDetected', type: 'sound', default: '', env: null, group: 'Alarm sounds', restart: false,
-    label: 'Sound when a person is found in a recording', help: 'Played when the person check finds somebody in a NEW recording (so it needs the person check above to be ON and its detector installed). None = no sound. Applies at once — no restart.' },
-  { key: 'alarmSoundPersonDetectedRelay', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
-    label: 'Person found: play it on the relay machine', help: 'ON: the machine the relay runs on (the Pi) plays the sound through its own speaker. Only has an effect while a sound is chosen above.' },
-  { key: 'alarmSoundPersonDetectedBrowser', type: 'bool', default: true, env: null, group: 'Alarm sounds', restart: false,
-    label: 'Person found: play it in the browser', help: 'ON: every browser that has the live dashboard, the camera list or a camera view open plays the sound. Only has an effect while a sound is chosen above.' },
-
-  { key: 'port', type: 'int', min: 1, max: 65535, default: 8080, env: 'PORT', group: 'Network', restart: true,
-    label: 'HTTP port', help: 'The relay\'s HTTP port (/mux, /snapshot, /status ...). The dashboard\'s relay address is updated to match when you change it here.' },
-  { key: 'pushPort', type: 'int', min: 1, max: 65535, default: 8081, env: 'PUSH_PORT', group: 'Network', restart: true,
-    label: 'Camera push port', help: 'The raw TCP port the cameras push their frames to. It is flashed into every camera (their relay port setting) — change it and the cameras can no longer connect until they are updated.' },
-
-  { key: 'camKey', type: 'secret', min: 8, max: 200, env: 'CAM_KEY', group: 'Keys', restart: true,
-    label: 'Camera key', help: 'Must match the API key of every camera. It is flashed into the boards: changing it disconnects every camera until each one is updated. Leave empty to keep the current one.' },
-  { key: 'controlKey', type: 'secret', min: 8, max: 200, env: 'CONTROL_KEY', group: 'Keys', restart: true,
-    label: 'Control key', help: 'Protects recording ON/OFF, these settings and firmware publishing. Use a different value from the camera key. The dashboard\'s copy is updated for you. Leave empty to keep the current one.' },
-
-  { key: 'logFile', type: 'string', path: 'file', ext: '.log', min: 1, max: 300, default: 'logs/camera.log', env: 'LOG_FILE', group: 'Log', restart: true,
-    label: 'Log file', help: 'A path inside the relay\'s own folder, ending in .log (for example logs/camera.log). To keep it somewhere else, set logFile in config.js.' },
-  { key: 'logMaxBytes', type: 'int', min: 64 * 1024, max: 1024 * MIB, default: 5 * MIB, env: 'LOG_MAX_BYTES', group: 'Log', restart: true,
-    label: 'Log rotation size (bytes)', help: 'The file rotates when it would pass this size. Default 5 MiB = 5242880.' },
-  { key: 'logKeepFiles', type: 'int', min: 1, max: 20, default: 2, env: 'LOG_KEEP_FILES', group: 'Log', restart: true,
-    label: 'Rotated log files kept', help: 'Disk use is at most (this + 1) x the rotation size.' },
-
-  { key: 'deviceSettingsDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'device-settings', env: 'DEVICE_SETTINGS_DIR', group: 'Folders', restart: true,
-    label: 'Staged device settings folder', help: 'Where settings staged for boards missing some are kept. A folder inside the relay\'s own folder; for one elsewhere, set deviceSettingsDir in config.js.' },
-  { key: 'firmwareDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'firmware', env: 'FIRMWARE_DIR', group: 'Folders', restart: true,
-    label: 'Firmware folder', help: 'Where the over-the-air firmware is published. A folder inside the relay\'s own folder; for one elsewhere, set firmwareDir in config.js.' },
-  { key: 'soundsDir', type: 'string', path: 'dir', min: 1, max: 300, default: 'sounds', env: 'SOUNDS_DIR', group: 'Folders', restart: true,
-    label: 'Alarm sounds folder', help: 'Where the alarm sound files are kept. A folder inside the relay\'s own folder; for one elsewhere, set soundsDir in config.js.' },
-  { key: 'switchFile', type: 'string', path: 'file', ext: '.json', min: 1, max: 300, default: 'recording-switch.json', env: 'SWITCH_FILE', group: 'Folders', restart: true,
-    label: 'Recording on/off state file', help: 'Where the recording ON/OFF state is kept so it survives a restart. A .json file inside the relay\'s own folder; for one elsewhere, set switchFile in config.js.' },
-];
+const { cleanBaseUrl } = require('./detectionnotice');
+const { chatIdEntries, CHAT_ID_RE } = require('./notify/telegram');
+const { FIELDS } = require('./sysfields');
 
 const BY_KEY = Object.fromEntries(FIELDS.map((f) => [f.key, f]));
-// Saved in the system settings file (everything that is not the live alarm value,
-// which lives in settings.json — see lib/settings.js).
-const OVERRIDE_KEYS = FIELDS.filter((f) => f.key !== 'alarmRecordSeconds').map((f) => f.key);
+// Saved in the system settings file (everything that is not the live alarm value, which lives in settings.json — see
+// lib/settings.js — and not a locked row: those are only ever read from config.js).
+const OVERRIDE_KEYS = FIELDS.filter((f) => f.key !== 'alarmRecordSeconds' && !f.locked).map((f) => f.key);
+const LOCKED_KEYS = FIELDS.filter((f) => f.locked).map((f) => f.key);
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS_G = /[\u0000-\u001f\u007f]+/g;
 
 // Checks ONE value. -> { value } or { error }
 // A decimal like 0.4 or .55 (not 1e-1, 0x1, 0,5), as text or a number, inside the field's range. -> { value } or { error }
@@ -114,6 +57,36 @@ function checkBool(field, raw) {
   return { error: `${field.key} must be true or false` };
 }
 
+// One of the field's words. -> { value } or { error }
+function checkChoice(field, raw) {
+  return field.options.includes(raw) ? { value: raw } : { error: `${field.key} must be one of: ${field.options.join(', ')}` };
+}
+
+// A plain http(s) address (the same rule as the one in lib/detectionnotice.js), or '' for none. -> { value } (normalised) or { error }
+function checkUrl(field, raw) {
+  if (raw === '') return { value: '' };
+  const clean = cleanBaseUrl(raw);
+  return clean === null ? { error: `${field.key} must be a plain http:// or https:// address, like http://raspberrypi.local/camdash — or empty for none` } : { value: clean };
+}
+
+// Telegram chat ids: a list or a comma separated text -> { value: 'id1,id2' } (no blanks, no repeats) or { error }. An array is
+// accepted because config.js may hold one.
+function checkChatIds(field, raw) {
+  if (typeof raw !== 'string' && !Array.isArray(raw)) return { error: `${field.key} must be text: chat ids separated by commas` };
+  const ids = [];
+  for (const entry of chatIdEntries(raw)) {
+    if (!CHAT_ID_RE.test(entry)) return { error: `${field.key}: "${entry.slice(0, 40).replace(CONTROL_CHARS_G, '?')}" is not a chat id (a number, a negative number for a group, or @channelname)` };
+    if (!ids.includes(entry)) ids.push(entry);
+  }
+  return { value: ids.join(',') };
+}
+
+// The address the HTTP port listens on: an IP address or a host name, letters, digits and . : _ - only. -> { value } or { error }
+const HOST_RE = /^[A-Za-z0-9._:-]{1,253}$/;
+function checkHost(field, raw) {
+  return HOST_RE.test(raw) ? { value: raw } : { error: `${field.key} must be an address or host name, like 0.0.0.0 or 127.0.0.1` };
+}
+
 function checkValue(field, raw) {
   if (field.type === 'float') return checkFloat(field, raw);
   if (field.type === 'bool') return checkBool(field, raw);
@@ -124,6 +97,7 @@ function checkValue(field, raw) {
     if (!Number.isSafeInteger(n) || n < field.min || n > field.max) return { error: `${field.key} must be a whole number between ${field.min} and ${field.max}` };
     return { value: n };
   }
+  if (field.type === 'chatids') return checkChatIds(field, raw);
   if (typeof raw !== 'string') return { error: `${field.key} must be text` };
   if (CONTROL_CHARS.test(raw)) return { error: `${field.key} must not contain control characters or line breaks` };
   if (field.type === 'secret') {
@@ -133,6 +107,10 @@ function checkValue(field, raw) {
   }
   const v = raw.trim();
   if (field.type === 'sound') return v === '' || sounds.isSoundName(v) ? { value: v } : { error: `${field.key} must be the name of a sound file (or empty for no sound)` };
+  if (field.type === 'choice') return checkChoice(field, v);
+  if (field.type === 'url') return checkUrl(field, v);
+  if (field.type === 'host') return checkHost(field, v);
+  if (field.type === 'argv') return { error: `${field.key} is a command and cannot be set from here` };
   if (v.length < field.min || v.length > field.max) return { error: `${field.key} must be ${field.min}-${field.max} characters long` };
   return { value: v };
 }
@@ -183,6 +161,9 @@ function parseOverrides(text) {
     return { overrides, warnings: ['the system settings file is not valid JSON — ignored, config.js is used'] };
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { overrides, warnings: ['the system settings file is not a JSON object — ignored'] };
+  for (const key of LOCKED_KEYS) {
+    if (obj[key] !== undefined) warnings.push(`system settings file: ${key} is locked (it decides what the relay runs) — ignored, set it in config.js`);
+  }
   for (const key of OVERRIDE_KEYS) {
     if (obj[key] === undefined) continue;
     const r = checkValue(BY_KEY[key], obj[key]);
@@ -203,23 +184,40 @@ function configValue(field, base) {
   return field.config.reduce((v, k) => (v !== null && typeof v === 'object' ? v[k] : undefined), base);
 }
 
+// A copy of `obj` with `value` at `path` (a list of keys); the blocks on the way are copied, never changed, and a block that
+// is missing or is not a plain object is replaced by one.
+function setPath(obj, path, value) {
+  const [head, ...rest] = path;
+  if (rest.length === 0) return { ...obj, [head]: value };
+  const child = obj[head];
+  const block = child !== null && typeof child === 'object' && !Array.isArray(child) ? child : {};
+  return { ...obj, [head]: setPath(block, rest, value) };
+}
+
 // config.js with the saved settings laid over it. A setting that config.js nests (personScanConfidence ->
-// personScan.confidence) is put where the code that reads config.js looks for it; `base` itself is not changed.
+// personScan.confidence, telegramChatId -> notifications.telegram.chatId) is put where the code that reads config.js
+// looks for it; `base` itself is not changed.
 function mergeConfig(base, overrides) {
-  const merged = { ...base };
+  let merged = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
     const f = BY_KEY[key];
-    if (!f || !f.config) { merged[key] = value; continue; }
-    const [block, leaf] = f.config;
-    merged[block] = { ...(merged[block] !== null && typeof merged[block] === 'object' ? merged[block] : {}), [leaf]: value };
+    merged = setPath(merged, f && f.config ? f.config : [key], value);
   }
   return merged;
 }
 
 // The value a field has right now and where it comes from.
+// What an environment variable says for a field. A true/false switch whose variable has an older meaning keeps it
+// (envFlag in lib/sysfields.js): RELAY_HSTS is on only for exactly "1", READ_KEY_REQUIRED is off only for exactly "0".
+function envValue(field, raw) {
+  const flag = field.envFlag;
+  if (!flag) return raw;
+  return flag.trueWhen !== undefined ? raw === flag.trueWhen : raw !== flag.falseWhen;
+}
+
 function effective(field, base, overrides, env) {
   const envName = field.env;
-  if (envName && env[envName] !== undefined) return { value: env[envName], source: 'environment' };
+  if (envName && env[envName] !== undefined) return { value: envValue(field, env[envName]), source: 'environment' };
   if (overrides[field.key] !== undefined) return { value: overrides[field.key], source: 'settings' };
   const fromConfig = configValue(field, base);
   if (fromConfig !== undefined && fromConfig !== null && fromConfig !== '') return { value: fromConfig, source: 'config.js' };
@@ -238,12 +236,25 @@ function currentValue(key, { base, overrides, env }) {
 // What GET /system-settings returns: the schema plus the current values. Secrets are
 // NEVER sent back — only whether one is set.
 // How a value is shown to the settings page, per type (a switch is the text "true" / "false", like the page sends it).
-const VIEW_VALUE = { int: Number, float: Number, bool: Boolean, string: String, secret: String, sound: String };
+const VIEW_VALUE = {
+  int: Number,
+  float: Number,
+  bool: (v) => v === true || v === 'true',
+  string: String,
+  secret: String,
+  sound: String,
+  choice: String,
+  url: String,
+  chatids: (v) => (Array.isArray(v) ? v.join(',') : String(v)),
+  host: String,
+  argv: (v) => (Array.isArray(v) ? v.slice() : []),
+};
 
 // soundNames: the sounds in the folder right now — what a `sound` setting can be set to (sent as its `options`).
 function buildView({ base, overrides, alarmRecordSeconds, env, soundNames = [] }) {
   const fields = FIELDS.map((f) => {
-    const out = { key: f.key, type: f.type, label: f.label, help: f.help, group: f.group, restart: f.restart };
+    const out = { key: f.key, type: f.type, label: f.label, help: f.help, group: f.group, tier: f.tier, restart: f.restart };
+    if (f.locked) out.locked = true;
     if (f.type === 'secret') {
       out.min = f.min; out.max = f.max;
       const e = effective(f, base, overrides, env);
@@ -256,7 +267,9 @@ function buildView({ base, overrides, alarmRecordSeconds, env, soundNames = [] }
       out.min = f.min; out.max = f.max; out.value = VIEW_VALUE[f.type](e.value); out.source = e.source;
       if (f.type === 'float') { out.step = f.step; out.minExclusive = Boolean(f.minExclusive); }
       if (f.type === 'sound') out.options = soundNames.slice();
+      if (f.type === 'choice') out.options = f.options.slice();
     }
+    if (f.type !== 'secret' && f.default !== undefined) out.default = VIEW_VALUE[f.type](f.default);
     out.envOverride = Boolean(f.env && env[f.env] !== undefined);
     if (out.envOverride) out.envName = f.env;
     return out;
@@ -270,6 +283,11 @@ function buildView({ base, overrides, alarmRecordSeconds, env, soundNames = [] }
 // (`soundNames`; left out = not checked, which is what a caller without a folder gets): one that was deleted since
 // but is still the saved choice is not an error until somebody picks it again.
 //   -> { error } | { overrides, alarmRecordSeconds, changed: [keys], restartRequired }
+// Is `raw` what the environment variable already says — as the text in it, or as the value the page was shown for it?
+function echoesEnvironment(field, raw, shownValue, env) {
+  return String(raw) === String(env[field.env]) || String(raw) === String(shownValue);
+}
+
 function applyUpdate({ base, overrides, alarmRecordSeconds, env, soundNames }, values) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) return { error: 'send the settings as a JSON object: { "key": value, ... }' };
   const nextOverrides = { ...overrides };
@@ -280,10 +298,15 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env, soundNames }, v
     const f = BY_KEY[key];
     if (!f) return { error: `unknown setting: ${key}` };
     const raw = values[key];
+    if (f.locked) {
+      // Not an error when it is merely echoed back unchanged by a page that shows it.
+      if (JSON.stringify(raw) === JSON.stringify(effective(f, base, overrides, env).value)) continue;
+      return { error: `${key} is locked: it decides what program the relay runs, so it can only be changed in config.js on the machine itself` };
+    }
     if (f.type === 'secret' && (raw === '' || raw === null || raw === undefined)) continue;
     if (f.env && env[f.env] !== undefined) {
       // Not an error when it is merely echoed back unchanged by the page.
-      if (f.type !== 'secret' && String(raw) === String(env[f.env])) continue;
+      if (f.type !== 'secret' && echoesEnvironment(f, raw, effective(f, base, overrides, env).value, env)) continue;
       return { error: `${key} is set by the ${f.env} environment variable and cannot be changed here` };
     }
     const r = checkValue(f, raw);
@@ -306,6 +329,12 @@ function applyUpdate({ base, overrides, alarmRecordSeconds, env, soundNames }, v
     changed.push(key);
     if (f.restart) restartRequired = true;
   }
+  if (changed.includes('authLockSeconds') || changed.includes('authLockMaxSeconds')) {
+    const first = Number(effective(BY_KEY.authLockSeconds, base, nextOverrides, env).value);
+    const longest = Number(effective(BY_KEY.authLockMaxSeconds, base, nextOverrides, env).value);
+    if (longest < first) return { error: 'authLockMaxSeconds must not be shorter than authLockSeconds' };
+  }
+
   const port = effective(BY_KEY.port, base, nextOverrides, env).value;
   const pushPort = effective(BY_KEY.pushPort, base, nextOverrides, env).value;
   if (String(port) === String(pushPort)) return { error: 'port and pushPort must be different' };

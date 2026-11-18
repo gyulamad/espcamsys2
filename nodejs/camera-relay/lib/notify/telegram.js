@@ -128,4 +128,4 @@ class TelegramNotifier extends Notifier {
   }
 }
 
-module.exports = { TelegramNotifier, resolveTelegramConfig, buildMultipart, HOST, MAX_CAPTION_LENGTH };
+module.exports = { TelegramNotifier, resolveTelegramConfig, buildMultipart, chatIdEntries, CHAT_ID_RE, HOST, MAX_CAPTION_LENGTH };

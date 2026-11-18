@@ -13,8 +13,17 @@
 //
 // Memory is bounded: at most `maxEntries` sources are remembered; expired ones go first, then the oldest.
 
+const DEFAULTS = Object.freeze({
+  maxFailures: 10,
+  windowMs: 60 * 1000,
+  baseLockMs: 60 * 1000,
+  maxLockMs: 15 * 60 * 1000,
+  forgetMs: 30 * 60 * 1000,
+  maxEntries: 2000,
+});
+
 class Lockout {
-  constructor({ maxFailures = 10, windowMs = 60 * 1000, baseLockMs = 60 * 1000, maxLockMs = 15 * 60 * 1000, forgetMs = 30 * 60 * 1000, maxEntries = 2000 } = {}) {
+  constructor({ maxFailures = DEFAULTS.maxFailures, windowMs = DEFAULTS.windowMs, baseLockMs = DEFAULTS.baseLockMs, maxLockMs = DEFAULTS.maxLockMs, forgetMs = DEFAULTS.forgetMs, maxEntries = DEFAULTS.maxEntries } = {}) {
     this.maxFailures = maxFailures;
     this.windowMs = windowMs;
     this.baseLockMs = baseLockMs;
@@ -86,4 +95,4 @@ class Lockout {
   }
 }
 
-module.exports = { Lockout };
+module.exports = { Lockout, DEFAULTS };

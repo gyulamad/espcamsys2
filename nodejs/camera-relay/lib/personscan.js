@@ -18,6 +18,11 @@ const MAX_REASON_LENGTH = 200;
 const CONFIDENCE = Object.freeze({ default: 0.4, min: 0, max: 1 });   // min is exclusive: 0 < c <= 1
 const isValidConfidence = (n) => typeof n === 'number' && Number.isFinite(n) && n > CONFIDENCE.min && n <= CONFIDENCE.max;
 
+// Where the detector script and the model are when config.js says nothing: relative to the relay's own folder, written
+// with '/' (the settings page shows them like that); resolveScanConfig() makes them absolute for the platform.
+const DEFAULT_SCRIPT = 'tools/person_scan.py';
+const DEFAULT_MODEL = 'models/person.onnx';
+
 const DEFAULTS = Object.freeze({
   enabled: false,        // switched on once the model is installed (MANUAL.md, "Sorting out footage without a person")
   auto: true,            // scan every recording right after it is saved
@@ -62,8 +67,8 @@ function resolveScanConfig(raw, relayDir) {
     auto: flag('auto'),
     action,
     python: text('python', DEFAULTS.python),
-    script: path.resolve(relayDir, text('script', path.join('tools', 'person_scan.py'))),
-    model: path.resolve(relayDir, text('model', path.join('models', 'person.onnx'))),
+    script: path.resolve(relayDir, text('script', DEFAULT_SCRIPT)),
+    model: path.resolve(relayDir, text('model', DEFAULT_MODEL)),
     confidence: number(given.confidence, DEFAULTS.confidence, isValidConfidence, 'confidence', warnings),
     stride,
     timeoutMs: number(given.timeoutSeconds, DEFAULTS.timeoutSeconds, inRange(10, 86400), 'timeoutSeconds', warnings) * 1000,
@@ -137,6 +142,6 @@ function parseScanResult(run) {
 }
 
 module.exports = {
-  ACTIONS, NO_PERSON_DIR, THUMB_SUFFIX, DEFAULTS, CONFIDENCE, isValidConfidence,
+  ACTIONS, NO_PERSON_DIR, THUMB_SUFFIX, DEFAULTS, DEFAULT_SCRIPT, DEFAULT_MODEL, CONFIDENCE, isValidConfidence,
   resolveScanConfig, thumbnailPath, noPersonDir, noPersonPath, buildScanArgs, scanEnv, parseScanResult,
 };

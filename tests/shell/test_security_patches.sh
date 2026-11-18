@@ -42,9 +42,12 @@ sc_has "$RECORDER" 'http\.addHeader\("X-Api-Key", g_cfg\.apiKey\.c_str\(\)\)' \
 # ── Patch 0002 — bind the relay's HTTP to 127.0.0.1 (SUPERSEDED by 0007: it broke the detectors) ──
 sc_group "patch 0002 (superseded by 0007)"
 
-sc_has "$RELAY" "RELAY_BIND = process\.env\.RELAY_BIND \|\| '0\.0\.0\.0'" \
+# F-29 T6a: RELAY_BIND is a settings row now; the relay reads it through relaySetting() and the default is in the table.
+sc_has "$RELAY" "RELAY_BIND = relaySetting\('relayBind'\)" \
+    "relay: RELAY_BIND is read from the settings (environment > store > config.js > default)"
+sc_has "nodejs/camera-relay/lib/sysfields.js" "key: 'relayBind'.*default: '0\.0\.0\.0'" \
     "relay: RELAY_BIND defaults to 0.0.0.0 (patch 0002 reverted by 0007)"
-sc_lacks "$RELAY" "RELAY_BIND = process\.env\.RELAY_BIND \|\| '127\.0\.0\.1'" \
+sc_lacks "nodejs/camera-relay/lib/sysfields.js" "key: 'relayBind'.*default: '127\.0\.0\.1'" \
     "relay: RELAY_BIND does NOT default to 127.0.0.1 (would break detectors)"
 
 # ── Patch 0003 — cap the php://input reads (PHP-H1) ──

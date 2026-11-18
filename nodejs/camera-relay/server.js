@@ -71,6 +71,9 @@ const loadedOverrides = (() => {
 let systemOverrides = loadedOverrides.overrides;
 for (const w of loadedOverrides.warnings) console.warn(`[config] ${w}`);
 const config = sysconfig.mergeConfig(baseConfig, systemOverrides);
+// One setting's value right now: environment > saved settings > config.js > default, checked (a bad value is the default).
+// Reads systemOverrides each time, so a value saved without a restart (`restart: false` in lib/sysfields.js) counts at once.
+const relaySetting = (key) => sysconfig.currentValue(key, { base: baseConfig, overrides: systemOverrides, env: process.env });
 
 const app = express();
 const PORT = process.env.PORT || config.port;
@@ -85,7 +88,7 @@ const API_KEY = process.env.CAM_KEY || config.camKey; // must match API_KEY in e
 // explicitly opts in (RELAY_HSTS=1) AND the relay is reachable over TLS — the
 // default plain-HTTP deployment must NOT advertise HSTS, otherwise a later
 // move to plain HTTP would break every cached client.
-const RELAY_HSTS = process.env.RELAY_HSTS === '1';
+const RELAY_HSTS = relaySetting('relayHsts');
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'no-referrer');
@@ -216,8 +219,7 @@ const readAuthThrottle = new Throttle(60 * 1000); // reads (see requireReadKey) 
 // connection is dropped). The camera key and the control key count separately, so a camera with a stale key
 // cannot lock the dashboard out. A request with NO key at all is not a guess and is not counted. Per address
 // (req.socket.remoteAddress — never a header the sender controls). The environment variables exist for the tests.
-const authEnvInt = (name, fallback) => { const v = parseInt(process.env[name], 10); return Number.isSafeInteger(v) && v > 0 ? v : fallback; };
-const lockoutOptions = () => ({ maxFailures: authEnvInt('AUTH_MAX_FAILURES', 10), baseLockMs: authEnvInt('AUTH_LOCK_SECONDS', 60) * 1000, maxLockMs: authEnvInt('AUTH_LOCK_MAX_SECONDS', 900) * 1000 });
+const lockoutOptions = () => ({ maxFailures: relaySetting('authMaxFailures'), baseLockMs: relaySetting('authLockSeconds') * 1000, maxLockMs: relaySetting('authLockMaxSeconds') * 1000 });
 const AUTH_LOCKS = { camera: new Lockout(lockoutOptions()), control: new Lockout(lockoutOptions()) };
 
 // One key check, with the books kept. -> { state: 'ok' | 'bad' | 'locked', retryAfterSec? }
@@ -506,8 +508,8 @@ const CONTROL_KEY = fromEnv('CONTROL_KEY', config.controlKey || '');
 // once it is streaming. A camera on a very weak WiFi link can take many seconds
 // per frame, but bytes still trickle in; a full minute of nothing means the
 // connection is gone (a half-open TCP connection never tells us by itself).
-const PUSH_AUTH_TIMEOUT_MS = connection.parseTimeoutMs(fromEnv('PUSH_AUTH_TIMEOUT_MS'), 10 * 1000);
-const PUSH_IDLE_TIMEOUT_MS = connection.parseTimeoutMs(fromEnv('PUSH_IDLE_TIMEOUT_MS'), 60 * 1000);
+const PUSH_AUTH_TIMEOUT_MS = relaySetting('pushAuthTimeoutMs');
+const PUSH_IDLE_TIMEOUT_MS = relaySetting('pushIdleTimeoutMs');
 const PUSH_KEEPALIVE_MS = 20 * 1000;
 
 function offText(state) {
@@ -778,7 +780,7 @@ app.get('/mux', requireReadKey, (req, res) => {
 // picture, a picture that never comes, the dashboard asking for one that does not exist): a detector
 // that "does not show up" must be explainable from the relay's log alone.
 const MAX_DETECTORS = 64;                     // a wrong or hostile id must not grow memory without bound
-const NO_PICTURE_WARN_MS = connection.parseTimeoutMs(fromEnv('DETECTOR_NO_PICTURE_WARN_MS'), 10 * 1000); // connected and reporting numbers, but no picture for this long: say so
+const NO_PICTURE_WARN_MS = relaySetting('detectorNoPictureWarnMs'); // connected and reporting numbers, but no picture for this long: say so
 const MAX_BAD_MESSAGES_IN_A_ROW = 25;         // then the connection is not a detector's: drop it
 const detectors = {}; // id -> record, see getDetector()
 const DETECTOR_VIEW_MINUTES = detectorview.viewMinutes(fromEnv('DETECTOR_VIEW_MINUTES', config.detectorViewMinutes)); // how long a detector streams after somebody asked (10 by default)
@@ -1240,7 +1242,7 @@ app.post('/restart', requireControlKey, (req, res) => {
   // for the next call to drop it again — a quiet DoS that looks like flapping.
   // RESTART_COOLDOWN_MS (default 30s) is the floor between two accepted calls;
   // a request inside the window is answered 429 with Retry-After.
-  const cooldownMs = parseInt(process.env.RESTART_COOLDOWN_MS, 10) || 30 * 1000;
+  const cooldownMs = relaySetting('restartCooldownMs');
   const now = Date.now();
   const sinceLast = now - lastRestartRequestAt;
   if (sinceLast < cooldownMs) {
@@ -1424,7 +1426,7 @@ function requireDashboardKey(req, res, next) {
 // shows "set controlKey" instead of live video, which is the safer default. The relay already logs a warning
 // at startup when controlKey is empty. Operators who genuinely want keyless reads (e.g. a trusted LAN with no
 // Tor exposure) can opt in with READ_KEY_REQUIRED=0 in the relay's environment.
-const READ_KEY_REQUIRED = process.env.READ_KEY_REQUIRED !== '0';
+const READ_KEY_REQUIRED = relaySetting('readKeyRequired');
 function requireReadKey(req, res, next) {
   if (!CONTROL_KEY) {
     if (READ_KEY_REQUIRED) {
@@ -2145,7 +2147,7 @@ function triggerAlarmAll(source = 'HTTP') {
 // logged at startup. Without it, a keyless POST is refused with 401 (the same
 // answer every other camera-keyed route gives), which closes the easy
 // disk-filling DoS where anyone on the LAN could POST /alarm/all in a loop.
-const ALLOW_KEYLESS_ALARM = process.env.ALLOW_KEYLESS_ALARM === '1';
+const ALLOW_KEYLESS_ALARM = relaySetting('allowKeylessAlarm');
 
 // (review NODE-002) when ALLOW_KEYLESS_ALARM is set, POST /alarm/:id and
 // /alarm/all accept requests with no key. Anyone who can reach the relay's
@@ -2155,7 +2157,7 @@ const ALLOW_KEYLESS_ALARM = process.env.ALLOW_KEYLESS_ALARM === '1';
 // indefinitely. A per-source throttle (one accepted alarm per minute per IP,
 // env-tunable) is the cheapest mitigation that keeps the legacy opt-in usable
 // for genuine old firmware without leaving the door wide open.
-const KEYLESS_ALARM_GAP_MS = parseInt(process.env.KEYLESS_ALARM_GAP_MS, 10) || 60 * 1000;
+const KEYLESS_ALARM_GAP_MS = relaySetting('keylessAlarmGapMs');
 const keylessAlarmThrottle = new Throttle(KEYLESS_ALARM_GAP_MS);
 
 function requireCameraKeyForAlarm(req, res, next) {
@@ -2188,20 +2190,20 @@ function requireCameraKeyForAlarm(req, res, next) {
 // Hard cap on simultaneous recordings to keep a keyless (or compromised)
 // alarm source from filling the disk: once this many cameras are recording,
 // further alarm-triggered recordings are refused with 503.
-const MAX_ALARM_RECORDINGS = parseInt(process.env.MAX_ALARM_RECORDINGS, 10) || 16;
+const maxAlarmRecordings = () => relaySetting('maxAlarmRecordings');   // read each time: a saved change counts at once
 function alarmRecordingAllowed() {
   const active = Object.values(cameras).filter((c) => c && c.recording).length;
-  return active < MAX_ALARM_RECORDINGS;
+  return active < maxAlarmRecordings();
 }
 
 // Registered before /alarm/:id so "all" isn't taken as a literal camera id.
 app.post('/alarm/all', requireCameraKeyForAlarm, (req, res) => {
-  if (!alarmRecordingAllowed()) return res.status(503).json({ error: `too many concurrent recordings (cap ${MAX_ALARM_RECORDINGS}) — refuse to start more` });
+  if (!alarmRecordingAllowed()) return res.status(503).json({ error: `too many concurrent recordings (cap ${maxAlarmRecordings()}) — refuse to start more` });
   res.json({ cameras: triggerAlarmAll() });
 });
 
 app.post('/alarm/:id', requireCameraKeyForAlarm, (req, res) => {
-  if (!alarmRecordingAllowed()) return res.status(503).json({ error: `too many concurrent recordings (cap ${MAX_ALARM_RECORDINGS}) — refuse to start more` });
+  if (!alarmRecordingAllowed()) return res.status(503).json({ error: `too many concurrent recordings (cap ${maxAlarmRecordings()}) — refuse to start more` });
   res.json(triggerAlarm(req.params.id));
 });
 
@@ -2525,7 +2527,7 @@ app.use((err, req, res, next) => {
 // requireReadKey() failing closed when no controlKey is set (above), not
 // restricting the bind. Operators who genuinely want loopback-only (e.g.
 // everything on one machine) can still opt in with RELAY_BIND=127.0.0.1.
-const RELAY_BIND = process.env.RELAY_BIND || '0.0.0.0';
+const RELAY_BIND = relaySetting('relayBind');
 
 // Known-weak / template values for camKey and controlKey that must never reach
 // production. Reported by the relay at startup so a copied example.config.js
@@ -2851,7 +2853,7 @@ function viewerSummary() {
     + `${dets.filter((d) => d.connected).length}/${dets.length} detectors connected, `
     + `${muxViewers} mux viewers`;
 }
-if (fromEnv('LOOPWATCH', '1') !== '0') {
+if (relaySetting('loopWatch')) {
   createLoopWatch({ log: relayLog, snapshot: viewerSummary }).start();
 }
 

@@ -125,5 +125,5 @@ function createDetectionNotifier({ notifier, config, throttle, now, files, log }
 
 module.exports = {
   resolveNoticeConfig, footageUrl, formatBytes, formatTime, buildPersonText, createDetectionNotifier,
-  DEFAULT_COOLDOWN_SECONDS, MAX_COOLDOWN_SECONDS,
+  DEFAULT_COOLDOWN_SECONDS, MAX_COOLDOWN_SECONDS, cleanBaseUrl,
 };

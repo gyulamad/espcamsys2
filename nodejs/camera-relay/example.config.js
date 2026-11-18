@@ -3,6 +3,11 @@
 // committed; this example file is what stays in the repo.
 //
 //   cp example.config.js config.js
+//
+// Every value below is also a setting you can change from the dashboard / POST /system-settings (a saved value
+// beats config.js; a few have an environment variable that beats both). SETTINGS.md lists all of them with
+// their defaults. Only the programs the relay runs (personScan.python, personScan.script, alarmSounds.player)
+// are locked: they can only be changed here, on the machine itself.
 
 module.exports = {
   port: 8080,       // HTTP: /mux, /snapshot, /status (and legacy /upload)

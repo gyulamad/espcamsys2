@@ -3,6 +3,7 @@
 const { test, assertEqual, assertTrue, summarize } = require('./framework');
 const sc = require('../../nodejs/camera-relay/lib/sysconfig');
 const ps = require('../../nodejs/camera-relay/lib/personscan');
+const { FIELD_TYPES } = require('../../nodejs/camera-relay/lib/sysfields');
 
 const BASE = { port: 8080, pushPort: 8081, camKey: 'cam-secret-1', controlKey: 'control-secret-1', preRollSeconds: 5 };
 const state = (extra = {}) => Object.assign({ base: BASE, overrides: {}, alarmRecordSeconds: 60, env: {} }, extra);
@@ -10,7 +11,7 @@ const state = (extra = {}) => Object.assign({ base: BASE, overrides: {}, alarmRe
 test('every field has a unique key, a group, a label and a help text', () => {
   const keys = sc.FIELDS.map((f) => f.key);
   assertEqual(new Set(keys).size, keys.length);
-  for (const f of sc.FIELDS) { assertTrue(f.group && f.label && f.help, f.key); assertTrue(['int', 'float', 'bool', 'string', 'secret', 'sound'].includes(f.type), f.key); }
+  for (const f of sc.FIELDS) { assertTrue(f.group && f.label && f.help, f.key); assertTrue(FIELD_TYPES.includes(f.type), f.key); }
 });
 
 test('checkValue: integers are range checked and parsed from text or numbers', () => {
@@ -278,8 +279,9 @@ test('parseOverrides: a saved path is still honoured as before (only changes mad
 
 test('every path setting is marked with what kind it is (so none is missed by the check)', () => {
   const paths = sc.FIELDS.filter((f) => f.path).map((f) => f.key).sort();
-  assertEqual(paths, ['deviceSettingsDir', 'firmwareDir', 'logFile', 'soundsDir', 'switchFile']);
-  for (const f of sc.FIELDS.filter((x) => x.type === 'string')) assertTrue(f.path, `${f.key} is a text setting that is not confined`);
+  assertEqual(paths, ['deviceSettingsDir', 'firmwareDir', 'logFile', 'personScanModel', 'soundsDir', 'switchFile']);
+  // free text is either a confined path or locked (never set from here: config.js only); the other kinds of text have their own check
+  for (const f of sc.FIELDS.filter((x) => x.type === 'string')) assertTrue(f.path || f.locked, `${f.key} is a text setting that is not confined`);
 });
 
 // ── alarm sounds ──
@@ -457,7 +459,7 @@ test('personScanEnabled: the first setting of the Person check group, off by def
   assertEqual([f.type, f.group, f.restart, f.env, f.default, f.config], ['bool', 'Person check', false, null, ps.DEFAULTS.enabled, ['personScan', 'enabled']]);
   assertTrue(f.label && f.help, 'label and help');
   const inGroup = sc.FIELDS.filter((x) => x.group === 'Person check').map((x) => x.key);
-  assertEqual(inGroup, ['personScanEnabled', 'personScanConfidence']);
+  assertEqual(inGroup.slice(0, 2), ['personScanEnabled', 'personScanConfidence']);   // the page's first two; the rest of config.js's personScan block follows
 });
 
 test('checkValue (bool): true or false, as a boolean or as the text true / false — nothing else (no 1, yes, on)', () => {
