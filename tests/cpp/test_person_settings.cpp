@@ -85,12 +85,10 @@ TEST(the_example_person_template_is_a_valid_complete_configuration) {
     std::string here = __FILE__;
     std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
     const char* file = "example.person.template.txt";
-    // Every setting except MOTION_EMA_PCT: the template keeps the motion auto-calibration off
-    // (MOTION_EMA_LEN=0), and then its percentage is not asked for. The optional settings (SETUP_MODE,
-    // SETUP_PASSWORD) are left out on purpose: a password placeholder in a template would become a real one.
-    // A template may carry defaulted settings too (they are stored, so the board shows them in its listing
-    // and EXPORT prints them); what matters is that it completes the configuration.
-    const size_t expected = requiredKeyCount(PERSON_SCHEMA) - 1;
+    // EVERY setting except MOTION_EMA_PCT (the template keeps the motion auto-calibration off with
+    // MOTION_EMA_LEN=0, and then its percentage is not asked for) and the optional pair SETUP_MODE /
+    // SETUP_PASSWORD (a password placeholder in a template would become a real one).
+    const size_t expected = PERSON_SCHEMA.count - 3;
     std::ifstream f(dir + "../../Arduino/templates/" + file);
     std::string line;
     TEST_ASSERT(static_cast<bool>(std::getline(f, line)), (std::string(file) + ": can be read").c_str());
@@ -99,7 +97,18 @@ TEST(the_example_person_template_is_a_valid_complete_configuration) {
     for (size_t e = 0; e < errs.size(); ++e) TEST_ASSERT(false, errs[e].c_str());
     TEST_ASSERT(errs.empty(), (std::string(file) + ": is valid input").c_str());
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), (std::string(file) + ": completes the configuration").c_str());
-    TEST_ASSERT(st.m.size() >= expected, (std::string(file) + ": covers every setting without a default (defaulted ones may be there too)").c_str());
+    TEST_ASSERT_EQ((int)st.m.size(), (int)expected, (std::string(file) + ": sets exactly the settings it should").c_str());
+
+    // And every value it carries for a defaulted setting IS that default: the template doubles as the
+    // example of what a board that stored nothing runs with, so a default that drifts from it would say
+    // one thing in the README's table and do another on the board.
+    for (size_t i = 0; i < PERSON_META_COUNT; ++i) {
+        if (!PERSON_META[i].defaultValue) continue;
+        std::map<std::string, std::string>::const_iterator it = st.m.find(PERSON_META[i].name);
+        if (it != st.m.end())
+            TEST_ASSERT_EQ(it->second, std::string(PERSON_META[i].defaultValue),
+                           ((std::string(file) + ": ") + PERSON_META[i].name + " carries its default").c_str());
+    }
 }
 
 // ── what is needed when ─────────────────────────────────────────────────
