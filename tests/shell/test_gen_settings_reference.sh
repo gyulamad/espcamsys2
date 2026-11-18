@@ -81,8 +81,10 @@ check "regenerating writes the new default" "$(grep -qF '| `PUSH_WR_TMO_MS` | Pu
 check "--check passes again after regenerating" "$("$TREE/$GEN" --check >/dev/null 2>&1 && echo 0 || echo 1)"
 
 # (b) a relay default changes
-sed -i "s|key: 'pushPort', type: 'int', min: 1, max: 65535, default: 8081,|key: 'pushPort', type: 'int', min: 1, max: 65535, default: 8082,|" "$TREE/nodejs/camera-relay/lib/sysconfig.js"
-check "the test really changed the relay table" "$(grep -qF 'default: 8082' "$TREE/nodejs/camera-relay/lib/sysconfig.js" && echo 0 || echo 1)"
+# T6a moved the rows from sysconfig.js (which now only re-exports FIELDS) to lib/sysfields.js,
+# and the row carries its tier between the key and the type: match the table where it lives.
+sed -i "s|key: 'pushPort', tier: 'advanced', type: 'int', min: 1, max: 65535, default: 8081,|key: 'pushPort', tier: 'advanced', type: 'int', min: 1, max: 65535, default: 8082,|" "$TREE/nodejs/camera-relay/lib/sysfields.js"
+check "the test really changed the relay table" "$(grep -qF 'default: 8082' "$TREE/nodejs/camera-relay/lib/sysfields.js" && echo 0 || echo 1)"
 "$TREE/$GEN" --check >/dev/null 2>&1; status=$?
 check "--check FAILS after a relay default changed" "$([ "$status" -eq 1 ] && echo 0 || echo 1)"
 "$TREE/$GEN" >/dev/null 2>&1

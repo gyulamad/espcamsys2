@@ -635,7 +635,10 @@ camtest_test('the generated schema has the person detector: the calibration sett
         if ($k['locked']) { $locked[] = $k['name']; }
     }
     sort($locked);
-    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'PERSON_GPIO', 'SERVER_HOST', 'SETUP_PASSWORD', 'WIFI']);
+    // T5b locked OTA_ENABLED and SYNC_ENABLED too (serial-only switches, review ARD-009):
+    // they gate the update and the dashboard's settings channels, so the dashboard may not
+    // switch either off. The list stays alphabetical because it is sorted above.
+    camtest_assert_equal($locked, ['API_KEY', 'DETECTOR_ID', 'HTTP_PORT', 'OTA_ENABLED', 'PERSON_GPIO', 'SERVER_HOST', 'SETUP_PASSWORD', 'SYNC_ENABLED', 'WIFI']);
     foreach (['DARK_THRESH', 'MOTION_THRESH', 'MOTION_HOLD_S', 'MOTION_X0', 'MOTION_Y0', 'MOTION_X1', 'MOTION_Y1', 'MOTION_EMA_LEN', 'MOTION_EMA_PCT', 'DETECT_THRESH', 'CLEAR_THRESH'] as $n) {
         camtest_assert_true(in_array($n, $names, true), $n);
     }
