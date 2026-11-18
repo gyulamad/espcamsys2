@@ -1,0 +1,22 @@
+# toolchain.versions — the exact versions of everything outside this repository that the firmware is built with.
+# Plain bash (sourced by tools/sketch_build_lib.sh); the one place these numbers are written down. Used by
+# tools/compile_sketches.sh (so by run_tests.sh and CI) and by ota-deploy.sh, so what is tested is what is deployed.
+#
+# Nothing here follows "latest". Change a value only together with a successful build of both sketches
+# (tools/compile_sketches.sh) and say why in the commit. Why it matters: on 2026-11-17 esp32 core 3.3.13 came out
+# with a rebuilt library bundle whose esp-tflite-micro (>= 1.4.2) moved tensorflow/lite/schema/schema_generated.h
+# to tensorflow/lite/micro/schema/, and the person detector stopped compiling although nothing in this repository
+# had changed.
+
+# The esp32 Arduino core. It brings the compiler AND the TFLite library (esp-tflite-micro, inside its prebuilt
+# libs) the person detector includes: a separate clone of esp-tflite-micro is not used (arduino-cli ignores a folder
+# without library.properties and without a header in its root). 3.3.12 (2026-09-18) has
+# tensorflow/lite/schema/schema_generated.h, which the detector sketch includes.
+ESP32_CORE_VERSION="3.3.12"
+
+# Where arduino-cli gets the esp32 core from.
+ESP32_BOARD_INDEX_URL="https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+
+# The arduino-cli the build was last verified with. It is the one program this repository cannot install for
+# you, so a different version only gets a warning from the scripts.
+ARDUINO_CLI_VERSION="1.6.0"

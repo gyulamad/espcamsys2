@@ -13,8 +13,9 @@
 # compiler's output is printed only for the ones that failed. Nothing is written into the repository
 # and nothing is flashed or published (ota-deploy.sh does that).
 #
-# Needs: arduino-cli with the esp32 core 3.x and the esp-tflite-micro library (DEVELOP.md, "Compiling the
-# sketches"). The board and the extra compile arguments are the ones of ota-deploy.sh: ota.conf (see
+# Needs: arduino-cli (DEVELOP.md, "Compiling the sketches"). The esp32 core, with the TFLite library inside it, is
+# the exact version of toolchain.versions; it is installed on the first run (SKETCH_TOOLCHAIN=system uses the
+# machine's own setup instead). The board and the extra compile arguments are the ones of ota-deploy.sh: ota.conf (see
 # ota.example.conf) if you have one, else the defaults.
 #
 # Environment:
@@ -56,6 +57,8 @@ if ! command -v arduino-cli >/dev/null 2>&1; then
     echo "compile_sketches: arduino-cli not found on PATH - install it and the esp32 core 3.x (DEVELOP.md, \"Compiling the sketches\")" >&2
     exit 2
 fi
+# The core is the pinned one (toolchain.versions), not whichever the machine has.
+ensure_pinned_toolchain || { echo "compile_sketches: the pinned toolchain is not available (see above)" >&2; exit 2; }
 # An unknown board means the core is not installed (or the FQBN is misspelled): say so, instead of
 # letting every sketch "fail to compile" for a reason that has nothing to do with the sketch.
 if ! arduino-cli board details --fqbn "$FQBN" >/dev/null 2>&1; then

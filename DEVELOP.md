@@ -49,11 +49,13 @@ By default the run prints one dot for every test case that passed, and the faile
 
 The C++ tests build only *parts* of the sketches (the logic headers, and blocks cut out of the `.ino` files) against desktop fakes, so a patch can pass all of them and still leave a sketch that does not compile — a name used above its declaration, a missing `#include`, a call the real core does not have. `run_tests.sh` therefore also compiles both sketch folders as a whole with the real toolchain, through `tools/compile_sketches.sh`. It writes nothing into the repository and flashes nothing. Run it before you start a patch (to know you start from a sketch that builds) and again before you finish it.
 
-One-time setup on the machine that runs the tests (the same toolchain `ota-deploy.sh` uses):
+The toolchain is **pinned**, never "latest": [`toolchain.versions`](toolchain.versions) is the one place that names the esp32 core version (`ESP32_CORE_VERSION`, currently 3.3.12), where it comes from, and the `arduino-cli` version the build was last verified with. The esp32 core brings the compiler *and* the TFLite library the person detector includes (`esp-tflite-micro`, inside the core's prebuilt libs), so a core update can break the detector without a line of this repository changing — core 3.3.13 (2026-11-17) did: its `esp-tflite-micro` is 1.4.2 or newer, where `tensorflow/lite/schema/schema_generated.h` moved to `tensorflow/lite/micro/schema/`. Change the pin only together with a successful `tools/compile_sketches.sh` and say why in the commit.
 
-1. Install [`arduino-cli`](https://arduino.github.io/arduino-cli/latest/installation/) and put it on `PATH`.
-2. Install the **esp32** core, version 3.x: add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` to `board_manager.additional_urls` (`arduino-cli config add board_manager.additional_urls <url>`), then `arduino-cli core update-index` and `arduino-cli core install esp32:esp32`.
-3. Have the `esp-tflite-micro` library where `arduino-cli` looks for libraries (step 1 of [ASSEMBLY.md](ASSEMBLY.md#2-optional-flash-a-person-detector-instead-tflite-micro) clones it into `~/Arduino/libraries`, which is its default); the person detector needs it.
+Setup on the machine that runs the tests:
+
+1. Install [`arduino-cli`](https://arduino.github.io/arduino-cli/latest/installation/) and put it on `PATH` (the scripts warn if its version is not the one in `toolchain.versions`).
+2. That is all: `tools/compile_sketches.sh` and `ota-deploy.sh` install the pinned core (3.3.12) into a private folder, `~/.cache/espcamsys-toolchain` (change it with `SKETCH_TOOLCHAIN_DIR`), on the first run — several hundred MB, later runs find it there — and your own `arduino-cli` setup is not touched. `SKETCH_TOOLCHAIN=system` skips this and uses your own setup as it is.
+3. There is no library to clone: `esp-tflite-micro` comes with the core (see [ASSEMBLY.md](ASSEMBLY.md#2-optional-flash-a-person-detector-instead-tflite-micro)).
 
 ```bash
 tools/compile_sketches.sh              # both sketches (default: all)

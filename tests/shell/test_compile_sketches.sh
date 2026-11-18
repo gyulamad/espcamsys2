@@ -25,6 +25,16 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/arduino-cli" <<'EOF'
 #!/usr/bin/env bash
 # fake arduino-cli: logs what it was asked, fails like the real one where the real one would
+# the pinned toolchain (toolchain.versions): an installed core is a line in $FAKE_CORE
+case "$1 $2" in
+    "core list")         [ -f "$FAKE_CORE" ] && { echo "ID          Installed Latest Name"; echo "esp32:esp32 $(cat "$FAKE_CORE") 3.3.13 esp32"; }; exit 0 ;;
+    "core update-index") echo "core update-index" >> "$FAKE_LOG"; exit 0 ;;
+    "core install")
+        [ "${FAKE_INSTALL_FAILS:-}" = 1 ] && { echo "Error: download failed" >&2; exit 1; }
+        echo "core install $3 data=$ARDUINO_DIRECTORIES_DATA urls=$ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS" >> "$FAKE_LOG"
+        echo "${3#*@}" > "$FAKE_CORE"; exit 0 ;;
+esac
+[ "$1" = version ] && { echo "arduino-cli  Version: ${FAKE_CLI_VERSION:-1.6.0} Commit: x Date: y"; exit 0; }
 case "$1 $2" in
     "board details")
         [ "${FAKE_NO_BOARD:-}" = 1 ] && { echo "Error: platform not installed" >&2; exit 1; }
@@ -61,8 +71,10 @@ chmod +x "$TMP/bin/arduino-cli"
 # FAKE_LOG is reset each time; OTA_CONF points at a config that does not exist unless the case sets it.
 run_script() {
     : > "$TMP/fake.log"
+    [ "${KEEP_CORE:-}" = 1 ] || rm -f "$TMP/core.installed"
     out="$TMP/out.txt"
-    PATH="$TMP/bin:$PATH" FAKE_LOG="$TMP/fake.log" OTA_CONF="${CASE_CONF:-$TMP/no-such.conf}" \
+    PATH="$TMP/bin:$PATH" FAKE_LOG="$TMP/fake.log" FAKE_CORE="$TMP/core.installed" \
+        SKETCH_TOOLCHAIN_DIR="$TMP/toolchain" OTA_CONF="${CASE_CONF:-$TMP/no-such.conf}" \
         bash "$SCRIPT" "$@" > "$out" 2>&1
     rc=$?
 }
@@ -75,6 +87,27 @@ check "...both real sketch folders were compiled, once each" $([ "$(compiled)" =
 check "...for the board ota-deploy.sh builds for" $(has "$TMP/fake.log" "fqbn=esp32:esp32:esp32cam:PartitionScheme=min_spiffs" && echo 0 || echo 1)
 check "...says so, and prints no compiler output for sketches that compiled" $(has "$out" "ok: every sketch compiles" && ! has "$out" "Sketch uses" && echo 0 || echo 1)
 check "...the board was checked before compiling" $(has "$TMP/fake.log" "board details --fqbn esp32:esp32:esp32cam:PartitionScheme=min_spiffs" && echo 0 || echo 1)
+
+# ── the pinned toolchain: never "latest" (toolchain.versions) ────────────
+PIN="$(sed -n 's/^ESP32_CORE_VERSION="\([^"]*\)".*/\1/p' "$ROOT/toolchain.versions")"
+URL="$(sed -n 's/^ESP32_BOARD_INDEX_URL="\([^"]*\)".*/\1/p' "$ROOT/toolchain.versions")"
+check "toolchain.versions pins a core version (x.y.z)" $(echo "$PIN" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' && echo 0 || echo 1)
+run_script
+check "a machine without the pinned core gets exactly that core installed (not the latest)" $(has "$TMP/fake.log" "core install esp32:esp32@$PIN data=$TMP/toolchain urls=$URL" && echo 0 || echo 1)
+check "...into the private folder, after the index update and before compiling" $([ "$(grep -n '^core update-index' "$TMP/fake.log" | cut -d: -f1)" -lt "$(grep -n '^core install' "$TMP/fake.log" | cut -d: -f1)" ] && [ "$(grep -n '^core install' "$TMP/fake.log" | cut -d: -f1)" -lt "$(grep -n '^compile ' "$TMP/fake.log" | head -1 | cut -d: -f1)" ] && echo 0 || echo 1)
+echo "$PIN" > "$TMP/core.installed"
+KEEP_CORE=1 run_script
+check "the pinned core already there: nothing is installed again" $([ $rc -eq 0 ] && ! has "$TMP/fake.log" "core install" && echo 0 || echo 1)
+echo "9.9.9" > "$TMP/core.installed"
+KEEP_CORE=1 run_script
+check "another core version there: the pinned one is installed" $([ $rc -eq 0 ] && has "$TMP/fake.log" "core install esp32:esp32@$PIN" && echo 0 || echo 1)
+FAKE_INSTALL_FAILS=1 run_script
+check "the pinned core cannot be installed: exit 2, nothing compiled" $([ $rc -eq 2 ] && [ "$(compiled)" = 0 ] && has "$out" "could not install esp32:esp32@$PIN" && echo 0 || echo 1)
+FAKE_CLI_VERSION=0.0.1 run_script
+check "an arduino-cli other than the verified one only warns" $([ $rc -eq 0 ] && has "$out" "WARNING: arduino-cli 0.0.1" && echo 0 || echo 1)
+SKETCH_TOOLCHAIN=system run_script
+check "SKETCH_TOOLCHAIN=system uses the machine's own setup: nothing installed" $([ $rc -eq 0 ] && ! has "$TMP/fake.log" "core install" && [ "$(compiled)" = 2 ] && echo 0 || echo 1)
+check "the docs name the pinned core version (one number, written in toolchain.versions)" $(grep -q "$PIN" "$ROOT/DEVELOP.md" && grep -q "$PIN" "$ROOT/ASSEMBLY.md" && echo 0 || echo 1)
 
 # ── choosing the sketch ──────────────────────────────────────────────────
 run_script recorder

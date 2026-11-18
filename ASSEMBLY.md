@@ -101,14 +101,9 @@ A printable housing for a camera exists in `3d/`: a FreeCAD model (`camera-box2.
 
 This is a second, **separate** sketch — `ESP32_CAM_TFLite_Person` — that runs fully offline, on-device person detection using TensorFlow Lite Micro, and prints the result to the Serial Monitor. It does **not** send recordings or alarms to the relay/dashboard (an optional **live view** for installation, see [the end of this section](#optional-see-the-detector-under-its-camera-on-the-dashboard-live-view--aim-and-tune-per-camera), is the one exception); it's a standalone alternative firmware image for a board, not an add-on to step 1. Flash it to a spare AI-Thinker ESP32-CAM if you want to try it.
 
-1. **Install the model-inference library.** Clone Espressif's `esp-tflite-micro` component, pinned to `v1.3.3` (the version this sketch was written and tested against), into your Arduino libraries folder:
+1. **Install the esp32 core at the pinned version — there is no separate TFLite library to install.** The model-inference library (`esp-tflite-micro`) is *inside* the esp32 Arduino core's prebuilt libraries, so the **core version decides which TFLite you get**. Use exactly the version in [`toolchain.versions`](toolchain.versions) (`ESP32_CORE_VERSION`, currently **3.3.12**), not the newest: core 3.3.13 (2026-11-17) ships `esp-tflite-micro` 1.4.2 or newer, which moved `tensorflow/lite/schema/schema_generated.h` to `tensorflow/lite/micro/schema/`, and this sketch does not compile against it yet. In the Arduino IDE choose it in Boards Manager (search "esp32", pick the version from the drop-down); with `arduino-cli`: `arduino-cli core install esp32:esp32@3.3.12`. (`tools/compile_sketches.sh` and `ota-deploy.sh` install the pinned core by themselves into a private folder.) Do **not** clone `esp-tflite-micro` into `~/Arduino/libraries`: it has no `library.properties`, so `arduino-cli` and the Arduino IDE ignore it, and it would not be the version the sketch is built with anyway.
 
-   ```
-   cd ~/Arduino/libraries
-   git clone --branch v1.3.3 https://github.com/espressif/esp-tflite-micro.git
-   ```
-
-2. In Arduino IDE, make sure you're on the **esp32 by Espressif Systems v3.x** board package (Boards Manager: Tools → Board → Boards Manager, search "esp32"; `arduino-cli core list` shows it too). Older 2.x releases don't support building an ESP-IDF component library like this one straight out of `~/Arduino/libraries`, so if you get "no such file or directory" on the `tensorflow/lite/...` includes or link errors, check this first. The sketch refuses to compile on a known-old core (`#error` at the top of the `.ino`).
+2. Make sure the Boards Manager entry is **esp32 by Espressif Systems, version 3.3.12** (`arduino-cli core list` shows it too). Older 2.x releases cannot build this sketch, and the sketch refuses to compile on a known-old core (`#error` at the top of the `.ino`).
 
 3. Create a sketch folder containing these files together:
    - `ESP32_CAM_TFLite_Person.ino`

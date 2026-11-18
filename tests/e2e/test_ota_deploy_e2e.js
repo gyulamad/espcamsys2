@@ -105,6 +105,14 @@ const camGet = (p) => request('GET', p, { 'X-Api-Key': KEY });
 // notes what fw_version.h said at compile time, so the test can see what the build was told.
 const FAKE_ARDUINO_CLI = `#!/usr/bin/env bash
 # fake arduino-cli for test_ota_deploy_e2e.js
+# The pinned-toolchain calls (toolchain.versions): a core "installed" is a line in a state file next to the log.
+core="\${FAKE_LOG}.core"
+case "$1 $2" in
+  "core list")         [ -f "$core" ] && { echo "ID          Installed Latest Name"; echo "esp32:esp32 $(cat "$core") 3.3.13 esp32"; }; exit 0 ;;
+  "core update-index") echo "core update-index" >> "$FAKE_LOG"; exit 0 ;;
+  "core install")      echo "core install $3 data=$ARDUINO_DIRECTORIES_DATA" >> "$FAKE_LOG"; echo "\${3#*@}" > "$core"; exit 0 ;;
+esac
+[ "$1" = version ] && { echo "arduino-cli  Version: 1.6.0 Commit: x Date: y"; exit 0; }
 out=""; sketch=""; fqbn=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -132,7 +140,7 @@ function runDeploy(ctx, args, extraEnv) {
     cwd: ctx.repo,
     env: Object.assign({}, process.env, {
       PATH: `${ctx.bin}${path.delimiter}${process.env.PATH}`,
-      OTA_CONF: ctx.conf, FAKE_LOG: ctx.fakeLog, FAKE_BIN_SIZE: '300000', OTA_POLL_SECONDS: '1',
+      OTA_CONF: ctx.conf, FAKE_LOG: ctx.fakeLog, FAKE_BIN_SIZE: '300000', OTA_POLL_SECONDS: '1', SKETCH_TOOLCHAIN_DIR: path.join(ctx.bin, '..', 'toolchain'),
     }, extraEnv || {}),
     encoding: 'utf8',
     timeout: 60000,
@@ -148,7 +156,7 @@ function runDeployAsync(ctx, args, extraEnv) {
       cwd: ctx.repo,
       env: Object.assign({}, process.env, {
         PATH: `${ctx.bin}${path.delimiter}${process.env.PATH}`,
-        OTA_CONF: ctx.conf, FAKE_LOG: ctx.fakeLog, FAKE_BIN_SIZE: '300000', OTA_POLL_SECONDS: '1',
+        OTA_CONF: ctx.conf, FAKE_LOG: ctx.fakeLog, FAKE_BIN_SIZE: '300000', OTA_POLL_SECONDS: '1', SKETCH_TOOLCHAIN_DIR: path.join(ctx.bin, '..', 'toolchain'),
       }, extraEnv || {}),
     });
     let out = '';
@@ -169,6 +177,7 @@ function makeRepo(tmp) {
   fs.copyFileSync(path.join(REPO, 'ota-deploy.sh'), path.join(repo, 'ota-deploy.sh'));
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });   // the script sources the shared build definitions
   fs.copyFileSync(path.join(REPO, 'tools/sketch_build_lib.sh'), path.join(repo, 'tools/sketch_build_lib.sh'));
+  fs.copyFileSync(path.join(REPO, 'toolchain.versions'), path.join(repo, 'toolchain.versions'));   // the pinned versions
   fs.writeFileSync(path.join(repo, '.gitignore'), 'fw_version.h\n');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'arduino-cli'), FAKE_ARDUINO_CLI, { mode: 0o755 });
@@ -211,6 +220,10 @@ async function main() {
     check('each sketch was compiled with FW_GIT set to that revision',
       fakeLog.includes(`compile ESP32_CAM_Recorder fqbn=esp32:esp32:esp32cam:PartitionScheme=min_spiffs fw_version=#define FW_GIT "${ctx.sha}"`) &&
       fakeLog.includes(`compile ESP32_CAM_TFLite_Person fqbn=esp32:esp32:esp32cam:PartitionScheme=min_spiffs fw_version=#define FW_GIT "${ctx.sha}"`), fakeLog);
+    const pinned = fs.readFileSync(path.join(REPO, 'toolchain.versions'), 'utf8').match(/^ESP32_CORE_VERSION="([^"]+)"/m)[1];
+    check('the firmware is built with the pinned esp32 core (toolchain.versions), installed into the private folder',
+      fakeLog.includes(`core install esp32:esp32@${pinned} data=${path.join(ctx.bin, '..', 'toolchain')}`) &&
+      fakeLog.indexOf('core install') < fakeLog.indexOf('compile '), fakeLog);
     check('fw_version.h is removed afterwards (it must never be committed)', !fs.existsSync(sketchHeader('recorder')) && !fs.existsSync(sketchHeader('detector')));
     check('the size line is printed', /recorder: 300000 bytes of 1966080/.test(r1.out), r1.out);
     const recVer = await camGet('/ota/recorder/version?id=c&fw=x');

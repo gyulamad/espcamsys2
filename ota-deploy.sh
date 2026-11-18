@@ -15,7 +15,7 @@
 # so a dev build always re-flashes. A different version — not a newer one — updates the cameras,
 # so checking out an older commit and deploying it downgrades them.
 #
-# Needs: arduino-cli (with the esp32 core 3.x), curl, awk, git. Settings: ota.conf (see
+# Needs: arduino-cli (the esp32 core is installed at the version of toolchain.versions), curl, awk, git. Settings: ota.conf (see
 # ota.example.conf). Exit code: 0 all good, 1 failed (build, upload, or a device not updated),
 # 2 wrong usage / missing setup.
 
@@ -59,6 +59,9 @@ RELAY_URL="${RELAY_URL%/}"
 for tool in arduino-cli curl awk git; do
     command -v "$tool" >/dev/null 2>&1 || { echo "ota-deploy: $tool not found on PATH" >&2; exit 2; }
 done
+
+# The firmware is built with the pinned toolchain (toolchain.versions), the same compile_sketches.sh tests.
+ensure_pinned_toolchain || die "the pinned toolchain is not available (see above)"
 
 case "$WHAT" in
     all)      TYPES="$SKETCH_TYPES" ;;

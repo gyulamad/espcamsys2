@@ -36,3 +36,46 @@ load_sketch_build_settings() {
     # shellcheck disable=SC1090
     . "$1"
 }
+
+# ── the pinned toolchain ─────────────────────────────────────────────────
+# toolchain.versions says which esp32 core the firmware is built with (never "latest": see that file).
+# ensure_pinned_toolchain installs exactly that core into a private arduino-cli data folder, so the
+# result does not depend on whatever core the machine happens to have, and the machine's own arduino-cli
+# setup is not touched. SKETCH_TOOLCHAIN=system skips all of this and uses the arduino-cli setup as it is
+# (for a machine that manages its own, and for the tests with a fake arduino-cli).
+#
+# SKETCH_TOOLCHAIN_DIR  where the pinned core lives (default: ~/.cache/espcamsys-toolchain); the first run
+#                       downloads it (several hundred MB), later runs find it there.
+#
+# Returns 0 when the pinned core is installed; otherwise prints why and returns 1.
+ensure_pinned_toolchain() {
+    [ "${SKETCH_TOOLCHAIN:-pinned}" = system ] && return 0
+    # shellcheck source=toolchain.versions
+    . "$SKETCH_ROOT/toolchain.versions" || { echo "cannot read $SKETCH_ROOT/toolchain.versions" >&2; return 1; }
+    [ -n "$ESP32_CORE_VERSION" ] && [ -n "$ESP32_BOARD_INDEX_URL" ] || { echo "toolchain.versions has no ESP32_CORE_VERSION / ESP32_BOARD_INDEX_URL" >&2; return 1; }
+
+    export ARDUINO_DIRECTORIES_DATA="${SKETCH_TOOLCHAIN_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/espcamsys-toolchain}"
+    export ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS="$ESP32_BOARD_INDEX_URL"
+
+    local have
+    have="$(pinned_core_installed)"
+    if [ "$have" != "$ESP32_CORE_VERSION" ]; then
+        echo "== Installing the pinned esp32 core $ESP32_CORE_VERSION into $ARDUINO_DIRECTORIES_DATA" >&2
+        arduino-cli core update-index >&2 || { echo "arduino-cli could not update the board index" >&2; return 1; }
+        arduino-cli core install "esp32:esp32@$ESP32_CORE_VERSION" >&2 || { echo "arduino-cli could not install esp32:esp32@$ESP32_CORE_VERSION" >&2; return 1; }
+        have="$(pinned_core_installed)"
+    fi
+    [ "$have" = "$ESP32_CORE_VERSION" ] || { echo "the esp32 core installed is '${have:-none}', toolchain.versions pins $ESP32_CORE_VERSION" >&2; return 1; }
+
+    local cli
+    cli="$(arduino-cli version 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "Version:") { print $(i + 1); exit } }')"
+    if [ -n "$ARDUINO_CLI_VERSION" ] && [ -n "$cli" ] && [ "$cli" != "$ARDUINO_CLI_VERSION" ]; then
+        echo "WARNING: arduino-cli $cli, but the build was verified with $ARDUINO_CLI_VERSION (toolchain.versions)" >&2
+    fi
+    return 0
+}
+
+# The version of the esp32 core installed in the current arduino-cli data folder (empty if none).
+pinned_core_installed() {
+    arduino-cli core list 2>/dev/null | awk '$1 == "esp32:esp32" {print $2; exit}'
+}
