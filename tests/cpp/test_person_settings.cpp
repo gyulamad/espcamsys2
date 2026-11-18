@@ -491,6 +491,94 @@ TEST(loading_refuses_missing_or_invalid_settings_and_says_which) {
     TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "STREAM_MAX_FPS is invalid"), "an invalid stored value");
 }
 
+// ── Hardware & internals (F-29 T5c): pin map, camera driver, task stacks, boot restart ──
+// (That every meta row names a real key once and every default is a valid stored value is proven for
+// the WHOLE of PERSON_META in test_person_settings_defaults.cpp — T5a's mirror of the recorder's
+// test_settings_defaults.cpp; the tests here are the ones specific to the hardware group.)
+
+// The keys T5c turned into settings, with the values the sketch hard-coded before.
+static const char* const T5C_KEYS[] = {
+    "PIN_PWDN", "PIN_RESET", "PIN_XCLK", "PIN_SIOD", "PIN_SIOC",
+    "PIN_Y9", "PIN_Y8", "PIN_Y7", "PIN_Y6", "PIN_Y5", "PIN_Y4", "PIN_Y3", "PIN_Y2",
+    "PIN_VSYNC", "PIN_HREF", "PIN_PCLK",
+    "CAM_XCLK_HZ", "CAM_FB_COUNT", "CAM_INIT_TRIES", "STK_LOG_B", "STK_NET_B",
+    "SER_BAUD", "SER_RXBUF_B", "BOOT_FAIL_MS",
+};
+
+TEST(a_board_from_before_t5c_loads_with_the_values_the_sketch_always_used) {
+    // A deployed board holds only what the settings engine asked for before F-29 T5c: the detection
+    // and live-view keys below (COMPLETE), nothing of the hardware group. It must come up unchanged.
+    MemoryStore st;
+    TEST_ASSERT(store(st, COMPLETE), "an old board's stored settings");
+    size_t storedBefore = st.m.size();
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), ("loads: " + err).c_str());
+    TEST_ASSERT(s.pinPwdn == 32 && s.pinReset == -1 && s.pinXclk == 0 && s.pinSiod == 26 && s.pinSioc == 27, "the control pins");
+    TEST_ASSERT(s.pinY9 == 35 && s.pinY8 == 34 && s.pinY7 == 39 && s.pinY6 == 36 &&
+                s.pinY5 == 21 && s.pinY4 == 19 && s.pinY3 == 18 && s.pinY2 == 5, "the eight data pins");
+    TEST_ASSERT(s.pinVsync == 25 && s.pinHref == 23 && s.pinPclk == 22, "the sync pins");
+    TEST_ASSERT(s.camXclkHz == 20000000 && s.camFbCount == 2 && s.camInitTries == 3, "the camera driver");
+    TEST_ASSERT(s.stkLogBytes == 8192 && s.stkNetBytes == 16384, "the task stacks");
+    TEST_ASSERT(s.bootFailRestartMs == 30000, "the restart after a failed start");
+    TEST_ASSERT_EQ((int)st.m.size(), (int)storedBefore, "loading stored nothing: a default is never written to flash");
+}
+
+TEST(a_stored_hardware_value_wins_over_the_default) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, COMPLETE), "stored");
+    TEST_ASSERT(store(st, "PIN_Y2=25;STK_NET_B=20480;SER_BAUD=9600;BOOT_FAIL_MS=60000"), "changed hardware values");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), ("loads: " + err).c_str());
+    TEST_ASSERT(s.pinY2 == 25 && s.stkNetBytes == 20480 && s.bootFailRestartMs == 60000, "the stored values are used");
+}
+
+TEST(a_damaged_stored_hardware_value_is_reported_not_hidden_by_the_default) {
+    MemoryStore st;
+    TEST_ASSERT(store(st, COMPLETE), "stored");
+    st.m["PIN_XCLK"] = "banana";                          // behind the rules' back, as flash damage
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "PIN_XCLK is invalid"), "refuses, and names the key");
+    st.m["PIN_XCLK"] = "0";
+    st.m["PIN_Y9"] = "99";                                // a whole number, but outside 0..39
+    TEST_ASSERT(!loadPersonSettings(st, s, err) && has(err, "PIN_Y9 is invalid"), "out of range: refused too");
+}
+
+TEST(hardware_values_out_of_range_are_refused_when_typed_or_changed) {
+    const char* bad[][2] = { {"PIN_PWDN", "99"}, {"PIN_PWDN", "40"}, {"PIN_Y2", "-2"}, {"PIN_RESET", "-2"},
+                             {"CAM_XCLK_HZ", "1999999"}, {"CAM_XCLK_HZ", "40000001"}, {"CAM_FB_COUNT", "0"},
+                             {"CAM_FB_COUNT", "5"}, {"CAM_INIT_TRIES", "0"}, {"STK_LOG_B", "4095"},
+                             {"STK_NET_B", "8191"}, {"SER_BAUD", "9599"}, {"SER_RXBUF_B", "100"},
+                             {"BOOT_FAIL_MS", "999"} };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
+        TEST_ASSERT(!valid((std::string(bad[i][0]) + "=" + bad[i][1]).c_str()), (std::string(bad[i][0]) + "=" + bad[i][1] + " is refused").c_str());
+    const char* good[][2] = { {"PIN_RESET", "-1"}, {"PIN_PWDN", "39"}, {"CAM_XCLK_HZ", "20000000"},
+                              {"SER_BAUD", "5000000"}, {"STK_NET_B", "65536"}, {"BOOT_FAIL_MS", "3600000"} };
+    for (size_t i = 0; i < sizeof(good) / sizeof(good[0]); ++i)
+        TEST_ASSERT(valid((std::string(good[i][0]) + "=" + good[i][1]).c_str()), (std::string(good[i][0]) + "=" + good[i][1] + " is accepted").c_str());
+}
+
+TEST(the_hardware_settings_are_expert_tier_need_a_restart_and_are_not_locked) {
+    std::vector<std::string> locked = personLockedKeys();
+    for (size_t i = 0; i < sizeof(T5C_KEYS) / sizeof(T5C_KEYS[0]); ++i) {
+        const KeyMeta* m = findMeta(PERSON_SCHEMA.meta, PERSON_SCHEMA.metaCount, T5C_KEYS[i]);
+        const KeyDef* def = findKey(PERSON_SCHEMA, T5C_KEYS[i]);
+        TEST_ASSERT(def && def->kind == Kind::Int, (std::string(T5C_KEYS[i]) + " is a plain whole number: the board's wiring, not a choice among the pins a user may drive").c_str());
+        TEST_ASSERT(m && m->tier == Tier::Expert, (std::string(T5C_KEYS[i]) + " is Expert tier").c_str());
+        TEST_ASSERT(m && m->apply == Apply::Reboot, (std::string(T5C_KEYS[i]) + " needs a restart").c_str());
+        TEST_ASSERT(m && std::string(m->category) == "Hardware & internals", (std::string(T5C_KEYS[i]) + " is in Hardware & internals").c_str());
+        bool isLocked = false;
+        for (size_t j = 0; j < locked.size(); ++j) if (locked[j] == T5C_KEYS[i]) isLocked = true;
+        TEST_ASSERT(!isLocked, (std::string(T5C_KEYS[i]) + " is not locked: a wrong pin map breaks the camera, not the relay link, so the dashboard can repair it").c_str());
+    }
+    // The serial port's two settings are also keys, though the sketch reads them before the settings
+    // engine runs (earlySerialSetup in the .ino): they are validated and defaulted like every other.
+    TEST_ASSERT(hasDefault(PERSON_SCHEMA, "SER_BAUD") && hasDefault(PERSON_SCHEMA, "SER_RXBUF_B"), "the serial settings have defaults");
+    TEST_ASSERT(valid("SER_BAUD=115200") && valid("SER_RXBUF_B=2048") && !valid("SER_BAUD=8") && !valid("SER_BAUD=6000000"), "and are range-checked");
+}
+
 // ── the setup settings (F-21): the same two as the recorder ─────────────
 
 TEST(the_detector_defines_the_two_setup_settings_as_designed) {
@@ -546,6 +634,11 @@ int main() {
     RUN_TEST(settings_load_into_typed_fields);
     RUN_TEST(the_documented_typical_values_are_the_defaults_of_the_struct_the_glue_test_relies_on);
     RUN_TEST(loading_refuses_missing_or_invalid_settings_and_says_which);
+    RUN_TEST(a_board_from_before_t5c_loads_with_the_values_the_sketch_always_used);
+    RUN_TEST(a_stored_hardware_value_wins_over_the_default);
+    RUN_TEST(a_damaged_stored_hardware_value_is_reported_not_hidden_by_the_default);
+    RUN_TEST(hardware_values_out_of_range_are_refused_when_typed_or_changed);
+    RUN_TEST(the_hardware_settings_are_expert_tier_need_a_restart_and_are_not_locked);
     RUN_TEST(the_detector_defines_the_two_setup_settings_as_designed);
     RUN_TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed);
     return test::summarize();

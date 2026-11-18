@@ -45,12 +45,15 @@ struct Preferences {
     bool clear() { g_flash.clear(); return true; }
 };
 
-// The serial port: input arrives at scripted moments of the fake clock.
+// The serial port: input arrives at scripted moments of the fake clock. The port's own settings
+// (SER_BAUD, SER_RXBUF_B, read by earlySerialSetup before begin()) are recorded, not acted on.
 struct Incoming { uint32_t at; std::string text; };
 static std::vector<Incoming> g_incoming;
 static std::string g_rx;
 static std::vector<std::string> g_serialOut;
 static int g_flushes = 0;
+static unsigned long g_serialBaud = 0;
+static size_t g_serialRxBuffer = 0;
 struct FakeSerial {
     void pump() {
         for (size_t i = 0; i < g_incoming.size();) {
@@ -66,6 +69,8 @@ struct FakeSerial {
         va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
         g_serialOut.push_back(buf);
     }
+    void begin(unsigned long baud) { g_serialBaud = baud; }
+    void setRxBufferSize(size_t bytes) { g_serialRxBuffer = bytes; }
     void flush() { g_flushes++; }
 } Serial;
 

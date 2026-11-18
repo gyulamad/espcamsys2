@@ -62,7 +62,7 @@ Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 42 settings: 30 with a d
 
 ## Detector (ESP32_CAM_TFLite_Person)
 
-Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 34 settings: 25 with a default, 9 without.
+Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 58 settings: 49 with a default, 9 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
@@ -100,6 +100,30 @@ Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 34 settings: 25 wit
 | `ANN_FIRST_S` | First wait before reaching the relay again (s) | `2` | advanced | reboot | Picture & live view |
 | `SETUP_MODE` | — | — | — | — | — |
 | `SETUP_PASSWORD` | — | — | — | — | — |
+| `PIN_PWDN` | Camera pin: PWDN | `32` | expert | reboot | Hardware & internals |
+| `PIN_RESET` | Camera pin: RESET | `-1` | expert | reboot | Hardware & internals |
+| `PIN_XCLK` | Camera pin: XCLK | `0` | expert | reboot | Hardware & internals |
+| `PIN_SIOD` | Camera pin: SIOD | `26` | expert | reboot | Hardware & internals |
+| `PIN_SIOC` | Camera pin: SIOC | `27` | expert | reboot | Hardware & internals |
+| `PIN_Y9` | Camera pin: Y9 | `35` | expert | reboot | Hardware & internals |
+| `PIN_Y8` | Camera pin: Y8 | `34` | expert | reboot | Hardware & internals |
+| `PIN_Y7` | Camera pin: Y7 | `39` | expert | reboot | Hardware & internals |
+| `PIN_Y6` | Camera pin: Y6 | `36` | expert | reboot | Hardware & internals |
+| `PIN_Y5` | Camera pin: Y5 | `21` | expert | reboot | Hardware & internals |
+| `PIN_Y4` | Camera pin: Y4 | `19` | expert | reboot | Hardware & internals |
+| `PIN_Y3` | Camera pin: Y3 | `18` | expert | reboot | Hardware & internals |
+| `PIN_Y2` | Camera pin: Y2 | `5` | expert | reboot | Hardware & internals |
+| `PIN_VSYNC` | Camera pin: VSYNC | `25` | expert | reboot | Hardware & internals |
+| `PIN_HREF` | Camera pin: HREF | `23` | expert | reboot | Hardware & internals |
+| `PIN_PCLK` | Camera pin: PCLK | `22` | expert | reboot | Hardware & internals |
+| `CAM_XCLK_HZ` | Camera clock (Hz) | `20000000` | expert | reboot | Hardware & internals |
+| `CAM_FB_COUNT` | Camera frame buffers | `2` | expert | reboot | Hardware & internals |
+| `CAM_INIT_TRIES` | Camera start attempts | `3` | expert | reboot | Hardware & internals |
+| `STK_LOG_B` | Log task stack (bytes) | `8192` | expert | reboot | Hardware & internals |
+| `STK_NET_B` | Network task stack (bytes) | `16384` | expert | reboot | Hardware & internals |
+| `SER_BAUD` | Serial speed (baud) | `115200` | expert | reboot | Hardware & internals |
+| `SER_RXBUF_B` | Serial receive buffer (bytes) | `2048` | expert | reboot | Hardware & internals |
+| `BOOT_FAIL_MS` | Restart after a failed start (ms) | `30000` | expert | reboot | Hardware & internals |
 
 ## Relay (nodejs/camera-relay)
 

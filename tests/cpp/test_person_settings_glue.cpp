@@ -29,6 +29,7 @@ static void powerUp() {
     g_now = 0; g_incoming.clear(); g_rx.clear(); g_serialOut.clear();
     g_restarts = 0; g_flushes = 0; g_cfg = PersonSettings();
     g_flashBeginOk = true; g_flashWriteOk = true;
+    g_serialBaud = 0; g_serialRxBuffer = 0;
     resetLink();
 }
 
@@ -155,6 +156,47 @@ TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again) {
     TEST_ASSERT(g_flash.count("PERSON_GPIO") == 0, "nothing stored");
 }
 
+// ── the serial port's own settings (SER_BAUD, SER_RXBUF_B, F-29 T5c) ────
+// They are settings, but the boot conversation needs the port first: earlySerialSetup() reads them
+// from flash before the settings engine runs.
+
+TEST(the_serial_settings_start_at_the_defaults_on_a_blank_board) {
+    eraseFlash(); powerUp();
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "SER_BAUD's default");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "SER_RXBUF_B's default");
+    TEST_ASSERT_EQ(g_prefsOpen, 0, "the flash was closed again");
+}
+
+TEST(the_serial_settings_are_taken_from_flash_while_they_are_valid) {
+    eraseFlash(); powerUp();
+    g_flash["SER_BAUD"] = "9600";
+    g_flash["SER_RXBUF_B"] = "4096";
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 9600UL, "the stored speed");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)4096, "the stored buffer");
+}
+
+TEST(a_damaged_serial_setting_falls_back_to_its_default_not_to_the_damage) {
+    eraseFlash(); powerUp();
+    g_flash["SER_BAUD"] = "banana";                       // behind the rules' back, as flash damage
+    g_flash["SER_RXBUF_B"] = "100";                       // valid number, out of range
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "a value that is not a whole number: the default");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "a value out of range: the default");
+}
+
+TEST(an_unreadable_flash_still_gives_the_serial_defaults) {
+    // (Like the recorder's unreadable-flash test: the fake still serves what is in g_flash, so the
+    // unreadable case is only testable with nothing stored — which is exactly what a really broken
+    // flash answers with on every key. earlySerialSetup must not crash and must not read garbage.)
+    eraseFlash(); powerUp();
+    g_flashBeginOk = false;
+    earlySerialSetup();
+    TEST_ASSERT_EQ(g_serialBaud, 115200UL, "the defaults, so the console still talks");
+    TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "...");
+}
+
 int main() {
     RUN_TEST(the_first_boot_stores_the_typed_settings_in_flash_and_restarts);
     RUN_TEST(after_the_reboot_it_waits_five_seconds_then_loads_into_g_cfg);
@@ -165,5 +207,9 @@ int main() {
     RUN_TEST(a_detector_missing_its_network_settings_can_not_ask_the_relay_so_it_never_tries_wifi);
     RUN_TEST(a_detector_that_predates_the_always_on_live_view_is_asked_for_its_settings_over_serial);
     RUN_TEST(a_relay_with_nothing_staged_makes_the_detector_restart_and_try_again);
+    RUN_TEST(the_serial_settings_start_at_the_defaults_on_a_blank_board);
+    RUN_TEST(the_serial_settings_are_taken_from_flash_while_they_are_valid);
+    RUN_TEST(a_damaged_serial_setting_falls_back_to_its_default_not_to_the_damage);
+    RUN_TEST(an_unreadable_flash_still_gives_the_serial_defaults);
     return test::summarize();
 }

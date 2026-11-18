@@ -29,9 +29,30 @@
 // DETECTOR_ID) and the alarm pin (PERSON_GPIO, which depends on how the board is wired)
 // have no default and stay required.
 //
-// What is NOT a setting (developer switches, edit and re-flash): TENSOR_ARENA_SIZE
-// (tied to the model), PRINT_DETECTION_SCORES, PRINT_STARTUP_INFO — see the top
-// of the .ino.
+// The Hardware & internals keys (F-29 T5c: PIN_*, CAM_*, STK_*, SER_*, BOOT_FAIL_MS) are the board's
+// pin map and the boot-time values of the camera driver, its two background tasks and the serial
+// port. Every one is read once at boot, so a change takes effect at the next restart (Apply::Reboot,
+// Expert tier in PERSON_META below), and every default is the value the sketch hard-coded before, so
+// an updated board behaves exactly as it did. SER_BAUD and SER_RXBUF_B are special: the boot
+// conversation itself needs the serial port, so the sketch reads them straight from flash before the
+// settings engine runs (see earlySerialSetup in the .ino).
+//
+// What is NOT a setting — the developer switches T5c keeps compile-time, each with its reason (the
+// same list is in docs/SETTINGS_KEYS.md):
+//   TENSOR_ARENA_SIZE      sizes the arena the interpreter plans its tensors into; tied to the model
+//                          compiled in below, so it changes only with a firmware build.
+//   IMAGE_WIDTH/HEIGHT/CHANNELS, person_scene::FRAME_SIZE
+//                          the model's input geometry; the model data and the scene sampler are
+//                          compiled around them (a static_assert pins the two together).
+//   MicroMutableOpResolver<5>
+//                          the 5 sizes the static operator table: one slot per operator the compiled
+//                          model uses.
+//   TENSOR_ARENA_IN_PSRAM  a build switch (-DTENSOR_ARENA_IN_PSRAM=0) for WHERE the arena is
+//                          allocated; at run time psramFound() already falls back to internal RAM,
+//                          so there is nothing for a field setting to decide.
+//   PRINT_DETECTION_SCORES, PRINT_STARTUP_INFO, PRINT_SCENE_READINGS
+//                          serial-only debug verbosity, deliberately not per-board settings.
+// See the top of the .ino.
 
 #pragma once
 
@@ -156,6 +177,64 @@ static const KeyDef PERSON_KEYS[] = {
       "1 = at the next restart this board opens its own setup WiFi and waits there, not working normally, until it is configured or exited; it switches itself off after use (absent or 0 = off)" },
     { "SETUP_PASSWORD",  Kind::Secret,    8,    63,      Cond::Optional,    nullptr,          nullptr,
       "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
+
+    // ── Hardware & internals (F-29 T5c) ──────────────────────────────────
+    // The AI-Thinker board's pin map and the boot-time values of the camera driver, the two
+    // background tasks and the serial port. Each is read once at boot, so a change takes effect at
+    // the next restart (Apply::Reboot, Expert tier in PERSON_META below), and each default is the
+    // value this sketch hard-coded before it became a setting, so an updated board behaves exactly
+    // as it did. A wrong pin map breaks the CAMERA — the board restarts, saying why in its log —
+    // but not its relay link, so the dashboard can still repair it; that is why none of these are
+    // locked. The pins are plain whole numbers (not the PERSON_GPIO kind) because they are the
+    // board's wiring, not a choice among the pins a user may drive: any GPIO number, -1 = not wired.
+    { "PIN_PWDN",        Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's PWDN (power down) line is wired to; the default is the AI-Thinker ESP32-CAM's wiring, so change this only for a rewired or a different board" },
+    { "PIN_RESET",       Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's RESET line is wired to (-1 = not wired, as on the AI-Thinker ESP32-CAM)" },
+    { "PIN_XCLK",        Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's XCLK (clock in) line is wired to" },
+    { "PIN_SIOD",        Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's SIOD (I2C data) line is wired to" },
+    { "PIN_SIOC",        Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's SIOC (I2C clock) line is wired to" },
+    { "PIN_Y9",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y9 is wired to" },
+    { "PIN_Y8",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y8 is wired to" },
+    { "PIN_Y7",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y7 is wired to" },
+    { "PIN_Y6",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y6 is wired to" },
+    { "PIN_Y5",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y5 is wired to" },
+    { "PIN_Y4",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y4 is wired to" },
+    { "PIN_Y3",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y3 is wired to" },
+    { "PIN_Y2",          Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's data line Y2 is wired to" },
+    { "PIN_VSYNC",       Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's VSYNC line is wired to" },
+    { "PIN_HREF",        Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's HREF line is wired to" },
+    { "PIN_PCLK",        Kind::Int,       -1,   39,      Cond::Always,      nullptr,          nullptr,
+      "camera pin: GPIO the sensor's PCLK (pixel clock) line is wired to" },
+    { "CAM_XCLK_HZ",     Kind::Int,       2000000, 40000000, Cond::Always, nullptr,       nullptr,
+      "the sensor's clock in Hz (20000000 is what the sketch always ran it at; lower it only if the camera misbehaves)" },
+    { "CAM_FB_COUNT",    Kind::Int,       1,    4,       Cond::Always,      nullptr,          nullptr,
+      "frames the camera driver keeps ready (2 is what the sketch always used: the newest finished frame is served while the next is captured)" },
+    { "CAM_INIT_TRIES",  Kind::Int,       1,    10,      Cond::Always,      nullptr,          nullptr,
+      "attempts to start the camera, each with a fresh power-cycle of the sensor, before the board restarts (3 is what the sketch always used)" },
+    { "STK_LOG_B",       Kind::Int,       4096, 65536,   Cond::Always,      nullptr,          nullptr,
+      "stack of the task that delivers the log to the relay, bytes (8192 is what the sketch always used; too small a stack can crash the board)" },
+    { "STK_NET_B",       Kind::Int,       8192, 65536,   Cond::Always,      nullptr,          nullptr,
+      "stack of the network task (live view, settings, firmware update), bytes (16384 is what the sketch always used; too small a stack can crash the board)" },
+    { "SER_BAUD",        Kind::Int,       9600, 5000000, Cond::Always,      nullptr,          nullptr,
+      "serial console speed in baud (115200 is what the sketch always used; a change takes effect at the next boot — open the terminal at the new speed then)" },
+    { "SER_RXBUF_B",     Kind::Int,       256,  65536,   Cond::Always,      nullptr,          nullptr,
+      "serial receive buffer in bytes, big enough for a pasted settings line (2048 is what the sketch always used)" },
+    { "BOOT_FAIL_MS",    Kind::Int,       1000, 3600000, Cond::Always,      nullptr,          nullptr,
+      "when the camera or the model cannot start, the board waits this long — its log goes to the relay first — and restarts (30000 is what the sketch always used)" },
 };
 
 // The readable name, group and fallback of each setting (see KeyMeta in settings_logic.h). A setting with a
@@ -168,8 +247,8 @@ static const KeyDef PERSON_KEYS[] = {
 // arrangement LOG_MIN_LEVEL has on the recorder, but there the fixed default always applied; here a board
 // that predates the feature must keep being asked, because nothing else tells the owner the choice exists.
 //
-// Categories follow the Atlas design's detector page: Detection, Picture & live view, Connection (the
-// detector's share of Connection - Wi-Fi sleep, HTTP timeouts - arrives with T5b).
+// Categories follow the Atlas design's detector page: Detection, Picture & live view, Hardware & internals
+// (Connection - the detector's share, Wi-Fi sleep and HTTP timeouts - arrives with T5b).
 static const KeyMeta PERSON_META[] = {
     // name              default  label                                   category          tier          apply
     { "DETECT_THRESH",   "0.6",   "Person detected above (score)",        "Detection",      Tier::Basic,    Apply::Live },
@@ -198,6 +277,36 @@ static const KeyMeta PERSON_META[] = {
     { "ANN_HEARTBEAT",   "600",   "Seconds between status lines",         "Picture & live view", Tier::Advanced, Apply::Reboot },
     { "ANN_RETRY",       "30",    "Longest wait before reaching the relay again (s)", "Picture & live view", Tier::Advanced, Apply::Reboot },
     { "ANN_FIRST_S",     "2",     "First wait before reaching the relay again (s)",   "Picture & live view", Tier::Advanced, Apply::Reboot },
+
+    // The Hardware & internals group, F-29 T5c. A setting with a default is no longer asked for on a
+    // blank board: it simply uses that value, which is what the sketch did before the value became a
+    // setting, until somebody changes it. Every row is Expert tier and Apply::Reboot: the values are
+    // read once at boot. The network, logging, update and setup rows are T5b's: they land in this
+    // table as that task is done.
+    { "PIN_PWDN",       "32",       "Camera pin: PWDN",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_RESET",      "-1",       "Camera pin: RESET",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_XCLK",       "0",        "Camera pin: XCLK",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_SIOD",       "26",       "Camera pin: SIOD",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_SIOC",       "27",       "Camera pin: SIOC",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y9",         "35",       "Camera pin: Y9",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y8",         "34",       "Camera pin: Y8",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y7",         "39",       "Camera pin: Y7",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y6",         "36",       "Camera pin: Y6",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y5",         "21",       "Camera pin: Y5",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y4",         "19",       "Camera pin: Y4",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y3",         "18",       "Camera pin: Y3",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_Y2",         "5",        "Camera pin: Y2",                        "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_VSYNC",      "25",       "Camera pin: VSYNC",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_HREF",       "23",       "Camera pin: HREF",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "PIN_PCLK",       "22",       "Camera pin: PCLK",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "CAM_XCLK_HZ",    "20000000", "Camera clock (Hz)",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "CAM_FB_COUNT",   "2",        "Camera frame buffers",                  "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "CAM_INIT_TRIES", "3",        "Camera start attempts",                 "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "STK_LOG_B",      "8192",     "Log task stack (bytes)",                "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "STK_NET_B",      "16384",    "Network task stack (bytes)",            "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "SER_BAUD",       "115200",   "Serial speed (baud)",                   "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "SER_RXBUF_B",    "2048",     "Serial receive buffer (bytes)",         "Hardware & internals", Tier::Expert, Apply::Reboot },
+    { "BOOT_FAIL_MS",   "30000",    "Restart after a failed start (ms)",     "Hardware & internals", Tier::Expert, Apply::Reboot },
 };
 static const size_t PERSON_META_COUNT = sizeof(PERSON_META) / sizeof(PERSON_META[0]);
 
@@ -243,6 +352,35 @@ struct PersonSettings {
     uint32_t announceHeartbeatSec = 600;
     uint32_t announceRetrySec = 30;
     uint32_t announceFirstRetrySec = 2;       // ANN_FIRST_S: the first backoff wait (the later ones double, up to ANN_RETRY)
+
+    // Hardware & internals (F-29 T5c): the pin map and the boot-time values of the camera driver, the
+    // two background tasks and the restart after a failed start. Each is read once at boot, so a
+    // changed value needs a restart (Apply::Reboot); every default is the old hard-coded value. The
+    // serial port's two settings (SER_BAUD, SER_RXBUF_B) are NOT here: the boot conversation needs
+    // the port before the settings engine runs, so the sketch reads them straight from flash
+    // (earlySerialSetup in the .ino).
+    int pinPwdn = 32;             // PIN_PWDN
+    int pinReset = -1;            // PIN_RESET (-1: the board has no reset line)
+    int pinXclk = 0;              // PIN_XCLK
+    int pinSiod = 26;             // PIN_SIOD
+    int pinSioc = 27;             // PIN_SIOC
+    int pinY9 = 35;               // PIN_Y9
+    int pinY8 = 34;               // PIN_Y8
+    int pinY7 = 39;               // PIN_Y7
+    int pinY6 = 36;               // PIN_Y6
+    int pinY5 = 21;               // PIN_Y5
+    int pinY4 = 19;               // PIN_Y4
+    int pinY3 = 18;               // PIN_Y3
+    int pinY2 = 5;                // PIN_Y2
+    int pinVsync = 25;            // PIN_VSYNC
+    int pinHref = 23;             // PIN_HREF
+    int pinPclk = 22;             // PIN_PCLK
+    int camXclkHz = 20000000;     // CAM_XCLK_HZ
+    int camFbCount = 2;           // CAM_FB_COUNT
+    int camInitTries = 3;         // CAM_INIT_TRIES
+    uint32_t stkLogBytes = 8192;   // STK_LOG_B
+    uint32_t stkNetBytes = 16384;  // STK_NET_B
+    uint32_t bootFailRestartMs = 30000;   // BOOT_FAIL_MS
 };
 
 // The settings this board needs before it can ask the relay for the OTHERS
@@ -318,6 +456,30 @@ inline bool loadPersonSettings(ISettingsStore& flash, PersonSettings& out, std::
     s.announceHeartbeatSec = static_cast<uint32_t>(storedInt(store, "ANN_HEARTBEAT"));
     s.announceRetrySec = static_cast<uint32_t>(storedInt(store, "ANN_RETRY"));
     s.announceFirstRetrySec = static_cast<uint32_t>(storedInt(store, "ANN_FIRST_S"));
+
+    // Hardware & internals (F-29 T5c): stored values, else the defaults the sketch always used.
+    s.pinPwdn = static_cast<int>(storedInt(store, "PIN_PWDN"));
+    s.pinReset = static_cast<int>(storedInt(store, "PIN_RESET"));
+    s.pinXclk = static_cast<int>(storedInt(store, "PIN_XCLK"));
+    s.pinSiod = static_cast<int>(storedInt(store, "PIN_SIOD"));
+    s.pinSioc = static_cast<int>(storedInt(store, "PIN_SIOC"));
+    s.pinY9 = static_cast<int>(storedInt(store, "PIN_Y9"));
+    s.pinY8 = static_cast<int>(storedInt(store, "PIN_Y8"));
+    s.pinY7 = static_cast<int>(storedInt(store, "PIN_Y7"));
+    s.pinY6 = static_cast<int>(storedInt(store, "PIN_Y6"));
+    s.pinY5 = static_cast<int>(storedInt(store, "PIN_Y5"));
+    s.pinY4 = static_cast<int>(storedInt(store, "PIN_Y4"));
+    s.pinY3 = static_cast<int>(storedInt(store, "PIN_Y3"));
+    s.pinY2 = static_cast<int>(storedInt(store, "PIN_Y2"));
+    s.pinVsync = static_cast<int>(storedInt(store, "PIN_VSYNC"));
+    s.pinHref = static_cast<int>(storedInt(store, "PIN_HREF"));
+    s.pinPclk = static_cast<int>(storedInt(store, "PIN_PCLK"));
+    s.camXclkHz = static_cast<int>(storedInt(store, "CAM_XCLK_HZ"));
+    s.camFbCount = static_cast<int>(storedInt(store, "CAM_FB_COUNT"));
+    s.camInitTries = static_cast<int>(storedInt(store, "CAM_INIT_TRIES"));
+    s.stkLogBytes = static_cast<uint32_t>(storedInt(store, "STK_LOG_B"));
+    s.stkNetBytes = static_cast<uint32_t>(storedInt(store, "STK_NET_B"));
+    s.bootFailRestartMs = static_cast<uint32_t>(storedInt(store, "BOOT_FAIL_MS"));
 
     out = s;
     return true;

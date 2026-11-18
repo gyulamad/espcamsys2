@@ -56,7 +56,7 @@ The table at the bottom is generated from `docs/settings_keys.tsv`
 The scheme uses upper case with `_MS`, `_S`, `_B` suffixes (not camel case such as `Ms`), because every stored key
 that exists today is written that way.
 
-## Not keys: values that stay compile-time (proposal for T3 / T5c to confirm)
+## Not keys: values that stay compile-time (T5c confirmed its list; T3's confirmation pending)
 
 These size static arrays or are protocol or hardware limits, so they have no row. Each task confirms its own list
 (decision 4 of the recap): `LOG_MSG_MAX`, `LOG_TRACE_MAX`, `LOG_QUEUE_CAPACITY`, `LOG_BATCH_MAX`,
@@ -64,6 +64,24 @@ These size static arrays or are protocol or hardware limits, so they have no row
 `SETUP_READ_CHUNK`, `MAX_FORM_FIELDS`, `MAX_FIELD_NAME`, `MAX_LINE_LENGTH`, `MAX_WIFI_NETWORKS`,
 `NVS_KEY_MAX_LENGTH`, `WPA2_PASS_MIN/MAX`, `SSID_MAX`, `TENSOR_ARENA_SIZE`, `FRAME_SIZE`, `IMAGE_*`
 (the model's input), `MAX_STATUS_BYTES`, `MAX_JPEG_BYTES` (must match the relay, see T8) and the frame-size ladder.
+
+**Confirmed by T5c (detector hardware and internals)**, each with its reason:
+
+- `TENSOR_ARENA_SIZE` (100 × 1024) — sizes the arena the interpreter plans its tensors into; tied to the model
+  compiled into the sketch, so it changes only with a firmware build.
+- `IMAGE_WIDTH` / `IMAGE_HEIGHT` / `IMAGE_CHANNELS` / `IMAGE_SIZE` and `person_scene::FRAME_SIZE` — the model's
+  input geometry; the model data and the scene sampler are compiled around them (a `static_assert` pins the two
+  together), so no runtime value can reshape them.
+- the `5` of `MicroMutableOpResolver<5>` — sizes the static operator table, one slot per operator the compiled
+  model uses.
+- `TENSOR_ARENA_IN_PSRAM` — a build switch (`-DTENSOR_ARENA_IN_PSRAM=0`) for where the arena is allocated; at
+  run time `psramFound()` already falls back to internal RAM, so there is nothing for a field setting to decide.
+- `PRINT_DETECTION_SCORES`, `PRINT_STARTUP_INFO`, `PRINT_SCENE_READINGS` — serial-only debug verbosity,
+  deliberately developer switches (edit and re-flash), not per-board settings.
+- `SETTINGS_NAMESPACE` (`"espcam"`, both sketches) — the NVS namespace every deployed board already holds its
+  settings under; changing it would orphan those settings, so it is a frozen constant, not a key.
+
+(The same list, with the same reasons, sits in the header of the detector's `settings_schema.h`.)
 
 ## The table
 
@@ -166,31 +184,31 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `REMOTE_CONNECT_MS` | `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | both | new | T2,T5b |
 | `REMOTE_WINDOW_MS` | `BOOT_RELAY_MS` | Boot: wait for settings from the relay (ms) | both | new | T2,T5b |
 | `REMOTE_POLL_MS` | `BOOT_POLL_MS` | Boot: ask the relay every (ms) | both | new | T2,T5b |
-| `PWDN_GPIO_NUM` | `PIN_PWDN` | Camera pin: PWDN | both | new | T3,T5c |
-| `RESET_GPIO_NUM` | `PIN_RESET` | Camera pin: RESET | both | new | T3,T5c |
-| `XCLK_GPIO_NUM` | `PIN_XCLK` | Camera pin: XCLK | both | new | T3,T5c |
-| `SIOD_GPIO_NUM` | `PIN_SIOD` | Camera pin: SIOD | both | new | T3,T5c |
-| `SIOC_GPIO_NUM` | `PIN_SIOC` | Camera pin: SIOC | both | new | T3,T5c |
-| `Y9_GPIO_NUM` | `PIN_Y9` | Camera pin: Y9 | both | new | T3,T5c |
-| `Y8_GPIO_NUM` | `PIN_Y8` | Camera pin: Y8 | both | new | T3,T5c |
-| `Y7_GPIO_NUM` | `PIN_Y7` | Camera pin: Y7 | both | new | T3,T5c |
-| `Y6_GPIO_NUM` | `PIN_Y6` | Camera pin: Y6 | both | new | T3,T5c |
-| `Y5_GPIO_NUM` | `PIN_Y5` | Camera pin: Y5 | both | new | T3,T5c |
-| `Y4_GPIO_NUM` | `PIN_Y4` | Camera pin: Y4 | both | new | T3,T5c |
-| `Y3_GPIO_NUM` | `PIN_Y3` | Camera pin: Y3 | both | new | T3,T5c |
-| `Y2_GPIO_NUM` | `PIN_Y2` | Camera pin: Y2 | both | new | T3,T5c |
-| `VSYNC_GPIO_NUM` | `PIN_VSYNC` | Camera pin: VSYNC | both | new | T3,T5c |
-| `HREF_GPIO_NUM` | `PIN_HREF` | Camera pin: HREF | both | new | T3,T5c |
-| `PCLK_GPIO_NUM` | `PIN_PCLK` | Camera pin: PCLK | both | new | T3,T5c |
-| `config.xclk_freq_hz` | `CAM_XCLK_HZ` | Camera clock (Hz) | both | new | T3,T5c |
-| `remoteLog task stack (8192)` | `STK_LOG_B` | Log task stack (bytes) | both | new | T3,T5c |
+| `PWDN_GPIO_NUM` | `PIN_PWDN` | Camera pin: PWDN | both | new | T5c done, T3 |
+| `RESET_GPIO_NUM` | `PIN_RESET` | Camera pin: RESET | both | new | T5c done, T3 |
+| `XCLK_GPIO_NUM` | `PIN_XCLK` | Camera pin: XCLK | both | new | T5c done, T3 |
+| `SIOD_GPIO_NUM` | `PIN_SIOD` | Camera pin: SIOD | both | new | T5c done, T3 |
+| `SIOC_GPIO_NUM` | `PIN_SIOC` | Camera pin: SIOC | both | new | T5c done, T3 |
+| `Y9_GPIO_NUM` | `PIN_Y9` | Camera pin: Y9 | both | new | T5c done, T3 |
+| `Y8_GPIO_NUM` | `PIN_Y8` | Camera pin: Y8 | both | new | T5c done, T3 |
+| `Y7_GPIO_NUM` | `PIN_Y7` | Camera pin: Y7 | both | new | T5c done, T3 |
+| `Y6_GPIO_NUM` | `PIN_Y6` | Camera pin: Y6 | both | new | T5c done, T3 |
+| `Y5_GPIO_NUM` | `PIN_Y5` | Camera pin: Y5 | both | new | T5c done, T3 |
+| `Y4_GPIO_NUM` | `PIN_Y4` | Camera pin: Y4 | both | new | T5c done, T3 |
+| `Y3_GPIO_NUM` | `PIN_Y3` | Camera pin: Y3 | both | new | T5c done, T3 |
+| `Y2_GPIO_NUM` | `PIN_Y2` | Camera pin: Y2 | both | new | T5c done, T3 |
+| `VSYNC_GPIO_NUM` | `PIN_VSYNC` | Camera pin: VSYNC | both | new | T5c done, T3 |
+| `HREF_GPIO_NUM` | `PIN_HREF` | Camera pin: HREF | both | new | T5c done, T3 |
+| `PCLK_GPIO_NUM` | `PIN_PCLK` | Camera pin: PCLK | both | new | T5c done, T3 |
+| `config.xclk_freq_hz` | `CAM_XCLK_HZ` | Camera clock (Hz) | both | new | T5c done, T3 |
+| `remoteLog task stack (8192)` | `STK_LOG_B` | Log task stack (bytes) | both | new | T5c done, T3 |
 | `otaTask stack (10240)` | `STK_OTA_B` | Update task stack (bytes) | rec | new | T3 |
-| `networkTask stack (16384)` | `STK_NET_B` | Network task stack (bytes) | det | new | T5c |
-| `Serial.begin(115200)` | `SER_BAUD` | Serial speed (baud) | both | new | T3,T5c |
-| `Serial.setRxBufferSize(2048)` | `SER_RXBUF_B` | Serial receive buffer (bytes) | both | new | T3,T5c |
-| `config.fb_count` | `CAM_FB_COUNT` | Camera frame buffers | det | new | T5c |
-| `initCamera ATTEMPTS` | `CAM_INIT_TRIES` | Camera start attempts | det | new | T5c |
-| `STARTUP_FAILURE_RESTART_MS` | `BOOT_FAIL_MS` | Restart after a failed start (ms) | det | new | T5c |
+| `networkTask stack (16384)` | `STK_NET_B` | Network task stack (bytes) | det | new | done |
+| `Serial.begin(115200)` | `SER_BAUD` | Serial speed (baud) | both | new | T5c done, T3 |
+| `Serial.setRxBufferSize(2048)` | `SER_RXBUF_B` | Serial receive buffer (bytes) | both | new | T5c done, T3 |
+| `config.fb_count` | `CAM_FB_COUNT` | Camera frame buffers | det | new | done |
+| `initCamera ATTEMPTS` | `CAM_INIT_TRIES` | Camera start attempts | det | new | done |
+| `STARTUP_FAILURE_RESTART_MS` | `BOOT_FAIL_MS` | Restart after a failed start (ms) | det | new | done |
 | `DARK_HYSTERESIS` | `DARK_HYST` | Darkness hysteresis | det | new | done |
 | `SCORE_FRESH_MS` | `SCORE_FRESH_MS` | Detection score stays fresh for (ms) | det | new | done |
 | `CLIP_FACTOR` | `MOTION_CLIP` | Motion spike clip factor | det | new | done |

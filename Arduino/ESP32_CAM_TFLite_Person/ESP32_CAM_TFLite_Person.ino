@@ -84,6 +84,10 @@
 #define FW_BUILD FW_GIT   // which firmware build wrote a log line (review ARD-019: __DATE__ __TIME__ dropped — leaks the build moment and breaks reproducible builds)
 
 // ── Developer switches (not per-camera settings: edit here and re-flash) ──
+// These are the switches F-29 T5c keeps compile-time, each with its reason in settings_schema.h and
+// docs/SETTINGS_KEYS.md. The pin map, the camera driver's boot values, the task stacks and the serial
+// port used to live here too — they are settings now (PIN_*, CAM_*, STK_*, SER_*, BOOT_FAIL_MS,
+// defaults = the old values below), so a board can be re-mapped without a re-flash.
 // Print person/no-person scores for every inference.
 #define PRINT_DETECTION_SCORES 1
 // Print startup and initialization information.
@@ -251,11 +255,12 @@ void remoteLogConfigure() {
 }
 
 // Starts the delivery task. Called from startNetwork(), after the camera and the model have their memory.
-// Pinned to core 0 (where the Wi-Fi stack runs) so it never competes with loop() on core 1.
+// Pinned to core 0 (where the Wi-Fi stack runs) so it never competes with loop() on core 1. The stack
+// size is STK_LOG_B (an Expert setting; the default is the 8192 the code always used).
 void remoteLogStart() {
   remoteLogMutex = xSemaphoreCreateMutex();
   if (!remoteLogMutex) return;   // no mutex, no safe way to share: serial only
-  xTaskCreatePinnedToCore(remoteLogTask, "remoteLog", 8192, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(remoteLogTask, "remoteLog", g_cfg.stkLogBytes, nullptr, 1, nullptr, 0);
 }
 
 // The uplink to the relay just came up: if remote logging had been given up on, resume it.
@@ -274,24 +279,14 @@ void remoteLogRelayReachable() {
 // AI Thinker ESP32-CAM pin configuration
 // ============================================================
 
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
-
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
+// The pin map is a set of settings now (F-29 T5c): PIN_PWDN, PIN_RESET, PIN_XCLK, PIN_SIOD, PIN_SIOC,
+// PIN_Y9..PIN_Y2, PIN_VSYNC, PIN_HREF, PIN_PCLK — loaded into g_cfg by setupSettings(), with the
+// defaults being exactly the AI-Thinker wiring the #defines below used to hold:
+//   PWDN 32   RESET -1  XCLK 0   SIOD 26  SIOC 27
+//   Y9 35  Y8 34  Y7 39  Y6 36  Y5 21  Y4 19  Y3 18  Y2 5
+//   VSYNC 25  HREF 23  PCLK 22
+// initCamera() below reads them from g_cfg, so a rewired or different board can be re-mapped from
+// the dashboard (Expert tier, a restart applies it) instead of by re-flashing.
 
 
 // ============================================================
@@ -374,10 +369,10 @@ void configureScene()
 // hand. Pulsing PWDN gives the sensor the clean start a cold boot would.
 static void cameraPowerCycle()
 {
-    pinMode(PWDN_GPIO_NUM, OUTPUT);
-    digitalWrite(PWDN_GPIO_NUM, HIGH);   // power down
+    pinMode(g_cfg.pinPwdn, OUTPUT);
+    digitalWrite(g_cfg.pinPwdn, HIGH);   // power down
     delay(100);
-    digitalWrite(PWDN_GPIO_NUM, LOW);    // power up
+    digitalWrite(g_cfg.pinPwdn, LOW);    // power up
     delay(100);
 }
 
@@ -392,29 +387,31 @@ static bool initCameraOnce()
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer   = LEDC_TIMER_0;
 
-    config.pin_d0 = Y2_GPIO_NUM;
-    config.pin_d1 = Y3_GPIO_NUM;
-    config.pin_d2 = Y4_GPIO_NUM;
-    config.pin_d3 = Y5_GPIO_NUM;
-    config.pin_d4 = Y6_GPIO_NUM;
-    config.pin_d5 = Y7_GPIO_NUM;
-    config.pin_d6 = Y8_GPIO_NUM;
-    config.pin_d7 = Y9_GPIO_NUM;
+    // The pin map (PIN_* settings): the AI-Thinker board's wiring by default.
+    config.pin_d0 = g_cfg.pinY2;
+    config.pin_d1 = g_cfg.pinY3;
+    config.pin_d2 = g_cfg.pinY4;
+    config.pin_d3 = g_cfg.pinY5;
+    config.pin_d4 = g_cfg.pinY6;
+    config.pin_d5 = g_cfg.pinY7;
+    config.pin_d6 = g_cfg.pinY8;
+    config.pin_d7 = g_cfg.pinY9;
 
-    config.pin_xclk = XCLK_GPIO_NUM;
-    config.pin_pclk = PCLK_GPIO_NUM;
-    config.pin_vsync = VSYNC_GPIO_NUM;
-    config.pin_href = HREF_GPIO_NUM;
+    config.pin_xclk = g_cfg.pinXclk;
+    config.pin_pclk = g_cfg.pinPclk;
+    config.pin_vsync = g_cfg.pinVsync;
+    config.pin_href = g_cfg.pinHref;
 
-    config.pin_sccb_sda = SIOD_GPIO_NUM;
-    config.pin_sccb_scl = SIOC_GPIO_NUM;
+    config.pin_sccb_sda = g_cfg.pinSiod;
+    config.pin_sccb_scl = g_cfg.pinSioc;
 
-    config.pin_pwdn = PWDN_GPIO_NUM;
-    config.pin_reset = RESET_GPIO_NUM;
+    config.pin_pwdn = g_cfg.pinPwdn;
+    config.pin_reset = g_cfg.pinReset;
 
     // The picture the dashboard shows, and the numbers beside it, can only be as fast as the camera hands
     // over frames. 20 MHz is what the recorder runs its camera at; at 15 MHz the sensor itself was slower.
-    config.xclk_freq_hz = 20000000;
+    // (CAM_XCLK_HZ, an Expert setting; the default is this value.)
+    config.xclk_freq_hz = g_cfg.camXclkHz;
 
     // The v1.3.3 model expects 96x96 grayscale input.
     config.pixel_format = PIXFORMAT_GRAYSCALE;
@@ -426,7 +423,8 @@ static bool initCameraOnce()
     // the loop has returned it, every frame that arrives while the loop is busy is lost and the rate
     // roughly halves (about 4.7 pictures a second was measured). The camera now keeps capturing on its
     // own and esp_camera_fb_get() returns the latest finished frame, never an old one.
-    config.fb_count = 2;
+    // (CAM_FB_COUNT, an Expert setting; the default is this value.)
+    config.fb_count = g_cfg.camFbCount;
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
@@ -464,15 +462,14 @@ static bool initCameraOnce()
 }
 
 // A few attempts, each with a fresh power-cycle of the sensor, before the caller gives up and restarts.
+// (CAM_INIT_TRIES, an Expert setting; the default is the 3 the code always used.)
 bool initCamera()
 {
-    constexpr int ATTEMPTS = 3;
-
-    for (int attempt = 1; attempt <= ATTEMPTS; attempt++)
+    for (int attempt = 1; attempt <= g_cfg.camInitTries; attempt++)
     {
         if (initCameraOnce()) return true;
 
-        if (attempt < ATTEMPTS) RLOG_WARN("camera init attempt %d/%d failed - power-cycling the sensor and retrying", attempt, ATTEMPTS);
+        if (attempt < g_cfg.camInitTries) RLOG_WARN("camera init attempt %d/%d failed - power-cycling the sensor and retrying", attempt, g_cfg.camInitTries);
     }
 
     return false;
@@ -734,6 +731,40 @@ void restartBoard() {
   Serial.flush();
   delay(500);
   ESP.restart();   // does not return
+}
+
+// ── The serial port's own settings (SER_BAUD, SER_RXBUF_B) ─────────────
+// These two are settings like every other (Hardware & internals, Expert tier, Apply::Reboot), but the
+// boot conversation itself needs the serial port, so they are read straight from flash BEFORE the
+// settings engine runs. A stored value is used while it is valid; otherwise — absent, damaged, or the
+// flash unreadable — the key's default is used, which is exactly what the sketch did before the value
+// became a setting. Whatever is wrong here is reported by the settings conversation right after (it
+// refuses to run on a stored value it cannot accept).
+// Both are static, and the parameter type is written out in full: Arduino generates a prototype at
+// the top of the sketch, where the file's `using esp32cam_settings::ISettingsStore` has not happened
+// yet — the qualified name is the only spelling that compiles there.
+static long long earlySerialSetting(esp32cam_settings::ISettingsStore& flash, const char* key) {
+  const esp32cam_settings::KeyMeta* meta = esp32cam_settings::findMeta(PERSON_SCHEMA.meta, PERSON_SCHEMA.metaCount, key);
+  if (!meta || !meta->defaultValue) return 0;   // only defaulted keys are read here
+  const esp32cam_settings::KeyDef* def = esp32cam_settings::findKey(PERSON_SCHEMA, key);
+  if (!def) return 0;
+  std::string value = meta->defaultValue;
+  if (flash.has(key)) {
+    std::string stored = flash.get(key);
+    std::string err;
+    if (esp32cam_settings::validateStored(*def, stored, err)) value = stored;
+  }
+  long long v = 0;
+  esp32cam_settings::parseInt(value, v);
+  return v;
+}
+
+// Opens the flash alone, reads the serial port's two settings and configures the port with them.
+// Call once, before Serial.begin().
+static void earlySerialSetup() {
+  PreferencesStore store;
+  Serial.setRxBufferSize(static_cast<size_t>(earlySerialSetting(store, "SER_RXBUF_B")));
+  Serial.begin(static_cast<unsigned long>(earlySerialSetting(store, "SER_BAUD")));
 }
 
 // Shows the settings, asks for any that are missing (or lets the user change
@@ -1482,9 +1513,10 @@ bool startNetwork()
 
     remoteLogStart();
 
-    // 16 KB: JPEG encoding, the HTTP calls of the firmware update (and its flash writes) and the uplink
-    // all run on this stack. The heartbeat line reports how much of it was ever left.
-    if (xTaskCreatePinnedToCore(networkTask, "network", 16384, nullptr, 1, nullptr, 0) != pdPASS)
+    // 16 KB (STK_NET_B, an Expert setting): JPEG encoding, the HTTP calls of the firmware update (and
+    // its flash writes) and the uplink all run on this stack. The heartbeat line reports how much of
+    // it was ever left.
+    if (xTaskCreatePinnedToCore(networkTask, "network", g_cfg.stkNetBytes, nullptr, 1, nullptr, 0) != pdPASS)
     {
         RLOG_ERROR("live view OFF: could not start the network task (free heap %u bytes)", (unsigned)ESP.getFreeHeap());
 
@@ -1775,16 +1807,15 @@ void logBootInfo()
 // restart. This used to be an empty loop — a board that looked "operational" on a serial cable while
 // its alarm line did nothing and the relay never heard a word. Restarting gives a transient fault
 // (a camera that browned out at power-up) another chance, and every attempt leaves a line in the
-// relay's log.
-constexpr uint32_t STARTUP_FAILURE_RESTART_MS = 30000;
-
+// relay's log. The wait is BOOT_FAIL_MS (an Expert setting; the default is the 30000 the code
+// always used).
 void startupFailed(const char *what)   // does not return: it ends in a restart (no [[noreturn]]: Arduino's generated prototype would not carry it)
 {
-    RLOG_ERROR("%s - the detector cannot work, restarting in %u s", what, (unsigned)(STARTUP_FAILURE_RESTART_MS / 1000));
+    RLOG_ERROR("%s - the detector cannot work, restarting in %u s", what, (unsigned)(g_cfg.bootFailRestartMs / 1000));
 
     startNetwork();   // so the line above can reach the relay's log before the restart
 
-    uint32_t until = millis() + STARTUP_FAILURE_RESTART_MS;
+    uint32_t until = millis() + g_cfg.bootFailRestartMs;
 
     while ((int32_t)(millis() - until) < 0)
     {
@@ -1802,11 +1833,11 @@ void startupFailed(const char *what)   // does not return: it ends in a restart 
 
 void setup()
 {
-    // The settings conversation can be fed a long pasted line (a camera's whole
-    // configuration); the default 256-byte receive buffer would lose part of it.
-    // Must be set before Serial.begin().
-    Serial.setRxBufferSize(2048);
-    Serial.begin(115200);
+    // SER_BAUD and SER_RXBUF_B are settings too (Hardware & internals), but the settings conversation
+    // below needs the serial port first, so they are read straight from flash (see the settings glue):
+    // stored values while valid, else the defaults the sketch always used. The receive buffer must be
+    // big enough for a pasted settings line — the core's default 256 bytes would lose part of it.
+    earlySerialSetup();
 
     delay(2000);
 
