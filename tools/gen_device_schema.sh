@@ -8,8 +8,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/php/cameras/lib/device_schema.php"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-g++ -std=c++11 -Wall -Wextra -o "$TMP/dump_recorder" "$ROOT/tools/dump_device_schema.cpp"
-g++ -std=c++11 -Wall -Wextra -DDUMP_DETECTOR -o "$TMP/dump_detector" "$ROOT/tools/dump_device_schema.cpp"
+# shellcheck source=schema_dump_lib.sh
+source "$ROOT/tools/schema_dump_lib.sh"
+build_schema_dumps "$ROOT" "$TMP"
 # A PHP file (not .json): deploy.sh ships lib/*.php, and a .json in the web root would be served without the login.
 {
     echo '<?php'

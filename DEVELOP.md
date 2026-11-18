@@ -14,7 +14,9 @@ php/cameras/                      the dashboard: page scripts (*.php), lib/ (Log
                                   the browser loads), fonts/
 tests/                            cpp, node, e2e, php, dom (jsdom + Playwright), python, shell, fixtures
 tools/                            compile_sketches.sh, gen_device_schema.sh, dump_device_schema.cpp, camdash-power.sh,
-                                  sketch_build_lib.sh, test_output.sh
+                                  sketch_build_lib.sh, test_output.sh, gen_settings_reference.sh (+ schema_dump_lib.sh,
+                                  dump_relay_schema.js, render_settings_reference.js)
+docs/                             SETTINGS_REFERENCE.md (generated: every setting of the camera, detector and relay)
 ```
 
 Runtime state (all next to `server.js`, gitignored, all redirectable in `config.js` or the environment — see the settings pages in [MANUAL.md](MANUAL.md)): `logs/camera.log` (`logFile`/`LOG_FILE`), `recordings/`, `firmware/` (`firmwareDir`), `device-settings/` (`deviceSettingsDir`), `sounds/` (`soundsDir`, the uploaded alarm sounds), `recording-switch.json` (`switchFile`), `system-settings.json` (the dashboard's SETTINGS page). The dashboard keeps what is saved on its pages in `data/settings.json` under the web folder (see [SETUP.md, *Where settings live*](SETUP.md#where-settings-live)).
@@ -115,6 +117,10 @@ If you rename the section title comments in `ESP32_CAM_TFLite_Person.ino` (`// M
 ## The device settings schema
 
 The dashboard's per-device settings pages (a camera's ⚙ SETTINGS, the detector's ⚙ CALIBRATE) are generated from the sketches' own settings tables (`settings_schema.h` in both sketch folders): `tools/gen_device_schema.sh` reads them (with `tools/dump_device_schema.cpp`) and writes `php/cameras/lib/device_schema.php`. Run it after every change to a `settings_schema.h`; `run_tests.sh` checks the committed file against a fresh regeneration (`--check`) and fails the run if you forgot.
+
+## The settings reference
+
+[docs/SETTINGS_REFERENCE.md](docs/SETTINGS_REFERENCE.md) lists every setting of the camera, the detector and the relay (key, label, default, tier, apply, category), generated from the same tables: the firmware's `settings_schema.h` files and the relay's `lib/sysconfig.js`. Run `tools/gen_settings_reference.sh` after changing any of them; `run_tests.sh` runs it with `--check` and fails the run when the committed file is stale. Do not edit the file by hand. Where the relay's table lives is known in one place, `tools/dump_relay_schema.js`, so moving the relay's settings into a new store (F-29 T6a) means changing only that adapter.
 
 ## The security-patch check
 

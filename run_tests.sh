@@ -383,6 +383,13 @@ else
         overall_status=1
     fi
 
+    # F-29 T9: docs/SETTINGS_REFERENCE.md (every setting of the camera, the detector and the relay with its default,
+    # tier, apply mode and category) is generated from the same tables; a stale file fails the run.
+    group_text "--- the settings reference is up to date with the firmware's and the relay's tables"
+    if ! "$ROOT_DIR/tools/gen_settings_reference.sh" --check; then
+        overall_status=1
+    fi
+
     # The sketch's remote-logging glue is tested by compiling the code it
     # ACTUALLY contains: extract the marked block from the .ino and build it
     # against fake Arduino/FreeRTOS/HTTP objects. If the markers go missing the
@@ -716,6 +723,10 @@ heading "Shell tests (the sketch compile check, tools/compile_sketches.sh, again
 
 heading "Shell tests (deploy_all.sh and tools/deploy_plan_lib.sh, against fake deploy / ota / curl tools)"
 "$ROOT_DIR/tests/shell/test_deploy_all.sh"
+[ $? -ne 0 ] && overall_status=1
+
+heading "Shell tests (the settings reference generator, tools/gen_settings_reference.sh: --check goes red when the file is stale)"
+"$ROOT_DIR/tests/shell/test_gen_settings_reference.sh"
 [ $? -ne 0 ] && overall_status=1
 
 heading "Shell tests (the output levels, tools/test_output.sh, and --verbose)"
