@@ -64,6 +64,9 @@ These size static arrays or are protocol or hardware limits, so they have no row
 `SETUP_READ_CHUNK`, `MAX_FORM_FIELDS`, `MAX_FIELD_NAME`, `MAX_LINE_LENGTH`, `MAX_WIFI_NETWORKS`,
 `NVS_KEY_MAX_LENGTH`, `WPA2_PASS_MIN/MAX`, `SSID_MAX`, `TENSOR_ARENA_SIZE`, `FRAME_SIZE`, `IMAGE_*`
 (the model's input), `MAX_STATUS_BYTES`, `MAX_JPEG_BYTES` (must match the relay, see T8) and the frame-size ladder.
+T5b confirms three more from its own code: `SETUP_MAX_CONNECTIONS` (it is the number of connection slots
+`ArduinoSetupNet` allocates), `SETUP_HTTP_PORT` (80 — the phones' captive-portal probes and the setup mode's
+DNS-rebinding guard assume it) and `SETUP_DNS_PORT` (53 — the port the phones send their DNS queries to).
 
 **Confirmed by T5c (detector hardware and internals)**, each with its reason:
 
@@ -176,9 +179,6 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `SETUP_RESTART_GRACE_MS` | `SETUP_GRACE_MS` | Wait before restart after setup (ms) | both | new | T2,T5b |
 | `SETUP_AP_CHANNEL` | `SETUP_AP_CHAN` | Setup Wi-Fi channel | both | new | T2,T5b |
 | `SETUP_AP_MAX_STATIONS` | `SETUP_MAX_STA` | Setup Wi-Fi: most devices at once | both | new | T2,T5b |
-| `SETUP_HTTP_PORT` | `SETUP_HTTP_PORT` | Setup page port | both | new | T2,T5b |
-| `SETUP_DNS_PORT` | `SETUP_DNS_PORT` | Setup DNS port | both | new | T2,T5b |
-| `SETUP_MAX_CONNECTIONS` | `SETUP_MAX_CONN` | Setup page: most connections at once | both | new | T2,T5b |
 | `SETUP_REQUEST_TIMEOUT_MS` | `SETUP_RQ_TMO_MS` | Setup page request timeout (ms) | both | new | T2,T5b |
 | `SETTINGS_WINDOW_MS` | `BOOT_SER_WIN_MS` | Boot wait for a serial "y" (ms) | both | new | T2,T5b |
 | `REMOTE_CONNECT_MS` | `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | both | new | T2,T5b |

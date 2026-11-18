@@ -11,11 +11,11 @@
 //     SettingsSync sync(RECORDER_SCHEMA, store, "recorder", recorderLockedKeys());
 //     if (sync.tick(host, httpPort, apiKey, id)) { /* settings were stored */ restart(); }
 //
-// Knobs (define before including to change):
-//   SETTINGS_SYNC_ENABLED         1; set 0 to build a sketch the dashboard can not reconfigure
-//   SETTINGS_SYNC_FIRST_SECONDS   20   after boot, before the first ask (the camera and the
-//                                      stream get the radio first)
-//   SETTINGS_SYNC_CHECK_SECONDS   30   between asks
+// Since F-29 the schedule is a SETTING, not a build-time knob (SYNC_ENABLED, SYNC_FIRST_S,
+// SYNC_CHECK_S). The values reach this class through the constructor; the defaults are the old
+// hard-coded ones, so a sketch that passes nothing behaves exactly as before. SYNC_ENABLED is the
+// sketch's decision, made once per tick from its settings — a sync switched off mid-boot must not
+// resurrect here.
 
 #pragma once
 
@@ -27,16 +27,6 @@
 #include <vector>
 
 #include "settings_logic.h"
-
-#ifndef SETTINGS_SYNC_ENABLED
-#define SETTINGS_SYNC_ENABLED 1
-#endif
-#ifndef SETTINGS_SYNC_FIRST_SECONDS
-#define SETTINGS_SYNC_FIRST_SECONDS 20
-#endif
-#ifndef SETTINGS_SYNC_CHECK_SECONDS
-#define SETTINGS_SYNC_CHECK_SECONDS 30
-#endif
 
 // The relay as the poller sees it:
 //   GET  /device-settings/<type>/<id>/change   -> 200 "<number>\n<KEY=value;...>", or 404 (nothing queued)
@@ -90,22 +80,19 @@ class RelayChangeLink : public esp32cam_settings::IChangeLink {
 
 class SettingsSync {
  public:
+  // `firstS` / `checkS`: the ask schedule in seconds, from the sketch's settings (SYNC_FIRST_S,
+  // SYNC_CHECK_S); the defaults are the old hard-coded values. ChangePoller takes milliseconds.
   SettingsSync(const esp32cam_settings::Schema& schema, esp32cam_settings::ISettingsStore& store, const char* type,
-               const std::vector<std::string>& lockedKeys)
+               const std::vector<std::string>& lockedKeys, uint32_t firstS = 20, uint32_t checkS = 30)
       : link_(type),
-        poller_(schema, store, link_, lockedKeys, (uint32_t)SETTINGS_SYNC_FIRST_SECONDS * 1000UL,
-                (uint32_t)SETTINGS_SYNC_CHECK_SECONDS * 1000UL) {}
+        poller_(schema, store, link_, lockedKeys, firstS * 1000UL, checkS * 1000UL) {}
 
   // true: settings were stored — restart the board so they take effect. Does nothing unless an
-  // ask is due; takes a few seconds when it is, so call it from a background task only.
+  // ask is due; takes a few seconds when it is, so call it from a background task only. Whether
+  // the board asks at all is the sketch's decision (SYNC_ENABLED), made before the call.
   bool tick(const std::string& host, int port, const std::string& apiKey, const std::string& id) {
-#if SETTINGS_SYNC_ENABLED
     link_.target(host, port, apiKey, id);
     return poller_.tick(millis()) == esp32cam_settings::ChangePoller::Restart;
-#else
-    (void)host; (void)port; (void)apiKey; (void)id;
-    return false;
-#endif
   }
 
   // true: the restart tick() asked for was requested by the dashboard (a command), not caused by new

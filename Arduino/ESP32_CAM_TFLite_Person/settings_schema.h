@@ -1,7 +1,8 @@
 // settings_schema.h — WHICH settings the person-detector sketch has (the key
-// table), the one rule that spans several of them, and PersonSettings, the
-// typed copy the sketch reads at run time. Pure C++11 like settings_logic.h (no
-// Arduino includes), unit-tested on a desktop: see tests/cpp/test_person_settings.cpp.
+// table), the rules that span several of them, the readable name, group and
+// fallback of each (PERSON_META), and PersonSettings, the typed copy the sketch
+// reads at run time. Pure C++11 like settings_logic.h (no Arduino includes),
+// unit-tested on a desktop: see tests/cpp/test_person_settings.cpp.
 //
 // This table replaces the old config.h. Key names are at most 15 characters
 // (a flash/NVS limit), which is why a few differ from the old config.h names:
@@ -29,6 +30,18 @@
 // DETECTOR_ID) and the alarm pin (PERSON_GPIO, which depends on how the board is wired)
 // have no default and stay required.
 //
+// F-29 (T5b): the values that used to be hard-coded in the sketch and the shared
+// headers — the over-the-air update (ota.h), finding the relay again (relay_find.h),
+// fetching queued settings changes (settings_sync.h), the setup WiFi's tuning and the
+// boot conversation's waits (setup_*), the live-view polls and connection timings, and
+// the log's delivery tuning (remote_log.h) — are settings too. Each has a default equal
+// to the old hard-coded value (PERSON_META), so nothing changes for a board until
+// somebody edits it, and a blank board is not asked for any of them. The setup values
+// the captive-portal protocol or the sketch's own memory layout pin (the DNS port 53,
+// the form's HTTP port 80, the connection-slot count and the reader caps) stay
+// compile-time — see docs/SETTINGS_KEYS.md, "not configurable".
+//
+//
 // The Hardware & internals keys (F-29 T5c: PIN_*, CAM_*, STK_*, SER_*, BOOT_FAIL_MS) are the board's
 // pin map and the boot-time values of the camera driver, its two background tasks and the serial
 // port. Every one is read once at boot, so a change takes effect at the next restart (Apply::Reboot,
@@ -53,6 +66,7 @@
 //   PRINT_DETECTION_SCORES, PRINT_STARTUP_INFO, PRINT_SCENE_READINGS
 //                          serial-only debug verbosity, deliberately not per-board settings.
 // See the top of the .ino.
+
 
 #pragma once
 
@@ -97,9 +111,42 @@ inline bool personMotionAreaConsistent(const IValues& v, std::string& err) {
     return false;
 }
 
+// OTA_FW_MIN_B (the smallest image accepted) must not be above OTA_FW_MAX_B (the largest): an inverted
+// window would refuse EVERY image, so an update could never succeed and the board would only say
+// "bad_size". Refused once both are known numbers (a missing or malformed one is reported on its own).
+inline bool otaFirmwareSizesConsistent(const IValues& v, std::string& err) {
+    std::string smin, smax;
+    if (!v.get("OTA_FW_MIN_B", smin) || !v.get("OTA_FW_MAX_B", smax)) return true;   // not both known yet
+    long long lo = 0, hi = 0;
+    if (!parseInt(smin, lo) || !parseInt(smax, hi)) return true;                     // reported on their own
+    if (lo > hi) {
+        err = "OTA_FW_MIN_B (" + smin + ") must not be higher than OTA_FW_MAX_B (" + smax +
+              ") - send both in one line to change them together";
+        return false;
+    }
+    return true;
+}
+
+// RF_RETRY_MIN_S is the FIRST wait after a failed search and RF_RETRY_MAX_S the longest one (the wait
+// doubles from the first to the last): a minimum above the maximum would leave no room to grow, and the
+// search would hammer the network at the minimum pace whatever the maximum says.
+inline bool relayFindRetryRangeHolds(const IValues& v, std::string& err) {
+    std::string smin, smax;
+    if (!v.get("RF_RETRY_MIN_S", smin) || !v.get("RF_RETRY_MAX_S", smax)) return true;   // not both known yet
+    long long lo = 0, hi = 0;
+    if (!parseInt(smin, lo) || !parseInt(smax, hi)) return true;                          // reported on their own
+    if (lo > hi) {
+        err = "RF_RETRY_MIN_S (" + smin + ") must not be higher than RF_RETRY_MAX_S (" + smax +
+              ") - send both in one line to change them together";
+        return false;
+    }
+    return true;
+}
+
 // Every rule that spans several of the detector's settings; the first one that fails is reported.
 inline bool personRulesHold(const IValues& v, std::string& err) {
-    return personThresholdsConsistent(v, err) && personMotionAreaConsistent(v, err);
+    return personThresholdsConsistent(v, err) && personMotionAreaConsistent(v, err) &&
+           otaFirmwareSizesConsistent(v, err) && relayFindRetryRangeHolds(v, err);
 }
 
 static const KeyDef PERSON_KEYS[] = {
@@ -171,6 +218,93 @@ static const KeyDef PERSON_KEYS[] = {
       "longest wait, in seconds, between attempts to reach the relay again (the first retries come sooner)" },
     { "ANN_FIRST_S",     Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
       "first wait, in seconds, before the relay is tried again after a failure (a relay restart should cost seconds, not half a minute); the later waits double up to ANN_RETRY" },
+
+    // F-29 (T5b): the update, relay-find, settings-sync, setup, boot, live-view and log values that
+    // used to be hard-coded. Each default below is the old hard-coded value, so nothing changes for a
+    // board until somebody edits it, and a blank board is never asked for any of them.
+    { "OTA_ENABLED",     Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: the board asks the relay which firmware is current and installs it; 0: it never updates itself until switched back on (serial only)" },
+    { "OTA_CHECK_S",     Kind::Int,       5,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between firmware-update checks (plus up to 15 s random jitter, so boards do not all ask at once)" },
+    { "OTA_RETRY_S",     Kind::Int,       5,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds to wait after a FAILED update before trying again" },
+    { "OTA_VER_MAX_B",   Kind::Int,       64,   65536,   Cond::Always,     nullptr,          nullptr,
+      "the version answer is refused as hostile above this many bytes (a valid answer is about 80)" },
+    { "OTA_FW_MIN_B",    Kind::Int,       0,    1048576, Cond::Always,     nullptr,          nullptr,
+      "a firmware image smaller than this many bytes is refused before it reaches flash (not above OTA_FW_MAX_B)" },
+    { "OTA_FW_MAX_B",    Kind::Int,       65536, 4194304, Cond::Always,    nullptr,          nullptr,
+      "a firmware image bigger than this many bytes is refused (the OTA partition holds about 2 MB; not below OTA_FW_MIN_B)" },
+    { "OTA_VER_IDLE_MS", Kind::Int,       100,  60000,   Cond::Always,     nullptr,          nullptr,
+      "how long the version answer may stay silent before it is given up on (ms)" },
+    { "OTA_DL_IDLE_MS",  Kind::Int,       100,  120000,  Cond::Always,     nullptr,          nullptr,
+      "how long the firmware download may stay silent before it is given up on (ms); the image is megabytes over Wi-Fi" },
+
+    { "RF_ENABLED",      Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: when the relay cannot be reached for a while, look for it on the network and store the address it answers from; 0: keep SERVER_HOST whatever happens" },
+    { "RF_PORT",         Kind::Int,       1,    65535,   Cond::Always,     nullptr,          nullptr,
+      "UDP port the relay answers discovery on - discoveryPort in the relay's config.js; the two must match" },
+    { "RF_FIRST_S",      Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
+      "seconds after boot (Wi-Fi up) before the first relay check" },
+    { "RF_OK_S",         Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between relay checks while the relay answers" },
+    { "RF_RETRY_MIN_S",  Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
+      "first wait after a failed search, in seconds; it doubles up to RF_RETRY_MAX_S (not above it)" },
+    { "RF_RETRY_MAX_S",  Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "longest wait between failed searches, in seconds (not below RF_RETRY_MIN_S)" },
+
+    { "SYNC_ENABLED",    Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: the board asks the relay for queued settings changes (the dashboard's settings pages); 0: the dashboard can not reconfigure this board (serial only)" },
+    { "SYNC_FIRST_S",    Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds after boot before the first settings ask (the live view gets the radio first)" },
+    { "SYNC_CHECK_S",    Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between settings asks" },
+
+    { "SETUP_RETRY_MS",  Kind::Int,       100,  60000,   Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: wait after a failed access-point start or flash write, then try again (ms)" },
+    { "SETUP_GRACE_MS",  Kind::Int,       0,    60000,   Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: keep serving this long after a save or exit so the browser gets its reply (ms)" },
+    { "SETUP_AP_CHAN",   Kind::Int,       1,    13,      Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: the access point's Wi-Fi channel" },
+    { "SETUP_MAX_STA",   Kind::Int,       1,    8,       Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: how many phones may be joined at once" },
+    { "SETUP_RQ_TMO_MS", Kind::Int,       1000, 120000,  Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: a form request that is not complete by then is dropped (ms); protects against slow-loris clients" },
+
+    { "BOOT_SER_WIN_MS", Kind::Int,       0,    60000,   Cond::Always,     nullptr,          nullptr,
+      "at boot: how long the serial port waits for a y (change settings?) before starting normally (ms)" },
+    { "BOOT_WIFI_MS",    Kind::Int,       1000, 120000,  Cond::Always,     nullptr,          nullptr,
+      "at boot: how long the board may take to join Wi-Fi while it asks the relay for missing settings (ms)" },
+    { "BOOT_RELAY_MS",   Kind::Int,       1000, 300000,  Cond::Always,     nullptr,          nullptr,
+      "at boot: how long it then waits for the relay to supply the missing settings (ms)" },
+    { "BOOT_POLL_MS",    Kind::Int,       500,  60000,   Cond::Always,     nullptr,          nullptr,
+      "at boot: how often it asks the relay meanwhile (ms)" },
+
+    { "VIEW_IDLE_MS",    Kind::Int,       1000,  3600000, Cond::Always,    nullptr,          nullptr,
+      "live view: how often the resting board asks the relay whether somebody watches (ms)" },
+    { "VIEW_LIVE_MS",    Kind::Int,       500,   60000,   Cond::Always,    nullptr,          nullptr,
+      "live view: how often it asks while somebody watches (ms)" },
+    { "VIEW_RETRY_MS",   Kind::Int,       500,   60000,   Cond::Always,    nullptr,          nullptr,
+      "live view: wait after a failed poll before trying again (ms)" },
+    { "WIFI_DOWN_MS",    Kind::Int,       1000,  3600000, Cond::Always,    nullptr,          nullptr,
+      "Wi-Fi down: how often the log repeats that it is still down (ms)" },
+    { "RELAY_DOWN_MS",   Kind::Int,       5000,  3600000, Cond::Always,    nullptr,          nullptr,
+      "the connection to the relay has been down this long (ms): look for it on the network again" },
+    { "HTTP_TMO_MS",     Kind::Int,       500,   60000,   Cond::Always,    nullptr,          nullptr,
+      "how long a plain HTTP call to the relay (log, live-view poll) may take (ms)" },
+
+    { "LOG_MIN_LEVEL",   Kind::Int,       0,    3,       Cond::Always,     nullptr,          nullptr,
+      "lowest level sent to the relay: 0=DEBUG 1=INFO 2=WARN 3=ERROR" },
+    { "LOG_ECHO",        Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: serial shows everything; 0: only what is not sent to the relay" },
+    { "LOG_RETRY_MAX",   Kind::Int,       0,    255,     Cond::Always,     nullptr,          nullptr,
+      "retries after a failed delivery, then serial only until the relay is back" },
+    { "LOG_RETRY_SEC",   Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between retries" },
+    { "LOG_FLUSH_SEC",   Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
+      "routine entries wait this long so they go out together" },
+    { "LOG_REPEAT_SEC",  Kind::Int,       0,    3600,    Cond::Always,     nullptr,          nullptr,
+      "an identical message inside this window is counted, not repeated" },
+
     // F-21, the cable-free first setup (see the setup mode of the sketch). Both settings are OPTIONAL: a board
     // that has neither is still complete, so boards deployed before this feature keep working untouched.
     { "SETUP_MODE",      Kind::Bool,      0,    0,       Cond::Optional,    nullptr,          nullptr,
@@ -246,9 +380,13 @@ static const KeyDef PERSON_KEYS[] = {
 // asked for while the auto-calibration is on, and its usual value (30) is in the help text - the same
 // arrangement LOG_MIN_LEVEL has on the recorder, but there the fixed default always applied; here a board
 // that predates the feature must keep being asked, because nothing else tells the owner the choice exists.
+// The two channel switches (OTA_ENABLED, SYNC_ENABLED) DO default to on - that is what the sketch built in
+// before - but they are locked (serial-only), so a compromise cannot quietly flip them off (see
+// personLockedKeys).
 //
-// Categories follow the Atlas design's detector page: Detection, Picture & live view, Hardware & internals
-// (Connection - the detector's share, Wi-Fi sleep and HTTP timeouts - arrives with T5b).
+// Categories follow the Atlas design's detector page: Detection, Picture & live view, Connection,
+// Updates & sync, Setup & security, Logging, Hardware & internals.
+
 static const KeyMeta PERSON_META[] = {
     // name              default  label                                   category          tier          apply
     { "DETECT_THRESH",   "0.6",   "Person detected above (score)",        "Detection",      Tier::Basic,    Apply::Live },
@@ -277,12 +415,54 @@ static const KeyMeta PERSON_META[] = {
     { "ANN_HEARTBEAT",   "600",   "Seconds between status lines",         "Picture & live view", Tier::Advanced, Apply::Reboot },
     { "ANN_RETRY",       "30",    "Longest wait before reaching the relay again (s)", "Picture & live view", Tier::Advanced, Apply::Reboot },
     { "ANN_FIRST_S",     "2",     "First wait before reaching the relay again (s)",   "Picture & live view", Tier::Advanced, Apply::Reboot },
-
+    // ── Updates & sync ──
+    { "OTA_ENABLED",     "1",       "Firmware updates from the relay",         "Updates & sync",   Tier::Basic,    Apply::Reboot },
+    { "OTA_CHECK_S",     "60",      "Update check interval (s)",               "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "OTA_RETRY_S",     "300",     "Update retry interval (s)",               "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "OTA_VER_MAX_B",   "256",     "Version reply size limit (bytes)",        "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_FW_MIN_B",    "102400",  "Smallest firmware accepted (bytes)",      "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_FW_MAX_B",    "2097152", "Largest firmware accepted (bytes)",       "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_VER_IDLE_MS", "5000",    "Version reply idle timeout (ms)",         "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_DL_IDLE_MS",  "15000",   "Firmware download idle timeout (ms)",     "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "SYNC_ENABLED",    "1",       "Fetch settings from the relay",           "Updates & sync",   Tier::Basic,    Apply::Reboot },
+    { "SYNC_FIRST_S",    "20",      "First settings check after (s)",          "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "SYNC_CHECK_S",    "30",      "Settings check interval (s)",             "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    // ── Connection ──
+    { "RF_ENABLED",      "1",       "Look for the relay on the network",       "Connection",       Tier::Basic,    Apply::Reboot },
+    { "RF_PORT",         "8082",    "Relay discovery port",                    "Connection",       Tier::Advanced, Apply::Reboot },
+    { "RF_FIRST_S",      "10",      "First relay search after (s)",            "Connection",       Tier::Expert,   Apply::Reboot },
+    { "RF_OK_S",         "60",      "Relay check interval while found (s)",    "Connection",       Tier::Expert,   Apply::Reboot },
+    { "RF_RETRY_MIN_S",  "15",      "Shortest wait between searches (s)",      "Connection",       Tier::Expert,   Apply::Reboot },
+    { "RF_RETRY_MAX_S",  "300",     "Longest wait between searches (s)",       "Connection",       Tier::Expert,   Apply::Reboot },
+    { "BOOT_WIFI_MS",    "20000",   "Boot: time to join Wi-Fi (ms)",           "Connection",       Tier::Advanced, Apply::Reboot },
+    { "BOOT_RELAY_MS",   "30000",   "Boot: wait for settings from the relay (ms)", "Connection",   Tier::Advanced, Apply::Reboot },
+    { "BOOT_POLL_MS",    "5000",    "Boot: ask the relay every (ms)",          "Connection",       Tier::Expert,   Apply::Reboot },
+    { "WIFI_DOWN_MS",    "10000",   "Wi-Fi down: report every (ms)",           "Connection",       Tier::Advanced, Apply::Reboot },
+    { "RELAY_DOWN_MS",   "90000",   "Relay considered gone after (ms)",        "Connection",       Tier::Advanced, Apply::Reboot },
+    { "HTTP_TMO_MS",     "5000",    "HTTP call timeout (ms)",                  "Connection",       Tier::Advanced, Apply::Reboot },
+    // ── Picture & live view (the live view's polls) ──
+    { "VIEW_IDLE_MS",    "30000",   "Live view poll when idle (ms)",           "Picture & live view",   Tier::Advanced, Apply::Reboot },
+    { "VIEW_LIVE_MS",    "3000",    "Live view poll while watched (ms)",       "Picture & live view",   Tier::Advanced, Apply::Reboot },
+    { "VIEW_RETRY_MS",   "10000",   "Live view poll retry (ms)",               "Picture & live view",   Tier::Expert,   Apply::Reboot },
+    // ── Setup & security ──
+    { "SETUP_RETRY_MS",  "5000",    "Setup retry after a failure (ms)",        "Setup & security", Tier::Expert,   Apply::Reboot },
+    { "SETUP_GRACE_MS",  "1500",    "Wait before restart after setup (ms)",    "Setup & security", Tier::Expert,   Apply::Reboot },
+    { "SETUP_AP_CHAN",   "1",       "Setup Wi-Fi channel",                     "Setup & security", Tier::Advanced, Apply::Reboot },
+    { "SETUP_MAX_STA",   "4",       "Setup Wi-Fi: most devices at once",       "Setup & security", Tier::Advanced, Apply::Reboot },
+    { "SETUP_RQ_TMO_MS", "10000",   "Setup page request timeout (ms)",         "Setup & security", Tier::Expert,   Apply::Reboot },
+    { "BOOT_SER_WIN_MS", "5000",    "Boot wait for a serial \"y\" (ms)",       "Setup & security", Tier::Advanced, Apply::Reboot },
+    // ── Logging ──
+    { "LOG_MIN_LEVEL",   "1",       "Lowest level sent to the relay",          "Logging",          Tier::Basic,    Apply::Live },
+    { "LOG_ECHO",        "1",       "Show everything on serial",               "Logging",          Tier::Advanced, Apply::Live },
+    { "LOG_RETRY_MAX",   "3",       "Retries after a failed delivery",         "Logging",          Tier::Advanced, Apply::Live },
+    { "LOG_RETRY_SEC",   "30",      "Seconds between retries",                 "Logging",          Tier::Advanced, Apply::Live },
+    { "LOG_FLUSH_SEC",   "10",      "Seconds routine entries wait",            "Logging",          Tier::Advanced, Apply::Live },
+    { "LOG_REPEAT_SEC",  "30",      "Window for counting repeats",             "Logging",          Tier::Advanced, Apply::Live },
     // The Hardware & internals group, F-29 T5c. A setting with a default is no longer asked for on a
     // blank board: it simply uses that value, which is what the sketch did before the value became a
     // setting, until somebody changes it. Every row is Expert tier and Apply::Reboot: the values are
-    // read once at boot. The network, logging, update and setup rows are T5b's: they land in this
-    // table as that task is done.
+    // read once at boot. The Atlas groups above it - Updates & sync, Connection, Picture & live
+    // view, Setup & security, Logging - are T5b's rows, landed since.
     { "PIN_PWDN",       "32",       "Camera pin: PWDN",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
     { "PIN_RESET",      "-1",       "Camera pin: RESET",                     "Hardware & internals", Tier::Expert, Apply::Reboot },
     { "PIN_XCLK",       "0",        "Camera pin: XCLK",                      "Hardware & internals", Tier::Expert, Apply::Reboot },
@@ -307,6 +487,7 @@ static const KeyMeta PERSON_META[] = {
     { "SER_BAUD",       "115200",   "Serial speed (baud)",                   "Hardware & internals", Tier::Expert, Apply::Reboot },
     { "SER_RXBUF_B",    "2048",     "Serial receive buffer (bytes)",         "Hardware & internals", Tier::Expert, Apply::Reboot },
     { "BOOT_FAIL_MS",   "30000",    "Restart after a failed start (ms)",     "Hardware & internals", Tier::Expert, Apply::Reboot },
+
 };
 static const size_t PERSON_META_COUNT = sizeof(PERSON_META) / sizeof(PERSON_META[0]);
 
@@ -320,7 +501,8 @@ static const Schema PERSON_SCHEMA = {
 
 // The settings as the sketch uses them. The in-struct defaults mirror PERSON_META: they are what
 // a PersonSettings built without loading (the glue tests' g_cfg) starts with, and loadPersonSettings
-// overwrites every field from the store anyway.
+// overwrites every field from the store anyway. (They are also what the boot-time code that cannot
+// load the settings yet reads; each equals its key's default in PERSON_META.)
 struct PersonSettings {
     int personGpio = 13;
     float detectThreshold = 0.60f;
@@ -353,6 +535,45 @@ struct PersonSettings {
     uint32_t announceRetrySec = 30;
     uint32_t announceFirstRetrySec = 2;       // ANN_FIRST_S: the first backoff wait (the later ones double, up to ANN_RETRY)
 
+
+    // Firmware update (ota.h; the update itself only runs while otaEnabled).
+    bool otaEnabled = true;
+    uint32_t otaCheckSec = 60;
+    uint32_t otaRetrySec = 300;
+    uint32_t otaVerMaxBytes = 256;
+    uint32_t otaFwMinBytes = 100UL * 1024UL;
+    uint32_t otaFwMaxBytes = 2UL * 1024UL * 1024UL;
+    uint32_t otaVerIdleMs = 5000;
+    uint32_t otaDlIdleMs = 15000;
+
+    // Finding the relay again (relay_find.h; the search only runs while relayFindEnabled).
+    bool relayFindEnabled = true;
+    int relayFindPort = 8082;
+    uint32_t relayFindFirstSec = 10;
+    uint32_t relayFindOkSec = 60;
+    uint32_t relayFindRetryMinSec = 15;
+    uint32_t relayFindRetryMaxSec = 300;
+
+    // Queued settings changes from the dashboard (settings_sync.h; asked only while syncEnabled).
+    bool syncEnabled = true;
+    uint32_t syncFirstSec = 20;
+    uint32_t syncCheckSec = 30;
+
+    // The live view's polls, the Wi-Fi and relay health and the plain HTTP calls.
+    uint32_t viewIdlePollMs = 30000;
+    uint32_t viewLivePollMs = 3000;
+    uint32_t viewRetryMs = 10000;
+    uint32_t wifiDownReportMs = 10000;
+    uint32_t relayDownMs = 90000;
+    uint32_t httpTimeoutMs = 5000;
+
+    // What the log sends and how it retries (remote_log.h; remote delivery itself is always on).
+    int logMinLevel = 1;
+    bool logEcho = true;
+    int logRetryMax = 3;
+    uint32_t logRetrySec = 30;
+    uint32_t logFlushSec = 10;
+    uint32_t logRepeatSec = 30;
     // Hardware & internals (F-29 T5c): the pin map and the boot-time values of the camera driver, the
     // two background tasks and the restart after a failed start. Each is read once at boot, so a
     // changed value needs a restart (Apply::Reboot); every default is the old hard-coded value. The
@@ -381,6 +602,7 @@ struct PersonSettings {
     uint32_t stkLogBytes = 8192;   // STK_LOG_B
     uint32_t stkNetBytes = 16384;  // STK_NET_B
     uint32_t bootFailRestartMs = 30000;   // BOOT_FAIL_MS
+
 };
 
 // The settings this board needs before it can ask the relay for the OTHERS
@@ -393,16 +615,20 @@ inline std::vector<std::string> personRemotePrerequisites() {
 }
 
 // The settings the dashboard may NOT change (they stay serial-only): everything that connects the
-// board to the relay, and the alarm pin. A wrong value in one of
-// them would leave a board nobody can reach without a USB cable (or drive the wrong pin). What is left -
-// the thresholds and the stream tuning - is what the dashboard's CALIBRATE page edits. Keep in sync
-// with the schema above.
+// board to the relay, the alarm pin, and the switches of the two channels a compromise could otherwise
+// quietly cut — the firmware updates (OTA_ENABLED) and the dashboard's own change channel (SYNC_ENABLED;
+// a MITM flipping either to 0 would strand the board's updates or its remote management, the same
+// operational-posture argument that keeps the recorder's LOG_ENABLED serial-only, review ARD-009). What
+// is left - the thresholds and the stream tuning - is what the dashboard's CALIBRATE page edits. Keep in
+// sync with the schema above.
 inline std::vector<std::string> personLockedKeys() {
     // F-21: SETUP_PASSWORD (the setup WiFi's master password) is serial-only / setup-form-only, like API_KEY: over
     // plain HTTP a man-in-the-middle could otherwise choose the password of the next setup session. SETUP_MODE is
     // NOT locked: switching it on from the dashboard is the point of the feature.
     static const char* const keys[] = { "PERSON_GPIO", "WIFI", "SERVER_HOST", "HTTP_PORT",
-                                        "API_KEY", "DETECTOR_ID", "SETUP_PASSWORD" };
+                                        "API_KEY", "DETECTOR_ID", "SETUP_PASSWORD",
+                                        // F-29 (T5b): the update and settings-sync switches, see above.
+                                        "OTA_ENABLED", "SYNC_ENABLED" };
     return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
 }
 
@@ -457,6 +683,39 @@ inline bool loadPersonSettings(ISettingsStore& flash, PersonSettings& out, std::
     s.announceRetrySec = static_cast<uint32_t>(storedInt(store, "ANN_RETRY"));
     s.announceFirstRetrySec = static_cast<uint32_t>(storedInt(store, "ANN_FIRST_S"));
 
+    s.otaEnabled = store.get("OTA_ENABLED") == "1";
+    s.otaCheckSec = static_cast<uint32_t>(storedInt(store, "OTA_CHECK_S"));
+    s.otaRetrySec = static_cast<uint32_t>(storedInt(store, "OTA_RETRY_S"));
+    s.otaVerMaxBytes = static_cast<uint32_t>(storedInt(store, "OTA_VER_MAX_B"));
+    s.otaFwMinBytes = static_cast<uint32_t>(storedInt(store, "OTA_FW_MIN_B"));
+    s.otaFwMaxBytes = static_cast<uint32_t>(storedInt(store, "OTA_FW_MAX_B"));
+    s.otaVerIdleMs = static_cast<uint32_t>(storedInt(store, "OTA_VER_IDLE_MS"));
+    s.otaDlIdleMs = static_cast<uint32_t>(storedInt(store, "OTA_DL_IDLE_MS"));
+
+    s.relayFindEnabled = store.get("RF_ENABLED") == "1";
+    s.relayFindPort = static_cast<int>(storedInt(store, "RF_PORT"));
+    s.relayFindFirstSec = static_cast<uint32_t>(storedInt(store, "RF_FIRST_S"));
+    s.relayFindOkSec = static_cast<uint32_t>(storedInt(store, "RF_OK_S"));
+    s.relayFindRetryMinSec = static_cast<uint32_t>(storedInt(store, "RF_RETRY_MIN_S"));
+    s.relayFindRetryMaxSec = static_cast<uint32_t>(storedInt(store, "RF_RETRY_MAX_S"));
+
+    s.syncEnabled = store.get("SYNC_ENABLED") == "1";
+    s.syncFirstSec = static_cast<uint32_t>(storedInt(store, "SYNC_FIRST_S"));
+    s.syncCheckSec = static_cast<uint32_t>(storedInt(store, "SYNC_CHECK_S"));
+
+    s.viewIdlePollMs = static_cast<uint32_t>(storedInt(store, "VIEW_IDLE_MS"));
+    s.viewLivePollMs = static_cast<uint32_t>(storedInt(store, "VIEW_LIVE_MS"));
+    s.viewRetryMs = static_cast<uint32_t>(storedInt(store, "VIEW_RETRY_MS"));
+    s.wifiDownReportMs = static_cast<uint32_t>(storedInt(store, "WIFI_DOWN_MS"));
+    s.relayDownMs = static_cast<uint32_t>(storedInt(store, "RELAY_DOWN_MS"));
+    s.httpTimeoutMs = static_cast<uint32_t>(storedInt(store, "HTTP_TMO_MS"));
+
+    s.logMinLevel = static_cast<int>(storedInt(store, "LOG_MIN_LEVEL"));
+    s.logEcho = store.get("LOG_ECHO") == "1";
+    s.logRetryMax = static_cast<int>(storedInt(store, "LOG_RETRY_MAX"));
+    s.logRetrySec = static_cast<uint32_t>(storedInt(store, "LOG_RETRY_SEC"));
+    s.logFlushSec = static_cast<uint32_t>(storedInt(store, "LOG_FLUSH_SEC"));
+    s.logRepeatSec = static_cast<uint32_t>(storedInt(store, "LOG_REPEAT_SEC"));
     // Hardware & internals (F-29 T5c): stored values, else the defaults the sketch always used.
     s.pinPwdn = static_cast<int>(storedInt(store, "PIN_PWDN"));
     s.pinReset = static_cast<int>(storedInt(store, "PIN_RESET"));
@@ -480,6 +739,7 @@ inline bool loadPersonSettings(ISettingsStore& flash, PersonSettings& out, std::
     s.stkLogBytes = static_cast<uint32_t>(storedInt(store, "STK_LOG_B"));
     s.stkNetBytes = static_cast<uint32_t>(storedInt(store, "STK_NET_B"));
     s.bootFailRestartMs = static_cast<uint32_t>(storedInt(store, "BOOT_FAIL_MS"));
+
 
     out = s;
     return true;

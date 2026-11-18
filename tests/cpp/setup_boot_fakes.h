@@ -22,6 +22,7 @@ struct FakeSetupWorld {
     int failStarts;                 // the next N startAccessPoint() calls fail
     std::string ssid, password;     // what the access point was last started with
     esp32cam_setup::SetupHandler handler;   // what the HTTP server calls, as given to openNet()
+    esp32cam_setup::SetupNetOptions net;    // what openNet() was last given
     std::function<void()> onPoll;   // plays the phone
     std::vector<std::string> logs;  // the serial lines
 
@@ -34,6 +35,7 @@ struct FakeSetupWorld {
         ssid.clear();
         password.clear();
         handler = esp32cam_setup::SetupHandler();
+        net = esp32cam_setup::SetupNetOptions();
         onPoll = std::function<void()>();
         logs.clear();
     }
@@ -70,9 +72,11 @@ class FakeSetupHardware : public esp32cam_setup::ISetupHardware {
 public:
     std::string mac() override { setupWorld().macCalls++; return setupWorld().mac; }
     std::string newToken() override { setupWorld().tokenCalls++; return setupWorld().token; }
-    std::unique_ptr<esp32cam_setup::ISetupNet> openNet(const esp32cam_setup::SetupHandler& handler) override {
+    std::unique_ptr<esp32cam_setup::ISetupNet> openNet(const esp32cam_setup::SetupHandler& handler,
+                                                       const esp32cam_setup::SetupNetOptions& net) override {
         setupWorld().opens++;
         setupWorld().handler = handler;
+        setupWorld().net = net;
         return std::unique_ptr<esp32cam_setup::ISetupNet>(new FakeSetupNet());
     }
     void log(const std::string& line) override { setupWorld().logs.push_back(line); }

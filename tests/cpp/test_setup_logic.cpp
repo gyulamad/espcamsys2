@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "../../Arduino/ESP32_CAM_Recorder/setup_logic.h"
+#include "../../Arduino/ESP32_CAM_Recorder/setup_boot.h"   // SetupOptions: where the grace default lives since F-29
 #include "settings_fakes.h"
 
 using namespace esp32cam_setup;
@@ -57,7 +57,7 @@ TEST(the_default_password_is_the_documented_one_and_a_valid_wpa2_passphrase) {
 
 TEST(the_access_point_constants) {
     TEST_ASSERT_EQ(std::string(SETUP_AP_IP), std::string("192.168.4.1"), "ESP32 default AP address");
-    TEST_ASSERT_EQ(SETUP_RESTART_GRACE_MS, 1500u, "grace before restart");
+    TEST_ASSERT_EQ(SetupOptions().graceMs, 1500u, "grace before restart (the SetupOptions default, SETUP_GRACE_MS's old value)");
 }
 
 // ── setupReason ─────────────────────────────────────────────────────────

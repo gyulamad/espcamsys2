@@ -63,9 +63,39 @@ TEST(the_serial_setup_of_a_blank_board_uses_the_defaults) {
     TEST_ASSERT_EQ(g_serialRxBuffer, (size_t)2048, "SER_RXBUF_B's default");
 }
 
+// F-29 (T5b): the SETUP_* and BOOT_* settings the boot reads reach the boot. A complete board is never
+// in setup, so only the serial window shows — with the stored 60 s, not the 5 s default.
+TEST(the_detector_setup_and_boot_settings_reach_the_serial_window) {
+    provision(std::string(DETECTION) + ";" + LIVE_VIEW +
+              ";SETUP_AP_CHAN=6;SETUP_MAX_STA=2;SETUP_RQ_TMO_MS=9999;BOOT_SER_WIN_MS=60000");
+    powerUp(); setupWorld().reset();
+    setupSettings();
+    TEST_ASSERT(said("Type y and Enter within 60 s"), "the serial window is the stored one (BOOT_SER_WIN_MS)");
+    TEST_ASSERT_EQ(setupWorld().opens, 0, "a complete board never opens its setup WiFi");
+    TEST_ASSERT_EQ(g_restarts, 0, "and it just starts");
+    TEST_ASSERT(g_cfg.otaCheckSec == 60 && g_cfg.relayDownMs == 90000, "the T5b defaults loaded with it");
+}
+
+// ...and a board that IS in setup hands the stored SETUP_* values to the access point it opens.
+TEST(the_detector_setup_settings_reach_the_access_point) {
+    provision(std::string(DETECTION) + ";SETUP_AP_CHAN=6;SETUP_MAX_STA=2;SETUP_RQ_TMO_MS=9999");
+    powerUp(); setupWorld().reset();
+    typeAt(300, std::string(LIVE_VIEW) + "\n");
+    setupSettings();
+    TEST_ASSERT_EQ(setupWorld().opens, 1, "the setup WiFi opened (the board was missing its live view)");
+    TEST_ASSERT_EQ(setupWorld().net.apChannel, 6, "on the stored channel");
+    TEST_ASSERT_EQ(setupWorld().net.apMaxStations, 2, "with the stored station count");
+    TEST_ASSERT_EQ(setupWorld().net.requestTimeoutMs, (uint32_t)9999, "and the stored request timeout");
+    TEST_ASSERT_EQ(g_restarts, 1, "restarted once everything was typed");
+
+}
+
 int main() {
     runSetupGlueCases();
     RUN_TEST(a_detector_that_predates_the_always_on_live_view_opens_the_setup_wifi);
     RUN_TEST(the_serial_setup_of_a_blank_board_uses_the_defaults);
+    RUN_TEST(the_detector_setup_and_boot_settings_reach_the_serial_window);
+    RUN_TEST(the_detector_setup_settings_reach_the_access_point);
+
     return test::summarize();
 }

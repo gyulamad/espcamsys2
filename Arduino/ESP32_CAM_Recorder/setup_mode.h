@@ -31,15 +31,17 @@
 //    watchdog), like the rest of the sketches.
 //
 // Knobs (define before including to change):
-//   SETUP_AP_CHANNEL            1     Wi-Fi channel of the access point
-//   SETUP_AP_MAX_STATIONS       4     phones that may be joined at once
-//   SETUP_HTTP_PORT             80
-//   SETUP_DNS_PORT              53
 //   SETUP_MAX_CONNECTIONS       4     open HTTP connections; more are closed at once
+//                                     (ALSO the number of connection slots, so it stays compile-time)
 //   SETUP_HEAD_MAX              2048  bytes of request line + headers
 //   SETUP_BODY_MAX              MAX_BODY_BYTES (4096) bytes of body
-//   SETUP_REQUEST_TIMEOUT_MS    10000 a request that is not complete by then is dropped (slow-loris)
 //   SETUP_READ_CHUNK            1024  bytes read from one connection per poll()
+//
+// Since F-29 the access point's channel and station count and the request timeout are SETTINGS
+// (SETUP_AP_CHAN, SETUP_MAX_STA, SETUP_RQ_TMO_MS): the sketch passes them here in a SetupNetOptions
+// (setup_boot.h), whose member defaults are the old hard-coded values; openNet() delivers them. The
+// two ports and the connection-slot count are pinned by the captive-portal protocol / this file's
+// memory layout and stay compile-time (see docs/SETTINGS_KEYS.md, "not configurable").
 
 #pragma once
 
@@ -51,20 +53,14 @@
 #include <functional>
 #include <string>
 
-#include "setup_boot.h"      // ISetupHardware, SetupHandler (and so HttpReply, SetupForm, ISetupNet)
+#include "setup_boot.h"      // ISetupHardware, SetupHandler, SetupNetOptions (and so HttpReply, SetupForm, ISetupNet)
 #include "setup_logic.h"     // SETUP_AP_IP
 
-#ifndef SETUP_AP_CHANNEL
-#define SETUP_AP_CHANNEL 1
-#endif
-#ifndef SETUP_AP_MAX_STATIONS
-#define SETUP_AP_MAX_STATIONS 4
-#endif
 #ifndef SETUP_HTTP_PORT
-#define SETUP_HTTP_PORT 80
+#define SETUP_HTTP_PORT 80     // the captive-portal probes assume 80; not a setting (see setup_boot.h)
 #endif
 #ifndef SETUP_DNS_PORT
-#define SETUP_DNS_PORT 53
+#define SETUP_DNS_PORT 53      // DNS; not a setting (see setup_boot.h)
 #endif
 #ifndef SETUP_MAX_CONNECTIONS
 #define SETUP_MAX_CONNECTIONS 4
@@ -74,9 +70,6 @@
 #endif
 #ifndef SETUP_BODY_MAX
 #define SETUP_BODY_MAX ((long)esp32cam_setup::MAX_BODY_BYTES)   // one cap for the reader and the form
-#endif
-#ifndef SETUP_REQUEST_TIMEOUT_MS
-#define SETUP_REQUEST_TIMEOUT_MS 10000
 #endif
 #ifndef SETUP_READ_CHUNK
 #define SETUP_READ_CHUNK 1024
@@ -341,9 +334,11 @@ inline std::string boardMacAddress() {
 // ── the real network ────────────────────────────────────────────────────────────────────────────
 class ArduinoSetupNet : public ISetupNet {
  public:
-  explicit ArduinoSetupNet(SetupHandler handler)
-      : handler_(handler), server_(SETUP_HTTP_PORT, SETUP_MAX_CONNECTIONS), touched_(false), running_(false),
-        dnsStarted_(false), serverStarted_(false) {}
+  // `opts`: how the access point and its servers come up (the sketch's SETUP_* net settings; the
+  // SetupNetOptions defaults are the old hard-coded values).
+  explicit ArduinoSetupNet(SetupHandler handler, const SetupNetOptions& opts = SetupNetOptions())
+      : handler_(handler), opts_(opts), server_(SETUP_HTTP_PORT, SETUP_MAX_CONNECTIONS),
+        touched_(false), running_(false), dnsStarted_(false), serverStarted_(false) {}
   ~ArduinoSetupNet() { stop(); }
 
   bool startAccessPoint(const std::string& ssid, const std::string& pass) override {
@@ -356,7 +351,7 @@ class ArduinoSetupNet : public ISetupNet {
     touched_ = true;
     WiFi.persistent(false);   // do not write the setup network to flash
     if (!WiFi.mode(WIFI_AP)) return failStart("WiFi.mode(WIFI_AP) failed");
-    if (!WiFi.softAP(ssid.c_str(), pass.c_str(), SETUP_AP_CHANNEL, 0, SETUP_AP_MAX_STATIONS)) return failStart("softAP() failed");
+    if (!WiFi.softAP(ssid.c_str(), pass.c_str(), opts_.apChannel, 0, opts_.apMaxStations)) return failStart("softAP() failed");
     IPAddress ip = WiFi.softAPIP();
     dns_.setErrorReplyCode(DNSReplyCode::NoError);   // answer every name: phones then open the form by themselves
     dnsStarted_ = dns_.start(SETUP_DNS_PORT, "*", ip);
@@ -424,7 +419,7 @@ class ArduinoSetupNet : public ISetupNet {
   }
 
   void serve(Slot& s) {
-    if ((uint32_t)(millis() - s.startMs) > (uint32_t)SETUP_REQUEST_TIMEOUT_MS) { answer(s, rejection(408)); return; }
+    if ((uint32_t)(millis() - s.startMs) > opts_.requestTimeoutMs) { answer(s, rejection(408)); return; }
     int avail = s.client.available();
     if (avail <= 0) {
       if (!s.client.connected()) release(s);   // the phone left before the request was complete: nothing is handled
@@ -473,6 +468,7 @@ class ArduinoSetupNet : public ISetupNet {
   }
 
   SetupHandler handler_;
+  SetupNetOptions opts_;   // the access point's and servers' channel, ports and request timeout (see openNet())
   DNSServer dns_;
   WiFiServer server_;
   Slot slots_[SETUP_MAX_CONNECTIONS];
@@ -487,8 +483,8 @@ class ArduinoSetupHardware : public ISetupHardware {
  public:
   std::string mac() override { return boardMacAddress(); }
   std::string newToken() override { return newCsrfToken(); }
-  std::unique_ptr<ISetupNet> openNet(const SetupHandler& handler) override {
-    return std::unique_ptr<ISetupNet>(new ArduinoSetupNet(handler));
+  std::unique_ptr<ISetupNet> openNet(const SetupHandler& handler, const SetupNetOptions& net) override {
+    return std::unique_ptr<ISetupNet>(new ArduinoSetupNet(handler, net));
   }
   void log(const std::string& line) override { Serial.printf("%s", line.c_str()), Serial.println(); }
 };

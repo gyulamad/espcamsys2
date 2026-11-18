@@ -27,6 +27,9 @@ using namespace esp32cam_setup;
 static const char* const OWN_PASSWORD = "My-Own-Master-1";
 static const char* const TOKEN_VALUE  = "0123456789abcdef0123456789abcdef";
 
+// The grace time the tests run with: SetupBoot's default (SETUP_GRACE_MS's old hard-coded value).
+static const uint32_t SETUP_RESTART_GRACE_MS = esp32cam_setup::SetupOptions().graceMs;
+
 static void load(MemoryStore& st, const std::string& line) {
     esp32cam_settings::CheckedLine c = esp32cam_settings::checkLine(BootFixture::schema(), line);
     for (size_t i = 0; i < c.pairs.size(); ++i) st.set(c.pairs[i].key, c.pairs[i].value);
@@ -110,6 +113,26 @@ TEST(a_blank_board_is_in_setup_but_not_armed) {
     FakeSetupHardware hw;
     SetupBoot boot(BootFixture::schema(), st, BootFixture::prerequisites(), BootFixture::type(), hw);
     TEST_ASSERT(boot.active() && !boot.armed(), "a blank board is in setup, and does not need arming");
+}
+
+TEST(the_setup_options_reach_the_hardware) {
+    // F-29: SETUP_RETRY_MS / SETUP_GRACE_MS / SETUP_AP_CHAN / SETUP_MAX_STA / SETUP_RQ_TMO_MS are
+    // settings; the sketch reads them and hands them to SetupBoot, which passes the net half to the
+    // hardware it builds the access point on. Here the non-default values really arrive.
+    setupWorld().reset();
+    MemoryStore st;
+    FakeSetupHardware hw;
+    SetupOptions opts;
+    opts.retryMs = 7777;
+    opts.graceMs = 8888;
+    opts.net.apChannel = 6;
+    opts.net.apMaxStations = 2;
+    opts.net.requestTimeoutMs = 9999;
+    SetupBoot boot(BootFixture::schema(), st, BootFixture::prerequisites(), BootFixture::type(), hw, opts);
+    TEST_ASSERT(boot.active(), "a blank board is in setup, so the access point is built");
+    TEST_ASSERT_EQ(setupWorld().net.apChannel, 6, "the hardware was given the stored channel");
+    TEST_ASSERT_EQ(setupWorld().net.apMaxStations, 2, "and the stored station count");
+    TEST_ASSERT_EQ(setupWorld().net.requestTimeoutMs, (uint32_t)9999, "and the stored request timeout");
 }
 
 TEST(a_board_that_cannot_reach_the_relay_is_in_setup) {
@@ -316,6 +339,7 @@ static void runSetupBootCases() {
     RUN_TEST(every_spelling_of_on_arms_the_board);
     RUN_TEST(a_board_missing_a_setting_it_can_get_from_the_relay_is_not_in_setup);
     RUN_TEST(a_blank_board_is_in_setup_but_not_armed);
+    RUN_TEST(the_setup_options_reach_the_hardware);
     RUN_TEST(a_board_that_cannot_reach_the_relay_is_in_setup);
     RUN_TEST(a_configured_board_with_the_switch_on_is_armed);
     RUN_TEST(the_setup_wifi_is_named_after_the_type_and_the_mac_and_uses_the_master_password);

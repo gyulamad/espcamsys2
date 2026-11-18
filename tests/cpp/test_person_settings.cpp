@@ -90,12 +90,20 @@ TEST(the_example_person_template_is_a_valid_complete_configuration) {
     // SETUP_PASSWORD (a password placeholder in a template would become a real one).
     const size_t expected = PERSON_SCHEMA.count - 3;
     std::ifstream f(dir + "../../Arduino/templates/" + file);
-    std::string line;
-    TEST_ASSERT(static_cast<bool>(std::getline(f, line)), (std::string(file) + ": can be read").c_str());
     MemoryStore st;
-    std::vector<std::string> errs = storeLine(st, line);
-    for (size_t e = 0; e < errs.size(); ++e) TEST_ASSERT(false, errs[e].c_str());
-    TEST_ASSERT(errs.empty(), (std::string(file) + ": is valid input").c_str());
+    // The full table no longer fits ONE serial line (MAX_LINE_LENGTH is 1024 characters, and 69
+    // settings are more), so the template is several lines, pasted one after the other the way the
+    // boot conversation takes them. Every line must be valid input on its own, and together they
+    // must complete the configuration.
+    size_t lines = 0;
+    for (std::string line; std::getline(f, line); ) {
+        if (line.empty()) continue;
+        ++lines;
+        std::vector<std::string> errs = storeLine(st, line);
+        for (size_t e = 0; e < errs.size(); ++e) TEST_ASSERT(false, errs[e].c_str());
+        TEST_ASSERT(errs.empty(), ((std::string(file) + " line " + std::to_string(lines) + ": is valid input").c_str()));
+    }
+    TEST_ASSERT(lines >= 2, (std::string(file) + ": has its lines (the table outgrew one serial line)").c_str());
     TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), (std::string(file) + ": completes the configuration").c_str());
     TEST_ASSERT_EQ((int)st.m.size(), (int)expected, (std::string(file) + ": sets exactly the settings it should").c_str());
 
@@ -604,6 +612,159 @@ TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed) {
     TEST_ASSERT(!applyChangeLine(PERSON_SCHEMA, st, "SETUP_PASSWORD=attacker-chosen-pw", personLockedKeys()).ok(), "but not choose the password");
 }
 
+// ── the T5b settings: network, logging, updates, setup ──────────────────
+
+// Every setting T5b moved into the table, with the value the sketch or a shared header hard-coded
+// before it became a setting. The default IS that value, so a board that stores nothing behaves
+// exactly as the previous firmware did (and blank boards are never asked for any of them).
+TEST(the_t5b_settings_exist_with_their_old_hard_coded_values_as_defaults) {
+    struct { const char* key; const char* value; } t5b[] = {
+        { "OTA_ENABLED", "1" }, { "OTA_CHECK_S", "60" }, { "OTA_RETRY_S", "300" },
+        { "OTA_VER_MAX_B", "256" }, { "OTA_FW_MIN_B", "102400" }, { "OTA_FW_MAX_B", "2097152" },
+        { "OTA_VER_IDLE_MS", "5000" }, { "OTA_DL_IDLE_MS", "15000" },
+        { "RF_ENABLED", "1" }, { "RF_PORT", "8082" }, { "RF_FIRST_S", "10" }, { "RF_OK_S", "60" },
+        { "RF_RETRY_MIN_S", "15" }, { "RF_RETRY_MAX_S", "300" },
+        { "SYNC_ENABLED", "1" }, { "SYNC_FIRST_S", "20" }, { "SYNC_CHECK_S", "30" },
+        { "SETUP_RETRY_MS", "5000" }, { "SETUP_GRACE_MS", "1500" }, { "SETUP_AP_CHAN", "1" },
+        { "SETUP_MAX_STA", "4" }, { "SETUP_RQ_TMO_MS", "10000" },
+        { "BOOT_SER_WIN_MS", "5000" }, { "BOOT_WIFI_MS", "20000" }, { "BOOT_RELAY_MS", "30000" },
+        { "BOOT_POLL_MS", "5000" },
+        { "VIEW_IDLE_MS", "30000" }, { "VIEW_LIVE_MS", "3000" }, { "VIEW_RETRY_MS", "10000" },
+        { "WIFI_DOWN_MS", "10000" }, { "RELAY_DOWN_MS", "90000" }, { "HTTP_TMO_MS", "5000" },
+        { "LOG_MIN_LEVEL", "1" }, { "LOG_ECHO", "1" }, { "LOG_RETRY_MAX", "3" },
+        { "LOG_RETRY_SEC", "30" }, { "LOG_FLUSH_SEC", "10" }, { "LOG_REPEAT_SEC", "30" },
+    };
+    MemoryStore blank;
+    DefaultingStore st(blank, PERSON_SCHEMA.meta, PERSON_SCHEMA.metaCount);
+    for (size_t i = 0; i < sizeof(t5b) / sizeof(t5b[0]); ++i) {
+        const KeyDef* d = findKey(PERSON_SCHEMA, t5b[i].key);
+        TEST_ASSERT(d != nullptr, (std::string(t5b[i].key) + " is a setting").c_str());
+        TEST_ASSERT(d && hasDefault(PERSON_SCHEMA, t5b[i].key), (std::string(t5b[i].key) + " has a default").c_str());
+        TEST_ASSERT(d && st.get(t5b[i].key) == t5b[i].value,
+                    (std::string(t5b[i].key) + "'s default is the old hard-coded value (" + t5b[i].value + ")").c_str());
+    }
+    TEST_ASSERT_EQ(blank.badGets, 0, "no read of an absent key");
+}
+
+TEST(the_t5b_settings_are_not_asked_for_on_a_blank_board) {
+    MemoryStore blank;
+    std::vector<Problem> ps = findProblems(PERSON_SCHEMA, blank);
+    TEST_ASSERT_EQ((int)ps.size(), (int)requiredKeyCount(PERSON_SCHEMA),
+                   "a blank board is asked exactly for the settings that have no default");
+    static const char* const t5b[] = {
+        "OTA_ENABLED", "OTA_CHECK_S", "OTA_RETRY_S", "OTA_VER_MAX_B", "OTA_FW_MIN_B", "OTA_FW_MAX_B",
+        "OTA_VER_IDLE_MS", "OTA_DL_IDLE_MS", "RF_ENABLED", "RF_PORT", "RF_FIRST_S", "RF_OK_S",
+        "RF_RETRY_MIN_S", "RF_RETRY_MAX_S", "SYNC_ENABLED", "SYNC_FIRST_S", "SYNC_CHECK_S",
+        "SETUP_RETRY_MS", "SETUP_GRACE_MS", "SETUP_AP_CHAN", "SETUP_MAX_STA", "SETUP_RQ_TMO_MS",
+        "BOOT_SER_WIN_MS", "BOOT_WIFI_MS", "BOOT_RELAY_MS", "BOOT_POLL_MS",
+        "VIEW_IDLE_MS", "VIEW_LIVE_MS", "VIEW_RETRY_MS", "WIFI_DOWN_MS", "RELAY_DOWN_MS", "HTTP_TMO_MS",
+        "LOG_MIN_LEVEL", "LOG_ECHO", "LOG_RETRY_MAX", "LOG_RETRY_SEC", "LOG_FLUSH_SEC", "LOG_REPEAT_SEC",
+    };
+    for (size_t i = 0; i < sizeof(t5b) / sizeof(t5b[0]); ++i)
+        TEST_ASSERT(!listed(ps, t5b[i]), (std::string(t5b[i]) + " is not asked for").c_str());
+}
+
+TEST(a_detector_that_predates_t5b_is_complete_and_loads_with_the_old_values) {
+    // The upgrade path: the flash of every deployed detector holds only the keys above. With the
+    // defaults in place that is still a complete configuration, and the typed settings carry the
+    // values the previous firmware hard-coded.
+    MemoryStore st;
+    TEST_ASSERT(store(st, COMPLETE), "the configuration every deployed detector holds");
+    TEST_ASSERT(findProblems(PERSON_SCHEMA, st).empty(), "still complete without any T5b key stored");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT(s.otaEnabled && s.otaCheckSec == 60 && s.otaRetrySec == 300, "the update schedule is as before");
+    TEST_ASSERT(s.otaVerMaxBytes == 256 && s.otaFwMinBytes == 102400 && s.otaFwMaxBytes == 2097152, "the update's response bounds are as before");
+    TEST_ASSERT(s.otaVerIdleMs == 5000 && s.otaDlIdleMs == 15000, "the update's idle timeouts are as before");
+    TEST_ASSERT(s.relayFindEnabled && s.relayFindPort == 8082, "relay find as before");
+    TEST_ASSERT(s.relayFindFirstSec == 10 && s.relayFindOkSec == 60 && s.relayFindRetryMinSec == 15 && s.relayFindRetryMaxSec == 300,
+                "the relay find timings are as before");
+    TEST_ASSERT(s.syncEnabled && s.syncFirstSec == 20 && s.syncCheckSec == 30, "the settings-sync schedule is as before");
+    TEST_ASSERT(s.viewIdlePollMs == 30000 && s.viewLivePollMs == 3000 && s.viewRetryMs == 10000, "the live view's polls are as before");
+    TEST_ASSERT(s.wifiDownReportMs == 10000 && s.relayDownMs == 90000 && s.httpTimeoutMs == 5000, "the connection timings are as before");
+    TEST_ASSERT(s.logMinLevel == 1 && s.logEcho && s.logRetryMax == 3 && s.logRetrySec == 30 && s.logFlushSec == 10 && s.logRepeatSec == 30,
+                "the log's tuning is as before");
+    TEST_ASSERT_EQ(st.badGets, 0, "no read of an absent key");
+}
+
+TEST(stored_t5b_values_override_the_defaults_and_load) {
+    MemoryStore st;
+    store(st, COMPLETE);
+    TEST_ASSERT(store(st, "OTA_ENABLED=0;OTA_CHECK_S=120;RF_PORT=9999;RELAY_DOWN_MS=45000;HTTP_TMO_MS=3000;"
+                           "LOG_MIN_LEVEL=2;LOG_ECHO=0;VIEW_LIVE_MS=5000;SYNC_CHECK_S=45;"
+                           "OTA_FW_MIN_B=150000;OTA_FW_MAX_B=1000000"),
+                "stored values are accepted");
+    PersonSettings s;
+    std::string err;
+    TEST_ASSERT(loadPersonSettings(st, s, err), err.c_str());
+    TEST_ASSERT(!s.otaEnabled && s.otaCheckSec == 120, "the update switch and schedule loaded");
+    TEST_ASSERT(s.relayFindPort == 9999 && s.relayDownMs == 45000 && s.httpTimeoutMs == 3000, "the connection values loaded");
+    TEST_ASSERT(s.logMinLevel == 2 && !s.logEcho, "the log values loaded");
+    TEST_ASSERT(s.viewLivePollMs == 5000 && s.syncCheckSec == 45, "the live-view and sync values loaded");
+    TEST_ASSERT(s.otaFwMinBytes == 150000 && s.otaFwMaxBytes == 1000000, "the firmware size window loaded");
+}
+
+TEST(the_t5b_cross_rules_refuse_an_inverted_window_and_offer_the_way_out) {
+    MemoryStore st;
+    store(st, COMPLETE);
+    // The rules judge the EFFECTIVE values (what is stored, else the default): lowering the largest
+    // accepted image below the smallest already inverts the window and would refuse every image.
+    std::vector<std::string> e = storeLine(st, "OTA_FW_MAX_B=65536");
+    TEST_ASSERT(anyError(e, "OTA_FW_MIN_B (102400) must not be higher than OTA_FW_MAX_B (65536)") && anyError(e, "in one line"),
+                "an inverted firmware window: refused, with the way out");
+    TEST_ASSERT(!st.m.count("OTA_FW_MAX_B"), "and nothing was stored");
+    TEST_ASSERT(store(st, "OTA_FW_MIN_B=100000;OTA_FW_MAX_B=1000000"), "both together in one line are fine");
+    TEST_ASSERT(st.m["OTA_FW_MIN_B"] == "100000" && st.m["OTA_FW_MAX_B"] == "1000000", "stored");
+    e = storeLine(st, "RF_RETRY_MIN_S=400");
+    TEST_ASSERT(anyError(e, "RF_RETRY_MIN_S (400) must not be higher than RF_RETRY_MAX_S (300)") && anyError(e, "in one line"),
+                "a search that would hammer at the minimum pace whatever the maximum says: refused too");
+    TEST_ASSERT(!st.m.count("RF_RETRY_MIN_S"), "and nothing was stored");
+    TEST_ASSERT(store(st, "RF_RETRY_MIN_S=200;RF_RETRY_MAX_S=400"), "both together are fine");
+    TEST_ASSERT(st.m["RF_RETRY_MIN_S"] == "200" && st.m["RF_RETRY_MAX_S"] == "400", "stored");
+}
+
+TEST(the_two_channel_switches_stay_serial_only_and_relay_find_does_not) {
+    // OTA_ENABLED and SYNC_ENABLED switch the two channels a compromise could otherwise quietly cut
+    // (the firmware updates, the dashboard's own change channel) — the same operational-posture rule
+    // that keeps the recorder's LOG_ENABLED serial-only. RF_ENABLED is a resilience switch, not a
+    // channel: the dashboard may turn it off (and back on) from the settings page.
+    MemoryStore st;
+    store(st, COMPLETE);
+    TEST_ASSERT(!applyChangeLine(PERSON_SCHEMA, st, "OTA_ENABLED=0", personLockedKeys()).ok(), "the dashboard cannot switch the updates off");
+    TEST_ASSERT(!applyChangeLine(PERSON_SCHEMA, st, "SYNC_ENABLED=0", personLockedKeys()).ok(), "or the settings sync");
+    TEST_ASSERT(applyChangeLine(PERSON_SCHEMA, st, "RF_ENABLED=0", personLockedKeys()).ok(), "relay find may be switched from the dashboard");
+    TEST_ASSERT(st.m["RF_ENABLED"] == "0", "and it stays off");
+}
+
+TEST(the_t5b_values_have_sane_ranges) {
+    TEST_ASSERT(valid("OTA_CHECK_S=5") && valid("OTA_CHECK_S=86400") && !valid("OTA_CHECK_S=4") && !valid("OTA_CHECK_S=86401"), "update check 5..86400 s");
+    TEST_ASSERT(valid("OTA_RETRY_S=300") && !valid("OTA_RETRY_S=0"), "update retry has no zero");
+    TEST_ASSERT(valid("OTA_VER_MAX_B=64") && valid("OTA_VER_MAX_B=65536") && !valid("OTA_VER_MAX_B=63"), "version reply 64..65536 bytes");
+    TEST_ASSERT(valid("OTA_FW_MIN_B=0") && valid("OTA_FW_MIN_B=1048576") && !valid("OTA_FW_MIN_B=1048577"), "firmware lower bound 0..1 MB");
+    TEST_ASSERT(valid("OTA_FW_MAX_B=65536") && valid("OTA_FW_MAX_B=4194304") && !valid("OTA_FW_MAX_B=4194305") && !valid("OTA_FW_MAX_B=100"), "firmware upper bound 64 KB..4 MB");
+    TEST_ASSERT(valid("OTA_VER_IDLE_MS=100") && !valid("OTA_VER_IDLE_MS=99") && valid("OTA_DL_IDLE_MS=120000") && !valid("OTA_DL_IDLE_MS=120001"), "idle timeouts");
+    TEST_ASSERT(valid("RF_PORT=8082") && !valid("RF_PORT=0") && !valid("RF_PORT=65536"), "discovery port 1..65535");
+    TEST_ASSERT(valid("RF_FIRST_S=10") && !valid("RF_FIRST_S=0") && valid("RF_OK_S=86400") && !valid("RF_OK_S=86401"), "relay find timings 1..");
+    TEST_ASSERT(valid("SYNC_FIRST_S=20") && !valid("SYNC_FIRST_S=0") && valid("SYNC_CHECK_S=86400") && !valid("SYNC_CHECK_S=0"), "sync timings 1..");
+    TEST_ASSERT(valid("SETUP_RETRY_MS=5000") && !valid("SETUP_RETRY_MS=99") && valid("SETUP_GRACE_MS=0") && !valid("SETUP_GRACE_MS=60001"), "setup waits");
+    TEST_ASSERT(valid("SETUP_AP_CHAN=1") && valid("SETUP_AP_CHAN=13") && !valid("SETUP_AP_CHAN=0") && !valid("SETUP_AP_CHAN=14"), "Wi-Fi channel 1..13");
+    TEST_ASSERT(valid("SETUP_MAX_STA=4") && !valid("SETUP_MAX_STA=0") && !valid("SETUP_MAX_STA=9"), "setup stations 1..8");
+    TEST_ASSERT(valid("SETUP_RQ_TMO_MS=10000") && !valid("SETUP_RQ_TMO_MS=999") && !valid("SETUP_RQ_TMO_MS=120001"), "setup request timeout 1000..120000");
+    TEST_ASSERT(valid("BOOT_SER_WIN_MS=0") && !valid("BOOT_SER_WIN_MS=60001"), "the serial window may be 0 (no wait)");
+    TEST_ASSERT(valid("BOOT_WIFI_MS=20000") && !valid("BOOT_WIFI_MS=999") && valid("BOOT_RELAY_MS=300000") && !valid("BOOT_RELAY_MS=300001"), "boot Wi-Fi and relay waits");
+    TEST_ASSERT(valid("BOOT_POLL_MS=5000") && !valid("BOOT_POLL_MS=499"), "boot poll 500..60000");
+    TEST_ASSERT(valid("VIEW_IDLE_MS=30000") && !valid("VIEW_IDLE_MS=999") && valid("VIEW_LIVE_MS=3000") && !valid("VIEW_LIVE_MS=499"), "live view polls");
+    TEST_ASSERT(valid("VIEW_RETRY_MS=10000") && !valid("VIEW_RETRY_MS=499"), "live view retry 500..60000");
+    TEST_ASSERT(valid("WIFI_DOWN_MS=10000") && !valid("WIFI_DOWN_MS=999"), "Wi-Fi down report 1000..3600000");
+    TEST_ASSERT(valid("RELAY_DOWN_MS=90000") && !valid("RELAY_DOWN_MS=4999"), "relay down 5000..3600000");
+    TEST_ASSERT(valid("HTTP_TMO_MS=5000") && !valid("HTTP_TMO_MS=499") && !valid("HTTP_TMO_MS=60001"), "HTTP timeout 500..60000");
+    TEST_ASSERT(valid("LOG_MIN_LEVEL=0") && valid("LOG_MIN_LEVEL=3") && !valid("LOG_MIN_LEVEL=4") && !valid("LOG_MIN_LEVEL=-1"), "log level 0..3");
+    TEST_ASSERT(valid("LOG_RETRY_MAX=0") && valid("LOG_RETRY_MAX=255") && !valid("LOG_RETRY_MAX=256"), "log retries 0..255");
+    TEST_ASSERT(valid("LOG_RETRY_SEC=30") && !valid("LOG_RETRY_SEC=0"), "log retry seconds 1..");
+    TEST_ASSERT(valid("LOG_FLUSH_SEC=10") && !valid("LOG_FLUSH_SEC=0") && valid("LOG_REPEAT_SEC=0") && !valid("LOG_REPEAT_SEC=3601"), "log flush 1.., repeat 0..");
+}
+
 int main() {
     RUN_TEST(the_person_schema_is_consistent);
     RUN_TEST(the_example_person_template_is_a_valid_complete_configuration);
@@ -641,5 +802,12 @@ int main() {
     RUN_TEST(the_hardware_settings_are_expert_tier_need_a_restart_and_are_not_locked);
     RUN_TEST(the_detector_defines_the_two_setup_settings_as_designed);
     RUN_TEST(a_detector_deployed_before_the_feature_is_complete_and_can_be_armed);
+    RUN_TEST(the_t5b_settings_exist_with_their_old_hard_coded_values_as_defaults);
+    RUN_TEST(the_t5b_settings_are_not_asked_for_on_a_blank_board);
+    RUN_TEST(a_detector_that_predates_t5b_is_complete_and_loads_with_the_old_values);
+    RUN_TEST(stored_t5b_values_override_the_defaults_and_load);
+    RUN_TEST(the_t5b_cross_rules_refuse_an_inverted_window_and_offer_the_way_out);
+    RUN_TEST(the_two_channel_switches_stay_serial_only_and_relay_find_does_not);
+    RUN_TEST(the_t5b_values_have_sane_ranges);
     return test::summarize();
 }

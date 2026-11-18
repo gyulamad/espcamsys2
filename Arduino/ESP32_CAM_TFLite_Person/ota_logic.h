@@ -116,6 +116,28 @@ static inline OtaTiming defaultTiming() {
   return t;
 }
 
+// The sanity bounds of the two HTTP responses (see ota.h): how big a version reply may be before it is
+// refused, how small and how big a firmware image may be, and how long either may stay silent. Since F-29
+// they are settings (OTA_VER_MAX_B, OTA_FW_MIN_B, OTA_FW_MAX_B, OTA_VER_IDLE_MS, OTA_DL_IDLE_MS); these are
+// their old hard-coded values, which a sketch that passes no limits keeps.
+struct OtaLimits {
+  size_t versionReplyMaxBytes;   // a longer version reply is refused without being parsed
+  size_t firmwareMinBytes;       // a smaller image is refused before it reaches flash (bad_size)
+  size_t firmwareMaxBytes;       // a larger one too (bad_size)
+  uint32_t versionReplyIdleMs;   // how long the version reply may stay silent
+  uint32_t downloadIdleMs;       // how long the download may stay silent (it is much bigger)
+};
+
+static inline OtaLimits defaultOtaLimits() {
+  OtaLimits l;
+  l.versionReplyMaxBytes = 256;
+  l.firmwareMinBytes = 100UL * 1024UL;
+  l.firmwareMaxBytes = 2UL * 1024UL * 1024UL;
+  l.versionReplyIdleMs = 5000;
+  l.downloadIdleMs = 15000;
+  return l;
+}
+
 // When the next check is due, and the error to report with it. Time is millis(); all
 // comparisons are done as differences so the 49-day wrap-around is harmless.
 class OtaPolicy {

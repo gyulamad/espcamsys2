@@ -166,6 +166,35 @@ TEST(a_wifi_that_is_down_asks_nothing) {
   TEST_ASSERT_EQ(g_restarts, 0, "no restart");
 }
 
+// F-29 (T5b): SYNC_ENABLED is a setting (serial-only, default on), and SYNC_FIRST_S / SYNC_CHECK_S set
+// the schedule the sketch builds the poller with. The values reach the tick through g_cfg, exactly as
+// the boot loaded them, so the tests load them the same way.
+TEST(the_sync_switch_off_stops_the_asking_completely) {
+  setUp(); route("/change", 200, "785\nDARK_THRESH=55\n"); route("/report", 200);
+  g_flash.set("SYNC_ENABLED", "0");
+  std::string err;
+  TEST_ASSERT(loadPersonSettings(g_flash, g_cfg, err), err.c_str());
+  TEST_ASSERT(!g_cfg.syncEnabled, "loaded as off");
+  runSeconds(120);
+  TEST_ASSERT_EQ(fake::g().requests.size(), (size_t)0, "no ask, no report, nothing");
+  TEST_ASSERT_EQ(g_restarts, 0, "and no restart");
+  TEST_ASSERT_EQ(g_flash.m["DARK_THRESH"], std::string("40"), "the queued change was never taken");
+}
+
+TEST(the_sync_schedule_comes_from_the_settings) {
+  setUp(); route("/change", 404); route("/report", 200);
+  g_flash.set("SYNC_FIRST_S", "5");
+  g_flash.set("SYNC_CHECK_S", "10");
+  std::string err;
+  TEST_ASSERT(loadPersonSettings(g_flash, g_cfg, err), err.c_str());
+  runSeconds(3);
+  TEST_ASSERT_EQ(fake::g().requests.size(), (size_t)0, "nothing before the stored first check (the default waits 20 s)");
+  runSeconds(14);   // to t = 17 s: asks at ~6 s and ~16 s with the stored schedule
+  size_t asks = 0;
+  for (size_t i = 0; i < fake::g().requests.size(); i++) if (fake::g().methods[i] == "GET") asks++;
+  TEST_ASSERT(asks >= 2, "the first ask came at SYNC_FIRST_S and the next one SYNC_CHECK_S later");
+}
+
 int main() {
   RUN_TEST(the_detector_asks_the_relay_as_a_detector_with_its_own_id_host_port_and_key);
   RUN_TEST(a_calibration_change_is_stored_logged_by_name_and_restarts_the_detector_once);
@@ -175,5 +204,7 @@ int main() {
   RUN_TEST(a_reboot_from_the_dashboard_is_answered_then_logged_as_such_and_restarts_the_detector);
   RUN_TEST(a_reboot_whose_answer_does_not_get_through_does_not_restart_the_detector_until_it_does);
   RUN_TEST(a_wifi_that_is_down_asks_nothing);
+  RUN_TEST(the_sync_switch_off_stops_the_asking_completely);
+  RUN_TEST(the_sync_schedule_comes_from_the_settings);
   return test::summarize();
 }

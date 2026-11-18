@@ -62,7 +62,7 @@ Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 42 settings: 30 with a d
 
 ## Detector (ESP32_CAM_TFLite_Person)
 
-Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 58 settings: 49 with a default, 9 without.
+Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 96 settings: 87 with a default, 9 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
@@ -98,6 +98,44 @@ Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 58 settings: 49 wit
 | `ANN_HEARTBEAT` | Seconds between status lines | `600` | advanced | reboot | Picture & live view |
 | `ANN_RETRY` | Longest wait before reaching the relay again (s) | `30` | advanced | reboot | Picture & live view |
 | `ANN_FIRST_S` | First wait before reaching the relay again (s) | `2` | advanced | reboot | Picture & live view |
+| `OTA_ENABLED` | Firmware updates from the relay | `1` | basic | reboot | Updates & sync |
+| `OTA_CHECK_S` | Update check interval (s) | `60` | advanced | reboot | Updates & sync |
+| `OTA_RETRY_S` | Update retry interval (s) | `300` | advanced | reboot | Updates & sync |
+| `OTA_VER_MAX_B` | Version reply size limit (bytes) | `256` | expert | reboot | Updates & sync |
+| `OTA_FW_MIN_B` | Smallest firmware accepted (bytes) | `102400` | expert | reboot | Updates & sync |
+| `OTA_FW_MAX_B` | Largest firmware accepted (bytes) | `2097152` | expert | reboot | Updates & sync |
+| `OTA_VER_IDLE_MS` | Version reply idle timeout (ms) | `5000` | expert | reboot | Updates & sync |
+| `OTA_DL_IDLE_MS` | Firmware download idle timeout (ms) | `15000` | expert | reboot | Updates & sync |
+| `RF_ENABLED` | Look for the relay on the network | `1` | basic | reboot | Connection |
+| `RF_PORT` | Relay discovery port | `8082` | advanced | reboot | Connection |
+| `RF_FIRST_S` | First relay search after (s) | `10` | expert | reboot | Connection |
+| `RF_OK_S` | Relay check interval while found (s) | `60` | expert | reboot | Connection |
+| `RF_RETRY_MIN_S` | Shortest wait between searches (s) | `15` | expert | reboot | Connection |
+| `RF_RETRY_MAX_S` | Longest wait between searches (s) | `300` | expert | reboot | Connection |
+| `SYNC_ENABLED` | Fetch settings from the relay | `1` | basic | reboot | Updates & sync |
+| `SYNC_FIRST_S` | First settings check after (s) | `20` | advanced | reboot | Updates & sync |
+| `SYNC_CHECK_S` | Settings check interval (s) | `30` | advanced | reboot | Updates & sync |
+| `SETUP_RETRY_MS` | Setup retry after a failure (ms) | `5000` | expert | reboot | Setup & security |
+| `SETUP_GRACE_MS` | Wait before restart after setup (ms) | `1500` | expert | reboot | Setup & security |
+| `SETUP_AP_CHAN` | Setup Wi-Fi channel | `1` | advanced | reboot | Setup & security |
+| `SETUP_MAX_STA` | Setup Wi-Fi: most devices at once | `4` | advanced | reboot | Setup & security |
+| `SETUP_RQ_TMO_MS` | Setup page request timeout (ms) | `10000` | expert | reboot | Setup & security |
+| `BOOT_SER_WIN_MS` | Boot wait for a serial "y" (ms) | `5000` | advanced | reboot | Setup & security |
+| `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | `20000` | advanced | reboot | Connection |
+| `BOOT_RELAY_MS` | Boot: wait for settings from the relay (ms) | `30000` | advanced | reboot | Connection |
+| `BOOT_POLL_MS` | Boot: ask the relay every (ms) | `5000` | expert | reboot | Connection |
+| `VIEW_IDLE_MS` | Live view poll when idle (ms) | `30000` | advanced | reboot | Picture & live view |
+| `VIEW_LIVE_MS` | Live view poll while watched (ms) | `3000` | advanced | reboot | Picture & live view |
+| `VIEW_RETRY_MS` | Live view poll retry (ms) | `10000` | expert | reboot | Picture & live view |
+| `WIFI_DOWN_MS` | Wi-Fi down: report every (ms) | `10000` | advanced | reboot | Connection |
+| `RELAY_DOWN_MS` | Relay considered gone after (ms) | `90000` | advanced | reboot | Connection |
+| `HTTP_TMO_MS` | HTTP call timeout (ms) | `5000` | advanced | reboot | Connection |
+| `LOG_MIN_LEVEL` | Lowest level sent to the relay | `1` | basic | live | Logging |
+| `LOG_ECHO` | Show everything on serial | `1` | advanced | live | Logging |
+| `LOG_RETRY_MAX` | Retries after a failed delivery | `3` | advanced | live | Logging |
+| `LOG_RETRY_SEC` | Seconds between retries | `30` | advanced | live | Logging |
+| `LOG_FLUSH_SEC` | Seconds routine entries wait | `10` | advanced | live | Logging |
+| `LOG_REPEAT_SEC` | Window for counting repeats | `30` | advanced | live | Logging |
 | `SETUP_MODE` | — | — | — | — | — |
 | `SETUP_PASSWORD` | — | — | — | — | — |
 | `PIN_PWDN` | Camera pin: PWDN | `32` | expert | reboot | Hardware & internals |
@@ -127,7 +165,7 @@ Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 58 settings: 49 wit
 
 ## Relay (nodejs/camera-relay)
 
-Source: `nodejs/camera-relay/lib/sysconfig.js` (see `tools/dump_relay_schema.js`). 23 settings: 21 with a default, 2 without.
+Source: `nodejs/camera-relay/lib/sysconfig.js` (see `tools/dump_relay_schema.js`). 54 settings: 51 with a default, 3 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
@@ -154,3 +192,34 @@ Source: `nodejs/camera-relay/lib/sysconfig.js` (see `tools/dump_relay_schema.js`
 | `firmwareDir` | Firmware folder | `firmware` | — | reboot | Folders |
 | `soundsDir` | Alarm sounds folder | `sounds` | — | reboot | Folders |
 | `switchFile` | Recording on/off state file | `recording-switch.json` | — | reboot | Folders |
+| `discoveryPort` | Camera discovery port (UDP, 0 = off) | `8082` | — | reboot | Network |
+| `relayBind` | HTTP bind address | `0.0.0.0` | — | reboot | Network |
+| `pushAuthTimeoutMs` | Push connection: time to say who it is (ms) | `10000` | — | reboot | Network |
+| `pushIdleTimeoutMs` | Push connection: silence before it is dropped (ms) | `60000` | — | reboot | Network |
+| `detectorViewMinutes` | Detector live view length (minutes) | `10` | — | reboot | Detectors |
+| `detectorNoPictureWarnMs` | Detector without a picture: warn after (ms) | `10000` | — | reboot | Detectors |
+| `personScanAuto` | Check every new recording automatically | `true` | — | reboot | Person check |
+| `personScanAction` | What to do with a clip without a person | `move` | — | reboot | Person check |
+| `personScanModel` | Person detector model file | `models/person.onnx` | — | reboot | Person check |
+| `personScanStride` | Analyse every Nth frame | `1` | — | reboot | Person check |
+| `personScanTimeoutSeconds` | Time allowed for checking one clip (seconds) | `900` | — | reboot | Person check |
+| `personScanPython` | Python program that runs the detector | `python3` | — | reboot | Person check |
+| `personScanScript` | Detector script | `tools/person_scan.py` | — | reboot | Person check |
+| `alarmSoundPlayer` | Sound player command | `ffplay,-nodisp,-autoexit,-loglevel,error` | — | reboot | Alarm sounds |
+| `alarmSoundTimeoutSeconds` | Longest time a sound may play (seconds) | `30` | — | reboot | Alarm sounds |
+| `telegramEnabled` | Telegram messages | `true` | — | reboot | Notifications |
+| `telegramBotToken` | Telegram bot token | — | — | reboot | Notifications |
+| `telegramChatId` | Telegram chat id(s) | `""` | — | reboot | Notifications |
+| `footageBaseUrl` | Dashboard address for message links | `""` | — | reboot | Notifications |
+| `notifyCooldownSeconds` | At most one person message per camera in (seconds) | `60` | — | reboot | Notifications |
+| `storageReminderHours` | Low-storage reminder every (hours) | `24` | — | reboot | Notifications |
+| `readKeyRequired` | Refuse reads while no control key is set | `true` | — | reboot | Security |
+| `allowKeylessAlarm` | Accept alarms without a camera key (old firmware) | `false` | — | reboot | Security |
+| `keylessAlarmGapMs` | Keyless alarms: gap per address (ms) | `60000` | — | reboot | Security |
+| `maxAlarmRecordings` | Most recordings at the same time | `16` | — | live | Security |
+| `relayHsts` | Send the HSTS header | `false` | — | reboot | Security |
+| `authMaxFailures` | Wrong keys before an address is locked out | `10` | — | reboot | Security |
+| `authLockSeconds` | First lock-out time (seconds) | `60` | — | reboot | Security |
+| `authLockMaxSeconds` | Longest lock-out time (seconds) | `900` | — | reboot | Security |
+| `restartCooldownMs` | Least time between two restart requests (ms) | `30000` | — | live | Security |
+| `loopWatch` | Event-loop watchdog | `true` | — | reboot | Diagnostics |

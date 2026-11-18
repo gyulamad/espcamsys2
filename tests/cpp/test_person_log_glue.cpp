@@ -127,6 +127,7 @@ using esp32cam_logic::RemoteLogConfig;
 using esp32cam_logic::LOG_MSG_MAX;
 using esp32cam_logic::LOG_SITE_MAX;
 using esp32cam_logic::formatCallSite;
+using esp32cam_logic::logLevelFromInt;   // the LOG_MIN_LEVEL setting's mapping (T5b)
 
 // ── the code under test, extracted verbatim from the sketch ─────────────
 #include "build/person_log_glue.inc"

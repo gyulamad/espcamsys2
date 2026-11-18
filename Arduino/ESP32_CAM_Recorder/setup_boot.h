@@ -33,20 +33,41 @@ namespace esp32cam_setup {
 // What the HTTP server calls for every request: (method, target, body) -> the reply. SetupForm::handle.
 typedef std::function<HttpReply(const std::string&, const std::string&, const std::string&)> SetupHandler;
 
+// How the access point and its servers come up — the radio half the hardware builds (setup_mode.h's
+// ArduinoSetupNet). Since F-29 three of these are settings (SETUP_AP_CHAN, SETUP_MAX_STA,
+// SETUP_RQ_TMO_MS); the member defaults are the old hard-coded values, so a sketch that fills none of
+// them behaves exactly as before. (What the captive-portal protocol itself pins — the DNS port 53 the
+// phones' queries use, the form's HTTP port 80 their probes and the DNS-rebinding guard assume, and the
+// connection-slot count and reader caps in setup_mode.h — stays compile-time; see
+// docs/SETTINGS_KEYS.md, "not configurable".)
+struct SetupNetOptions {
+    int apChannel;             // Wi-Fi channel of the access point
+    int apMaxStations;         // phones that may be joined at once
+    uint32_t requestTimeoutMs; // a request that is not complete by then is dropped (slow-loris)
+    SetupNetOptions() : apChannel(1), apMaxStations(4), requestTimeoutMs(10000) {}
+};
+
+// Everything the setup boot tunes. `net` goes to the hardware's openNet(); retryMs and graceMs into the
+// session (SetupSessionConfig). Since F-29 these two are settings as well (SETUP_RETRY_MS, SETUP_GRACE_MS).
+struct SetupOptions {
+    uint32_t retryMs;   // pause between failed access-point starts / failed flash writes
+    uint32_t graceMs;   // keep serving this long after save/exit so the browser gets its reply
+    SetupNetOptions net;
+    SetupOptions() : retryMs(5000), graceMs(1500) {}
+};
+
 // The part that needs a radio, a random number generator and a serial port. setup_mode.h has the real
 // one (ArduinoSetupHardware); the tests have a fake.
 struct ISetupHardware {
     virtual ~ISetupHardware() {}
     virtual std::string mac() = 0;        // "AA:BB:CC:DD:EE:FF", the board's own address
     virtual std::string newToken() = 0;   // unguessable, per session: the form's CSRF token
-    // The access point plus its DNS and HTTP servers, answering with `handler`. Called only when the
-    // board really is in setup, so a normal boot never pays for the servers' memory.
-    virtual std::unique_ptr<ISetupNet> openNet(const SetupHandler& handler) = 0;
+    // The access point plus its DNS and HTTP servers, answering with `handler`, brought up on `net`'s
+    // channel, port and limits. Called only when the board really is in setup, so a normal boot never
+    // pays for the servers' memory.
+    virtual std::unique_ptr<ISetupNet> openNet(const SetupHandler& handler, const SetupNetOptions& net) = 0;
     virtual void log(const std::string& line) = 0;   // one serial line; never the password
 };
-
-// A failed access-point start or flash write is tried again after this long.
-static const uint32_t SETUP_RETRY_MS = 5000;
 
 // Used when the board's MAC address is not usable for the name (cannot happen with an eFuse address,
 // but a board in setup must open SOME network: the alternative is a camera that can never be set up).
@@ -80,9 +101,12 @@ private:
 class SetupBoot {
 public:
     // `type` is the relay's word for the board ("recorder" or "detector"); `prerequisites` the settings
-    // it needs to reach the relay (what remoteFillPossible() takes).
+    // it needs to reach the relay (what remoteFillPossible() takes); `opts` the setup tuning (the
+    // sketch's SETUP_RETRY_MS / SETUP_GRACE_MS / SETUP_* net settings, with the old hard-coded values
+    // as the defaults).
     SetupBoot(const esp32cam_settings::Schema& schema, esp32cam_settings::ISettingsStore& store,
-              const std::vector<std::string>& prerequisites, const std::string& type, ISetupHardware& hw)
+              const std::vector<std::string>& prerequisites, const std::string& type, ISetupHardware& hw,
+              const SetupOptions& opts = SetupOptions())
         : reason_(setupReason(schema, store, prerequisites)), log_(hw) {
         if (reason_ == SetupReason::None) return;   // the normal boot: nothing is built, nothing is asked
 
@@ -100,14 +124,14 @@ public:
         SetupForm& form = *form_;
         net_ = hw.openNet([&form](const std::string& method, const std::string& target, const std::string& body) {
             return form.handle(method, target, body);
-        });
+        }, opts.net);
         clear_.reset(new SettingsSetupStore(schema, store));
 
         SetupSessionConfig config;
         config.ssid = ssid;
         config.password = setupPassword(schema, store);
-        config.graceMs = SETUP_RESTART_GRACE_MS;
-        config.retryMs = SETUP_RETRY_MS;
+        config.graceMs = opts.graceMs;
+        config.retryMs = opts.retryMs;
         mode_.reset(new SetupMode(true, config, *net_, *form_, *clear_, &log_));
     }
 

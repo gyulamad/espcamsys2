@@ -20,6 +20,11 @@ using namespace esp32cam_setup;
 static const char* SSID = "espcamsys2-recorder-d4e5f6";
 static const char* PASS = "Secret-Pass-1";
 
+// Since F-29 these live in the SetupNetOptions / SetupOptions defaults (setup_boot.h), not in #defines;
+// the tests run with the defaults, so the names read from there.
+static const uint32_t SETUP_REQUEST_TIMEOUT_MS = SetupNetOptions().requestTimeoutMs;
+static const uint32_t SETUP_RESTART_GRACE_MS = SetupOptions().graceMs;
+
 static HttpReply mk(int status, const std::string& type, const std::string& body) {
   HttpReply r;
   r.status = status;
@@ -686,7 +691,7 @@ TEST(the_real_hardware_gives_the_boards_address_a_fresh_token_and_the_serial_por
 TEST(the_real_hardware_opens_an_access_point_that_answers_with_the_handler_it_was_given) {
   world();
   ArduinoSetupHardware hw;
-  std::unique_ptr<ISetupNet> net = hw.openNet(handler());
+  std::unique_ptr<ISetupNet> net = hw.openNet(handler(), SetupNetOptions());
   TEST_ASSERT(net != nullptr, "a net");
   TEST_ASSERT(fake::g().wifiCalls.empty(), "opening it does not start the radio yet");
   TEST_ASSERT(net->startAccessPoint(SSID, PASS), "it starts");

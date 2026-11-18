@@ -52,10 +52,13 @@ static bool logged(const std::string& part) {
   return false;
 }
 
+// RelayFind's default wait before the first check (RF_FIRST_S's old hard-coded value, 10 s).
+static const uint32_t FIRST_CHECK_MS = 10UL * 1000UL;
+
 // One tick that is due: arm it, let the first delay pass, tick again.
 static bool dueTick(RelayFind& f, const std::string& host, bool relayDown = true) {
   f.tick(host, KEY, relayDown);
-  fake::g().now += (uint32_t)RELAY_FIND_FIRST_SECONDS * 1000UL;
+  fake::g().now += FIRST_CHECK_MS;
   return f.tick(host, KEY, relayDown);
 }
 
@@ -168,6 +171,37 @@ TEST(an_address_that_cannot_be_saved_does_not_restart_the_board) {
   TEST_ASSERT(!dueTick(f, "192.168.1.9"), "no restart (it would only loop)");
 }
 
+TEST(the_port_and_timings_come_from_the_constructor) {
+  // F-29: RF_PORT and the RF_* search timings are settings; the sketch builds the finder with the
+  // values it read from them. Here a non-default port and a non-default first check really change
+  // what goes out and when.
+  MemoryStore store;
+  store.v["SERVER_HOST"] = "192.168.1.9";
+  store.v["API_KEY"] = KEY;
+  world({{"192.168.1.77", KEY}});
+  RelayFind f(store, 9999, 5000, 60000, 15000, 300000);
+  f.tick("192.168.1.9", KEY, true);
+  fake::g().now += 5000;   // the constructor's first-check wait, not the 10 s default
+  TEST_ASSERT(f.tick("192.168.1.9", KEY, true), "the search runs");
+  TEST_ASSERT_EQ(store.v["SERVER_HOST"], std::string("192.168.1.77"), "and stores the address it found");
+  TEST_ASSERT(!fake::g().udpSent.empty(), "probes went out (the broadcast and the sweep)");
+  bool allOnPort = true;
+  for (size_t i = 0; i < fake::g().udpSent.size(); ++i)
+    if (fake::g().udpSent[i].find(":9999 ") == std::string::npos) allOnPort = false;
+  TEST_ASSERT(allOnPort, "every probe went to the port the constructor gave (the default is 8082)");
+  TEST_ASSERT(!fake::g().udpOpen, "socket closed");
+}
+
+TEST(a_search_that_finds_nothing_names_the_port_it_searched_on) {
+  MemoryStore store;
+  world({});
+  RelayFind f(store, 9999);
+  f.tick("192.168.1.9", KEY, true);
+  fake::g().now += 10000;
+  TEST_ASSERT(!f.tick("192.168.1.9", KEY, true), "no restart");
+  TEST_ASSERT(logged("relay not found") && logged("UDP 9999"), "the log says what to check, on the configured port");
+}
+
 int main() {
   RUN_TEST(nothing_is_sent_while_the_relay_works);
   RUN_TEST(nothing_is_sent_without_wifi);
@@ -178,5 +212,7 @@ int main() {
   RUN_TEST(a_name_is_resolved_and_a_dead_name_still_leads_to_a_search);
   RUN_TEST(nobody_answering_is_logged_the_first_time_then_rarely);
   RUN_TEST(an_address_that_cannot_be_saved_does_not_restart_the_board);
+  RUN_TEST(the_port_and_timings_come_from_the_constructor);
+  RUN_TEST(a_search_that_finds_nothing_names_the_port_it_searched_on);
   return test::summarize();
 }

@@ -67,10 +67,6 @@ static_assert(isPrintableAscii(SETUP_DEFAULT_PASSWORD),
 // The ESP32's own access-point address: where the form lives.
 static const char* const SETUP_AP_IP = "192.168.4.1";
 
-// After a save or an exit the board waits this long before restarting, so the
-// browser still receives the "restarting" page.
-static const uint32_t SETUP_RESTART_GRACE_MS = 1500;
-
 // An SSID is at most 32 bytes.
 static const size_t SSID_MAX = 32;
 

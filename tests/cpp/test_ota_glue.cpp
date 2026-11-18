@@ -11,7 +11,7 @@
 #include "ota.h"
 
 static const std::string MD5 = "900150983cd24fb0d6963f7d28e17f72";
-// (review ARD-016) the firmware size bound (OTA_FIRMWARE_MIN_BYTES, 100 KB by
+// (review ARD-016) the firmware size bound (OTA_FW_MIN_B, 100 KB by
 // default) refuses anything below it, so the test image has to be at least
 // that big or every existing test would fail with bad_size. 200 KB is well
 // above the minimum and well below the 2 MB maximum.
@@ -230,7 +230,7 @@ TEST(a_firmware_below_the_minimum_size_is_refused_review_ARD_016) {
 TEST(a_firmware_above_the_maximum_size_is_refused_review_ARD_016) {
   resetWorld();
   route("/version", 200, "new456\n" + MD5 + "\n");
-  // 3 MB > OTA_FIRMWARE_MAX_BYTES (2 MB). The fake does not actually allocate
+  // 3 MB > OTA_FW_MAX_B (2 MB). The fake does not actually allocate
   // 3 MB — getSize() reports stream_.bytes.size(), which is the size of the
   // string we pass. We use a small string but pretend it is large by counting
   // on the bound to fire on len, not on the body actually being huge.
@@ -299,6 +299,55 @@ TEST(a_download_that_stalls_halfway_is_given_up_on_and_aborted) {
   TEST_ASSERT(fake::g().serial.back().find("short_write") != std::string::npos, "reported as short_write");
 }
 
+TEST(the_timing_comes_from_the_constructor) {
+  // F-29: OTA_CHECK_S / OTA_RETRY_S are settings; the sketch builds the updater with the timing read
+  // from them. A short schedule really asks sooner than the old hard-coded one.
+  resetWorld();
+  route("/version", 200, "cur123\n" + MD5 + "\n");
+  esp32cam_ota::OtaTiming t = esp32cam_ota::defaultTiming();
+  t.firstCheckMs = 5000;
+  t.checkMs = 10000;
+  OtaUpdater ota("recorder", t);
+  runUntil(ota, 5000);
+  TEST_ASSERT_EQ(fake::g().requests.size(), (size_t)0, "nothing before the constructor's first check");
+  runUntil(ota, 26000);
+  TEST_ASSERT_EQ(countRequests("/version"), (size_t)3, "checks at 5 s, 15 s and 25 s with checkMs = 10 s (the default is one a minute)");
+}
+
+TEST(the_response_limits_come_from_the_constructor) {
+  // F-29: OTA_VER_MAX_B / OTA_FW_MIN_B / OTA_FW_MAX_B / OTA_VER_IDLE_MS / OTA_DL_IDLE_MS are settings;
+  // the bounds they feed are honoured exactly as the old hard-coded ones were.
+  resetWorld();
+  route("/version", 200, "new456\n" + MD5 + "\n");
+  route("firmware.bin?id=cam1", 200, "", IMAGE);
+  esp32cam_ota::OtaTiming t = esp32cam_ota::defaultTiming();
+  t.firstCheckMs = 5000;
+  t.retryMs = 30000;   // the failed attempt is tried again soon, so the test can see it
+  esp32cam_ota::OtaLimits lim = esp32cam_ota::defaultOtaLimits();
+  lim.firmwareMinBytes = 300 * 1024;   // above the 200 KB test image: refused
+  lim.firmwareMaxBytes = 400 * 1024;
+  OtaUpdater ota("recorder", t, lim);
+  runUntil(ota, 37000);   // the check at ~5 s fails, the retry comes 30 s later (retryMs)
+  TEST_ASSERT(!fake::g().restarted, "a too-small image is never flashed");
+  TEST_ASSERT_EQ(fake::g().updateSize, (size_t)0, "it never reached Update.begin");
+  bool reported = false;
+  for (size_t i = 0; i < fake::g().requests.size(); ++i)
+    if (fake::g().requests[i].find("&err=bad_size") != std::string::npos) reported = true;
+  TEST_ASSERT(reported, "the failure goes out with the next poll (30 s later here, 5 minutes with the default)");
+  TEST_ASSERT(countRequests("/version") >= 2, "and the check continues");
+}
+
+TEST(a_version_reply_over_the_limit_is_refused_without_a_download) {
+  resetWorld();
+  route("/version", 200, "cur123\n" + MD5 + "\n");
+  esp32cam_ota::OtaLimits lim = esp32cam_ota::defaultOtaLimits();
+  lim.versionReplyMaxBytes = 10;   // a valid reply is ~40 bytes: this one is refused unread
+  OtaUpdater ota("recorder", esp32cam_ota::defaultTiming(), lim);
+  runUntil(ota, 25000);
+  TEST_ASSERT_EQ(countRequests("firmware.bin"), (size_t)0, "no download from an answer over the limit");
+  TEST_ASSERT(!fake::g().restarted, "and no restart");
+}
+
 int main() {
   RUN_TEST(no_wifi_no_request);
   RUN_TEST(first_check_comes_20s_after_wifi);
@@ -309,6 +358,9 @@ int main() {
   RUN_TEST(a_garbled_answer_is_ignored);
   RUN_TEST(relay_unreachable_is_quiet);
   RUN_TEST(md5_mismatch_is_reported_next_poll_and_retried_after_5_minutes);
+  RUN_TEST(the_timing_comes_from_the_constructor);
+  RUN_TEST(the_response_limits_come_from_the_constructor);
+  RUN_TEST(a_version_reply_over_the_limit_is_refused_without_a_download);
   RUN_TEST(the_error_is_reported_once);
   RUN_TEST(each_failure_has_its_token);
   RUN_TEST(an_oversized_version_reply_is_ignored_review_ARD_008);

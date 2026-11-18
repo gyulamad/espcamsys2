@@ -14,10 +14,14 @@
 // HTTP must never run in loop() (it would stall the camera): call tick() from a
 // background task that already does networking.
 //
-// Knobs (define before including to change):
-//   OTA_ENABLED         1; set 0 to build a sketch that never updates itself
-//   OTA_CHECK_SECONDS   60   between checks (plus up to 15 s random jitter)
-//   OTA_RETRY_SECONDS   300  wait after a failed update
+// Since F-29 the timing and the response bounds are SETTINGS, not build-time knobs
+// (OTA_CHECK_S, OTA_RETRY_S, OTA_VER_MAX_B, OTA_FW_MIN_B, OTA_FW_MAX_B, OTA_VER_IDLE_MS,
+// OTA_DL_IDLE_MS — and OTA_ENABLED, which the sketch honours by not calling tick() at
+// all). The values reach this class through the constructor; the defaults are the old
+// hard-coded ones, so a sketch that passes nothing behaves exactly as before:
+//     OtaUpdater ota("recorder", timing, limits);
+// (Whether the board updates at all is the sketch's decision, made once per tick from
+// its settings — an update disabled mid-boot must not resurrect here.)
 //
 // The camera is NOT paused and not deinitialised during the update: the flash writes briefly
 // stall the other core, which the stream survives. (Revisit if hardware tests show trouble.)
@@ -31,45 +35,6 @@
 #include <string>
 
 #include "ota_logic.h"
-
-#ifndef OTA_ENABLED
-#define OTA_ENABLED 1
-#endif
-#ifndef OTA_CHECK_SECONDS
-#define OTA_CHECK_SECONDS 60
-#endif
-#ifndef OTA_RETRY_SECONDS
-#define OTA_RETRY_SECONDS 300
-#endif
-
-// (review ARD-008) maximum bytes the OTA logic will buffer for the version
-// reply before parsing it. The valid shape is "<version>\n<md5>\n" (~80 bytes
-// typical, ~120 worst case) — anything bigger is either a relay bug or a
-// malicious response, and unbounded getString() would let a hostile relay
-// exhaust the camera's ~300 KB heap.
-#ifndef OTA_VERSION_REPLY_MAX_BYTES
-#define OTA_VERSION_REPLY_MAX_BYTES 256
-#endif
-// (review ARD-016) sanity bounds on the firmware size. The Update library
-// already refuses anything bigger than the OTA partition, but a 1-byte body
-// would otherwise proceed to writeStream and fail confusingly; bounding the
-// size at the application level also produces a clearer error token.
-#ifndef OTA_FIRMWARE_MIN_BYTES
-#define OTA_FIRMWARE_MIN_BYTES 100 * 1024
-#endif
-#ifndef OTA_FIRMWARE_MAX_BYTES
-#define OTA_FIRMWARE_MAX_BYTES 2 * 1024 * 1024
-#endif
-
-// How long a response may stay silent before it is given up on. The reader yields while it waits (see
-// readBody), so this is not about the task watchdog; it is that a relay that goes quiet must not hold the
-// network task for ever. The version reply is a few dozen bytes, the image is megabytes over Wi-Fi.
-#ifndef OTA_VERSION_REPLY_IDLE_MS
-#define OTA_VERSION_REPLY_IDLE_MS 5000
-#endif
-#ifndef OTA_DOWNLOAD_IDLE_MS
-#define OTA_DOWNLOAD_IDLE_MS 15000
-#endif
 
 // Where this reports to. The recorder maps these to its remote log (so the relay's log file
 // shows them); the default is the serial port.
@@ -131,12 +96,17 @@ static BodyRead readBody(HTTPClient& http, size_t maxBytes, uint32_t idleLimitMs
 
 class OtaUpdater {
  public:
-  explicit OtaUpdater(const char* type) : type_(type), policy_(makeTiming()) {}
+  // `timing`: when checks happen (esp32cam_ota::defaultTiming() = the old hard-coded schedule).
+  // `limits`: how big / how slow a response may be (esp32cam_ota::defaultOtaLimits() = the old bounds,
+  // see ota_logic.h for why each exists).
+  explicit OtaUpdater(const char* type,
+                      const esp32cam_ota::OtaTiming& timing = esp32cam_ota::defaultTiming(),
+                      const esp32cam_ota::OtaLimits& limits = esp32cam_ota::defaultOtaLimits())
+      : type_(type), policy_(timing), limits_(limits), retryS_(timing.retryMs / 1000UL) {}
 
   // One pass: does nothing unless a check is due. Takes seconds when it does (and a minute or
   // so when it flashes), so call it from a background task only.
   void tick(const std::string& host, int port, const std::string& apiKey, const std::string& id) {
-#if OTA_ENABLED
     uint32_t now = millis();
     uint32_t jitter = (uint32_t)random(0, 15001);
     if (!policy_.due(now, WiFi.status() == WL_CONNECTED, jitter)) return;
@@ -154,14 +124,14 @@ class OtaUpdater {
       // (review ARD-008) bounded read: a hostile relay (or a MITM, since the OTA URL is plain HTTP — see
       // ARD-001) returning a huge body would otherwise exhaust the camera's heap. parseVersionReply only
       // looks at the first ~120 bytes anyway.
-      BodyRead read = readBody(http, OTA_VERSION_REPLY_MAX_BYTES, OTA_VERSION_REPLY_IDLE_MS,
+      BodyRead read = readBody(http, limits_.versionReplyMaxBytes, limits_.versionReplyIdleMs,
                                [&body](uint8_t* data, size_t n) {
                                  body.append(reinterpret_cast<const char*>(data), n);
                                  return n;
                                });
       if (read.step != esp32cam_ota::ReadStep::Done) {
         if (read.step == esp32cam_ota::ReadStep::TooLarge) {
-          OTA_WARN("the relay's firmware answer was too large (>%d bytes) - ignoring it", (int)OTA_VERSION_REPLY_MAX_BYTES);
+          OTA_WARN("the relay's firmware answer was too large (>%d bytes) - ignoring it", (int)limits_.versionReplyMaxBytes);
         } else {
           OTA_WARN("the relay's firmware answer did not arrive completely - ignoring it");
         }
@@ -198,20 +168,11 @@ class OtaUpdater {
     OTA_INFO("firmware %s is published, this board runs %s - downloading", reply.version.c_str(), FW_GIT);
     std::string err = download(host, port, apiKey, id, reply);
     // Only reached when something went wrong: a good update restarts the board.
-    OTA_WARN("firmware update to %s failed (%s) - will try again in %d s", reply.version.c_str(), err.c_str(), OTA_RETRY_SECONDS);
+    OTA_WARN("firmware update to %s failed (%s) - will try again in %d s", reply.version.c_str(), err.c_str(), (int)retryS_);
     policy_.onResult(millis(), false, err, jitter);
-#else
-    (void)host; (void)port; (void)apiKey; (void)id;
-#endif
   }
 
  private:
-  static esp32cam_ota::OtaTiming makeTiming() {
-    esp32cam_ota::OtaTiming t = esp32cam_ota::defaultTiming();
-    t.checkMs = (uint32_t)OTA_CHECK_SECONDS * 1000UL;
-    t.retryMs = (uint32_t)OTA_RETRY_SECONDS * 1000UL;
-    return t;
-  }
 
   // Downloads and flashes `reply`. Returns an error token on failure; on success the board restarts
   // and this does not return.
@@ -236,7 +197,7 @@ class OtaUpdater {
     // refuse anything bigger than the OTA partition, but a 1-byte body would
     // otherwise proceed to writeStream and fail with a confusing
     // "short_write". Bounds also produce clearer error tokens.
-    if (len < (int)OTA_FIRMWARE_MIN_BYTES || len > (int)OTA_FIRMWARE_MAX_BYTES) {
+    if (len < (int)limits_.firmwareMinBytes || len > (int)limits_.firmwareMaxBytes) {
       http.end();
       return "bad_size";
     }
@@ -252,7 +213,7 @@ class OtaUpdater {
     // pass, so the Wi-Fi stack and the idle task run during the whole download — Update.writeStream() reads
     // in a tight loop that never yields, and the task watchdog reboots the board mid-download — and it gives
     // up when the relay goes quiet instead of waiting for ever.
-    size_t written = readBody(http, (size_t)OTA_FIRMWARE_MAX_BYTES + 1, OTA_DOWNLOAD_IDLE_MS,
+    size_t written = readBody(http, (size_t)limits_.firmwareMaxBytes + 1, limits_.downloadIdleMs,
                               [](uint8_t* data, size_t n) { return Update.write(data, n); }).bytes;
     http.end();
     if (written != (size_t)len) {
@@ -276,4 +237,6 @@ class OtaUpdater {
 
   const char* type_;
   esp32cam_ota::OtaPolicy policy_;
+  esp32cam_ota::OtaLimits limits_;
+  uint32_t retryS_;   // for the "will try again in N s" line (timing.retryMs, kept for the message)
 };

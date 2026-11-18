@@ -82,9 +82,6 @@ new	both	SETUP_RETRY_MS	SETUP_RETRY_MS	Setup retry after a failure (ms)	T2,T5b
 new	both	SETUP_RESTART_GRACE_MS	SETUP_GRACE_MS	Wait before restart after setup (ms)	T2,T5b
 new	both	SETUP_AP_CHANNEL	SETUP_AP_CHAN	Setup Wi-Fi channel	T2,T5b
 new	both	SETUP_AP_MAX_STATIONS	SETUP_MAX_STA	Setup Wi-Fi: most devices at once	T2,T5b
-new	both	SETUP_HTTP_PORT	SETUP_HTTP_PORT	Setup page port	T2,T5b
-new	both	SETUP_DNS_PORT	SETUP_DNS_PORT	Setup DNS port	T2,T5b
-new	both	SETUP_MAX_CONNECTIONS	SETUP_MAX_CONN	Setup page: most connections at once	T2,T5b
 new	both	SETUP_REQUEST_TIMEOUT_MS	SETUP_RQ_TMO_MS	Setup page request timeout (ms)	T2,T5b
 new	both	SETTINGS_WINDOW_MS	BOOT_SER_WIN_MS	Boot wait for a serial "y" (ms)	T2,T5b
 new	both	REMOTE_CONNECT_MS	BOOT_WIFI_MS	Boot: time to join Wi-Fi (ms)	T2,T5b

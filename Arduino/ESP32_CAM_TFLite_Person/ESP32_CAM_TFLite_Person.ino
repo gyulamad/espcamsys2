@@ -115,6 +115,7 @@ using esp32cam_logic::LOG_MSG_MAX;
 using esp32cam_logic::LOG_SITE_MAX;
 using esp32cam_logic::formatCallSite;
 using esp32cam_logic::isAbnormalReset;
+using esp32cam_logic::logLevelFromInt;
 using esp32cam_logic::resetReasonName;
 
 // ── Remote logging glue ─────────────────────────────────────────────────
@@ -133,11 +134,20 @@ using esp32cam_logic::resetReasonName;
 // Usage anywhere below:  RLOG_INFO("connected, RSSI %d", rssi);  — printf-style, at levels RLOG_DEBUG /
 // RLOG_INFO / RLOG_WARN / RLOG_ERROR. (Not LOG_*: the ESP32 toolchain's syslog headers define those names.)
 //
-// There are no LOG_* settings on the detector (they would make every board that is updated ask for them):
-// remote logging is always on, at INFO and above.
+// Since F-29 (T5b) what the log sends and how it retries are settings (LOG_MIN_LEVEL, LOG_ECHO,
+// LOG_RETRY_MAX, LOG_RETRY_SEC, LOG_FLUSH_SEC, LOG_REPEAT_SEC), each with the old hard-coded value as
+// its default. There is still no LOG_ENABLED switch: remote logging is always on (a detector is
+// installed where nobody can read a serial port), and the defaults make every board that is updated
+// keep logging exactly as before.
 
 void logEcho(void*, LogLevel, const char* line) {
   Serial.println(line);
+}
+
+// Clamps LOG_RETRY_MAX into the uint8_t the log engine takes. The setting is range-checked when it is
+// stored, so this only matters for a value read before the settings are loaded.
+uint8_t remoteLogMaxRetries(int retries) {
+  return (uint8_t)(retries < 0 ? 0 : (retries > 255 ? 255 : retries));
 }
 
 // The log's configuration. Remote delivery is off until the settings are loaded (the instance below starts
@@ -145,12 +155,12 @@ void logEcho(void*, LogLevel, const char* line) {
 RemoteLogConfig remoteLogConfigFor(bool remote) {
   RemoteLogConfig c;
   c.remoteEnabled   = remote;
-  c.remoteMinLevel  = LogLevel::Info;
-  c.echoAlways      = true;      // the serial port always gets everything too
-  c.flushIntervalMs = 10000;     // routine entries wait this long so they go out together (warnings go at once)
-  c.retryPeriodMs   = 30000;     // after a failed delivery
-  c.maxRetries      = 3;         // ...then give up (serial only) until the uplink to the relay is up again
-  c.repeatWindowMs  = 30000;     // an identical message inside this window is counted, not repeated
+  c.remoteMinLevel  = logLevelFromInt(g_cfg.logMinLevel);
+  c.echoAlways      = g_cfg.logEcho;
+  c.flushIntervalMs = g_cfg.logFlushSec * 1000UL;
+  c.retryPeriodMs   = g_cfg.logRetrySec * 1000UL;
+  c.maxRetries      = remoteLogMaxRetries(g_cfg.logRetryMax);
+  c.repeatWindowMs  = g_cfg.logRepeatSec * 1000UL;
   return c;
 }
 
@@ -194,7 +204,7 @@ bool postLogBatch(const std::string &body, String &detail) {
   HTTPClient http;
   std::string url = person_report::buildLogUrl(g_cfg.serverHost, g_cfg.httpPort);
   http.begin(String(url.c_str()));
-  http.setTimeout(5000);
+  http.setTimeout(g_cfg.httpTimeoutMs);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
   int code = http.POST((uint8_t *)body.data(), body.size());
@@ -236,8 +246,8 @@ void remoteLogPump() {
     Serial.printf("[log] giving up on remote logging after %u failed deliveries (%s) — serial only until the relay is reachable again\n",
                   (unsigned)failed, detail.c_str());
   } else {
-    Serial.printf("[log] could not deliver log entries (%s) — delivery %u failed, retrying in 30 s\n",
-                  detail.c_str(), (unsigned)failed);
+    Serial.printf("[log] could not deliver log entries (%s) — delivery %u failed, retrying in %u s\n",
+                  detail.c_str(), (unsigned)failed, (unsigned)g_cfg.logRetrySec);
   }
 }
 
@@ -647,7 +657,9 @@ public:
                       "/device-settings/" + type_ + "/" + store_.get(idKey_) + "?need=" + needKeys;
     HTTPClient http;
     http.begin(String(url.c_str()));
-    http.setTimeout(5000);
+    // The boot's recovery path, before the settings (and so HTTP_TMO_MS) can be loaded: g_cfg still
+    // holds its member defaults, which are the values the sketch used before the settings existed.
+    http.setTimeout(g_cfg.httpTimeoutMs);
     http.addHeader("X-Api-Key", store_.get("API_KEY").c_str());
     int code = http.GET();
     esp32cam_settings::FetchResult result = esp32cam_settings::FetchResult::Failed;
@@ -684,16 +696,13 @@ using esp32cam_settings::loadPersonSettings;
 using esp32cam_settings::personRemotePrerequisites;
 using esp32cam_setup::ArduinoSetupHardware;
 using esp32cam_setup::SetupBoot;
+using esp32cam_setup::SetupOptions;
 using esp32cam_setup::SetupStep;
 
-const uint32_t SETTINGS_WINDOW_MS = 5000;          // how long boot waits for a "y" before starting normally
-// A board that is MISSING settings (typically after a firmware update added one) first gives the
-// serial port SETTINGS_WINDOW_MS to itself, then asks the relay for them (RemoteFill). Only possible
-// when the settings that reach the relay (Wi-Fi, server, key, id) are stored; without them the board
-// is configured over serial or in its setup WiFi.
-const uint32_t REMOTE_CONNECT_MS = 20000;          // how long it gets to join Wi-Fi before restarting to try again
-const uint32_t REMOTE_WINDOW_MS = 30000;           // how long it then waits for the relay to supply them
-const uint32_t REMOTE_POLL_MS = 5000;              // and how often it asks meanwhile
+// How long boot waits for a "y" (change settings?) before starting normally, and how long a board that
+// is MISSING settings (typically after a firmware update added one) may take to join Wi-Fi and wait for
+// the relay to supply them (RemoteFill) — settings since F-29 (BOOT_SER_WIN_MS, BOOT_WIFI_MS,
+// BOOT_RELAY_MS, BOOT_POLL_MS), read in setupSettings() with these old values as their defaults.
 const char* const SETTINGS_NAMESPACE = "espcam";   // flash (NVS) namespace the settings live in
 const char* const BOARD_TYPE = "detector";         // the relay's word for this board; also names its setup WiFi
 
@@ -783,8 +792,27 @@ void setupSettings() {
     Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
   }
 
+  // The boot conversation's waits and the setup WiFi's tuning are settings (BOOT_*, SETUP_*), read
+  // through the defaults view: a board that stored nothing — or whose flash could not be opened —
+  // gets the values the sketch used before they were settings.
+  esp32cam_settings::DefaultingStore defaults(store, PERSON_SCHEMA.meta, PERSON_SCHEMA.metaCount);
+  const uint32_t serialWindowMs = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_SER_WIN_MS");
+  const uint32_t wifiConnectMs  = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_WIFI_MS");
+  const uint32_t relayWindowMs  = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_RELAY_MS");
+  const uint32_t relayPollMs    = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_POLL_MS");
+
+  // The setup WiFi's retry, grace, channel, station count and request timeout (SETUP_RETRY_MS,
+  // SETUP_GRACE_MS, SETUP_AP_CHAN, SETUP_MAX_STA, SETUP_RQ_TMO_MS); SetupOptions' member defaults are
+  // the same values, so this only overrides what the board has stored.
+  SetupOptions setupOpts;
+  setupOpts.retryMs = (uint32_t)esp32cam_settings::storedInt(defaults, "SETUP_RETRY_MS");
+  setupOpts.graceMs = (uint32_t)esp32cam_settings::storedInt(defaults, "SETUP_GRACE_MS");
+  setupOpts.net.apChannel = (int)esp32cam_settings::storedInt(defaults, "SETUP_AP_CHAN");
+  setupOpts.net.apMaxStations = (int)esp32cam_settings::storedInt(defaults, "SETUP_MAX_STA");
+  setupOpts.net.requestTimeoutMs = (uint32_t)esp32cam_settings::storedInt(defaults, "SETUP_RQ_TMO_MS");
+
   ArduinoSetupHardware setupHardware;
-  SetupBoot setupBoot(PERSON_SCHEMA, store, personRemotePrerequisites(), BOARD_TYPE, setupHardware);
+  SetupBoot setupBoot(PERSON_SCHEMA, store, personRemotePrerequisites(), BOARD_TYPE, setupHardware, setupOpts);
   if (setupBoot.armed()) {
     // Configured, so there is nothing to ask on the serial port: serve the setup WiFi until the owner is done.
     while (setupBoot.step(millis()) == SetupStep::Running) delay(5);
@@ -793,14 +821,14 @@ void setupSettings() {
     return;
   }
 
-  BootConfigFlow flow(PERSON_SCHEMA, store, console, SETTINGS_WINDOW_MS);
+  BootConfigFlow flow(PERSON_SCHEMA, store, console, serialWindowMs);
   // Missing settings can also come from the relay (staged there by the operator), so a firmware
   // update that needs one more setting doesn't need a USB cable. Only gaps are ever filled, and
   // only if nobody types: see RemoteFill in settings_logic.h.
   RelaySettingsLink link(store, BOARD_TYPE, "DETECTOR_ID");
   RemoteFill remote(PERSON_SCHEMA, store, link, console, personRemotePrerequisites(),
-                    REMOTE_CONNECT_MS, REMOTE_WINDOW_MS, REMOTE_POLL_MS);
-  flow.attachRemote(&remote, SETTINGS_WINDOW_MS);
+                    wifiConnectMs, relayWindowMs, relayPollMs);
+  flow.attachRemote(&remote, serialWindowMs);
   BootConfigFlow::Status status;
   while ((status = flow.step(millis())) == BootConfigFlow::Running) {
     // A blank board has its setup WiFi open while the serial prompt keeps working: whichever is used first wins.
@@ -839,9 +867,11 @@ static PreferencesStore* g_syncStore = nullptr;
 static SettingsSync* g_sync = nullptr;
 
 void settingsSyncTick() {
-  if (!g_sync) {   // created on first use, in the task that uses it
+  if (!g_cfg.syncEnabled) return;   // SYNC_ENABLED=0: the dashboard can not reconfigure this board (serial only)
+  if (!g_sync) {   // created on first use, in the task that uses it, with the SYNC_* settings' schedule
     g_syncStore = new PreferencesStore();
-    g_sync = new SettingsSync(esp32cam_settings::PERSON_SCHEMA, *g_syncStore, "detector", esp32cam_settings::personLockedKeys());
+    g_sync = new SettingsSync(esp32cam_settings::PERSON_SCHEMA, *g_syncStore, "detector",
+                              esp32cam_settings::personLockedKeys(), g_cfg.syncFirstSec, g_cfg.syncCheckSec);
   }
   if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId)) {
     if (g_sync->rebootRequested()) RLOG_INFO("restart requested from the dashboard - restarting");
@@ -860,17 +890,19 @@ void settingsSyncTick() {
 #include "relay_find.h"
 #include "relay_health.h"
 
-static const uint32_t RELAY_DOWN_MS = 90000;   // a resting detector asks only every ~30 s
 RelayHealth g_relayHealth;   // when the relay was last CONFIRMED alive (set by WifiUplinkEnv, read by relayFindTick)
 static PreferencesStore* g_findStore = nullptr;
 static RelayFind* g_find = nullptr;
 
 void relayFindTick() {
-  if (!g_find) {   // created on first use, in the task that uses it
+  if (!g_cfg.relayFindEnabled) return;   // RF_ENABLED=0: SERVER_HOST stays whatever it is (serial only)
+  if (!g_find) {   // created on first use, in the task that uses it, with the RF_* settings' port and timings
     g_findStore = new PreferencesStore();
-    g_find = new RelayFind(*g_findStore);
+    g_find = new RelayFind(*g_findStore, g_cfg.relayFindPort,
+                           g_cfg.relayFindFirstSec * 1000UL, g_cfg.relayFindOkSec * 1000UL,
+                           g_cfg.relayFindRetryMinSec * 1000UL, g_cfg.relayFindRetryMaxSec * 1000UL);
   }
-  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), RELAY_DOWN_MS))) restartBoard();
+  if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), g_cfg.relayDownMs))) restartBoard();
 }
 // ── end of finding the relay again ──────────────────────────────────────
 
@@ -1003,12 +1035,40 @@ void reportPersonState(bool detected)
 // Over-the-air updates, server-driven: the network task asks the relay every minute or so which
 // firmware is current and, when it differs from FW_GIT, downloads it, flashes it and restarts. What it
 // decides: ota_logic.h (unit-tested); the HTTP and flash calls: ota.h. Its messages go to the remote
-// log, so the relay's log file shows each step.
+// log, so the relay's log file shows each step. The timing and the response bounds are the OTA_*
+// settings (read when the updater is built below); the check only runs while OTA_ENABLED=1.
 #define OTA_INFO(...) RLOG_INFO(__VA_ARGS__)
 #define OTA_WARN(...) RLOG_WARN(__VA_ARGS__)
 #include "ota.h"
 
-OtaUpdater otaUpdater("detector");
+// Built on first use, in the network task (after the settings are loaded), so its timing and bounds
+// come from the OTA_* settings; the defaults (esp32cam_ota::defaultTiming() / defaultOtaLimits()) hold
+// the values the sketch hard-coded before F-29. A board with OTA_ENABLED=0 never gets this far, and no
+// check resurrects the update behind the setting's back.
+static OtaUpdater* g_ota = nullptr;
+
+static void otaTick()
+{
+    if (!g_cfg.otaEnabled) return;
+
+    if (!g_ota)
+    {
+        esp32cam_ota::OtaTiming timing = esp32cam_ota::defaultTiming();
+        timing.checkMs = g_cfg.otaCheckSec * 1000UL;
+        timing.retryMs = g_cfg.otaRetrySec * 1000UL;
+
+        esp32cam_ota::OtaLimits limits = esp32cam_ota::defaultOtaLimits();
+        limits.versionReplyMaxBytes = g_cfg.otaVerMaxBytes;
+        limits.firmwareMinBytes = g_cfg.otaFwMinBytes;
+        limits.firmwareMaxBytes = g_cfg.otaFwMaxBytes;
+        limits.versionReplyIdleMs = g_cfg.otaVerIdleMs;
+        limits.downloadIdleMs = g_cfg.otaDlIdleMs;
+
+        g_ota = new OtaUpdater("detector", timing, limits);
+    }
+
+    g_ota->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId);
+}
 
 // ── Uplink glue ─────────────────────────────────────────────
 // What UplinkSession (report_logic.h) needs from the board: a socket, the JPEG encoder, the detection
@@ -1351,7 +1411,7 @@ void pollViewSwitch(person_report::ViewGate &gate, person_report::ViewPollWatch 
     // The poll also tells the relay which Wi-Fi network this board is on and how strong the signal is (it rests, so
     // it has no other connection to say it on).
     http.begin(String(person_report::buildViewUrl(g_cfg.serverHost, g_cfg.httpPort, g_cfg.detectorId, std::string(WiFi.SSID().c_str()), WiFi.RSSI()).c_str()));
-    http.setTimeout(5000);
+    http.setTimeout(g_cfg.httpTimeoutMs);
     http.addHeader("X-Api-Key", g_cfg.apiKey.c_str());
     int code = http.GET();
     String body = (code > 0) ? http.getString() : String();   // a refusal's body says why (a small JSON error)
@@ -1427,9 +1487,12 @@ void networkTask(void *)
     ucfg.report.scoreFreshMs = g_cfg.scoreFreshMs;
 
     person_report::UplinkSession session(ucfg, env);
-    person_report::WifiWatch wifiWatch(10000);
+    person_report::WifiWatch wifiWatch(g_cfg.wifiDownReportMs);
     person_report::Every heartbeat((uint32_t)g_cfg.announceHeartbeatSec * 1000UL);
-    person_report::ViewGate viewGate;   // streams only while somebody watches; otherwise the radio rests
+    // The live view's poll schedule (VIEW_IDLE_MS / VIEW_LIVE_MS / VIEW_RETRY_MS; the defaults are the
+    // values the sketch used before the settings existed): streams only while somebody watches, so the
+    // radio can rest.
+    person_report::ViewGate viewGate(g_cfg.viewIdlePollMs, g_cfg.viewLivePollMs, g_cfg.viewRetryMs);
     person_report::ViewPollWatch viewPollWatch;   // the poll's failures, said once and then at intervals (F-33)
     bool radioAwake = true;
 
@@ -1453,8 +1516,8 @@ void networkTask(void *)
 
         if (up)
         {
-            // Firmware update check (does nothing unless one is due).
-            otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId);
+            // Firmware update check (does nothing unless one is due, and only while OTA_ENABLED=1).
+            otaTick();
 
             // Calibration changes queued from the dashboard (does nothing unless an ask is due).
             settingsSyncTick();

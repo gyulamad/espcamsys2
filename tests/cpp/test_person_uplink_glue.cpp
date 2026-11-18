@@ -174,11 +174,10 @@ struct FakeWiFiMulti {
 };
 static FakeWiFiMulti wifiMulti;
 
-// -- the firmware update check (ota.h in the sketch) --
-struct OtaCall { std::string host; int port; std::string key; std::string id; };
-static std::vector<OtaCall> g_otaCalls;
-struct FakeOta { void tick(const std::string& host, int port, const std::string& key, const std::string& id) { g_otaCalls.push_back({host, port, key, id}); } };
-static FakeOta otaUpdater;
+// -- the firmware update check (the sketch's otaTick(): its gate and the updater's construction live
+//    outside the extracted blocks, right after the OTA_* settings are loaded; what is under test here
+//    is that the network task calls it on every pass while up, with the settings it read) --
+// The fake itself sits with the sketch's settings below (it reads g_cfg).
 
 // -- the settings changed from the dashboard (settings_sync.h in the sketch) --
 static int g_settingsSyncTicks = 0;
@@ -316,6 +315,12 @@ static void remoteLogRelayReachable() { g_reachableCalls++; }
 #include "../../Arduino/ESP32_CAM_TFLite_Person/settings_schema.h"
 using esp32cam_settings::PersonSettings;
 static PersonSettings g_cfg;
+
+// -- the firmware update check, recorded (needs g_cfg, so it sits after its declaration) --
+struct OtaCall { std::string host; int port; std::string key; std::string id; };
+static std::vector<OtaCall> g_otaCalls;
+static void otaTick() { g_otaCalls.push_back({g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.detectorId}); }
+
 #include "../../Arduino/ESP32_CAM_TFLite_Person/report_logic.h"
 #include "../../Arduino/ESP32_CAM_TFLite_Person/remote_log.h"
 using esp32cam_logic::isAbnormalReset;       // (the sketch declares these above its logging glue)
