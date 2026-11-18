@@ -234,6 +234,26 @@ async function main() {
         && staged === 'JPEG_Q_DROP=1;JPEG_Q_MIN=10;JPEG_Q_MAX=50',
       JSON.stringify({ posted: posts[3] && posts[3].body, staged }));
     closeWindow(dom);
+
+    // ── T4: a locked secret is read-only and masked, even when a board reports it in the clear ──
+    const RAW_KEY = 'RAW-api-key-must-not-show', RAW_PW = 'RAW-master-pw-must-not-show';
+    board = Object.assign({}, NEW_BOARD, { API_KEY: RAW_KEY, SETUP_PASSWORD: RAW_PW });
+    toasts = [];
+    dom = await openPage(toasts);
+    window = dom.window;
+    for (const name of ['API_KEY', 'SETUP_PASSWORD']) {
+      const input = window.document.getElementById('f-' + name);
+      check(name + ' is read-only on the page', input !== null && input.disabled === true && !!window.document.getElementById('r-' + name).querySelector('.tag.lock'));
+      check(name + ' shows the mask, not the reported value', input !== null && input.value === '********', input && input.value);
+    }
+    const shown = dom.serialize() + Array.from(window.document.querySelectorAll('input')).map((i) => i.value).join('|');
+    check('neither raw secret appears anywhere on the page', !shown.includes(RAW_KEY) && !shown.includes(RAW_PW));
+    setField(window, 'LOG_ECHO', '0');
+    await clickSave(window, toasts, posts.length);
+    const lastPost = posts[posts.length - 1].body;
+    check('saving another setting does not carry the secrets along', lastPost === '{"values":{"LOG_ECHO":"0"}}' && !staged.includes('API_KEY') && !staged.includes('SETUP_PASSWORD'),
+      JSON.stringify({ lastPost, staged }));
+    closeWindow(dom);
   } finally {
     if (php) await stopProc(php);
     if (relay) await new Promise((r) => relay.close(r));

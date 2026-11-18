@@ -144,6 +144,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   // An optional setting (SETUP_MODE) may be absent from a board; absent means off. It is always shown, so it can be turned on.
   const isOptional = (d) => d.cond === 'optional';
   const isFixed = (d) => d.locked || d.kind === 'secret' || d.kind === 'wifi';
+  const SECRET_MASK = '********';
 
   function makeInput(d, value) {
     const opts = (list) => { const s = el('select'); for (const [v, t] of list) s.append(el('option', { value: v, textContent: t })); return s; };
@@ -208,7 +209,9 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       const input = makeInput(d, value);
       input.id = id; input.name = d.name;
       if (fixed) input.disabled = true;
-      if (fixed && (d.kind === 'secret' || d.kind === 'wifi')) { input.type = 'text'; input.value = value === undefined ? '(not set)' : value; }
+      // a locked secret is read-only AND masked: the page never shows what a device sent, only that it is set
+      // (the server masks it too, camera-settings.php; this is the page's own lock)
+      if (fixed && (d.kind === 'secret' || d.kind === 'wifi')) { input.type = 'text'; input.value = value === undefined ? '(not set)' : d.kind === 'secret' ? SECRET_MASK : value; }
       original[d.name] = value === undefined ? '' : String(value);
       input.addEventListener('input', () => { refresh(); });
       input.addEventListener('change', () => { refresh(); });

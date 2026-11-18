@@ -342,6 +342,11 @@ else
     run_cpp_test test_setup_boot_recorder
     run_cpp_test test_setup_boot_person
     run_cpp_test test_setup_credentials
+    # T4 (F-29): the master password end to end - the build-time default, a change over serial or through the form
+    # persisting and overriding it, and the locked secrets masked - against each sketch's real key table (the
+    # recorder with a private build-time default, the detector with the built-in one).
+    run_cpp_test test_setup_password_recorder
+    run_cpp_test test_setup_password_person
     # setup_mode.h compiled for real against fakes of the Arduino core (tests/cpp/ota_fakes/): the access point, DNS and
     # HTTP server, and the ArduinoSetupHardware that SetupBoot runs on; the last tests put the real form and session on top.
     run_cpp_test test_setup_mode_glue -I "$ROOT_DIR/tests/cpp/ota_fakes" -I "$ROOT_DIR/Arduino/ESP32_CAM_Recorder"

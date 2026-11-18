@@ -1775,6 +1775,34 @@ class CamLogic
         return null;
     }
 
+    // What a device reported, made safe to hand to a browser: a setting of kind `secret` (API_KEY, SETUP_PASSWORD, ...)
+    // is always shown as SECRET_MASK, whatever the device sent. The firmware already masks its report, so this is the
+    // second lock: a device that reported a secret in the clear (an old or broken build) must not put it on the page.
+    // A secret that was not reported stays absent (the page shows "not set"). Other kinds are returned untouched
+    // (a Wi-Fi list arrives unescaped here, so its passwords cannot be told apart reliably: the firmware masks those).
+    public const SECRET_MASK = '********';
+
+    public static function maskReportedSecrets(array $schemaKeys, array $reported): array
+    {
+        foreach ($schemaKeys as $k) {
+            if (($k['kind'] ?? '') !== 'secret' || !array_key_exists($k['name'], $reported)) {
+                continue;
+            }
+            $reported[$k['name']] = self::SECRET_MASK;
+        }
+        return $reported;
+    }
+
+    // The relay's state document with the reported settings masked by maskReportedSecrets().
+    public static function maskStateSecrets(array $schemaKeys, array $state): array
+    {
+        if (!isset($state['reported']['settings']) || !is_array($state['reported']['settings'])) {
+            return $state;
+        }
+        $state['reported']['settings'] = self::maskReportedSecrets($schemaKeys, $state['reported']['settings']);
+        return $state;
+    }
+
     // Turns the submitted { SETTING: value } into the line to queue for the camera.
     //   $reported: what the camera says it holds ({ SETTING: text }, secrets masked).
     //   $rules: the rules over several settings that the device's schema carries (device_schema.php 'rules'),

@@ -90,7 +90,7 @@ if ($method === 'GET') {
         'camera' => ['id' => (string) $camera['id'], 'name' => (string) ($camera['name'] ?? ''), 'icon' => (string) ($camera['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($camera) ?? ''), 'type' => $type, 'deviceId' => $deviceId],
         'keys' => $keys,
         'gpios' => $gpios,
-        'state' => camera_state($base, $headers),
+        'state' => CamLogic::maskStateSecrets($keys, camera_state($base, $headers)),   // a secret never reaches the browser
     ]);
     exit;
 }

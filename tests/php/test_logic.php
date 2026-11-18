@@ -2121,4 +2121,55 @@ camtest_test('buildDetectorStatus: a resting detector\'s Wi-Fi is still shown (i
     camtest_assert_equal([$out['cam1']['report'], $out['cam1']['wifi']], [null, $wifiGood]);
 });
 
+// ── T4: secrets never reach the browser ───────────────────────────────
+
+camtest_test('maskReportedSecrets: every secret of both devices is masked, whatever the device sent', function () {
+    $sc = camtest_schema();
+    foreach (['recorder', 'detector'] as $type) {
+        $secrets = [];
+        $reported = [];
+        foreach ($sc[$type]['keys'] as $k) {
+            if ($k['kind'] === 'secret') { $secrets[] = $k['name']; $reported[$k['name']] = 'RAW-' . $k['name'] . '-value'; }
+        }
+        camtest_assert_true(in_array('API_KEY', $secrets, true) && in_array('SETUP_PASSWORD', $secrets, true), $type . ' has both secrets');
+        $out = CamLogic::maskReportedSecrets($sc[$type]['keys'], $reported);
+        foreach ($secrets as $name) {
+            camtest_assert_equal($out[$name], CamLogic::SECRET_MASK, $type . ' ' . $name);
+        }
+        camtest_assert_true(strpos(json_encode($out), 'RAW-') === false, $type . ': no raw value is left');
+    }
+});
+
+camtest_test('maskReportedSecrets: other settings are untouched and an unreported secret stays absent', function () {
+    $sc = camtest_schema()['recorder']['keys'];
+    $out = CamLogic::maskReportedSecrets($sc, ['SERVER_HOST' => '192.168.4.9', 'PUSH_PORT' => '8081', 'API_KEY' => 'raw-key-1234']);
+    camtest_assert_equal($out, ['SERVER_HOST' => '192.168.4.9', 'PUSH_PORT' => '8081', 'API_KEY' => '********']);
+    camtest_assert_true(!array_key_exists('SETUP_PASSWORD', $out), 'an absent secret is not invented');
+});
+
+camtest_test('maskStateSecrets: masks the reported settings only, and leaves a state without a report alone', function () {
+    $sc = camtest_schema()['recorder']['keys'];
+    $state = ['reported' => ['settings' => ['API_KEY' => 'raw-key-1234', 'SETUP_PASSWORD' => 'raw-master-pw', 'PUSH_PORT' => '8081'], 'at' => 5],
+              'pending' => ['rev' => 2, 'keys' => ['PUSH_GAP_MUL'], 'at' => 6], 'last' => null, 'now' => 9];
+    $out = CamLogic::maskStateSecrets($sc, $state);
+    camtest_assert_equal($out['reported']['settings'], ['API_KEY' => '********', 'SETUP_PASSWORD' => '********', 'PUSH_PORT' => '8081']);
+    camtest_assert_equal([$out['reported']['at'], $out['pending'], $out['now']], [5, $state['pending'], 9]);
+    camtest_assert_true(strpos(json_encode($out), 'raw-') === false, 'nothing raw in the JSON the browser gets');
+    foreach ([['reported' => null, 'now' => 1], ['now' => 1], ['reported' => ['at' => 1]]] as $noReport) {
+        camtest_assert_equal(CamLogic::maskStateSecrets($sc, $noReport), $noReport);
+    }
+});
+
+camtest_test('a masked report cannot be sent back as a change of a locked secret', function () {
+    $sc = camtest_schema()['recorder'];
+    $reported = CamLogic::maskReportedSecrets($sc['keys'], ['API_KEY' => 'raw-key-1234', 'SETUP_PASSWORD' => 'raw-master-pw', 'PUSH_GAP_MUL' => '1.5']);
+    foreach (['API_KEY', 'SETUP_PASSWORD'] as $name) {
+        $r = CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], $reported, [$name => CamLogic::SECRET_MASK]);
+        camtest_assert_true(!$r['ok'], $name . ': the mask itself is refused as a value');
+        $r = CamLogic::buildDeviceChange($sc['keys'], $sc['gpios'], $reported, [$name => 'attacker-chosen-pw']);
+        camtest_assert_true(!$r['ok'], $name . ': a new value is refused, it can only be changed over the serial port');
+    }
+});
+
+
 exit(camtest_summarize());
