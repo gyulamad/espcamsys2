@@ -149,6 +149,63 @@ static const KeyDef RECORDER_KEYS[] = {
     { "SETUP_PASSWORD",  Kind::Secret,    8,    63,      Cond::Optional,      nullptr,           nullptr,
       "master password of the setup WiFi, the same on every board (8 to 63 characters); until it is set a built-in default is used, which the setup form makes you replace" },
 
+    // ── Updates & sync, Setup & security, Connection (F-29 T2) ─────────────────────────────────────────
+    // What used to be build knobs and constants of the shared headers (ota.h, relay_find.h, settings_sync.h,
+    // setup_boot.h, setup_mode.h) and of the boot. The same keys, ranges and defaults as the detector's (F-29 T5b).
+    // A setting with a default is never asked for on a blank board. All are read at boot: a change needs a restart.
+    { "OTA_ENABLED",     Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: the board asks the relay which firmware is current and installs it; 0: it never updates itself until switched back on (serial only)" },
+    { "OTA_CHECK_S",     Kind::Int,       5,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between firmware-update checks (plus up to 15 s random jitter, so boards do not all ask at once)" },
+    { "OTA_RETRY_S",     Kind::Int,       5,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds to wait after a FAILED update before trying again" },
+    { "OTA_VER_MAX_B",   Kind::Int,       64,   65536,   Cond::Always,     nullptr,          nullptr,
+      "the version answer is refused as hostile above this many bytes (a valid answer is about 80)" },
+    { "OTA_FW_MIN_B",    Kind::Int,       0,    1048576, Cond::Always,     nullptr,          nullptr,
+      "a firmware image smaller than this many bytes is refused before it reaches flash (not above OTA_FW_MAX_B)" },
+    { "OTA_FW_MAX_B",    Kind::Int,       65536, 4194304, Cond::Always,    nullptr,          nullptr,
+      "a firmware image bigger than this many bytes is refused (the OTA partition holds about 2 MB; not below OTA_FW_MIN_B)" },
+    { "OTA_VER_IDLE_MS", Kind::Int,       100,  60000,   Cond::Always,     nullptr,          nullptr,
+      "how long the version answer may stay silent before it is given up on (ms)" },
+    { "OTA_DL_IDLE_MS",  Kind::Int,       100,  120000,  Cond::Always,     nullptr,          nullptr,
+      "how long the firmware download may stay silent before it is given up on (ms); the image is megabytes over Wi-Fi" },
+    { "RF_ENABLED",      Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: when the relay cannot be reached for a while, look for it on the network and store the address it answers from; 0: keep SERVER_HOST whatever happens" },
+    { "RF_PORT",         Kind::Int,       1,    65535,   Cond::Always,     nullptr,          nullptr,
+      "UDP port the relay answers discovery on - discoveryPort in the relay's config.js; the two must match" },
+    { "RF_FIRST_S",      Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
+      "seconds after boot (Wi-Fi up) before the first relay check" },
+    { "RF_OK_S",         Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between relay checks while the relay answers" },
+    { "RF_RETRY_MIN_S",  Kind::Int,       1,    3600,    Cond::Always,     nullptr,          nullptr,
+      "first wait after a failed search, in seconds; it doubles up to RF_RETRY_MAX_S (not above it)" },
+    { "RF_RETRY_MAX_S",  Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "longest wait between failed searches, in seconds (not below RF_RETRY_MIN_S)" },
+    { "SYNC_ENABLED",    Kind::Bool,      0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: the board asks the relay for queued settings changes (the dashboard's settings pages); 0: the dashboard can not reconfigure this board (serial only)" },
+    { "SYNC_FIRST_S",    Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds after boot before the first settings ask (the camera and its stream get the radio first)" },
+    { "SYNC_CHECK_S",    Kind::Int,       1,    86400,   Cond::Always,     nullptr,          nullptr,
+      "seconds between settings asks" },
+    { "SETUP_RETRY_MS",  Kind::Int,       100,  60000,   Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: wait after a failed access-point start or flash write, then try again (ms)" },
+    { "SETUP_GRACE_MS",  Kind::Int,       0,    60000,   Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: keep serving this long after a save or exit so the browser gets its reply (ms)" },
+    { "SETUP_AP_CHAN",   Kind::Int,       1,    13,      Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: the access point's Wi-Fi channel" },
+    { "SETUP_MAX_STA",   Kind::Int,       1,    8,       Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: how many phones may be joined at once" },
+    { "SETUP_RQ_TMO_MS", Kind::Int,       1000, 120000,  Cond::Always,     nullptr,          nullptr,
+      "setup WiFi: a form request that is not complete by then is dropped (ms); protects against slow-loris clients" },
+    { "BOOT_SER_WIN_MS", Kind::Int,       0,    60000,   Cond::Always,     nullptr,          nullptr,
+      "at boot: how long the serial port waits for a y (change settings?) before starting normally (ms)" },
+    { "BOOT_WIFI_MS",    Kind::Int,       1000, 120000,  Cond::Always,     nullptr,          nullptr,
+      "at boot: how long the board may take to join Wi-Fi while it asks the relay for missing settings (ms)" },
+    { "BOOT_RELAY_MS",   Kind::Int,       1000, 300000,  Cond::Always,     nullptr,          nullptr,
+      "at boot: how long it then waits for the relay to supply the missing settings (ms)" },
+    { "BOOT_POLL_MS",    Kind::Int,       500,  60000,   Cond::Always,     nullptr,          nullptr,
+      "at boot: how often it asks the relay meanwhile (ms)" },
+
     // ── Hardware & internals (F-29 T3) ───────────────────────────────────
     // The AI-Thinker board's pin map and the boot-time values of the camera driver, the two background
     // tasks and the serial port. Each is read once at boot, so a change takes effect at the next restart
@@ -272,7 +329,33 @@ static const KeyMeta RECORDER_META[] = {
     { "STK_OTA_B",      "10240",    "Update task stack (bytes)",             "Hardware & internals", Tier::Expert, Apply::Reboot },
     { "SER_BAUD",       "115200",   "Serial speed (baud)",                   "Hardware & internals", Tier::Expert, Apply::Reboot },
     { "SER_RXBUF_B",    "2048",     "Serial receive buffer (bytes)",         "Hardware & internals", Tier::Expert, Apply::Reboot },
-    { "LOG_PUMP_MS",    "250",      "Log delivery check interval (ms)",      "Logging", Tier::Expert, Apply::Reboot },
+    { "LOG_PUMP_MS",    "250",      "Log delivery check interval (ms)",      "Logging", Tier::Expert, Apply::Reboot },    // F-29 T2: the same labels, groups and tiers as the detector's.
+    { "OTA_ENABLED",     "1",       "Firmware updates from the relay",         "Updates & sync",   Tier::Basic,    Apply::Reboot },
+    { "OTA_CHECK_S",     "60",      "Update check interval (s)",               "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "OTA_RETRY_S",     "300",     "Update retry interval (s)",               "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "OTA_VER_MAX_B",   "256",     "Version reply size limit (bytes)",        "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_FW_MIN_B",    "102400",  "Smallest firmware accepted (bytes)",      "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_FW_MAX_B",    "2097152", "Largest firmware accepted (bytes)",       "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_VER_IDLE_MS", "5000",    "Version reply idle timeout (ms)",         "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "OTA_DL_IDLE_MS",  "15000",   "Firmware download idle timeout (ms)",     "Updates & sync",   Tier::Expert,   Apply::Reboot },
+    { "RF_ENABLED",      "1",       "Look for the relay on the network",       "Connection",       Tier::Basic,    Apply::Reboot },
+    { "RF_PORT",         "8082",    "Relay discovery port",                    "Connection",       Tier::Advanced, Apply::Reboot },
+    { "RF_FIRST_S",      "10",      "First relay search after (s)",            "Connection",       Tier::Expert,   Apply::Reboot },
+    { "RF_OK_S",         "60",      "Relay check interval while found (s)",    "Connection",       Tier::Expert,   Apply::Reboot },
+    { "RF_RETRY_MIN_S",  "15",      "Shortest wait between searches (s)",      "Connection",       Tier::Expert,   Apply::Reboot },
+    { "RF_RETRY_MAX_S",  "300",     "Longest wait between searches (s)",       "Connection",       Tier::Expert,   Apply::Reboot },
+    { "SYNC_ENABLED",    "1",       "Fetch settings from the relay",           "Updates & sync",   Tier::Basic,    Apply::Reboot },
+    { "SYNC_FIRST_S",    "20",      "First settings check after (s)",          "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "SYNC_CHECK_S",    "30",      "Settings check interval (s)",             "Updates & sync",   Tier::Advanced, Apply::Reboot },
+    { "SETUP_RETRY_MS",  "5000",    "Setup retry after a failure (ms)",        "Setup & security", Tier::Expert,   Apply::Reboot },
+    { "SETUP_GRACE_MS",  "1500",    "Wait before restart after setup (ms)",    "Setup & security", Tier::Expert,   Apply::Reboot },
+    { "SETUP_AP_CHAN",   "1",       "Setup Wi-Fi channel",                     "Setup & security", Tier::Advanced, Apply::Reboot },
+    { "SETUP_MAX_STA",   "4",       "Setup Wi-Fi: most devices at once",       "Setup & security", Tier::Advanced, Apply::Reboot },
+    { "SETUP_RQ_TMO_MS", "10000",   "Setup page request timeout (ms)",         "Setup & security", Tier::Expert,   Apply::Reboot },
+    { "BOOT_SER_WIN_MS", "5000",    "Boot wait for a serial \"y\" (ms)",       "Setup & security", Tier::Advanced, Apply::Reboot },
+    { "BOOT_WIFI_MS",    "20000",   "Boot: time to join Wi-Fi (ms)",           "Connection",       Tier::Advanced, Apply::Reboot },
+    { "BOOT_RELAY_MS",   "30000",   "Boot: wait for settings from the relay (ms)", "Connection",   Tier::Advanced, Apply::Reboot },
+    { "BOOT_POLL_MS",    "5000",    "Boot: ask the relay every (ms)",          "Connection",       Tier::Expert,   Apply::Reboot },
 };
 static const size_t RECORDER_META_COUNT = sizeof(RECORDER_META) / sizeof(RECORDER_META[0]);
 
@@ -311,15 +394,40 @@ inline bool pushSpeedRangeHolds(const IValues& v, std::string& err) {
     return true;
 }
 
+// A "lowest <= highest" rule over two whole-number settings: true while either is not known yet or not a number
+// (those are reported on their own), false with `err` when `lowKey` is higher than `highKey`.
+inline bool numberNotHigherHolds(const IValues& v, const char* lowKey, const char* highKey, std::string& err) {
+    std::string slow, shigh;
+    if (!v.get(lowKey, slow) || !v.get(highKey, shigh)) return true;   // not both known yet
+    long long lo = 0, hi = 0;
+    if (!parseInt(slow, lo) || !parseInt(shigh, hi)) return true;      // reported on their own
+    if (lo > hi) {
+        err = std::string(lowKey) + " (" + slow + ") must not be higher than " + highKey + " (" + shigh +
+              ") - send both in one line to change them together";
+        return false;
+    }
+    return true;
+}
+
+// OTA_FW_MIN_B above OTA_FW_MAX_B would refuse EVERY firmware image (an update could never succeed); RF_RETRY_MIN_S
+// above RF_RETRY_MAX_S would leave the search's doubling wait no room to grow (the same rules as the detector's).
+inline bool otaFirmwareSizesConsistent(const IValues& v, std::string& err) {
+    return numberNotHigherHolds(v, "OTA_FW_MIN_B", "OTA_FW_MAX_B", err);
+}
+inline bool relayFindRetryRangeHolds(const IValues& v, std::string& err) {
+    return numberNotHigherHolds(v, "RF_RETRY_MIN_S", "RF_RETRY_MAX_S", err);
+}
+
 // Every rule over several settings of the Recorder, in turn; the first that fails refuses the line.
 inline bool recorderRulesHold(const IValues& v, std::string& err) {
-    return jpegQualityRangeHolds(v, err) && pushSpeedRangeHolds(v, err);
+    return jpegQualityRangeHolds(v, err) && pushSpeedRangeHolds(v, err) &&
+           otaFirmwareSizesConsistent(v, err) && relayFindRetryRangeHolds(v, err);
 }
 
 static const Schema RECORDER_SCHEMA = {
     RECORDER_KEYS,
     sizeof(RECORDER_KEYS) / sizeof(RECORDER_KEYS[0]),
-    recorderRulesHold,  // JPEG_Q_MIN <= JPEG_Q_MAX and PUSH_FAST_MS < PUSH_SLOW_MS (numbers first)
+    recorderRulesHold,  // JPEG_Q_MIN <= JPEG_Q_MAX, PUSH_FAST_MS < PUSH_SLOW_MS, OTA_FW_MIN_B <= OTA_FW_MAX_B, RF_RETRY_MIN_S <= RF_RETRY_MAX_S
     RECORDER_META,
     RECORDER_META_COUNT
 };
@@ -400,6 +508,33 @@ struct RecorderSettings {
     int camFbCount = 2;           // CAM_FB_COUNT (a board with PSRAM; without it the sketch uses 1)
     uint32_t stkLogBytes = 8192;   // STK_LOG_B
     uint32_t stkOtaBytes = 10240;  // STK_OTA_B
+
+    // F-29 T2. The defaults here are the values the code always used (and RECORDER_META's); the names are the
+    // detector's (F-29 T5b), so the two sketches read the same way.
+    // Firmware update (ota.h; the update itself only runs while otaEnabled).
+    bool otaEnabled = true;
+    uint32_t otaCheckSec = 60;
+    uint32_t otaRetrySec = 300;
+    uint32_t otaVerMaxBytes = 256;
+    uint32_t otaFwMinBytes = 100UL * 1024UL;
+    uint32_t otaFwMaxBytes = 2UL * 1024UL * 1024UL;
+    uint32_t otaVerIdleMs = 5000;
+    uint32_t otaDlIdleMs = 15000;
+
+    // Finding the relay again (relay_find.h; the search only runs while relayFindEnabled).
+    bool relayFindEnabled = true;
+    int relayFindPort = 8082;
+    uint32_t relayFindFirstSec = 10;
+    uint32_t relayFindOkSec = 60;
+    uint32_t relayFindRetryMinSec = 15;
+    uint32_t relayFindRetryMaxSec = 300;
+
+    // Queued settings changes from the dashboard (settings_sync.h; asked only while syncEnabled).
+    bool syncEnabled = true;
+    uint32_t syncFirstSec = 20;
+    uint32_t syncCheckSec = 30;
+    // (The setup WiFi's SETUP_* values and the boot's BOOT_* waits are not here: they are read at boot, before this
+    // struct can be loaded - see the sketch's setupSettings().)
 };
 
 // The settings this board needs before it can ask the relay for the OTHERS
@@ -436,6 +571,9 @@ inline std::vector<std::string> recorderLockedKeys() {
         // Operational safety: see comment above (review ARD-009)
         "ALARM_GPIO_PIN", "ALARM_ACTIVE", "ALARM_ALL_CAMS",
         "LOG_ENABLED",
+        // F-29 (T2): the update and settings-sync switches: a man-in-the-middle flipping either to 0 would strand the
+        // board's updates or its remote management (the same argument as LOG_ENABLED). The detector locks the same two.
+        "OTA_ENABLED", "SYNC_ENABLED",
     };
     return std::vector<std::string>(keys, keys + sizeof(keys) / sizeof(keys[0]));
 }
@@ -527,6 +665,27 @@ inline bool loadRecorderSettings(ISettingsStore& flash, RecorderSettings& out, s
     s.camFbCount = static_cast<int>(storedInt(store, "CAM_FB_COUNT"));
     s.stkLogBytes = static_cast<uint32_t>(storedInt(store, "STK_LOG_B"));
     s.stkOtaBytes = static_cast<uint32_t>(storedInt(store, "STK_OTA_B"));
+
+    // Updates, relay search and settings sync (F-29 T2): stored values, else the defaults the sketch always used.
+    s.otaEnabled = store.get("OTA_ENABLED") == "1";
+    s.otaCheckSec = static_cast<uint32_t>(storedInt(store, "OTA_CHECK_S"));
+    s.otaRetrySec = static_cast<uint32_t>(storedInt(store, "OTA_RETRY_S"));
+    s.otaVerMaxBytes = static_cast<uint32_t>(storedInt(store, "OTA_VER_MAX_B"));
+    s.otaFwMinBytes = static_cast<uint32_t>(storedInt(store, "OTA_FW_MIN_B"));
+    s.otaFwMaxBytes = static_cast<uint32_t>(storedInt(store, "OTA_FW_MAX_B"));
+    s.otaVerIdleMs = static_cast<uint32_t>(storedInt(store, "OTA_VER_IDLE_MS"));
+    s.otaDlIdleMs = static_cast<uint32_t>(storedInt(store, "OTA_DL_IDLE_MS"));
+
+    s.relayFindEnabled = store.get("RF_ENABLED") == "1";
+    s.relayFindPort = static_cast<int>(storedInt(store, "RF_PORT"));
+    s.relayFindFirstSec = static_cast<uint32_t>(storedInt(store, "RF_FIRST_S"));
+    s.relayFindOkSec = static_cast<uint32_t>(storedInt(store, "RF_OK_S"));
+    s.relayFindRetryMinSec = static_cast<uint32_t>(storedInt(store, "RF_RETRY_MIN_S"));
+    s.relayFindRetryMaxSec = static_cast<uint32_t>(storedInt(store, "RF_RETRY_MAX_S"));
+
+    s.syncEnabled = store.get("SYNC_ENABLED") == "1";
+    s.syncFirstSec = static_cast<uint32_t>(storedInt(store, "SYNC_FIRST_S"));
+    s.syncCheckSec = static_cast<uint32_t>(storedInt(store, "SYNC_CHECK_S"));
 
     out = s;
     return true;

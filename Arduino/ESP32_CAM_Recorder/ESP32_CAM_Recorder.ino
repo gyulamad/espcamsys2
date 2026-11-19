@@ -308,7 +308,30 @@ void remoteLogRelayReachable() {
 #define OTA_WARN(...) RLOG_WARN(__VA_ARGS__)
 #include "ota.h"
 
-OtaUpdater otaUpdater("recorder");
+// Built on first use, in the network task (after the settings are loaded), so its timing and bounds come from
+// the OTA_* settings; the defaults (esp32cam_ota::defaultTiming() / defaultOtaLimits()) hold the values the sketch
+// always used. A board with OTA_ENABLED=0 never gets this far, and nothing resurrects the update behind the
+// setting's back.
+static OtaUpdater* g_ota = nullptr;
+
+static void otaTick() {
+  if (!g_cfg.otaEnabled) return;   // OTA_ENABLED=0: this board never updates itself (serial only)
+  if (!g_ota) {
+    esp32cam_ota::OtaTiming timing = esp32cam_ota::defaultTiming();
+    timing.checkMs = g_cfg.otaCheckSec * 1000UL;
+    timing.retryMs = g_cfg.otaRetrySec * 1000UL;
+
+    esp32cam_ota::OtaLimits limits = esp32cam_ota::defaultOtaLimits();
+    limits.versionReplyMaxBytes = g_cfg.otaVerMaxBytes;
+    limits.firmwareMinBytes = g_cfg.otaFwMinBytes;
+    limits.firmwareMaxBytes = g_cfg.otaFwMaxBytes;
+    limits.versionReplyIdleMs = g_cfg.otaVerIdleMs;
+    limits.downloadIdleMs = g_cfg.otaDlIdleMs;
+
+    g_ota = new OtaUpdater("recorder", timing, limits);
+  }
+  g_ota->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId);
+}
 
 // Defined after the settings glue below (it needs the flash store). Changes the dashboard's
 // settings page queued for this board are applied from here — the same background task, so
@@ -319,7 +342,7 @@ void relayFindTick();   // same, for finding the relay again after its address c
 void otaTask(void *) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000));
-    otaUpdater.tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId);
+    otaTick();
     settingsSyncTick();
     relayFindTick();
   }
@@ -789,15 +812,16 @@ using esp32cam_settings::RemoteFill;
 using esp32cam_settings::loadRecorderSettings;
 using esp32cam_settings::recorderRemotePrerequisites;
 using esp32cam_setup::ArduinoSetupHardware;
+using esp32cam_setup::SetupOptions;
 using esp32cam_setup::SetupBoot;
 using esp32cam_setup::SetupStep;
 
-const uint32_t SETTINGS_WINDOW_MS = 5000;          // how long boot waits for a "y" before starting normally
+// The boot conversation's waits are the settings BOOT_SER_WIN_MS (how long boot waits for a "y" before starting
+// normally), BOOT_WIFI_MS, BOOT_RELAY_MS and BOOT_POLL_MS, read in setupSettings() (the old values are their defaults).
 // A board that is MISSING settings (typically after a firmware update added one) first gives the
-// serial port SETTINGS_WINDOW_MS to itself, then asks the relay for them (RemoteFill):
-const uint32_t REMOTE_CONNECT_MS = 20000;          // how long it gets to join Wi-Fi before restarting to try again
-const uint32_t REMOTE_WINDOW_MS = 30000;           // how long it then waits for the relay to supply them
-const uint32_t REMOTE_POLL_MS = 5000;              // and how often it asks meanwhile
+// serial port its window to itself, then asks the relay for them (RemoteFill): BOOT_WIFI_MS is how long it gets
+// to join Wi-Fi before restarting to try again, BOOT_RELAY_MS how long it then waits for the relay to supply
+// them, BOOT_POLL_MS how often it asks meanwhile.
 const char* const SETTINGS_NAMESPACE = "espcam";   // flash (NVS) namespace the settings live in
 const char* const BOARD_TYPE = "recorder";         // the relay's word for this board; also names its setup WiFi
 
@@ -886,8 +910,27 @@ void setupSettings() {
     Serial.println("WARNING: the flash settings storage could not be opened - settings can't be read or saved.");
   }
 
+  // The boot conversation's waits and the setup WiFi's tuning are settings (BOOT_*, SETUP_*), read through the
+  // defaults view: a board that stored nothing - or whose flash could not be opened - gets the values the sketch
+  // used before they were settings.
+  esp32cam_settings::DefaultingStore defaults(store, RECORDER_SCHEMA.meta, RECORDER_SCHEMA.metaCount);
+  const uint32_t serialWindowMs = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_SER_WIN_MS");
+  const uint32_t wifiConnectMs  = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_WIFI_MS");
+  const uint32_t relayWindowMs  = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_RELAY_MS");
+  const uint32_t relayPollMs    = (uint32_t)esp32cam_settings::storedInt(defaults, "BOOT_POLL_MS");
+
+  // The setup WiFi's retry, grace, channel, station count and request timeout (SETUP_RETRY_MS, SETUP_GRACE_MS,
+  // SETUP_AP_CHAN, SETUP_MAX_STA, SETUP_RQ_TMO_MS); SetupOptions' member defaults are the same values, so this only
+  // overrides what the board has stored.
+  SetupOptions setupOpts;
+  setupOpts.retryMs = (uint32_t)esp32cam_settings::storedInt(defaults, "SETUP_RETRY_MS");
+  setupOpts.graceMs = (uint32_t)esp32cam_settings::storedInt(defaults, "SETUP_GRACE_MS");
+  setupOpts.net.apChannel = (int)esp32cam_settings::storedInt(defaults, "SETUP_AP_CHAN");
+  setupOpts.net.apMaxStations = (int)esp32cam_settings::storedInt(defaults, "SETUP_MAX_STA");
+  setupOpts.net.requestTimeoutMs = (uint32_t)esp32cam_settings::storedInt(defaults, "SETUP_RQ_TMO_MS");
+
   ArduinoSetupHardware setupHardware;
-  SetupBoot setupBoot(RECORDER_SCHEMA, store, recorderRemotePrerequisites(), BOARD_TYPE, setupHardware);
+  SetupBoot setupBoot(RECORDER_SCHEMA, store, recorderRemotePrerequisites(), BOARD_TYPE, setupHardware, setupOpts);
   if (setupBoot.armed()) {
     // Configured, so there is nothing to ask on the serial port: serve the setup WiFi until the owner is done.
     while (setupBoot.step(millis()) == SetupStep::Running) delay(5);
@@ -896,14 +939,14 @@ void setupSettings() {
     return;
   }
 
-  BootConfigFlow flow(RECORDER_SCHEMA, store, console, SETTINGS_WINDOW_MS);
+  BootConfigFlow flow(RECORDER_SCHEMA, store, console, serialWindowMs);
   // Missing settings can also come from the relay (staged there by the operator), so a firmware
   // update that needs one more setting doesn't need a USB cable. Only gaps are ever filled, and
   // only if nobody types: see RemoteFill in settings_logic.h.
   RelaySettingsLink link(store, BOARD_TYPE, "CAMERA_ID");
   RemoteFill remote(RECORDER_SCHEMA, store, link, console, recorderRemotePrerequisites(),
-                    REMOTE_CONNECT_MS, REMOTE_WINDOW_MS, REMOTE_POLL_MS);
-  flow.attachRemote(&remote, SETTINGS_WINDOW_MS);
+                    wifiConnectMs, relayWindowMs, relayPollMs);
+  flow.attachRemote(&remote, serialWindowMs);
   BootConfigFlow::Status status;
   while ((status = flow.step(millis())) == BootConfigFlow::Running) {
     // A blank board has its setup WiFi open while the serial prompt keeps working: whichever is used first wins.
@@ -942,9 +985,11 @@ static PreferencesStore* g_syncStore = nullptr;
 static SettingsSync* g_sync = nullptr;
 
 void settingsSyncTick() {
-  if (!g_sync) {   // created on first use, in the task that uses it
+  if (!g_cfg.syncEnabled) return;   // SYNC_ENABLED=0: the dashboard can not reconfigure this board (serial only)
+  if (!g_sync) {   // created on first use, in the task that uses it, with the SYNC_* settings' schedule
     g_syncStore = new PreferencesStore();
-    g_sync = new SettingsSync(esp32cam_settings::RECORDER_SCHEMA, *g_syncStore, "recorder", esp32cam_settings::recorderLockedKeys());
+    g_sync = new SettingsSync(esp32cam_settings::RECORDER_SCHEMA, *g_syncStore, "recorder",
+                              esp32cam_settings::recorderLockedKeys(), g_cfg.syncFirstSec, g_cfg.syncCheckSec);
   }
   if (g_sync->tick(g_cfg.serverHost, g_cfg.httpPort, g_cfg.apiKey, g_cfg.cameraId)) {
     if (g_sync->rebootRequested()) RLOG_INFO("restart requested from the dashboard - restarting");
@@ -966,9 +1011,12 @@ static PreferencesStore* g_findStore = nullptr;
 static RelayFind* g_find = nullptr;
 
 void relayFindTick() {
-  if (!g_find) {   // created on first use, in the task that uses it
+  if (!g_cfg.relayFindEnabled) return;   // RF_ENABLED=0: SERVER_HOST stays whatever it is (serial only)
+  if (!g_find) {   // created on first use, in the task that uses it, with the RF_* settings
     g_findStore = new PreferencesStore();
-    g_find = new RelayFind(*g_findStore);
+    g_find = new RelayFind(*g_findStore, g_cfg.relayFindPort,
+                           g_cfg.relayFindFirstSec * 1000UL, g_cfg.relayFindOkSec * 1000UL,
+                           g_cfg.relayFindRetryMinSec * 1000UL, g_cfg.relayFindRetryMaxSec * 1000UL);
   }
   if (g_find->tick(g_cfg.serverHost, g_cfg.apiKey, g_relayHealth.isDown(millis(), g_cfg.relayDownMs))) restartBoard();
 }

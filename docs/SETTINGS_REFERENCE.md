@@ -13,7 +13,7 @@ use. `./run_tests.sh` fails when this file is out of date.
 
 ## Camera (ESP32_CAM_Recorder)
 
-Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 65 settings: 53 with a default, 12 without.
+Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 91 settings: 79 with a default, 12 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
@@ -59,6 +59,32 @@ Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 65 settings: 53 with a d
 | `LOG_LOW_HEAP` | Warn below this free heap (bytes) | `30000` | advanced | live | Logging |
 | `SETUP_MODE` | — | — | — | — | — |
 | `SETUP_PASSWORD` | — | — | — | — | — |
+| `OTA_ENABLED` | Firmware updates from the relay | `1` | basic | reboot | Updates & sync |
+| `OTA_CHECK_S` | Update check interval (s) | `60` | advanced | reboot | Updates & sync |
+| `OTA_RETRY_S` | Update retry interval (s) | `300` | advanced | reboot | Updates & sync |
+| `OTA_VER_MAX_B` | Version reply size limit (bytes) | `256` | expert | reboot | Updates & sync |
+| `OTA_FW_MIN_B` | Smallest firmware accepted (bytes) | `102400` | expert | reboot | Updates & sync |
+| `OTA_FW_MAX_B` | Largest firmware accepted (bytes) | `2097152` | expert | reboot | Updates & sync |
+| `OTA_VER_IDLE_MS` | Version reply idle timeout (ms) | `5000` | expert | reboot | Updates & sync |
+| `OTA_DL_IDLE_MS` | Firmware download idle timeout (ms) | `15000` | expert | reboot | Updates & sync |
+| `RF_ENABLED` | Look for the relay on the network | `1` | basic | reboot | Connection |
+| `RF_PORT` | Relay discovery port | `8082` | advanced | reboot | Connection |
+| `RF_FIRST_S` | First relay search after (s) | `10` | expert | reboot | Connection |
+| `RF_OK_S` | Relay check interval while found (s) | `60` | expert | reboot | Connection |
+| `RF_RETRY_MIN_S` | Shortest wait between searches (s) | `15` | expert | reboot | Connection |
+| `RF_RETRY_MAX_S` | Longest wait between searches (s) | `300` | expert | reboot | Connection |
+| `SYNC_ENABLED` | Fetch settings from the relay | `1` | basic | reboot | Updates & sync |
+| `SYNC_FIRST_S` | First settings check after (s) | `20` | advanced | reboot | Updates & sync |
+| `SYNC_CHECK_S` | Settings check interval (s) | `30` | advanced | reboot | Updates & sync |
+| `SETUP_RETRY_MS` | Setup retry after a failure (ms) | `5000` | expert | reboot | Setup & security |
+| `SETUP_GRACE_MS` | Wait before restart after setup (ms) | `1500` | expert | reboot | Setup & security |
+| `SETUP_AP_CHAN` | Setup Wi-Fi channel | `1` | advanced | reboot | Setup & security |
+| `SETUP_MAX_STA` | Setup Wi-Fi: most devices at once | `4` | advanced | reboot | Setup & security |
+| `SETUP_RQ_TMO_MS` | Setup page request timeout (ms) | `10000` | expert | reboot | Setup & security |
+| `BOOT_SER_WIN_MS` | Boot wait for a serial "y" (ms) | `5000` | advanced | reboot | Setup & security |
+| `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | `20000` | advanced | reboot | Connection |
+| `BOOT_RELAY_MS` | Boot: wait for settings from the relay (ms) | `30000` | advanced | reboot | Connection |
+| `BOOT_POLL_MS` | Boot: ask the relay every (ms) | `5000` | expert | reboot | Connection |
 | `PIN_PWDN` | Camera pin: PWDN | `32` | expert | reboot | Hardware & internals |
 | `PIN_RESET` | Camera pin: RESET | `-1` | expert | reboot | Hardware & internals |
 | `PIN_XCLK` | Camera pin: XCLK | `0` | expert | reboot | Hardware & internals |

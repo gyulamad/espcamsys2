@@ -61,32 +61,32 @@ stored	det	STREAM_JPEG_Q	STREAM_JPEG_Q	Live view JPEG quality
 stored	det	STREAM_WR_TMO_S	STREAM_WR_TMO_S	Relay write timeout (s)	
 stored	det	ANN_HEARTBEAT	ANN_HEARTBEAT	Seconds between status lines	
 stored	det	ANN_RETRY	ANN_RETRY	Longest wait before reaching the relay again (s)	
-new	both	OTA_ENABLED	OTA_ENABLED	Firmware updates from the relay	T2,T5b
-new	both	OTA_CHECK_SECONDS	OTA_CHECK_S	Update check interval (s)	T2,T5b
-new	both	OTA_RETRY_SECONDS	OTA_RETRY_S	Update retry interval (s)	T2,T5b
-new	both	OTA_VERSION_REPLY_MAX_BYTES	OTA_VER_MAX_B	Version reply size limit (bytes)	T2,T5b
-new	both	OTA_FIRMWARE_MIN_BYTES	OTA_FW_MIN_B	Smallest firmware accepted (bytes)	T2,T5b
-new	both	OTA_FIRMWARE_MAX_BYTES	OTA_FW_MAX_B	Largest firmware accepted (bytes)	T2,T5b
-new	both	OTA_VERSION_REPLY_IDLE_MS	OTA_VER_IDLE_MS	Version reply idle timeout (ms)	T2,T5b
-new	both	OTA_DOWNLOAD_IDLE_MS	OTA_DL_IDLE_MS	Firmware download idle timeout (ms)	T2,T5b
-new	both	RELAY_FIND_ENABLED	RF_ENABLED	Look for the relay on the network	T2,T5b
-new	both	RELAY_FIND_PORT	RF_PORT	Relay discovery port	T2,T5b
-new	both	RELAY_FIND_FIRST_SECONDS	RF_FIRST_S	First relay search after (s)	T2,T5b
-new	both	RELAY_FIND_OK_SECONDS	RF_OK_S	Relay check interval while found (s)	T2,T5b
-new	both	RELAY_FIND_RETRY_MIN_SECONDS	RF_RETRY_MIN_S	Shortest wait between searches (s)	T2,T5b
-new	both	RELAY_FIND_RETRY_MAX_SECONDS	RF_RETRY_MAX_S	Longest wait between searches (s)	T2,T5b
-new	both	SETTINGS_SYNC_ENABLED	SYNC_ENABLED	Fetch settings from the relay	T2,T5b
-new	both	SETTINGS_SYNC_FIRST_SECONDS	SYNC_FIRST_S	First settings check after (s)	T2,T5b
-new	both	SETTINGS_SYNC_CHECK_SECONDS	SYNC_CHECK_S	Settings check interval (s)	T2,T5b
-new	both	SETUP_RETRY_MS	SETUP_RETRY_MS	Setup retry after a failure (ms)	T2,T5b
-new	both	SETUP_RESTART_GRACE_MS	SETUP_GRACE_MS	Wait before restart after setup (ms)	T2,T5b
-new	both	SETUP_AP_CHANNEL	SETUP_AP_CHAN	Setup Wi-Fi channel	T2,T5b
-new	both	SETUP_AP_MAX_STATIONS	SETUP_MAX_STA	Setup Wi-Fi: most devices at once	T2,T5b
-new	both	SETUP_REQUEST_TIMEOUT_MS	SETUP_RQ_TMO_MS	Setup page request timeout (ms)	T2,T5b
-new	both	SETTINGS_WINDOW_MS	BOOT_SER_WIN_MS	Boot wait for a serial "y" (ms)	T2,T5b
-new	both	REMOTE_CONNECT_MS	BOOT_WIFI_MS	Boot: time to join Wi-Fi (ms)	T2,T5b
-new	both	REMOTE_WINDOW_MS	BOOT_RELAY_MS	Boot: wait for settings from the relay (ms)	T2,T5b
-new	both	REMOTE_POLL_MS	BOOT_POLL_MS	Boot: ask the relay every (ms)	T2,T5b
+new	both	OTA_ENABLED	OTA_ENABLED	Firmware updates from the relay	T5b done, T2 done
+new	both	OTA_CHECK_SECONDS	OTA_CHECK_S	Update check interval (s)	T5b done, T2 done
+new	both	OTA_RETRY_SECONDS	OTA_RETRY_S	Update retry interval (s)	T5b done, T2 done
+new	both	OTA_VERSION_REPLY_MAX_BYTES	OTA_VER_MAX_B	Version reply size limit (bytes)	T5b done, T2 done
+new	both	OTA_FIRMWARE_MIN_BYTES	OTA_FW_MIN_B	Smallest firmware accepted (bytes)	T5b done, T2 done
+new	both	OTA_FIRMWARE_MAX_BYTES	OTA_FW_MAX_B	Largest firmware accepted (bytes)	T5b done, T2 done
+new	both	OTA_VERSION_REPLY_IDLE_MS	OTA_VER_IDLE_MS	Version reply idle timeout (ms)	T5b done, T2 done
+new	both	OTA_DOWNLOAD_IDLE_MS	OTA_DL_IDLE_MS	Firmware download idle timeout (ms)	T5b done, T2 done
+new	both	RELAY_FIND_ENABLED	RF_ENABLED	Look for the relay on the network	T5b done, T2 done
+new	both	RELAY_FIND_PORT	RF_PORT	Relay discovery port	T5b done, T2 done
+new	both	RELAY_FIND_FIRST_SECONDS	RF_FIRST_S	First relay search after (s)	T5b done, T2 done
+new	both	RELAY_FIND_OK_SECONDS	RF_OK_S	Relay check interval while found (s)	T5b done, T2 done
+new	both	RELAY_FIND_RETRY_MIN_SECONDS	RF_RETRY_MIN_S	Shortest wait between searches (s)	T5b done, T2 done
+new	both	RELAY_FIND_RETRY_MAX_SECONDS	RF_RETRY_MAX_S	Longest wait between searches (s)	T5b done, T2 done
+new	both	SETTINGS_SYNC_ENABLED	SYNC_ENABLED	Fetch settings from the relay	T5b done, T2 done
+new	both	SETTINGS_SYNC_FIRST_SECONDS	SYNC_FIRST_S	First settings check after (s)	T5b done, T2 done
+new	both	SETTINGS_SYNC_CHECK_SECONDS	SYNC_CHECK_S	Settings check interval (s)	T5b done, T2 done
+new	both	SETUP_RETRY_MS	SETUP_RETRY_MS	Setup retry after a failure (ms)	T5b done, T2 done
+new	both	SETUP_RESTART_GRACE_MS	SETUP_GRACE_MS	Wait before restart after setup (ms)	T5b done, T2 done
+new	both	SETUP_AP_CHANNEL	SETUP_AP_CHAN	Setup Wi-Fi channel	T5b done, T2 done
+new	both	SETUP_AP_MAX_STATIONS	SETUP_MAX_STA	Setup Wi-Fi: most devices at once	T5b done, T2 done
+new	both	SETUP_REQUEST_TIMEOUT_MS	SETUP_RQ_TMO_MS	Setup page request timeout (ms)	T5b done, T2 done
+new	both	SETTINGS_WINDOW_MS	BOOT_SER_WIN_MS	Boot wait for a serial "y" (ms)	T5b done, T2 done
+new	both	REMOTE_CONNECT_MS	BOOT_WIFI_MS	Boot: time to join Wi-Fi (ms)	T5b done, T2 done
+new	both	REMOTE_WINDOW_MS	BOOT_RELAY_MS	Boot: wait for settings from the relay (ms)	T5b done, T2 done
+new	both	REMOTE_POLL_MS	BOOT_POLL_MS	Boot: ask the relay every (ms)	T5b done, T2 done
 new	both	PWDN_GPIO_NUM	PIN_PWDN	Camera pin: PWDN	T5c done, T3 done
 new	both	RESET_GPIO_NUM	PIN_RESET	Camera pin: RESET	T5c done, T3 done
 new	both	XCLK_GPIO_NUM	PIN_XCLK	Camera pin: XCLK	T5c done, T3 done

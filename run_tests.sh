@@ -363,6 +363,8 @@ else
     # The short stored keys (docs/settings_keys.tsv): at most 15 characters, no duplicate, every schema key has a row.
     run_cpp_test test_settings_keys_recorder
     run_cpp_test test_settings_keys_person
+    # F-29 T2: the recorder's update, relay-search, sync, setup-WiFi and boot settings.
+    run_cpp_test test_recorder_connection_settings
     run_cpp_test test_settings_remote
     run_cpp_test test_settings_change
     run_cpp_test test_person_settings

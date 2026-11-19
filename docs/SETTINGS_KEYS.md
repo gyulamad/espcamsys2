@@ -178,32 +178,32 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `STREAM_WR_TMO_S` | `STREAM_WR_TMO_S` | Relay write timeout (s) | det | stored |  |
 | `ANN_HEARTBEAT` | `ANN_HEARTBEAT` | Seconds between status lines | det | stored |  |
 | `ANN_RETRY` | `ANN_RETRY` | Longest wait before reaching the relay again (s) | det | stored |  |
-| `OTA_ENABLED` | `OTA_ENABLED` | Firmware updates from the relay | both | new | T2,T5b |
-| `OTA_CHECK_SECONDS` | `OTA_CHECK_S` | Update check interval (s) | both | new | T2,T5b |
-| `OTA_RETRY_SECONDS` | `OTA_RETRY_S` | Update retry interval (s) | both | new | T2,T5b |
-| `OTA_VERSION_REPLY_MAX_BYTES` | `OTA_VER_MAX_B` | Version reply size limit (bytes) | both | new | T2,T5b |
-| `OTA_FIRMWARE_MIN_BYTES` | `OTA_FW_MIN_B` | Smallest firmware accepted (bytes) | both | new | T2,T5b |
-| `OTA_FIRMWARE_MAX_BYTES` | `OTA_FW_MAX_B` | Largest firmware accepted (bytes) | both | new | T2,T5b |
-| `OTA_VERSION_REPLY_IDLE_MS` | `OTA_VER_IDLE_MS` | Version reply idle timeout (ms) | both | new | T2,T5b |
-| `OTA_DOWNLOAD_IDLE_MS` | `OTA_DL_IDLE_MS` | Firmware download idle timeout (ms) | both | new | T2,T5b |
-| `RELAY_FIND_ENABLED` | `RF_ENABLED` | Look for the relay on the network | both | new | T2,T5b |
-| `RELAY_FIND_PORT` | `RF_PORT` | Relay discovery port | both | new | T2,T5b |
-| `RELAY_FIND_FIRST_SECONDS` | `RF_FIRST_S` | First relay search after (s) | both | new | T2,T5b |
-| `RELAY_FIND_OK_SECONDS` | `RF_OK_S` | Relay check interval while found (s) | both | new | T2,T5b |
-| `RELAY_FIND_RETRY_MIN_SECONDS` | `RF_RETRY_MIN_S` | Shortest wait between searches (s) | both | new | T2,T5b |
-| `RELAY_FIND_RETRY_MAX_SECONDS` | `RF_RETRY_MAX_S` | Longest wait between searches (s) | both | new | T2,T5b |
-| `SETTINGS_SYNC_ENABLED` | `SYNC_ENABLED` | Fetch settings from the relay | both | new | T2,T5b |
-| `SETTINGS_SYNC_FIRST_SECONDS` | `SYNC_FIRST_S` | First settings check after (s) | both | new | T2,T5b |
-| `SETTINGS_SYNC_CHECK_SECONDS` | `SYNC_CHECK_S` | Settings check interval (s) | both | new | T2,T5b |
-| `SETUP_RETRY_MS` | `SETUP_RETRY_MS` | Setup retry after a failure (ms) | both | new | T2,T5b |
-| `SETUP_RESTART_GRACE_MS` | `SETUP_GRACE_MS` | Wait before restart after setup (ms) | both | new | T2,T5b |
-| `SETUP_AP_CHANNEL` | `SETUP_AP_CHAN` | Setup Wi-Fi channel | both | new | T2,T5b |
-| `SETUP_AP_MAX_STATIONS` | `SETUP_MAX_STA` | Setup Wi-Fi: most devices at once | both | new | T2,T5b |
-| `SETUP_REQUEST_TIMEOUT_MS` | `SETUP_RQ_TMO_MS` | Setup page request timeout (ms) | both | new | T2,T5b |
-| `SETTINGS_WINDOW_MS` | `BOOT_SER_WIN_MS` | Boot wait for a serial "y" (ms) | both | new | T2,T5b |
-| `REMOTE_CONNECT_MS` | `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | both | new | T2,T5b |
-| `REMOTE_WINDOW_MS` | `BOOT_RELAY_MS` | Boot: wait for settings from the relay (ms) | both | new | T2,T5b |
-| `REMOTE_POLL_MS` | `BOOT_POLL_MS` | Boot: ask the relay every (ms) | both | new | T2,T5b |
+| `OTA_ENABLED` | `OTA_ENABLED` | Firmware updates from the relay | both | new | T5b done, T2 done |
+| `OTA_CHECK_SECONDS` | `OTA_CHECK_S` | Update check interval (s) | both | new | T5b done, T2 done |
+| `OTA_RETRY_SECONDS` | `OTA_RETRY_S` | Update retry interval (s) | both | new | T5b done, T2 done |
+| `OTA_VERSION_REPLY_MAX_BYTES` | `OTA_VER_MAX_B` | Version reply size limit (bytes) | both | new | T5b done, T2 done |
+| `OTA_FIRMWARE_MIN_BYTES` | `OTA_FW_MIN_B` | Smallest firmware accepted (bytes) | both | new | T5b done, T2 done |
+| `OTA_FIRMWARE_MAX_BYTES` | `OTA_FW_MAX_B` | Largest firmware accepted (bytes) | both | new | T5b done, T2 done |
+| `OTA_VERSION_REPLY_IDLE_MS` | `OTA_VER_IDLE_MS` | Version reply idle timeout (ms) | both | new | T5b done, T2 done |
+| `OTA_DOWNLOAD_IDLE_MS` | `OTA_DL_IDLE_MS` | Firmware download idle timeout (ms) | both | new | T5b done, T2 done |
+| `RELAY_FIND_ENABLED` | `RF_ENABLED` | Look for the relay on the network | both | new | T5b done, T2 done |
+| `RELAY_FIND_PORT` | `RF_PORT` | Relay discovery port | both | new | T5b done, T2 done |
+| `RELAY_FIND_FIRST_SECONDS` | `RF_FIRST_S` | First relay search after (s) | both | new | T5b done, T2 done |
+| `RELAY_FIND_OK_SECONDS` | `RF_OK_S` | Relay check interval while found (s) | both | new | T5b done, T2 done |
+| `RELAY_FIND_RETRY_MIN_SECONDS` | `RF_RETRY_MIN_S` | Shortest wait between searches (s) | both | new | T5b done, T2 done |
+| `RELAY_FIND_RETRY_MAX_SECONDS` | `RF_RETRY_MAX_S` | Longest wait between searches (s) | both | new | T5b done, T2 done |
+| `SETTINGS_SYNC_ENABLED` | `SYNC_ENABLED` | Fetch settings from the relay | both | new | T5b done, T2 done |
+| `SETTINGS_SYNC_FIRST_SECONDS` | `SYNC_FIRST_S` | First settings check after (s) | both | new | T5b done, T2 done |
+| `SETTINGS_SYNC_CHECK_SECONDS` | `SYNC_CHECK_S` | Settings check interval (s) | both | new | T5b done, T2 done |
+| `SETUP_RETRY_MS` | `SETUP_RETRY_MS` | Setup retry after a failure (ms) | both | new | T5b done, T2 done |
+| `SETUP_RESTART_GRACE_MS` | `SETUP_GRACE_MS` | Wait before restart after setup (ms) | both | new | T5b done, T2 done |
+| `SETUP_AP_CHANNEL` | `SETUP_AP_CHAN` | Setup Wi-Fi channel | both | new | T5b done, T2 done |
+| `SETUP_AP_MAX_STATIONS` | `SETUP_MAX_STA` | Setup Wi-Fi: most devices at once | both | new | T5b done, T2 done |
+| `SETUP_REQUEST_TIMEOUT_MS` | `SETUP_RQ_TMO_MS` | Setup page request timeout (ms) | both | new | T5b done, T2 done |
+| `SETTINGS_WINDOW_MS` | `BOOT_SER_WIN_MS` | Boot wait for a serial "y" (ms) | both | new | T5b done, T2 done |
+| `REMOTE_CONNECT_MS` | `BOOT_WIFI_MS` | Boot: time to join Wi-Fi (ms) | both | new | T5b done, T2 done |
+| `REMOTE_WINDOW_MS` | `BOOT_RELAY_MS` | Boot: wait for settings from the relay (ms) | both | new | T5b done, T2 done |
+| `REMOTE_POLL_MS` | `BOOT_POLL_MS` | Boot: ask the relay every (ms) | both | new | T5b done, T2 done |
 | `PWDN_GPIO_NUM` | `PIN_PWDN` | Camera pin: PWDN | both | new | T5c done, T3 done |
 | `RESET_GPIO_NUM` | `PIN_RESET` | Camera pin: RESET | both | new | T5c done, T3 done |
 | `XCLK_GPIO_NUM` | `PIN_XCLK` | Camera pin: XCLK | both | new | T5c done, T3 done |
