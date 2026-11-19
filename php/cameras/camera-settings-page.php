@@ -18,6 +18,9 @@
 //     with the row's ↺ RESET button, which goes through the same change tracking as a hand edit.
 //   * a PENDING-CHANGES tray at the bottom: every unsaved edit of every category with its old → new value,
 //     a DISCARD button, and ONE apply button — nothing is written to the board until it is pressed.
+//   * a LINKED SETTINGS panel (F-29 T8, designs/Main-v2.png): the rules that watch values which must
+//     agree across devices (this board's against the relay's), each with its verdict. It watches only —
+//     a rule that does not hold names the two values and where to change them; nothing is written.
 //
 // The form is drawn from what camera-settings.php sends (the firmware's own settings table), so a setting
 // added to the firmware shows up here by itself. Changes are queued on the relay; the board picks them up,
@@ -109,7 +112,21 @@ require_once __DIR__ . '/lib/Layout.php';
   .inline input.icon { flex: 0 0 90px; min-width: 70px; text-align: center; }
   /* The hidden attribute must win over this page's own display rules — .row, .rail, .catwrap and .btn set
      one, and an author display would otherwise beat the browser's [hidden] (the same note as Layout.php's .btn). */
-  .btn[hidden], .row[hidden], .rail[hidden], .catwrap[hidden], .pending-pill[hidden], .tag[hidden], #tray-note[hidden], #pending-list[hidden] { display: none; }
+  .btn[hidden], .row[hidden], .rail[hidden], .catwrap[hidden], .pending-pill[hidden], .tag[hidden], #tray-note[hidden], #pending-list[hidden], #linked[hidden] { display: none; }
+  /* ── the Linked settings panel (F-29 T8, designs/Main-v2.png): values that must agree across
+        devices, watched — each with its verdict, the reason in words under the formula ── */
+  .linked-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 14px 18px 10px; margin-top: 22px; }
+  .linked-card .lbl { font-family: var(--mono); font-size: .8rem; letter-spacing: .12em; color: var(--accent); text-transform: uppercase; }
+  .linked-desc { font-size: .75rem; color: var(--muted); margin: 5px 0 10px; line-height: 1.45; max-width: 560px; }
+  .linked-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; border-top: 1px solid var(--border); padding: 7px 0; }
+  .linked-row .mark { flex: 0 0 auto; font-family: var(--mono); font-size: .8rem; }
+  .linked-row .formula { font-family: var(--mono); font-size: .74rem; color: var(--text); }
+  .linked-row.ok .mark { color: var(--ok); }
+  .linked-row.bad .mark { color: var(--accent2); }
+  .linked-row.unknown .mark { color: var(--muted); }
+  .linked-row .note { flex-basis: 100%; margin-left: 22px; font-size: .75rem; line-height: 1.45; color: var(--muted); }
+  .linked-row.bad .note { color: var(--accent2); }
+  .linked-row.unknown .formula { color: var(--muted); }
   /* ── the pending-changes tray: every unsaved edit, DISCARD, and the one APPLY ── */
   .tray { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 10px 32px 12px; }
   .tray.has-changes { border-top-color: var(--warn); background: #16130b; }
@@ -198,6 +215,12 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       <form id="form" onsubmit="return false;"></form>
     </div>
   </div>
+
+  <section class="linked-card" id="linked" hidden aria-label="Linked settings">
+    <span class="lbl">Linked settings</span>
+    <p class="linked-desc">Values that must agree across devices are watched for you. A rule that does not hold says what to change; the values themselves stay where they live — this tray changes nothing by itself.</p>
+    <div id="linked-list"></div>
+  </section>
 </main>
 
 <div class="tray" id="tray">
@@ -547,9 +570,30 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     return { values: out, missing };
   }
 
+  // ── the Linked settings panel (F-29 T8): the rules that watch values which must agree across
+  // devices — this board's against the relay's — each with its verdict and, when it does not hold,
+  // the reason in words. The panel only WATCHES: it changes nothing by itself; the values are
+  // changed where they live (the rows above, the relay's settings page, or the USB serial port).
+  function renderLinked(list) {
+    const card = $('linked'), box = $('linked-list');
+    if (!Array.isArray(list) || !list.length) { card.hidden = true; box.textContent = ''; return; }
+    card.hidden = false;
+    box.textContent = '';
+    for (const r of list) {
+      const cls = r.status === 'problem' ? 'bad' : r.status === 'ok' ? 'ok' : 'unknown';
+      const mark = el('span', { className: 'mark', textContent: r.status === 'problem' ? '✗' : r.status === 'ok' ? '✓' : '?' });
+      mark.setAttribute('aria-hidden', 'true');   // the row's words carry the meaning; the mark is decoration
+      const row = el('div', { className: 'linked-row ' + cls }, mark, el('span', { className: 'formula', textContent: r.formula }));
+      const note = r.status === 'problem' ? r.problem : r.note;
+      if (note) row.append(el('span', { className: 'note', textContent: note }));
+      box.append(row);
+    }
+  }
+
   function render(data) {
     camera = data.camera; keys = data.keys; gpios = data.gpios;
     const st = data.state; reported = st.reported ? st.reported.settings : null;
+    renderLinked(data.linked);   // before the structure early-return: the panel follows every answer, form or not
 
     // The status text and the WITHDRAW button follow every answer (their seconds tick); the FORM, the rail
     // and the banners are built from the structure below, and are rebuilt only when it CHANGED. While a

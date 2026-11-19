@@ -1843,6 +1843,230 @@ class CamLogic
         return $state;
     }
 
+    // ── Linked settings: values that must agree across devices (F-29 T8) ──
+    // The Linked settings panel (designs/Main-v2.png) watches the values whose drift breaks the
+    // system quietly: the camera's PUSH_PORT against the relay's pushPort, the shared API key, the
+    // discovery port, the push write timeout against the relay's live window, the alarm repeat
+    // against the relay's recording length, and the detector picture limit the two sides must share.
+    // The rules only WATCH (and say so in words); changing a value stays where it lives — the
+    // board's own page or the relay's settings page. They never echo a secret: the API key rule
+    // speaks about "set / not set", because neither side's value is ever sent anywhere.
+
+    // The relay-side PROTOCOL constants the rules need. They are not settings — nothing can edit
+    // them — so the dashboard mirrors the values the relay's code hard-codes. tests/php re-reads
+    // the three sources and fails when a mirror drifts (test_linked_settings.php).
+    const RELAY_LIVE_WINDOW_MS = 2000;        // nodejs/camera-relay/lib/connection.js LIVE_WINDOW_MS
+    const RELAY_MAX_JPEG_BYTES = 16384;      // nodejs/camera-relay/lib/detectorlink.js MAX_JPEG_BYTES (16 * 1024)
+    const DETECTOR_MAX_JPEG_BYTES = 16384;   // Arduino/ESP32_CAM_TFLite_Person/report_logic.h MAX_JPEG_BYTES (16 * 1024)
+
+    // A number the linked rules can compare, or null: an int, or text that is one (device values
+    // arrive as text, the relay's JSON as ints), and never anything else — junk answers
+    // "cannot check" instead of being guessed into a comparison.
+    private static function ruleInt($v): ?int
+    {
+        if (is_int($v)) {
+            return $v;
+        }
+        if (is_string($v) && preg_match('/^-?\d{1,15}$/D', $v)) {
+            return (int) $v;
+        }
+        return null;
+    }
+
+    // The relay's values the linked rules watch, out of its GET /system-settings answer:
+    // pushPort, discoveryPort and alarmRecordSeconds with their `value`, and the camera key's
+    // `isSet` (a secret's value is never sent). A field that is missing or unreadable stays null —
+    // a relay older than the field answers "cannot check" rather than a wrong verdict.
+    //   -> ['pushPort' => ?int, 'camKeySet' => ?bool, 'discoveryPort' => ?int, 'alarmRecordSeconds' => ?int]
+    public static function relayLinkedValues(array $fields): array
+    {
+        $out = ['pushPort' => null, 'camKeySet' => null, 'discoveryPort' => null, 'alarmRecordSeconds' => null];
+        foreach ($fields as $f) {
+            if (!is_array($f) || !isset($f['key']) || !is_string($f['key'])) {
+                continue;
+            }
+            if (in_array($f['key'], ['pushPort', 'discoveryPort', 'alarmRecordSeconds'], true)) {
+                $out[$f['key']] = self::ruleInt($f['value'] ?? null);
+            } elseif ($f['key'] === 'camKey') {
+                $out['camKeySet'] = array_key_exists('isSet', $f) && $f['isSet'] === true;
+            }
+        }
+        return $out;
+    }
+
+    // The detector's and the relay's picture-size limit (MAX_JPEG_BYTES) must be the same: the
+    // detector sends its small live-view JPEGs to the relay, which drops one that passes its own
+    // limit. Both values are compile-time constants, so what is compared here are the dashboard's
+    // mirrors of the two sources; the null/problem split keeps the rule a plain function like the
+    // other linked checks, and lets the test prove a mismatch is named.
+    //   -> null when they match, the problem in words when they do not
+    public static function linkedMaxJpegBytesProblem(int $detectorBytes, int $relayBytes): ?string
+    {
+        if ($detectorBytes === $relayBytes) {
+            return null;
+        }
+        return 'the detector\'s picture limit (MAX_JPEG_BYTES ' . $detectorBytes . ') does not match the relay\'s ('
+            . $relayBytes . ') — the relay drops a picture the detector was still allowed to send, so the live view shows gaps';
+    }
+
+    // The Linked settings panel's data: every rule that watches values which must agree across
+    // devices, offered together, each with its verdict. Which rules apply is the device type:
+    // a recorder pushes (PUSH_PORT, push write timeout, alarm input), a detector streams its
+    // small pictures (MAX_JPEG_BYTES); the shared key and the discovery port concern both.
+    //   $schemaKeys/$reported: the device's schema and what it reported ($reported null: the board
+    //                          has not reported yet — every rule answers "cannot check").
+    //   $relay: relayLinkedValues() of the relay's /system-settings fields, or null/missing keys
+    //           when they could not be read (older relay, momentary failure): same answer.
+    //   $type: 'recorder' or 'detector'.
+    // -> [ ['formula' => text, 'status' => 'ok'|'problem'|'unknown', 'problem' => ?string, 'note' => ?string], ... ]
+    //    'unknown' means the values needed are not (yet) known; 'problem' always carries the reason.
+    public static function linkedSettings(array $schemaKeys, ?array $reported, ?array $relay, string $type): array
+    {
+        if ($type !== 'recorder' && $type !== 'detector') {
+            throw new InvalidArgumentException('unknown device type for the linked rules: ' . $type);
+        }
+        $relay = array_merge(['pushPort' => null, 'camKeySet' => null, 'discoveryPort' => null, 'alarmRecordSeconds' => null],
+            is_array($relay) ? $relay : []);
+        // What the board would hold: what it reported, and for a setting it never stored its
+        // default — the same view of a board as buildDeviceChange().
+        $held = $reported === null ? [] : self::deviceHeldValues($schemaKeys, $reported);
+        $dev = static function (string $name) use ($held): ?string {
+            return array_key_exists($name, $held) && is_string($held[$name]) ? $held[$name] : null;
+        };
+        $rules = [];
+        $add = static function (array $rule) use (&$rules): void { $rules[] = $rule; };
+        $entry = static function (string $formula, string $status, ?string $problem = null, ?string $note = null): array {
+            return ['formula' => $formula, 'status' => $status, 'problem' => $problem, 'note' => $note];
+        };
+        $notReported = 'the device has not reported its settings yet';
+        $relaySilent = 'the relay did not tell its settings, so this cannot be checked';
+
+        // The shared key. Neither side's value is ever sent anywhere, so the rule watches what can
+        // be known — that both sides HAVE one — and says plainly that equality itself is only
+        // proven by the camera connecting (a masked report is presence, never a value).
+        $camKeySet = $relay['camKeySet'];
+        $deviceKeySet = $reported !== null && array_key_exists('API_KEY', $reported) && $reported['API_KEY'] !== '';
+        if ($reported === null) {
+            $add($entry('API_KEY = relay camKey', 'unknown', null, $notReported));
+        } elseif ($camKeySet === null) {
+            $add($entry('API_KEY = relay camKey', 'unknown', null, $relaySilent));
+        } elseif (!$camKeySet) {
+            $add($entry('API_KEY = relay camKey', 'problem',
+                'the relay has no camKey set — no camera can connect to it. Set the camera key in the relay\'s settings.'));
+        } elseif (!$deviceKeySet) {
+            $add($entry('API_KEY = relay camKey', 'problem',
+                'this device has no API_KEY stored — it cannot prove who it is to the relay. Set it over the USB serial port.'));
+        } else {
+            $add($entry('API_KEY = relay camKey', 'ok', null,
+                'both sides are set — the values themselves are never sent, so a device that keeps connecting is what proves they agree'));
+        }
+
+        // The discovery port: what the cameras ask on when they have lost the relay's address.
+        // 0 switches the relay's discovery off; a camera that never searches (RF_ENABLED 0) does
+        // not need the ports to agree. Both device types share it.
+        $rfPort = self::ruleInt($dev('RF_PORT'));
+        $discoveryPort = $relay['discoveryPort'];
+        if ($reported === null) {
+            $add($entry('RF_PORT = relay discoveryPort', 'unknown', null, $notReported));
+        } elseif ($dev('RF_ENABLED') === '0') {
+            $add($entry('RF_PORT = relay discoveryPort', 'unknown', null, 'not used while the relay search is off (RF_ENABLED 0)'));
+        } elseif ($discoveryPort === null) {
+            $add($entry('RF_PORT = relay discoveryPort', 'unknown', null, $relaySilent));
+        } elseif ($discoveryPort === 0) {
+            $add($entry('RF_PORT = relay discoveryPort', 'problem',
+                'the relay\'s camera discovery is switched off (discoveryPort 0) — a camera that loses the relay\'s address cannot ask for it again'));
+        } elseif ($rfPort === null) {
+            $add($entry('RF_PORT = relay discoveryPort', 'unknown', null, 'the device has no RF_PORT value'));
+        } elseif ($rfPort !== $discoveryPort) {
+            $add($entry('RF_PORT = relay discoveryPort', 'problem',
+                'RF_PORT (' . $rfPort . ') does not equal the relay\'s discoveryPort (' . $discoveryPort . ') — a camera that loses the relay\'s address asks on a port nobody answers. Make them equal: change discoveryPort in the relay\'s settings, or RF_PORT over the device\'s USB serial port.'));
+        } else {
+            $add($entry('RF_PORT = relay discoveryPort', 'ok'));
+        }
+
+        // ── the recorder's own links ──
+        if ($type === 'recorder') {
+            // Where the camera pushes its pictures. A mismatch means no connection at all.
+            $pushPort = self::ruleInt($dev('PUSH_PORT'));
+            $relayPushPort = $relay['pushPort'];
+            if ($reported === null) {
+                $add($entry('PUSH_PORT = relay pushPort', 'unknown', null, $notReported));
+            } elseif ($relayPushPort === null) {
+                $add($entry('PUSH_PORT = relay pushPort', 'unknown', null, $relaySilent));
+            } elseif ($pushPort === null) {
+                $add($entry('PUSH_PORT = relay pushPort', 'unknown', null, 'the camera has no PUSH_PORT value'));
+            } elseif ($pushPort !== $relayPushPort) {
+                $add($entry('PUSH_PORT = relay pushPort', 'problem',
+                    'PUSH_PORT (' . $pushPort . ') does not equal the relay\'s pushPort (' . $relayPushPort . ') — the camera pushes its pictures to the wrong port and cannot connect. Make them equal: change pushPort in the relay\'s settings, or PUSH_PORT over the camera\'s USB serial port.'));
+            } else {
+                $add($entry('PUSH_PORT = relay pushPort', 'ok'));
+            }
+
+            // The push write timeout must outlive the relay's live window: a camera that gave up
+            // on a stalled push has, by definition, been silent for its own timeout, so a timeout
+            // shorter than the window makes its OWN reconnect look like a second camera fighting
+            // over the same id (connection.js classifyPreviousConnection).
+            $timeoutMs = self::ruleInt($dev('PUSH_WR_TMO_MS'));
+            if ($reported === null) {
+                $add($entry('PUSH_WR_TMO_MS > relay LIVE_WINDOW_MS', 'unknown', null, $notReported));
+            } elseif ($timeoutMs === null) {
+                $add($entry('PUSH_WR_TMO_MS > relay LIVE_WINDOW_MS', 'unknown', null, 'the camera has no PUSH_WR_TMO_MS value'));
+            } elseif ($timeoutMs <= self::RELAY_LIVE_WINDOW_MS) {
+                $add($entry('PUSH_WR_TMO_MS > relay LIVE_WINDOW_MS', 'problem',
+                    'PUSH_WR_TMO_MS (' . $timeoutMs . ') must stay longer than the relay\'s live window (LIVE_WINDOW_MS ' . self::RELAY_LIVE_WINDOW_MS . ') — a camera that gives up on a stalled push and reconnects would look like a second camera fighting over the same id, instead of the same one coming back'));
+            } else {
+                $add($entry('PUSH_WR_TMO_MS > relay LIVE_WINDOW_MS', 'ok'));
+            }
+
+            // The alarm repeat must stay inside the relay's recording length: while the line stays
+            // active the camera re-sends the alarm every ALARM_HOLD_MS, and a repeat that arrives
+            // after the recording has ended starts a second clip instead of extending the first.
+            // No rule while the alarm input is not used (ALARM_GPIO_PIN -1/absent) — the setting is
+            // "not used" in the schema's own words, and the panel shows only what applies.
+            if ($reported !== null && $dev('ALARM_GPIO_PIN') !== '-1' && $dev('ALARM_GPIO_PIN') !== null) {
+                $holdMs = self::ruleInt($dev('ALARM_HOLD_MS'));
+                $recordS = $relay['alarmRecordSeconds'];
+                if ($recordS === null) {
+                    $add($entry('ALARM_HOLD_MS < relay alarmRecordSeconds', 'unknown', null, $relaySilent));
+                } elseif ($holdMs === null) {
+                    $add($entry('ALARM_HOLD_MS < relay alarmRecordSeconds', 'unknown', null, 'the camera has no ALARM_HOLD_MS value'));
+                } elseif ($holdMs >= $recordS * 1000) {
+                    $add($entry('ALARM_HOLD_MS < relay alarmRecordSeconds', 'problem',
+                        'ALARM_HOLD_MS (' . $holdMs . ') must stay below the relay\'s alarmRecordSeconds (' . $recordS . ' s = ' . $recordS * 1000 . ' ms) — while the alarm line stays active the camera re-sends it every ALARM_HOLD_MS, and a repeat that arrives after the recording has ended starts a second clip instead of extending the first'));
+                } else {
+                    $add($entry('ALARM_HOLD_MS < relay alarmRecordSeconds', 'ok'));
+                }
+            }
+        }
+
+        // ── the detector's own links ──
+        if ($type === 'detector') {
+            // The picture limit both sides hard-code (see linkedMaxJpegBytesProblem).
+            $problem = self::linkedMaxJpegBytesProblem(self::DETECTOR_MAX_JPEG_BYTES, self::RELAY_MAX_JPEG_BYTES);
+            $add($problem === null
+                ? $entry('MAX_JPEG_BYTES = relay MAX_JPEG_BYTES', 'ok', null,
+                    'both are compile-time limits (' . self::DETECTOR_MAX_JPEG_BYTES . ' bytes) — they can only drift between a detector and a relay built from different code')
+                : $entry('MAX_JPEG_BYTES = relay MAX_JPEG_BYTES', 'problem', $problem));
+        }
+
+        return $rules;
+    }
+
+    // What the board really holds: what it reported, and for a setting it never stored (and so
+    // never reported) its default — the value the firmware uses until something is stored, which
+    // used to be fixed in the code. buildDeviceChange() and the linked rules share this view, so
+    // "what the camera has" is decided once.
+    private static function deviceHeldValues(array $schemaKeys, array $reported): array
+    {
+        $held = $reported;
+        foreach ($schemaKeys as $k) {
+            if (!array_key_exists($k['name'], $held) && isset($k['default']) && is_string($k['default'])) {
+                $held[$k['name']] = $k['default'];
+            }
+        }
+        return $held;
+    }
+
     // Turns the submitted { SETTING: value } into the line to queue for the camera.
     //   $reported: what the camera says it holds ({ SETTING: text }, secrets masked).
     //   $rules: the rules over several settings that the device's schema carries (device_schema.php 'rules'),
@@ -1855,15 +2079,9 @@ class CamLogic
         foreach ($schemaKeys as $k) {
             $byName[$k['name']] = $k;
         }
-        // What the board really holds: what it reported, and for a setting it never stored (and so never reported)
-        // its default - the value the firmware uses until something is stored, which used to be fixed in the code.
-        // Submitting that same value is therefore no change, and a setting with a default is never "missing".
-        $held = $reported;
-        foreach ($schemaKeys as $k) {
-            if (!array_key_exists($k['name'], $held) && isset($k['default']) && is_string($k['default'])) {
-                $held[$k['name']] = $k['default'];
-            }
-        }
+        // What the board really holds (see deviceHeldValues): submitting a default's value is
+        // therefore no change, and a setting with a default is never "missing".
+        $held = self::deviceHeldValues($schemaKeys, $reported);
         $changes = [];
         foreach ($values as $name => $raw) {
             $name = (string) $name;

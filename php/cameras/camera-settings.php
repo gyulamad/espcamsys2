@@ -5,7 +5,10 @@
 //   GET  camera-settings.php?cam=ID[&type=detector]
 //        -> { camera: {id, name, icon, detector, type, deviceId}, keys: [ {name, kind, min, max, cond, condKey, condValue, locked, help} ]   (cond: always | equals | not_equals | optional),
 //             gpios: [...], state: { reported: {settings, at} | null, pending: {rev, keys, at, by} | null,
-//                                    last: {rev, result, message, at} | null, now } }
+//                                    last: {rev, result, message, at} | null, now },
+//             linked: [ {formula, status: ok|problem|unknown, problem, note} ] }   (F-29 T8: values that must
+//                                                                     agree across devices, watched — see
+//                                                                     CamLogic::linkedSettings)
 //   POST camera-settings.php?cam=ID[&type=detector]   body: { "values": { "LOG_HEARTBEAT": "900", ... } }   queue a change
 //                                     or    { "cancel": true }                               withdraw the queued one
 //        -> { ok, queued, changed: [names], message }
@@ -85,12 +88,36 @@ function camera_state(string $base, string $headers): array
     return $j;
 }
 
+// The relay's settings as the linked rules need them (F-29 T8), or every value unknown: the
+// panel answers "cannot check" then, but the page itself keeps working — an older relay without
+// the route, or a momentary failure, must not cost the camera its settings page.
+function relay_linked_values(string $relayUrl, string $headers): array
+{
+    [$body, $resp] = relay_fetch(rtrim($relayUrl, '/') . '/system-settings', 'GET', 5, $headers);
+    if ($body === false) {
+        return [];
+    }
+    $status = CamLogic::extractStatusCode($resp) ?? 200;
+    $j = json_decode($body, true);
+    if ($status !== 200 || !is_array($j) || !isset($j['fields']) || !is_array($j['fields'])) {
+        return [];
+    }
+    return CamLogic::relayLinkedValues($j['fields']);
+}
+
 if ($method === 'GET') {
+    $state = camera_state($base, $headers);
+    // The linked rules run on what the device REALLY holds (its reported settings, before the
+    // browser's copy is masked) and on the relay's values; they never echo a secret — the API key
+    // rule speaks about "set / not set" only (see CamLogic::linkedSettings).
+    $linked = CamLogic::linkedSettings($keys, $state['reported']['settings'] ?? null,
+        relay_linked_values((string) ($config['relay_url'] ?? ''), $headers), $type);
     echo json_encode([
         'camera' => ['id' => (string) $camera['id'], 'name' => (string) ($camera['name'] ?? ''), 'icon' => (string) ($camera['icon'] ?? ''), 'detector' => (string) (CamLogic::detectorIdOf($camera) ?? ''), 'type' => $type, 'deviceId' => $deviceId],
         'keys' => $keys,
         'gpios' => $gpios,
-        'state' => CamLogic::maskStateSecrets($keys, camera_state($base, $headers)),   // a secret never reaches the browser
+        'state' => CamLogic::maskStateSecrets($keys, $state),   // a secret never reaches the browser
+        'linked' => $linked,
     ]);
     exit;
 }

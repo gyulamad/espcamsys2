@@ -87,6 +87,15 @@ const BOARD = {
 
 let board = BOARD;            // what GET /state answers with
 let staged = null;            // what PUT /change was handed (the final "KEY=value;..." line)
+let relaySettings = {         // what GET /system-settings answers with (F-29 T8: the Linked settings panel)
+  fields: [
+    { key: 'port', type: 'int', value: 8080, label: 'HTTP port' },
+    { key: 'pushPort', type: 'int', value: 8081, label: 'Camera push port' },
+    { key: 'discoveryPort', type: 'int', value: 8082, label: 'Camera discovery port' },
+    { key: 'camKey', type: 'secret', isSet: true, label: 'Camera key' },
+    { key: 'alarmRecordSeconds', type: 'int', value: 60, label: 'Alarm recording length' },
+  ],
+};
 const posts = [];             // what the page POSTed to camera-settings.php
 
 function startRelay() {
@@ -100,6 +109,8 @@ function startRelay() {
         if (url === '/device-settings/recorder/cam-a/state') {
           const now = Date.now();
           res.end(JSON.stringify({ reported: { settings: board, at: now - 4000 }, pending: null, last: null, now }));
+        } else if (url === '/system-settings' && req.method === 'GET') {   // the relay's own settings (Linked settings panel)
+          res.end(JSON.stringify(relaySettings));
         } else if (url === '/device-settings/recorder/cam-a/change' && req.method === 'PUT') {
           staged = body;
           // like the real board: store the change, so the page's reload shows the new values
@@ -210,6 +221,18 @@ async function main() {
     const row = (name) => window.document.getElementById('r-' + name);
     const railItem = (c) => window.document.querySelector(`#rail .rail-item[data-cat="${c}"]`);
     const tierBtn = (t) => window.document.querySelector(`#tierbar [data-tier="${t}"]`);
+
+    // ── the Linked settings panel (F-29 T8): the cross-device rules, watched, with their verdicts ──
+    check('the Linked settings panel is shown with the five rules a camera is offered',
+      $('linked').hidden === false
+      && Array.from(window.document.querySelectorAll('#linked-list .linked-row')).map((r) => r.querySelector('.formula').textContent).join(' | ')
+        === 'API_KEY = relay camKey | RF_PORT = relay discoveryPort | PUSH_PORT = relay pushPort | PUSH_WR_TMO_MS > relay LIVE_WINDOW_MS | ALARM_HOLD_MS < relay alarmRecordSeconds');
+    check('a healthy board against a healthy relay: every linked rule holds (a green mark on every row)',
+      window.document.querySelectorAll('#linked-list .linked-row.ok').length === 5
+      && window.document.querySelectorAll('#linked-list .linked-row.bad').length === 0);
+    check('the API key rule says plainly that the values are never sent — it watches "set / not set" only',
+      window.document.querySelector('#linked-list .linked-row.ok .formula').textContent === 'API_KEY = relay camKey'
+      && window.document.querySelector('#linked-list .linked-row.ok .note').textContent.includes('never sent'));
 
     // ── the category rail ────────────────────────────────────────────────────────────────────
     check('the rail is shown with the dashboard scope as its heading',
@@ -342,6 +365,21 @@ async function main() {
         && row('PUSH_GAP_MUL').querySelector('.tag.defval').classList.contains('differs') === false);
     check('the breadcrumb links back to the settings hub',
       window.document.querySelector('.crumbs a[href="settings-page.php"]') !== null);
+    closeWindow(dom);
+
+    // ── the Linked settings panel flags a drifted value: the relay's pushPort no longer matches the board ──
+    relaySettings.fields.find((f) => f.key === 'pushPort').value = 8099;
+    toasts = [];
+    dom = await openPage(toasts);
+    window = dom.window;
+    const badRow = Array.from(window.document.querySelectorAll('#linked-list .linked-row.bad'))
+      .find((r) => r.querySelector('.formula').textContent === 'PUSH_PORT = relay pushPort');
+    check('a PUSH_PORT that drifted from the relay\'s pushPort is flagged, and the reason names both ports',
+      badRow !== undefined && badRow.querySelector('.mark').textContent === '✗'
+      && badRow.querySelector('.note').textContent.includes('PUSH_PORT (8081)')
+      && badRow.querySelector('.note').textContent.includes('pushPort (8099)'));
+    check('the other rules still hold while one has drifted',
+      window.document.querySelectorAll('#linked-list .linked-row.ok').length === 4);
     closeWindow(dom);
   } finally {
     if (php) await stopProc(php);

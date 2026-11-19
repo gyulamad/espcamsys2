@@ -131,6 +131,7 @@ async function main() {
       atlas.includes('id="rail"') && atlas.includes('id="tierbar"') && atlas.includes('data-tier="expert"')
         && atlas.includes('id="pending-list"') && atlas.includes('id="pending-count"')
         && atlas.includes('id="tray-note"') && (atlas.match(/id="save"/g) || []).length === 1, atlas.length.toString());
+    check('the Atlas page carries the Linked settings panel (F-29 T8)', atlas.includes('id="linked"') && atlas.includes('id="linked-list"'));
     check('the Atlas page links back to the settings hub', atlas.includes('settings-page.php'));
     check('every camera card has a settings button that opens its own page', /camera-settings-page\.php\?cam=cam-a/.test((await dash('GET', 'index.php')).text) && /camera-settings-page\.php\?cam=cam-b/.test((await dash('GET', 'index.php')).text));
     check('the API needs the login', (await dash('GET', 'camera-settings.php?cam=cam-a', { auth: false })).status === 401);
@@ -145,6 +146,12 @@ async function main() {
     const g0 = await dash('GET', api);
     check('the page data comes with the firmware\'s settings table', g0.status === 200 && g0.json.keys.length >= 15 && g0.json.gpios.length >= 3 && g0.json.camera.name === 'Front door', g0.text.slice(0, 200));
     check('a camera that never reported has no settings to show', g0.json.state.reported === null && g0.json.state.pending === null);
+    // (F-29 T8) the linked rules come with the page data even before the board has reported: every one
+    // answers "unknown" (the relay's settings were read, but there is no board side to compare yet).
+    // Four rules: the alarm-repeat one is offered only once the report says the alarm input is in use.
+    check('the page data carries the linked rules, unknown while the board has not reported',
+      Array.isArray(g0.json.linked) && g0.json.linked.length === 4 && g0.json.linked.every((r) => r.status === 'unknown'),
+      JSON.stringify(g0.json.linked));
     const early = await dash('POST', api, { body: { values: { LOG_HEARTBEAT: '900' } } });
     check('a change before the first report is refused with the reason (nothing to check it against)', early.status === 409 && /not reported/.test(early.json.error), early.text);
     check('nothing was queued', (await board.ask()).status === 404);
@@ -153,6 +160,16 @@ async function main() {
     check('a malformed report is refused', (await board.req('POST', 'report', 'garbage')).status === 400);
     check('the board\'s boot report is accepted', (await board.report('0', 'boot', '', REPORT)).status === 200);
     const g1 = await dash('GET', api);
+    // (F-29 T8) once the board has reported, the linked rules are judged against the relay's REAL values
+    // (read with the control key): the fixture's own drift is named - the board's PUSH_PORT (8081) does
+    // not match the relay's pushPort - while the other four rules hold.
+    {
+      const linked = g1.json.linked;
+      const push = (linked || []).find((r) => r.formula === 'PUSH_PORT = relay pushPort');
+      check('the linked rules are judged against the relay\'s own settings, and a drift is named',
+        push !== undefined && push.status === 'problem' && push.problem.includes('PUSH_PORT (8081)') && push.problem.includes(`pushPort (${PUSH_PORT})`)
+        && linked.filter((r) => r.status === 'ok').length === 4, JSON.stringify(linked));
+    }
     check('the page now shows what the board holds', g1.json.state.reported.settings.LOG_HEARTBEAT === '600' && g1.json.state.reported.settings.CAMERA_ID === 'cam-a');
     check('escaped characters in the report come back unescaped', g1.json.state.reported.settings.WIFI === 'extender-1:********');
     check('a masked secret stays masked', g1.json.state.reported.settings.API_KEY === '********' && !g1.text.includes(CAM_KEY));
