@@ -109,6 +109,14 @@ async function main() {
     // ── access ──
     check('the page needs the login', (await dash('GET', 'camera-settings-page.php?cam=cam-a', { auth: false })).status === 401);
     check('the page loads', (await dash('GET', 'camera-settings-page.php?cam=cam-a')).status === 200);
+    // (F-29 T7a) the page follows the Settings Atlas design: category rail, LEVEL switch, pending-changes
+    // tray with ONE apply button, the pending counter in the header, and the link back to the settings hub.
+    const atlas = (await dash('GET', 'camera-settings-page.php?cam=cam-a')).text;
+    check('the page is the Atlas layout: rail, tier switch, pending tray, one apply, pending counter',
+      atlas.includes('id="rail"') && atlas.includes('id="tierbar"') && atlas.includes('data-tier="expert"')
+        && atlas.includes('id="pending-list"') && atlas.includes('id="pending-count"')
+        && atlas.includes('id="tray-note"') && (atlas.match(/id="save"/g) || []).length === 1, atlas.length.toString());
+    check('the Atlas page links back to the settings hub', atlas.includes('settings-page.php'));
     check('every camera card has a settings button that opens its own page', /camera-settings-page\.php\?cam=cam-a/.test((await dash('GET', 'index.php')).text) && /camera-settings-page\.php\?cam=cam-b/.test((await dash('GET', 'index.php')).text));
     check('the API needs the login', (await dash('GET', 'camera-settings.php?cam=cam-a', { auth: false })).status === 401);
     check('…and the dashboard\'s own header', (await dash('GET', 'camera-settings.php?cam=cam-a', { ajax: false })).status === 403);

@@ -1,9 +1,26 @@
 <?php
 // camera-settings-page.php?cam=ID[&type=detector] — one camera's SETTINGS page (with &type=detector: the
-// CALIBRATE page of the person detector paired with that camera, same form, the detector's own settings): its dashboard entry (name, icon, remove)
-// and the settings stored in the board itself. The form is drawn from what camera-settings.php sends
-// (the firmware's own settings table), so a setting added to the firmware shows up here by itself.
-// Changes are queued on the relay; the board picks them up, applies them and restarts — see camera-settings.php.
+// CALIBRATE page of the person detector paired with that camera, same form, the detector's own settings).
+//
+// The page follows the Settings Atlas design (designs/Main-v2.png, designs/Category-v2.png):
+//   * a CATEGORY RAIL on the left — one entry per category the firmware's settings table names, with the
+//     number of settings in it; the settings that have no category (the relay-connection identity values,
+//     the serial-only locks, setup mode) sit under "Other". One category is shown at a time; edits made in
+//     another stay pending (see the tray).
+//   * a LEVEL switch — BASIC / ADVANCED / EXPERT. Rows above the chosen level stay in the form (hidden, with
+//     their values), so switching levels never loses an edit.
+//   * one row per setting: the short key with its tags ("was hard-coded" — its value used to be fixed in the
+//     firmware, and this default was that old value; "serial only" for the locked keys; "changed" while the
+//     row holds an unsaved edit), the readable label, the help text, and the value tags (where the value
+//     comes from — "preferences" once the board stores it, "default" while it does not —, "live" or "reboot",
+//     and the default itself). A number row shows its allowed range; one with a default can be reset to it
+//     with the row's ↺ RESET button, which goes through the same change tracking as a hand edit.
+//   * a PENDING-CHANGES tray at the bottom: every unsaved edit of every category with its old → new value,
+//     a DISCARD button, and ONE apply button — nothing is written to the board until it is pressed.
+//
+// The form is drawn from what camera-settings.php sends (the firmware's own settings table), so a setting
+// added to the firmware shows up here by itself. Changes are queued on the relay; the board picks them up,
+// applies them and restarts — see camera-settings.php.
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/lib/Layout.php';
 ?><!DOCTYPE html>
@@ -23,41 +40,95 @@ require_once __DIR__ . '/lib/Layout.php';
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: var(--sans); font-weight: 300; min-height: 100vh; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
   header h1 { font-family: var(--mono); font-size: 1.1rem; letter-spacing: .12em; color: var(--accent); }
   header p { font-size: .72rem; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+  .crumbs { font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; }
+  .crumbs a { color: var(--muted); text-decoration: none; }
+  .crumbs a:hover { color: var(--accent); }
+  .crumbs .sep { margin: 0 6px; }
+  .crumbs .here { color: var(--accent); }
+  .pending-pill { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; color: var(--warn); border: 1px solid var(--warn); border-radius: 20px; padding: 4px 12px; white-space: nowrap; }
   .btn { font-family: var(--mono); font-size: .75rem; padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--border-light); background: transparent; color: var(--text); cursor: pointer; letter-spacing: .06em; text-decoration: none; display: inline-block; transition: all .2s; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn:disabled { opacity: .5; cursor: default; }
   .btn.primary { border-color: var(--accent); color: var(--accent); }
   .btn.danger:hover { border-color: var(--accent2); color: var(--accent2); }
-  main { max-width: 860px; margin: 0 auto; padding: 24px 32px 120px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 32px 150px; }
   .banner { border: 1px solid var(--border-light); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; font-size: .85rem; line-height: 1.4; }
   .banner.warn { border-color: var(--warn); color: var(--warn); }
   .banner.err  { border-color: var(--accent2); color: var(--accent2); }
   .banner.ok   { border-color: var(--ok); color: var(--ok); }
   fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px 8px; margin-bottom: 20px; background: var(--surface); }
   legend { font-family: var(--mono); font-size: .8rem; letter-spacing: .1em; color: var(--accent); padding: 0 8px; text-transform: uppercase; }
-  .row { display: grid; grid-template-columns: 260px 1fr; gap: 6px 18px; padding: 10px 0; border-top: 1px solid var(--border); align-items: start; }
-  .row:first-of-type { border-top: 0; }
+  .kv { font-family: var(--mono); font-size: .75rem; color: var(--muted); margin-bottom: 10px; line-height: 1.6; }
+  /* ── the Atlas layout: category rail + one category's rows ── */
+  .page { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 8px 28px; align-items: start; margin-top: 6px; }
+  .rail { position: sticky; top: 14px; display: flex; flex-direction: column; gap: 2px; }
+  .rail .rail-head { font-family: var(--mono); font-size: .62rem; letter-spacing: .18em; color: var(--muted); padding: 2px 10px 8px; text-transform: uppercase; }
+  .rail-item { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; text-align: left; font-family: var(--sans); font-weight: 400; font-size: .88rem; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: var(--radius); padding: 7px 10px; cursor: pointer; }
+  .rail-item:hover { border-color: var(--border-light); }
+  .rail-item.on { border-color: var(--accent); color: var(--accent); background: rgba(0, 229, 255, .06); }
+  .rail-count { font-family: var(--mono); font-size: .68rem; color: var(--muted); }
+  .catwrap { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 24px; flex-wrap: wrap; margin-bottom: 10px; }
+  .cat-head h2 { font-size: 1.35rem; font-weight: 500; letter-spacing: .01em; }
+  .cat-head p { font-size: .82rem; color: var(--muted); margin-top: 4px; max-width: 560px; line-height: 1.45; }
+  .tierbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 2px; }
+  .tierbar .lbl { font-family: var(--mono); font-size: .65rem; letter-spacing: .14em; color: var(--muted); }
+  .btn.tier.on { border-color: var(--accent); color: var(--accent); }
+  #tierinfo { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
+  /* ── one setting row: what (key, label, tags, help) left, the value (range, input, reset) right ── */
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 2px 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 10px; align-items: start; }
   .row.unused { opacity: .55; }
-  .row label { font-weight: 500; font-size: .9rem; font-family: var(--mono); }
-  .tags { display: block; margin-top: 3px; }
-  .tag { font-family: var(--mono); font-size: .6rem; border: 1px solid var(--border-light); border-radius: 20px; padding: 1px 7px; margin-right: 4px; color: var(--muted); }
-  .tag.lock { border-color: var(--warn); color: var(--warn); }
-  .row input, .row select { width: 100%; font-family: var(--mono); font-size: .85rem; padding: 7px 9px; border-radius: var(--radius); border: 1px solid var(--border-light); background: var(--bg); color: var(--text); }
-  .row input:focus, .row select:focus { outline: none; border-color: var(--accent); }
-  .row input:disabled, .row select:disabled { opacity: .6; }
-  .changed { border-color: var(--warn) !important; }
-  .help { grid-column: 2; font-size: .75rem; color: var(--muted); line-height: 1.4; }
+  .keyline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .keyline label { font-weight: 500; font-size: .92rem; font-family: var(--mono); letter-spacing: .02em; }
+  .tags { display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: baseline; }
+  .tag { font-family: var(--mono); font-size: .6rem; border: 1px solid var(--border-light); border-radius: 20px; padding: 1px 7px; color: var(--muted); white-space: nowrap; }
+  .tag.lock, .tag.hardcoded { border-color: var(--warn); color: var(--warn); }
+  .tag.changed { border-color: var(--warn); color: var(--warn); background: rgba(255, 176, 32, .12); }
+  .tag.apply { border-color: var(--border-light); }
+  .tag.apply.reboot { border-color: var(--warn); color: var(--warn); }
+  .tag.default { border-color: var(--accent); color: var(--accent); }
+  .tag.defval.differs { border-color: var(--warn); color: var(--warn); }
+  .rowlabel { font-size: .9rem; font-weight: 400; margin-top: 3px; }
+  .tagrow { margin-top: 7px; }
+  .side { grid-row: 1 / span 3; grid-column: 2; display: flex; flex-direction: column; gap: 6px; }
+  .range { font-family: var(--mono); font-size: .62rem; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; text-align: right; }
+  .ctl { display: flex; gap: 8px; align-items: stretch; }
+  .ctl input, .ctl select { flex: 1; min-width: 0; width: auto; font-family: var(--mono); font-size: .85rem; padding: 7px 9px; border-radius: var(--radius); border: 1px solid var(--border-light); background: var(--bg); color: var(--text); }
+  .ctl input:focus, .ctl select:focus { outline: none; border-color: var(--accent); }
+  .ctl input:disabled, .ctl select:disabled { opacity: .6; }
+  .ctl input.changed, .ctl select.changed { border-color: var(--warn); }
+  .btn.reset { flex: 0 0 auto; white-space: nowrap; font-size: .62rem; padding: 5px 9px; border-color: var(--border); color: var(--muted); }
+  .help { grid-column: 1; font-size: .75rem; color: var(--muted); line-height: 1.4; margin-top: 5px; }
   .inline { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   .inline input { width: auto; flex: 1; min-width: 140px; font-family: var(--mono); font-size: .85rem; padding: 7px 9px; border-radius: var(--radius); border: 1px solid var(--border-light); background: var(--bg); color: var(--text); }
   .inline input.icon { flex: 0 0 90px; min-width: 70px; text-align: center; }
-  .kv { font-family: var(--mono); font-size: .75rem; color: var(--muted); margin-bottom: 10px; line-height: 1.6; }
-  .savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 12px 32px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  /* The hidden attribute must win over this page's own display rules — .row, .rail, .catwrap and .btn set
+     one, and an author display would otherwise beat the browser's [hidden] (the same note as Layout.php's .btn). */
+  .btn[hidden], .row[hidden], .rail[hidden], .catwrap[hidden], .pending-pill[hidden], .tag[hidden], #tray-note[hidden], #pending-list[hidden] { display: none; }
+  /* ── the pending-changes tray: every unsaved edit, DISCARD, and the one APPLY ── */
+  .tray { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 10px 32px 12px; }
+  .tray.has-changes { border-top-color: var(--warn); background: #16130b; }
+  #pending-list { max-height: 150px; overflow-y: auto; margin-bottom: 8px; }
+  .pending-row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-family: var(--mono); font-size: .74rem; padding: 3px 0; }
+  .pending-row b { color: var(--accent); font-weight: 400; }
+  .pending-row .pv { color: var(--text); }
+  .pending-row .pc { color: var(--muted); font-size: .66rem; }
+  #tray-note { font-size: .78rem; color: var(--warn); line-height: 1.45; margin-bottom: 8px; }
+  .traybar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
   #status { font-family: var(--mono); font-size: .75rem; flex: 1; min-width: 200px; }
   #status.err { color: var(--accent2); } #status.ok { color: var(--ok); } #status.busy { color: var(--warn); }
-  @media (max-width: 700px) { header, main, .savebar { padding-left: 16px; padding-right: 16px; } .row { grid-template-columns: 1fr; } .help { grid-column: 1; } }
+  @media (max-width: 800px) {
+    header, main, .tray { padding-left: 16px; padding-right: 16px; }
+    .page { grid-template-columns: 1fr; }
+    .rail { position: static; flex-direction: row; flex-wrap: wrap; padding-bottom: 6px; }
+    .rail .rail-head { flex-basis: 100%; }
+    .row { grid-template-columns: 1fr; }
+    .side { grid-column: 1; grid-row: auto; }
+    .help { grid-column: 1; }
+    .pending-pill { order: 3; }
+  }
 <?= CamLayout::navBarStyle() ?>
 <?= CamLayout::busyStyle() ?>
 <?= CamLayout::iconPickerStyle() ?>
@@ -67,9 +138,13 @@ require_once __DIR__ . '/lib/Layout.php';
 <?= CamLayout::navBar(null) ?>
 <header>
   <div>
+    <nav class="crumbs" aria-label="Where you are">
+      <a href="settings-page.php" data-page-load="">← SETTINGS</a><span class="sep">/</span><span id="crumb-scope">CAMERAS</span><span class="sep">/</span><span class="here" id="crumb-cat"></span>
+    </nav>
     <h1>⚙ <span id="title">CAMERA</span></h1>
     <p id="subtitle">Camera settings</p>
   </div>
+  <span class="pending-pill" id="pending-count" hidden>0 PENDING</span>
 </header>
 
 <main>
@@ -98,14 +173,36 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   </fieldset>
 
   <div class="kv" id="state"></div>
-  <form id="form" onsubmit="return false;"></form>
+  <div class="page">
+    <nav class="rail" id="rail" hidden aria-label="Setting categories"></nav>
+    <div class="content">
+      <div class="catwrap" id="catwrap" hidden>
+        <div class="cat-head">
+          <h2 id="cat-title"></h2>
+          <p id="cat-desc"></p>
+        </div>
+        <div class="tierbar" id="tierbar">
+          <span class="lbl">LEVEL</span>
+          <button class="btn tier on" type="button" data-tier="basic">BASIC</button>
+          <button class="btn tier" type="button" data-tier="advanced">ADVANCED</button>
+          <button class="btn tier" type="button" data-tier="expert">EXPERT</button>
+          <span id="tierinfo"></span>
+        </div>
+      </div>
+      <form id="form" onsubmit="return false;"></form>
+    </div>
+  </div>
 </main>
 
-<div class="savebar">
-  <button class="btn primary" id="save" disabled>⬆ APPLY TO CAMERA</button>
-  <button class="btn" id="revert" disabled>↺ REVERT</button>
-  <button class="btn" id="cancel" hidden>✖ WITHDRAW QUEUED CHANGE</button>
-  <span id="status">Loading…</span>
+<div class="tray" id="tray">
+  <div id="pending-list"></div>
+  <div id="tray-note" hidden></div>
+  <div class="traybar">
+    <button class="btn" id="revert" disabled>↺ DISCARD</button>
+    <button class="btn primary" id="save" disabled>⬆ APPLY TO CAMERA</button>
+    <button class="btn" id="cancel" hidden>✖ WITHDRAW QUEUED CHANGE</button>
+    <span id="status">Loading…</span>
+  </div>
 </div>
 
 <script src="js/toast.js"></script>
@@ -121,13 +218,16 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   const API = 'camera-settings.php?cam=' + encodeURIComponent(CAM) + (TYPE === 'detector' ? '&type=detector' : '');
   let keys = [], gpios = [], reported = null, camera = null, original = {}, pollTimer = null;
   let lastStructure = null;   // what the form (and the banners) were last built from; only a change rebuilds them
+  let tierLevel = 'basic';    // the level shown: rows above it stay in the form but hidden (their edits survive)
+  let activeCat = null;       // the category shown; null until the first render picks the first one
+  const LEVELS = ['basic', 'advanced', 'expert'];   // who a row is for (the schema's tier); the level picks how many are shown
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert'), cancelBtn = $('cancel');
   function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = cls || ''; }
-  // The result of pressing a button (APPLY TO CAMERA, SAVE NAME, WITHDRAW...): a toast popup (F-12) instead of
-  // a message in the save bar, where a longer answer wrapped the bar into several lines. The save bar's
-  // own #status line stays for the passive states (loading, unsaved-changes count, queuing...).
+  // The result of pressing a button (APPLY, SAVE NAME, WITHDRAW...): a toast popup (F-12) instead of
+  // a message in the tray, where a longer answer wrapped the buttons into several lines. The tray's
+  // own #status line stays for the passive states (loading, pending-changes count, queuing...).
   function notify(t, kind) { CamToast.show(t, kind || 'info'); }
   function el(tag, props, ...kids) { const e = document.createElement(tag); Object.assign(e, props || {}); for (const k of kids) e.append(k); return e; }
   function banner(t, cls) { $('banners').append(el('div', { className: 'banner ' + cls, textContent: t })); }
@@ -145,6 +245,46 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   const isOptional = (d) => d.cond === 'optional';
   const isFixed = (d) => d.locked || d.kind === 'secret' || d.kind === 'wifi';
   const SECRET_MASK = '********';
+
+  // ── categories (the Atlas rail) ──
+  // The firmware's table gives most settings a category; they are shown in the order the table names
+  // them (a camera starts with Picture & link, a detector with Detection). The relay-connection identity
+  // values, the serial-only locks and setup mode have no category — they share the last entry, "Other".
+  // One line per category, from the Atlas design board (Main-v2); a category the board does not name gets none.
+  const CAT_DESC = {
+    'Connection': 'Which Wi-Fi and which relay this board talks to, and how it finds it again.',
+    'Picture & link': 'Frame pacing, JPEG quality and the resolution fallback on a slow link.',
+    'Alarm input': 'Which pin listens, which level means alarm, and how it is debounced.',
+    'Logging': 'What the board reports to the relay log, how often, and how it retries.',
+    'Updates & sync': 'Over-the-air firmware, relay discovery and settings sync timing.',
+    'Setup & security': 'The board\u2019s own setup Wi-Fi, its master password and request limits.',
+    'Hardware & internals': 'Pin map, task stacks, serial. Expert tier only.',
+  };
+  const OTHER_CAT = { label: 'Other', desc: 'Identity values for the relay connection, the serial-only locks and setup mode \u2014 the firmware\u2019s table gives them no category.' };
+  const catOf = (d) => d.category || '';
+  const catLabel = (c) => (c === '' ? OTHER_CAT.label : c);
+  function catList() {
+    const seen = [];
+    for (const d of keys) { const c = catOf(d); if (c !== '' && !seen.includes(c)) seen.push(c); }
+    if (keys.some((d) => catOf(d) === '')) seen.push('');
+    return seen;
+  }
+
+  // ── values as text ──
+  // A boolean reads as on/off wherever it is spoken about in words (the reset button, the tray); the inputs
+  // themselves keep the raw values the board stores ('1' / '0').
+  const fmtBool = (v) => (v === '1' ? 'on' : v === '0' ? 'off' : String(v));
+  function fmtValue(d, v) {
+    if (v === undefined || v === null || v === '') return '(not set)';
+    return d && d.kind === 'bool' ? fmtBool(v) : String(v);
+  }
+  function rangeText(d) {
+    if (d.kind === 'bool') return 'ON / OFF';
+    if ((d.kind === 'int' || d.kind === 'float') && d.max > 0) return d.min + ' TO ' + d.max;
+    return '';
+  }
+  const hasDefault = (d) => d.default !== undefined && d.default !== null;
+  const defaultText = (d) => (d.kind === 'bool' ? fmtBool(d.default) : String(d.default));
 
   function makeInput(d, value) {
     const opts = (list) => { const s = el('select'); for (const [v, t] of list) s.append(el('option', { value: v, textContent: t })); return s; };
@@ -170,59 +310,107 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     if (window.CamStableText && text !== '') window.CamStableText.reserveHeight(state, [text]);
   }
 
-  function render(data) {
-    camera = data.camera; keys = data.keys; gpios = data.gpios;
-    const st = data.state; reported = st.reported ? st.reported.settings : null;
+  // ── one row: key + tags, readable label, help on the left; range, input, reset on the right ──
+  function buildRow(d) {
+    const id = 'f-' + d.name, fixed = isFixed(d);
+    // an absent optional on/off setting reads as Off (and is not a change until it is switched On)
+    // a setting the board has not stored uses its default (the value that used to be fixed in the firmware): show that
+    const usesDefault = reported[d.name] === undefined && hasDefault(d);
+    const value = usesDefault ? d.default : reported[d.name] === undefined && isOptional(d) && d.kind === 'bool' ? '0' : reported[d.name];
+    const input = makeInput(d, value);
+    input.id = id; input.name = d.name;
+    if (fixed) input.disabled = true;
+    // a locked secret is read-only AND masked: the page never shows what a device sent, only that it is set
+    // (the server masks it too, camera-settings.php; this is the page's own lock)
+    if (fixed && (d.kind === 'secret' || d.kind === 'wifi')) { input.type = 'text'; input.value = value === undefined ? '(not set)' : d.kind === 'secret' ? SECRET_MASK : value; }
+    original[d.name] = value === undefined ? '' : String(value);
+    input.addEventListener('input', () => { refresh(); });
+    input.addEventListener('change', () => { refresh(); });
 
-    // The status text and the WITHDRAW button follow every answer (their seconds tick); the FORM and the
-    // banners are built from the structure below, and are rebuilt only when it CHANGED. While a change is
-    // queued this page polls every few seconds, and each rebuild used to move everything below the form and
-    // wipe what was being typed (F-35): an unchanged answer now keeps both.
-    const parts = [];
-    if (st.reported) parts.push('Settings reported by the ' + WHO + ' ' + ago(st.now - st.reported.at));
-    if (st.pending) parts.push('QUEUED: ' + st.pending.keys.join(', ') + ' (queued ' + ago(st.now - st.pending.at) + ') — waiting for the ' + WHO + ' to pick it up');
-    if (st.last) parts.push('Last change: ' + st.last.result.toUpperCase() + (st.last.message ? ' — ' + st.last.message : '') + ' (' + ago(st.now - st.last.at) + ')');
-    setStateText(parts);
-    cancelBtn.hidden = !st.pending;
-    const structure = JSON.stringify([camera, keys, gpios, st.reported, st.pending, st.last]);
-    if (structure === lastStructure) return;
-    lastStructure = structure;
-
-    $('title').textContent = camera.icon + ' ' + camera.name + (TYPE === 'detector' ? ' — detector' : '');
-    document.title = camera.name + (TYPE === 'detector' ? ' detector calibration' : ' settings') + ' — ESP32-CAM Dashboard';
-    if (TYPE === 'detector') { $('subtitle').textContent = 'Person detector calibration (' + camera.deviceId + ')'; $('calib-help').hidden = false; $('calib-help').style.whiteSpace = 'pre-line'; }
-    $('entry').hidden = TYPE === 'detector'; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id; $('e-detector').value = camera.detector || '';
-    $('banners').textContent = ''; form.textContent = ''; original = {};
-
-    if (!reported) {
-      banner('This ' + WHO + ' has not reported its settings yet. It reports once it runs the firmware that supports remote settings (' + (TYPE === 'detector' ? 'flash the detector with the current ESP32_CAM_TFLite_Person sketch, or publish it with ota-deploy.sh detector' : 'publish it with ota-deploy.sh') + ') and has reached the relay — then this page fills in.' + (TYPE === 'detector' ? '' : ' You can still rename it or remove it from the dashboard above.'), 'warn');
-      saveBtn.disabled = revertBtn.disabled = true;
-      return;
+    // Reset to default: the default goes into the input, and from there through the SAME change tracking
+    // and apply as a hand-made change (no separate path to the board). No button while the input already
+    // holds the default, and none for what has no default or cannot be changed here anyway.
+    const reset = !fixed && hasDefault(d) ? el('button', {
+      className: 'btn reset', type: 'button', title: 'Put the default back, then APPLY', textContent: '↺ RESET TO ' + defaultText(d),
+    }) : null;
+    if (reset) {
+      reset.disabled = input.value === String(d.default);
+      input.addEventListener('input', () => { reset.disabled = input.value === String(d.default); });
+      reset.addEventListener('click', () => { input.value = String(d.default); input.dispatchEvent(new Event('input', { bubbles: true })); });
     }
-    const fs = el('fieldset', {}, el('legend', { textContent: 'Stored in the ' + WHO }));
-    for (const d of keys) {
-      const id = 'f-' + d.name, fixed = isFixed(d);
-      // an absent optional on/off setting reads as Off (and is not a change until it is switched On)
-      // a setting the board has not stored uses its default (the value that used to be fixed in the firmware): show that
-      const usesDefault = reported[d.name] === undefined && d.default !== undefined && d.default !== null;
-      const value = usesDefault ? d.default : reported[d.name] === undefined && isOptional(d) && d.kind === 'bool' ? '0' : reported[d.name];
-      const input = makeInput(d, value);
-      input.id = id; input.name = d.name;
-      if (fixed) input.disabled = true;
-      // a locked secret is read-only AND masked: the page never shows what a device sent, only that it is set
-      // (the server masks it too, camera-settings.php; this is the page's own lock)
-      if (fixed && (d.kind === 'secret' || d.kind === 'wifi')) { input.type = 'text'; input.value = value === undefined ? '(not set)' : d.kind === 'secret' ? SECRET_MASK : value; }
-      original[d.name] = value === undefined ? '' : String(value);
-      input.addEventListener('input', () => { refresh(); });
-      input.addEventListener('change', () => { refresh(); });
-      const tags = el('span', { className: 'tags' });
-      if (fixed) tags.append(el('span', { className: 'tag lock', textContent: 'serial only' }));
-      if (usesDefault) tags.append(el('span', { className: 'tag default', textContent: 'default' }));
-      const row = el('div', { className: 'row', id: 'r-' + d.name }, el('div', {}, el('label', { htmlFor: id, textContent: d.name, title: d.label || '' }), d.label ? el('div', { className: 'help', textContent: d.label }) : '', tags), input, el('div', { className: 'help', textContent: d.help + (reported[d.name] === undefined && isOptional(d) ? ' — not set on this ' + WHO + ' (treated as off)' : '') + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '') }));
-      fs.append(row);
+
+    // Tags beside the key: what this setting used to be, what may change it, and that it is edited right now.
+    const keyTags = el('span', { className: 'tags' });
+    if (hasDefault(d)) keyTags.append(el('span', { className: 'tag hardcoded', textContent: 'was hard-coded', title: 'its value used to be fixed in the firmware — this default was that old value' }));
+    if (fixed) keyTags.append(el('span', { className: 'tag lock', textContent: 'serial only' }));
+    keyTags.append(el('span', { className: 'tag changed', id: 'c-' + d.name, hidden: true, textContent: 'changed' }));
+
+    // Value tags: where the shown value comes from, when it takes effect, and what the default is.
+    const tags = el('span', { className: 'tags' });
+    if (reported[d.name] !== undefined) tags.append(el('span', { className: 'tag', textContent: 'preferences', title: 'stored in the board\u2019s flash' }));
+    else if (usesDefault) tags.append(el('span', { className: 'tag default', textContent: 'default', title: 'the board has not stored this — it uses the default' }));
+    if (d.apply) tags.append(el('span', { className: 'tag apply' + (d.apply === 'reboot' ? ' reboot' : ''), textContent: d.apply, title: d.apply === 'reboot' ? 'takes effect only after the ' + WHO + ' restarts' : 'takes effect at once' }));
+    if (hasDefault(d)) tags.append(el('span', { className: 'tag defval', id: 'dv-' + d.name, textContent: 'default ' + defaultText(d) }));
+
+    const what = el('div', { className: 'what' },
+      el('div', { className: 'keyline' }, el('label', { htmlFor: id, textContent: d.name, title: d.label || '' }), keyTags));
+    if (d.label) what.append(el('div', { className: 'rowlabel', textContent: d.label }));
+
+    const side = el('div', { className: 'side' });
+    const range = rangeText(d);
+    if (range) side.append(el('div', { className: 'range', textContent: range }));
+    const ctl = el('div', { className: 'ctl' }, input);
+    if (reset) ctl.append(reset);
+    side.append(ctl);
+
+    const helpText = d.help
+      + (reported[d.name] === undefined && isOptional(d) ? ' — not set on this ' + WHO + ' (treated as off)' : '')
+      + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '');
+
+    const row = el('div', { className: 'row', id: 'r-' + d.name }, what, side, el('div', { className: 'tagrow' }, tags), el('div', { className: 'help', textContent: helpText }));
+    if (d.tier) row.dataset.tier = d.tier;
+    row.dataset.cat = catOf(d);
+    return row;
+  }
+
+  // ── the rail, the category heading and the LEVEL switch ──
+  function renderRail() {
+    const rail = $('rail');
+    rail.textContent = '';
+    rail.append(el('div', { className: 'rail-head', textContent: TYPE === 'detector' ? 'DETECTOR' : 'CAMERAS' }));
+    for (const c of catList()) {
+      const n = keys.filter((d) => catOf(d) === c).length;
+      const b = el('button', { className: 'rail-item' + (c === activeCat ? ' on' : ''), type: 'button' },
+        el('span', { textContent: catLabel(c), title: c === '' ? OTHER_CAT.desc : '' }), el('span', { className: 'rail-count', textContent: String(n) }));
+      b.dataset.cat = c;
+      b.addEventListener('click', () => { selectCategory(c); });
+      rail.append(b);
     }
-    form.append(fs);
+    rail.hidden = false;
+  }
+  function renderCatHead() {
+    $('cat-title').textContent = catLabel(activeCat);
+    const desc = activeCat === '' ? OTHER_CAT.desc : (CAT_DESC[activeCat] || '');
+    $('cat-desc').textContent = (desc ? desc + ' ' : '') + 'Editing ' + camera.name + '.';
+    $('crumb-cat').textContent = catLabel(activeCat);
+  }
+  function selectCategory(c) {
+    activeCat = c;
+    renderCatHead();
+    for (const b of document.querySelectorAll('#rail .rail-item')) b.classList.toggle('on', b.dataset.cat === c);
     refresh();
+  }
+  // The chosen level hides every row above it (basic < advanced < expert). Rows without a tier — the
+  // serial-only ones and setup mode — are shown at every level. Hidden rows keep their values, so a change
+  // made at a higher level is not lost by switching back: it is still tracked, and the tray counts it.
+  // Nothing is dropped: the form stays complete and the level is only a view.
+  function applyTier(level) {
+    tierLevel = level;
+    for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === tierLevel);
+    refresh();
+  }
+  for (const b of document.querySelectorAll('#tierbar .btn.tier')) {
+    b.addEventListener('click', () => { applyTier(b.dataset.tier); });
   }
 
   function currentValues() {
@@ -233,21 +421,82 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     }
     return v;
   }
+
+  // ── visibility: needed by the current values, in the shown category, at the chosen level ──
   // Shows what the current values make necessary: unused settings are dimmed, and a setting that
   // is needed but has no value yet (a feature was just switched on) appears.
-  function refresh() {
+  function updateVisibility() {
     const vals = currentValues();
+    let tierHidden = 0;
     for (const d of keys) {
       const row = $('r-' + d.name), i = $('f-' + d.name);
+      if (!row) continue;
       const need = required(d, vals), has = reported[d.name] !== undefined;
-      row.hidden = !need && !has && !isOptional(d);
+      const catVisible = catOf(d) === activeCat;
+      const aboveLevel = d.tier && LEVELS.indexOf(d.tier) > LEVELS.indexOf(tierLevel);
+      row.hidden = (!need && !has && !isOptional(d)) || !catVisible || aboveLevel;
       row.classList.toggle('unused', !need && !isOptional(d));
-      i.classList.toggle('changed', !isFixed(d) && i.value !== original[d.name]);
+      if (catVisible && aboveLevel) tierHidden += 1;
     }
-    const n = Object.keys(changes().values).length;
-    saveBtn.disabled = n === 0; revertBtn.disabled = n === 0;
-    if (n > 0) setStatus(n + ' unsaved change' + (n === 1 ? '' : 's'), '');
+    $('tierinfo').textContent = tierHidden === 0
+      ? 'every setting shown at ' + tierLevel
+      : tierHidden + ' hidden at ' + tierLevel + ' — a higher level shows them';
   }
+
+  // Marks each row about its edit: the input's changed border, the row's "changed" tag, and whether the
+  // shown value differs from the default (the default tag is highlighted while it does).
+  function updateRowMarks() {
+    for (const d of keys) {
+      const i = $('f-' + d.name);
+      if (!i) continue;
+      const changed = !isFixed(d) && i.value !== original[d.name];
+      i.classList.toggle('changed', changed);
+      const changedTag = $('c-' + d.name);
+      if (changedTag) changedTag.hidden = !changed;
+      const defTag = $('dv-' + d.name);
+      if (defTag) defTag.classList.toggle('differs', String(i.value) !== String(d.default));
+    }
+  }
+
+  // ── the pending-changes tray ──
+  let lastPending = -1;   // how many edits the last tray answer showed (-1: none yet); -1 → 0 keeps the status line
+  function renderTray(pending) {
+    const names = Object.keys(pending.values);
+    const list = $('pending-list');
+    list.textContent = '';
+    for (const name of names) {
+      const d = keys.find((k) => k.name === name) || {};
+      list.append(el('div', { className: 'pending-row' },
+        el('b', { textContent: name }),
+        el('span', { className: 'pv', textContent: fmtValue(d, original[name]) + ' \u2192 ' + fmtValue(d, pending.values[name]) }),
+        d.category ? el('span', { className: 'pc', textContent: catLabel(d.category) }) : el('span', { className: 'pc', textContent: catLabel('') })));
+    }
+    const n = names.length;
+    const pill = $('pending-count');
+    pill.textContent = n + ' PENDING';
+    pill.hidden = n === 0;
+    $('tray-note').hidden = n === 0;
+    $('tray').classList.toggle('has-changes', n > 0);
+    if (n === 0 && lastPending > 0) setStatus('', '');   // the tray emptied (applied or discarded): the count line goes too
+    lastPending = n;
+    if (n > 0) {
+      const rb = names.filter((name) => { const d = keys.find((k) => k.name === name); return d && d.apply === 'reboot'; }).length;
+      let note = n + ' pending change' + (n === 1 ? '' : 's') + '. ' + camera.name + ' picks ' + (n === 1 ? 'it' : 'them')
+        + ' up at its next settings sync (within about half a minute). Nothing is written until you apply.';
+      if (rb > 0) note += ' ' + rb + ' of ' + (n === 1 ? 'it takes' : 'them take') + ' effect only after the ' + WHO + ' restarts.';
+      $('tray-note').textContent = note;
+      setStatus(n + ' pending change' + (n === 1 ? '' : 's'), '');
+    }
+    saveBtn.disabled = revertBtn.disabled = n === 0;
+  }
+
+  function refresh() {
+    const pending = changes();
+    updateVisibility();
+    updateRowMarks();
+    renderTray(pending);
+  }
+
   // Only what differs from what the camera holds. A setting this edit has just made needed (a feature
   // was switched on) must be given a value; one the camera already needed before — a setting its
   // firmware predates, unreported and empty — is not this edit's doing and is not demanded, or no
@@ -262,6 +511,53 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       if (vals[d.name] !== original[d.name]) out[d.name] = vals[d.name];
     }
     return { values: out, missing };
+  }
+
+  function render(data) {
+    camera = data.camera; keys = data.keys; gpios = data.gpios;
+    const st = data.state; reported = st.reported ? st.reported.settings : null;
+
+    // The status text and the WITHDRAW button follow every answer (their seconds tick); the FORM, the rail
+    // and the banners are built from the structure below, and are rebuilt only when it CHANGED. While a
+    // change is queued this page polls every few seconds, and each rebuild used to move everything below
+    // the form and wipe what was being typed (F-35): an unchanged answer now keeps both.
+    const parts = [];
+    if (st.reported) parts.push('Settings reported by the ' + WHO + ' ' + ago(st.now - st.reported.at));
+    if (st.pending) parts.push('QUEUED: ' + st.pending.keys.join(', ') + ' (queued ' + ago(st.now - st.pending.at) + ') — waiting for the ' + WHO + ' to pick it up');
+    if (st.last) parts.push('Last change: ' + st.last.result.toUpperCase() + (st.last.message ? ' — ' + st.last.message : '') + ' (' + ago(st.now - st.last.at) + ')');
+    setStateText(parts);
+    cancelBtn.hidden = !st.pending;
+    const structure = JSON.stringify([camera, keys, gpios, st.reported, st.pending, st.last]);
+    if (structure === lastStructure) return;
+    lastStructure = structure;
+
+    $('title').textContent = camera.icon + ' ' + camera.name + (TYPE === 'detector' ? ' — detector' : '');
+    document.title = camera.name + (TYPE === 'detector' ? ' detector calibration' : ' settings') + ' — ESP32-CAM Dashboard';
+    if (TYPE === 'detector') {
+      $('subtitle').textContent = 'Person detector calibration (' + camera.deviceId + ')';
+      $('calib-help').hidden = false; $('calib-help').style.whiteSpace = 'pre-line';
+      $('crumb-scope').textContent = 'DETECTOR';
+    }
+    $('entry').hidden = TYPE === 'detector'; $('e-icon').value = camera.icon; $('e-name').value = camera.name; $('e-id').textContent = camera.id; $('e-detector').value = camera.detector || '';
+    $('banners').textContent = ''; form.textContent = ''; original = {};
+    saveBtn.textContent = '⬆ APPLY TO ' + (TYPE === 'detector' ? 'DETECTOR' : camera.name.toUpperCase());
+
+    if (!reported) {
+      banner('This ' + WHO + ' has not reported its settings yet. It reports once it runs the firmware that supports remote settings (' + (TYPE === 'detector' ? 'flash the detector with the current ESP32_CAM_TFLite_Person sketch, or publish it with ota-deploy.sh detector' : 'publish it with ota-deploy.sh') + ') and has reached the relay — then this page fills in.' + (TYPE === 'detector' ? '' : ' You can still rename it or remove it from the dashboard above.'), 'warn');
+      $('rail').hidden = true; $('catwrap').hidden = true;
+      $('pending-count').hidden = true;
+      saveBtn.disabled = revertBtn.disabled = true;
+      return;
+    }
+    // The categories come with the keys; the first one that has a name is shown (for a detector that is
+    // its Detection category, for a camera Picture & link). "Other" is only picked by hand.
+    const cats = catList();
+    activeCat = cats.find((c) => c !== '') || cats[0] || '';
+    renderRail();
+    renderCatHead();
+    $('catwrap').hidden = false;
+    for (const d of keys) form.append(buildRow(d));
+    refresh();
   }
 
   async function load(keepStatus) {
@@ -311,7 +607,9 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       notify(data.message, data.queued ? 'busy' : 'ok');
     } catch (e) { notify('Failed: ' + e.message, 'error'); refresh(); }
   }));
-  revertBtn.addEventListener('click', () => { for (const d of keys) { if (isFixed(d)) continue; $('f-' + d.name).value = original[d.name]; } refresh(); notify('Reverted.', 'ok'); });
+  // DISCARD puts every input back to what the server sent — edits from every category, shown or hidden —
+  // so the tray empties and nothing is sent. Locked and read-only inputs are skipped (they cannot change).
+  revertBtn.addEventListener('click', () => { for (const d of keys) { if (isFixed(d)) continue; $('f-' + d.name).value = original[d.name]; } refresh(); notify('Discarded — nothing was sent.', 'ok'); });
   cancelBtn.addEventListener('click', () => CamBusy.run(cancelBtn, async () => {
     const { res, data } = await post(API, { cancel: true });
     notify(res.ok ? data.message : (data.error || ('Error ' + res.status)), res.ok ? 'ok' : 'error');
