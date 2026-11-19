@@ -595,7 +595,11 @@ camtest_test('the generated schema is complete and the connection settings are t
     // plain-HTTP control plane could otherwise disable the alarm feature,
     // invert its level, force all-cameras recording on every alarm, or
     // silence the remote log so the operator never sees the manipulation.
-    camtest_assert_equal($locked, ['ALARM_ACTIVE', 'ALARM_ALL_CAMS', 'ALARM_GPIO_PIN', 'API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'LOG_ENABLED', 'PUSH_PORT', 'SERVER_HOST', 'SETUP_PASSWORD', 'WIFI']);
+    // (F-29 T2) the firmware-update and settings-sync switches are serial-only
+    // locks as well: flipping either to 0 over the plain-HTTP control plane would
+    // strand the board's updates or its remote management (same argument as
+    // LOG_ENABLED). The detector locks the same two.
+    camtest_assert_equal($locked, ['ALARM_ACTIVE', 'ALARM_ALL_CAMS', 'ALARM_GPIO_PIN', 'API_KEY', 'CAMERA_ID', 'HTTP_PORT', 'LOG_ENABLED', 'OTA_ENABLED', 'PUSH_PORT', 'SERVER_HOST', 'SETUP_PASSWORD', 'SYNC_ENABLED', 'WIFI']);
 });
 
 function camtest_detector_reported(): array {
