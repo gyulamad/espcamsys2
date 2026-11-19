@@ -48,9 +48,36 @@ function assertThrows(fn, msg) {
   throw new Error(msg || 'expected function to throw');
 }
 
+// The same for tests that wait for something (a file, a timer, a fetch): asyncTest() queues the test, runAsyncTests()
+// runs the queue one test after the other, then summarizes. afterEach() runs after every test, passed or failed — to
+// put back something the test replaced.
+//   const { asyncTest, assertEqual, runAsyncTests } = require('./framework');
+//   asyncTest('reads the file', async () => assertEqual(await read(), 'x'));
+//   runAsyncTests();
+const asyncQueue = [];
+
+function asyncTest(name, fn) {
+  asyncQueue.push([name, fn]);
+}
+
+async function runAsyncTests({ afterEach } = {}) {
+  for (const [name, fn] of asyncQueue) {
+    try {
+      await fn();
+      passCount += 1;
+      console.log(`[PASS] ${name}`);
+    } catch (err) {
+      failCount += 1;
+      console.error(`[FAIL] ${name} -- ${err.message}`);
+    }
+    if (afterEach) afterEach();
+  }
+  summarize();
+}
+
 function summarize() {
   console.log(`\n${passCount} passed, ${failCount} failed`);
   process.exitCode = failCount === 0 ? 0 : 1;
 }
 
-module.exports = { test, assertEqual, assertTrue, assertThrows, summarize };
+module.exports = { test, asyncTest, assertEqual, assertTrue, assertThrows, runAsyncTests, summarize };

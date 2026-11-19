@@ -40,6 +40,9 @@ module.exports = {
   // logMaxBytes: 5 * 1024 * 1024,   // rotate when the file would pass this size (default 5 MiB)
   // logKeepFiles: 2,                // rotated files kept: camera.log.1, camera.log.2 (default 2)
   //                                 // => at most (keep + 1) * maxBytes of disk, ever
+  // The dashboard's OTA & LOGS page also shows the end of Apache's error log (read by this relay, so the user it
+  // runs as must be allowed to read that file: on Raspberry Pi OS the default user is in the adm group, which is).
+  // apacheErrorLog: '/var/log/apache2/error.log',  // default; the APACHE_ERROR_LOG env var overrides it, and set to nothing leaves it out
 
   // Settings staged for boards that are missing one (see "Missing settings after a
   // firmware update" in DEPLOY.md). A relative path is relative to this folder; optional.

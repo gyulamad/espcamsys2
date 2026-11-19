@@ -670,6 +670,16 @@ fi
 #     sender's IP, no forged lines, rotation, relay-observed events (camera
 #     connected/dropped), an unusable log location. Override the ports with
 #     E2E_LOG_PORT / E2E_LOG_PUSH_PORT.
+#   - tests/e2e/test_logs_tail_e2e.js: GET /logs/tail, the route behind the dashboard's OTA & LOGS page — control key
+#     needed, the relay's own log and Apache's error log (the last N lines, kept by level, an Apache line at the level of
+#     its [module:level] tag), a query it does not understand a 400, a path in the query ignored, control characters
+#     replaced, a missing file reported for that file only, APACHE_ERROR_LOG='' switching Apache's log off, and reading
+#     not logged. Override the ports with E2E_LOGSTAIL_PORT / E2E_LOGSTAIL_PUSH_PORT.
+#   - tests/e2e/test_dashboard_ota_logs_e2e.js: ota-status.php, logs-tail.php and ota-logs.php on a real PHP server in
+#     front of a fake relay — login needed, the control key added on the way and never sent to the browser, only a checked
+#     lines/levels passed on, what the relay says cut down to plain text, a relay that is down / refuses the key / sends
+#     nonsense a clear error, the page's controls and defaults, and the OTA & LOGS button in the navigation bar. Needs php.
+#     Override the port with E2E_DOTALOGS_PORT (and the next one up).
 #   - tests/e2e/test_device_settings_e2e.js: the settings the relay stages for
 #     boards that are missing some (GET/PUT /device-settings) — camera key to
 #     ask, control key to stage, a device's own line beating the fleet line, the
@@ -1240,6 +1250,24 @@ if ! command -v node >/dev/null 2>&1; then
     overall_status=1
 else
     run_node_e2e "$ROOT_DIR/tests/e2e/test_logging_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (relay GET /logs/tail, the OTA & LOGS page's log) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_logs_tail_e2e.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "End-to-end (dashboard OTA & LOGS page) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    run_node_e2e "$ROOT_DIR/tests/e2e/test_dashboard_ota_logs_e2e.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

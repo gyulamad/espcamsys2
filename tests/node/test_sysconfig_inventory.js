@@ -44,8 +44,8 @@ test('every row that is not a secret has a default, and a default is a value the
   for (const f of FIELDS.filter((x) => x.type === 'secret')) assertEqual(f.default, undefined, `${f.key}: a secret has no default`);
 });
 
-test('the number of rows: 23 that were already settings and 31 that came from config.js only or the environment only', () => {
-  assertEqual(FIELDS.length, 54);
+test('the number of rows: 23 that were already settings, 31 that came from config.js only or the environment only, and 1 added later', () => {
+  assertEqual(FIELDS.length, 55);
 });
 
 // ── nothing is left outside the table ──
@@ -87,6 +87,24 @@ test('SETTINGS.md is the reference of the table as it is now (regenerate: node l
   assertEqual(fs.readFileSync(path.join(RELAY, 'SETTINGS.md'), 'utf8'), buildReference());
 });
 
+// ── apacheErrorLog (F-30): the Apache log the OTA & LOGS page shows ──
+
+test('apacheErrorLog: the system Apache log by default; the environment and config.js name another; only the environment can leave it out', () => {
+  assertEqual(sc.currentValue('apacheErrorLog', empty()), '/var/log/apache2/error.log');
+  assertEqual(sc.currentValue('apacheErrorLog', empty({ base: { apacheErrorLog: '/var/log/httpd/error_log' } })), '/var/log/httpd/error_log');
+  assertEqual(sc.currentValue('apacheErrorLog', empty({ env: { APACHE_ERROR_LOG: '/var/log/x/error.log' } })), '/var/log/x/error.log');
+  assertEqual(sc.currentValue('apacheErrorLog', empty({ env: { APACHE_ERROR_LOG: '' } })), '', 'APACHE_ERROR_LOG= leaves it out');
+  assertEqual(sc.currentValue('apacheErrorLog', empty({ base: { apacheErrorLog: '' } })), '/var/log/apache2/error.log', 'an empty config.js value is "not set", as for every row');
+});
+
+test('apacheErrorLog: a file the relay READS and shows to the dashboard — set from the page it must be a .log inside the relay\'s folder', () => {
+  for (const bad of ['/etc/shadow', '/var/log/apache2/other.log', 'config.js', 'logs/../config.js', '../x.log', 'lib/x.log', 'node_modules/x.log', '.hidden/x.log', 'x.txt', '']) {
+    assertTrue(sc.applyUpdate(full(), { apacheErrorLog: bad }).error, `refused: ${JSON.stringify(bad)}`);
+  }
+  const ok = sc.applyUpdate(full(), { apacheErrorLog: 'logs/apache.log' });
+  assertEqual([ok.error, ok.changed, ok.restartRequired, ok.overrides.apacheErrorLog], [undefined, ['apacheErrorLog'], true, 'logs/apache.log']);
+});
+
 // ── an empty store changes nothing: every default is the value the code used before ──
 
 // What the relay used before each of these became a setting, written out here (not read from the table).
@@ -94,6 +112,8 @@ const ALREADY_SETTINGS = ['alarmRecordSeconds', 'minFreeStorageMB', 'preRollSeco
   'alarmSoundRecordStart', 'alarmSoundRecordStartRelay', 'alarmSoundRecordStartBrowser', 'alarmSoundPersonDetected', 'alarmSoundPersonDetectedRelay',
   'alarmSoundPersonDetectedBrowser', 'port', 'pushPort', 'camKey', 'controlKey', 'logFile', 'logMaxBytes', 'logKeepFiles', 'deviceSettingsDir',
   'firmwareDir', 'soundsDir', 'switchFile'];
+// Rows added after T6a: they did not exist before, so there is no "before" value to compare (tested on their own below).
+const ADDED_LATER = ['apacheErrorLog'];
 const BEFORE = {
   discoveryPort: 8082, detectorViewMinutes: 10, personScanAuto: true, personScanAction: 'move', personScanStride: 1,
   personScanTimeoutSeconds: 900, personScanPython: 'python3', personScanModel: 'models/person.onnx', personScanScript: 'tools/person_scan.py',
@@ -110,7 +130,7 @@ test('with nothing stored, in config.js or in the environment, each moved value 
   }
   assertEqual(field('alarmSoundPlayer').default, ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'error']);
   // the rows that are new in T6a are exactly these (a secret has no default to compare)
-  const moved = FIELDS.filter((f) => !ALREADY_SETTINGS.includes(f.key)).map((f) => f.key).sort();
+  const moved = FIELDS.filter((f) => !ALREADY_SETTINGS.includes(f.key) && !ADDED_LATER.includes(f.key)).map((f) => f.key).sort();
   assertEqual(moved, [...Object.keys(BEFORE), 'alarmSoundPlayer', 'telegramBotToken'].sort());
 });
 
@@ -281,7 +301,7 @@ test('locked rows: sending back the value that is shown is not an error (a page 
 
 test('buildView: every row shows its tier and, unless it is a secret, its default; a choice shows its words', () => {
   const view = sc.buildView(full());
-  assertEqual(view.fields.length, 54);
+  assertEqual(view.fields.length, 55);
   for (const f of view.fields) {
     assertTrue(TIERS.includes(f.tier), f.key);
     if (f.type === 'secret') assertTrue(!('default' in f) && !('value' in f), `${f.key}: a secret shows neither`);

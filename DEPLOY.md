@@ -89,6 +89,8 @@ It writes the git revision into `fw_version.h` (gitignored, removed afterwards),
 
 ### What you will see in the relay log
 
+(The same, and the status of every board, is on the dashboard's **🛰 OTA & LOGS** page — see ["The OTA & LOGS page"](MANUAL.md#the-ota--logs-page-navigation-bar---ota--logs).)
+
 - `... published recorder firmware f5959f7 (1234567 bytes, md5 ...)` — the upload
 - `cam1 is downloading recorder firmware f5959f7 (...)` — a board started
 - `cam1 now runs f5959f7 (was e1c95ad)` — it rebooted into the new version; every log line also carries the version

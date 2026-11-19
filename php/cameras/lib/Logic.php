@@ -1358,6 +1358,127 @@ class CamLogic
         return 'X-Control-Key: ' . $controlKey . "\r\nX-Actor: " . $actor . "\r\n" . ($json ? "Content-Type: application/json\r\n" : "Content-Length: 0\r\n");
     }
 
+    // ── The OTA & LOGS page (ota-logs.php) ──
+    // Two read-only views of the relay: the firmware status of the boards (GET /ota/status) and the end of the relay's and
+    // Apache's logs (GET /logs/tail). PHP is the trust boundary: what the relay sends is cut down to what the page draws —
+    // fixed fields, plain text with no control characters, bounded sizes — and the page puts it on the screen as text.
+
+    const OTA_STATUS_COLUMNS = ['id', 'type', 'target', 'running', 'state', 'seen', 'error'];
+    const OTA_STATUS_MAX_ROWS = 200;
+    const LOG_TAIL_KINDS = ['relay', 'apache'];
+    const LOG_TAIL_MAX_SOURCES = 4;
+    const LOG_TAIL_MAX_LINES = 5000;
+    const LOG_TAIL_MAX_LINE_CHARS = 2000;
+
+    // A text for the page: control characters (a tab stays) become '?', and it is cut to $max characters (with a …).
+    public static function plainText(string $text, int $max): string
+    {
+        $clean = preg_replace('/[\x00-\x08\x0B-\x1F\x7F]/', '?', $text);
+        if (strlen($clean) <= $max) {
+            return $clean;
+        }
+        if (preg_match('/^(.{0,' . $max . '})(.?)/su', $clean, $m) === 1) {
+            return $m[2] === '' ? $m[1] : $m[1] . '…';
+        }
+        return substr($clean, 0, $max) . '…';   // not valid UTF-8: cut by bytes; json_encode then replaces the broken end
+    }
+
+    // The relay's /ota/status text — one line per board, seven tab-separated columns:
+    //   id type published running state last-seen last-error
+    // — as { at, rows: [ { id, type, target, running, state, seen, error } ] }. A line that is not seven columns is dropped.
+    public static function sanitizeOtaStatus(string $text, int $now): array
+    {
+        $rows = [];
+        foreach (explode("\n", $text) as $line) {
+            $line = rtrim($line, "\r");
+            if ($line === '') {
+                continue;
+            }
+            $cells = explode("\t", $line);
+            if (count($cells) !== count(self::OTA_STATUS_COLUMNS)) {
+                continue;
+            }
+            $row = [];
+            foreach (self::OTA_STATUS_COLUMNS as $i => $name) {
+                $row[$name] = self::plainText($cells[$i], $name === 'error' ? 300 : 80);
+            }
+            $rows[] = $row;
+            if (count($rows) >= self::OTA_STATUS_MAX_ROWS) {
+                break;
+            }
+        }
+        return ['at' => date('c', $now), 'rows' => $rows];
+    }
+
+    // The relay's /logs/tail answer (already decoded) as { at, sources: [ { kind, path, ok, lines | error } ] }, or null when
+    // it is not that shape. Only the two known kinds of file are kept; every line is plain text of bounded length.
+    public static function sanitizeLogTail($decoded, int $now): ?array
+    {
+        if (!is_array($decoded) || !isset($decoded['sources']) || !is_array($decoded['sources'])) {
+            return null;
+        }
+        $sources = [];
+        foreach ($decoded['sources'] as $s) {
+            if (count($sources) >= self::LOG_TAIL_MAX_SOURCES) {
+                break;
+            }
+            if (!is_array($s) || !isset($s['kind'], $s['path']) || !is_string($s['kind']) || !is_string($s['path'])
+                || !in_array($s['kind'], self::LOG_TAIL_KINDS, true)) {
+                continue;
+            }
+            $source = ['kind' => $s['kind'], 'path' => self::plainText($s['path'], 300)];
+            if (($s['ok'] ?? false) !== true) {
+                $source['ok'] = false;
+                $source['error'] = self::plainText(is_string($s['error'] ?? null) ? $s['error'] : 'it could not be read', 200);
+                $sources[] = $source;
+                continue;
+            }
+            $lines = [];
+            if (isset($s['lines']) && is_array($s['lines'])) {
+                foreach (array_slice($s['lines'], -self::LOG_TAIL_MAX_LINES) as $line) {
+                    if (is_string($line)) {
+                        $lines[] = self::plainText($line, self::LOG_TAIL_MAX_LINE_CHARS);
+                    }
+                }
+            }
+            $source['ok'] = true;
+            $source['lines'] = $lines;
+            $sources[] = $source;
+        }
+        return ['at' => date('c', $now), 'sources' => $sources];
+    }
+
+    // What the browser may ask of logs-tail.php, as the query string for the relay: ?lines= (1 to 5000, 1000 when absent)
+    // and ?levels= (a comma-separated list of WARN, ERROR, DEBUG, INFO; absent = every level). Null for anything else:
+    // nothing from the browser reaches the relay unchecked.
+    public static function logTailQuery(array $get): ?string
+    {
+        $lines = $get['lines'] ?? '1000';
+        if (!is_string($lines) || preg_match('/^[0-9]{1,5}$/D', $lines) !== 1 || (int) $lines < 1 || (int) $lines > self::LOG_TAIL_MAX_LINES) {
+            return null;
+        }
+        $query = 'lines=' . (int) $lines;
+        if (!isset($get['levels'])) {
+            return $query;
+        }
+        $levels = $get['levels'];
+        if (!is_string($levels) || preg_match('/^(WARN|ERROR|DEBUG|INFO)(,(WARN|ERROR|DEBUG|INFO))*$/D', $levels) !== 1) {
+            return null;
+        }
+        return $query . '&levels=' . $levels;
+    }
+
+    // The words of the relay's own refusal — { "error": "missing or wrong control key" } — as plain text for the page; a
+    // fixed sentence when the body is not that.
+    public static function relayErrorText(string $body): string
+    {
+        $decoded = json_decode($body, true);
+        if (is_array($decoded) && isset($decoded['error']) && is_string($decoded['error']) && $decoded['error'] !== '') {
+            return self::plainText($decoded['error'], 200);
+        }
+        return 'The relay answered with an error';
+    }
+
     // ── Cameras on the dashboard (the `cameras` list of config.php) ──
     // Add, rename and remove from the settings pages. The id is what ties an entry to a board
     // (its CAMERA_ID setting), so it can never be edited — remove the entry and add a new one.

@@ -4,24 +4,11 @@
 // object, or null whenever it cannot be trusted. fetch is replaced by a stand-in for each case.
 
 const path = require('path');
-const { assertEqual, assertTrue } = require('./framework');
+const { asyncTest: test, assertEqual, assertTrue, runAsyncTests } = require('./framework');
 
 const CamRelayJson = require(path.join(__dirname, '../../php/cameras/js/relay-json.js'));
 
-// The shared test() is synchronous; these tests wait for promises, so they run one after the other here.
-const queue = [];
-const test = (name, fn) => queue.push([name, fn]);
-async function runAll() {
-  let pass = 0;
-  let fail = 0;
-  for (const [name, fn] of queue) {
-    const realFetch = globalThis.fetch;
-    try { await fn(); pass += 1; console.log(`[PASS] ${name}`); } catch (err) { fail += 1; console.error(`[FAIL] ${name} -- ${err.message}`); }
-    globalThis.fetch = realFetch;
-  }
-  console.log(`\n${pass} passed, ${fail} failed`);
-  process.exitCode = fail === 0 ? 0 : 1;
-}
+const realFetch = globalThis.fetch;   // put back after every test
 
 const answer = (body, { ok = true } = {}) => async (url, options) => ({ ok, json: async () => { if (body instanceof Error) throw body; return body; }, url, options });
 
@@ -62,4 +49,32 @@ test('get: an empty object is an answer (no camera known yet), not a failure', a
   assertTrue(got !== null && Object.keys(got).length === 0);
 });
 
-runAll();
+test('request: an object answer is { data }', async () => {
+  globalThis.fetch = answer({ rows: [] });
+  assertEqual(await CamRelayJson.request('ota-status.php'), { data: { rows: [] } });
+});
+
+test('request: the page\'s own { error } words are the error, whatever the status', async () => {
+  globalThis.fetch = answer({ error: 'missing or wrong control key' }, { ok: false });
+  assertEqual(await CamRelayJson.request('ota-status.php'), { error: 'missing or wrong control key' });
+  globalThis.fetch = answer({ error: 'Could not reach relay' }, { ok: true });
+  assertEqual(await CamRelayJson.request('ota-status.php'), { error: 'Could not reach relay' });
+});
+
+test('request: an error status without words says the status; an answer that is not an object says so', async () => {
+  globalThis.fetch = answer({}, { ok: false });
+  assertEqual(await CamRelayJson.request('x.php'), { error: 'the dashboard answered HTTP undefined' });
+  globalThis.fetch = async () => ({ ok: false, status: 502, json: async () => { throw new Error('<html>'); } });
+  assertEqual(await CamRelayJson.request('x.php'), { error: 'the dashboard answered HTTP 502' });
+  globalThis.fetch = answer([1, 2]);
+  assertEqual(await CamRelayJson.request('x.php'), { error: 'the answer was not what was expected' });
+  globalThis.fetch = answer(null);
+  assertEqual(await CamRelayJson.request('x.php'), { error: 'the answer was not what was expected' });
+});
+
+test('request: a page that cannot be reached at all', async () => {
+  globalThis.fetch = async () => { throw new Error('network down'); };
+  assertEqual(await CamRelayJson.request('ota-status.php'), { error: 'the dashboard could not be reached' });
+});
+
+runAsyncTests({ afterEach: () => { globalThis.fetch = realFetch; } });

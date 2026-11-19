@@ -214,7 +214,7 @@ Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 96 settings: 87 wit
 
 ## Relay (nodejs/camera-relay)
 
-Source: `nodejs/camera-relay/lib/sysconfig.js` (see `tools/dump_relay_schema.js`). 54 settings: 51 with a default, 3 without.
+Source: `nodejs/camera-relay/lib/sysconfig.js` (see `tools/dump_relay_schema.js`). 55 settings: 52 with a default, 3 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
@@ -237,6 +237,7 @@ Source: `nodejs/camera-relay/lib/sysconfig.js` (see `tools/dump_relay_schema.js`
 | `logFile` | Log file | `logs/camera.log` | — | reboot | Log |
 | `logMaxBytes` | Log rotation size (bytes) | `5242880` | — | reboot | Log |
 | `logKeepFiles` | Rotated log files kept | `2` | — | reboot | Log |
+| `apacheErrorLog` | Apache error log (shown on the OTA & LOGS page) | `/var/log/apache2/error.log` | — | reboot | Log |
 | `deviceSettingsDir` | Staged device settings folder | `device-settings` | — | reboot | Folders |
 | `firmwareDir` | Firmware folder | `firmware` | — | reboot | Folders |
 | `soundsDir` | Alarm sounds folder | `sounds` | — | reboot | Folders |

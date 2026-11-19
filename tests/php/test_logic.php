@@ -2225,5 +2225,172 @@ camtest_test('a masked report cannot be sent back as a change of a locked secret
     }
 });
 
+// ── the OTA & LOGS page: plainText, sanitizeOtaStatus, sanitizeLogTail, logTailQuery, relayErrorText ──
+
+camtest_test('plainText: control characters become ?, a tab stays, markup is left alone (the page shows it as text)', function () {
+    camtest_assert_equal(CamLogic::plainText("a\x1b[31mred\x00\tb\x7fc", 100), "a?[31mred?\tb?c");
+    camtest_assert_equal(CamLogic::plainText('<img src=x onerror=alert(1)>', 100), '<img src=x onerror=alert(1)>');
+    camtest_assert_equal(CamLogic::plainText('plain ünïcode ✓', 100), 'plain ünïcode ✓');
+});
+
+camtest_test('plainText: a long text is cut to the number of characters (never inside one), with a …', function () {
+    camtest_assert_equal(CamLogic::plainText('short', 10), 'short');
+    camtest_assert_equal(CamLogic::plainText(str_repeat('x', 10), 10), str_repeat('x', 10), 'as long as allowed is not cut');
+    camtest_assert_equal(CamLogic::plainText(str_repeat('x', 12), 10), str_repeat('x', 10) . '…');
+    camtest_assert_equal(CamLogic::plainText(str_repeat('é', 10), 10), str_repeat('é', 10), 'bytes are not characters');
+    camtest_assert_equal(CamLogic::plainText(str_repeat('é', 12), 10), str_repeat('é', 10) . '…');
+    camtest_assert_equal(CamLogic::plainText("\xff" . str_repeat('x', 20), 5), "\xffxxxx" . '…', 'not UTF-8: cut by bytes');
+});
+
+camtest_test('sanitizeOtaStatus: one row per line of the relay text, seven columns, with the time the dashboard says', function () {
+    $text = "cam1\trecorder\tv2\tv2\tupdated\t4s\t-\ndet1\tdetector\tv2\tv1\tpending\t12s\tdownload failed: timeout\n";
+    camtest_assert_equal(CamLogic::sanitizeOtaStatus($text, 1700000000), [
+        'at' => date('c', 1700000000),
+        'rows' => [
+            ['id' => 'cam1', 'type' => 'recorder', 'target' => 'v2', 'running' => 'v2', 'state' => 'updated', 'seen' => '4s', 'error' => '-'],
+            ['id' => 'det1', 'type' => 'detector', 'target' => 'v2', 'running' => 'v1', 'state' => 'pending', 'seen' => '12s', 'error' => 'download failed: timeout'],
+        ],
+    ]);
+});
+
+camtest_test('sanitizeOtaStatus: no boards, blank lines, CRLF and lines that are not seven columns', function () {
+    camtest_assert_equal(CamLogic::sanitizeOtaStatus('', 5)['rows'], []);
+    camtest_assert_equal(CamLogic::sanitizeOtaStatus("\n\n", 5)['rows'], []);
+    $text = "cam1\trecorder\tv2\tv2\tupdated\t4s\t-\r\n"
+        . "six\tcolumns\tonly\tv\tupdated\t4s\n"
+        . "eight\tcolumns\tare\ttoo\tmany\tfor\tthe\trelay\n"
+        . "not a status line at all\n"
+        . "cam2\trecorder\tv2\tv2\tupdated\t9s\t-\n";
+    $rows = CamLogic::sanitizeOtaStatus($text, 5)['rows'];
+    camtest_assert_equal(array_column($rows, 'id'), ['cam1', 'cam2']);
+    camtest_assert_equal($rows[0]['error'], '-', 'the CR of a CRLF is not part of the last column');
+});
+
+camtest_test('sanitizeOtaStatus: control characters in a cell are replaced, long cells are cut, markup stays text', function () {
+    $evil = "x\x1b[2Jy";
+    $text = "cam1\trecorder\t" . $evil . "\tv2\tupdated\t4s\t" . str_repeat('e', 400) . "\n"
+        . "<b>id</b>\trecorder\tv2\tv2\tupdated\t4s\t-\n";
+    $rows = CamLogic::sanitizeOtaStatus($text, 5)['rows'];
+    camtest_assert_equal($rows[0]['target'], 'x?[2Jy');
+    camtest_assert_equal($rows[0]['error'], str_repeat('e', 300) . '…');
+    camtest_assert_equal($rows[1]['id'], '<b>id</b>');
+});
+
+camtest_test('sanitizeOtaStatus: at most 200 rows', function () {
+    $text = str_repeat("cam\trecorder\tv2\tv2\tupdated\t4s\t-\n", 250);
+    camtest_assert_equal(count(CamLogic::sanitizeOtaStatus($text, 5)['rows']), 200);
+});
+
+camtest_test('sanitizeLogTail: the files with their lines, and the time the dashboard says', function () {
+    $r = CamLogic::sanitizeLogTail(['at' => 'whatever', 'lines' => 1000, 'levels' => null, 'sources' => [
+        ['kind' => 'relay', 'path' => '/r/camera.log', 'ok' => true, 'lines' => ['a ERROR b', 'c WARN d']],
+        ['kind' => 'apache', 'path' => '/var/log/apache2/error.log', 'ok' => false, 'error' => 'the file does not exist'],
+    ]], 1700000000);
+    camtest_assert_equal($r, [
+        'at' => date('c', 1700000000),
+        'sources' => [
+            ['kind' => 'relay', 'path' => '/r/camera.log', 'ok' => true, 'lines' => ['a ERROR b', 'c WARN d']],
+            ['kind' => 'apache', 'path' => '/var/log/apache2/error.log', 'ok' => false, 'error' => 'the file does not exist'],
+        ],
+    ]);
+});
+
+camtest_test('sanitizeLogTail: an answer that is not what the relay sends is null', function () {
+    foreach ([null, 'x', 7, true, [], ['error' => 'missing or wrong control key'], ['sources' => 'x'], ['sources' => null]] as $answer) {
+        camtest_assert_equal(CamLogic::sanitizeLogTail($answer, 5), null, json_encode($answer));
+    }
+    camtest_assert_equal(CamLogic::sanitizeLogTail(['sources' => []], 5), ['at' => date('c', 5), 'sources' => []], 'no files is an answer');
+});
+
+camtest_test('sanitizeLogTail: only the two known kinds of file with a text path are kept', function () {
+    $r = CamLogic::sanitizeLogTail(['sources' => [
+        null, 'x', ['kind' => 'relay'], ['path' => '/p'], ['kind' => 'shadow', 'path' => '/etc/shadow', 'ok' => true, 'lines' => ['root:x']],
+        ['kind' => ['relay'], 'path' => '/p'], ['kind' => 'relay', 'path' => ['/p'], 'ok' => true, 'lines' => []],
+        ['kind' => 'relay', 'path' => '/r/camera.log', 'ok' => true, 'lines' => ['kept']],
+    ]], 5);
+    camtest_assert_equal(array_column($r['sources'], 'path'), ['/r/camera.log']);
+});
+
+camtest_test('sanitizeLogTail: a file that is not ok says why (our words when it does not), only a real true is ok', function () {
+    $r = CamLogic::sanitizeLogTail(['sources' => [
+        ['kind' => 'relay', 'path' => '/a', 'ok' => false],
+        ['kind' => 'relay', 'path' => '/b', 'ok' => 'yes', 'lines' => ['not shown']],
+        ['kind' => 'apache', 'path' => '/c', 'ok' => false, 'error' => ['x']],
+        ['kind' => 'apache', 'path' => '/d', 'ok' => false, 'error' => "denied\x1b[0m"],
+    ]], 5);
+    camtest_assert_equal(array_column($r['sources'], 'ok'), [false, false, false, false]);
+    camtest_assert_equal(array_column($r['sources'], 'error'), ['it could not be read', 'it could not be read', 'it could not be read', 'denied?[0m']);
+    foreach ($r['sources'] as $s) {
+        camtest_assert_true(!array_key_exists('lines', $s), 'a file that is not ok has no lines');
+    }
+});
+
+camtest_test('sanitizeLogTail: lines are plain text; what is not a text is dropped; long lines are cut', function () {
+    $r = CamLogic::sanitizeLogTail(['sources' => [
+        ['kind' => 'relay', 'path' => '/r', 'ok' => true, 'lines' => ["a\x1b[31mred", 7, null, ['x'], 'ok <b>line</b>', str_repeat('y', 2500)]],
+    ]], 5);
+    $lines = $r['sources'][0]['lines'];
+    camtest_assert_equal($lines, ['a?[31mred', 'ok <b>line</b>', str_repeat('y', 2000) . '…']);
+    camtest_assert_equal(CamLogic::sanitizeLogTail(['sources' => [['kind' => 'relay', 'path' => '/r', 'ok' => true]]], 5)['sources'][0]['lines'], [], 'no lines key: no lines');
+    camtest_assert_equal(CamLogic::sanitizeLogTail(['sources' => [['kind' => 'relay', 'path' => '/r', 'ok' => true, 'lines' => 'text']]], 5)['sources'][0]['lines'], []);
+});
+
+camtest_test('sanitizeLogTail: at most 4 files, and the newest 5000 lines of each', function () {
+    $many = [];
+    for ($i = 0; $i < 6; $i++) {
+        $many[] = ['kind' => 'relay', 'path' => '/f' . $i, 'ok' => true, 'lines' => []];
+    }
+    camtest_assert_equal(count(CamLogic::sanitizeLogTail(['sources' => $many], 5)['sources']), 4);
+    $lines = [];
+    for ($i = 0; $i < 5200; $i++) {
+        $lines[] = 'line ' . $i;
+    }
+    $kept = CamLogic::sanitizeLogTail(['sources' => [['kind' => 'relay', 'path' => '/r', 'ok' => true, 'lines' => $lines]]], 5)['sources'][0]['lines'];
+    camtest_assert_equal([count($kept), $kept[0], $kept[4999]], [5000, 'line 200', 'line 5199']);
+});
+
+camtest_test('sanitizeLogTail: a long path is cut', function () {
+    $r = CamLogic::sanitizeLogTail(['sources' => [['kind' => 'relay', 'path' => str_repeat('p', 400), 'ok' => true, 'lines' => []]]], 5);
+    camtest_assert_equal($r['sources'][0]['path'], str_repeat('p', 300) . '…');
+});
+
+camtest_test('logTailQuery: the lines and levels the browser may ask for, as the relay\'s query', function () {
+    camtest_assert_equal(CamLogic::logTailQuery([]), 'lines=1000');
+    camtest_assert_equal(CamLogic::logTailQuery(['lines' => '250']), 'lines=250');
+    camtest_assert_equal(CamLogic::logTailQuery(['lines' => '1']), 'lines=1');
+    camtest_assert_equal(CamLogic::logTailQuery(['lines' => '5000']), 'lines=5000');
+    camtest_assert_equal(CamLogic::logTailQuery(['lines' => '0050']), 'lines=50', 'leading zeros are a number');
+    camtest_assert_equal(CamLogic::logTailQuery(['lines' => '1000', 'levels' => 'WARN,ERROR']), 'lines=1000&levels=WARN,ERROR');
+    camtest_assert_equal(CamLogic::logTailQuery(['levels' => 'DEBUG']), 'lines=1000&levels=DEBUG');
+    camtest_assert_equal(CamLogic::logTailQuery(['levels' => 'WARN,ERROR,DEBUG,INFO']), 'lines=1000&levels=WARN,ERROR,DEBUG,INFO');
+});
+
+camtest_test('logTailQuery: anything else is refused — nothing from the browser reaches the relay unchecked', function () {
+    foreach (['0', '5001', '-1', '12a', ' 5', '1.5', '', '123456', 'many'] as $bad) {
+        camtest_assert_equal(CamLogic::logTailQuery(['lines' => $bad]), null, 'lines=' . $bad);
+    }
+    foreach ([['1'], 5] as $bad) {
+        camtest_assert_equal(CamLogic::logTailQuery(['lines' => $bad]), null, 'lines=' . json_encode($bad));
+    }
+    foreach (['WARN,FATAL', 'warn', 'WARN,', ',WARN', '', 'ALL', 'WARN&file=/etc/passwd', "WARN\nERROR", 'WARN,ERROR ', ['WARN']] as $bad) {
+        camtest_assert_equal(CamLogic::logTailQuery(['levels' => $bad]), null, 'levels=' . json_encode($bad));
+    }
+});
+
+camtest_test('logTailQuery: other parameters are ignored, never passed on', function () {
+    camtest_assert_equal(CamLogic::logTailQuery(['lines' => '5', 'file' => '/etc/passwd', 'path' => '/x', 'PHPSESSID' => 'abc']), 'lines=5');
+});
+
+camtest_test('relayErrorText: the words of the relay\'s own refusal, as plain text', function () {
+    camtest_assert_equal(CamLogic::relayErrorText('{"error":"missing or wrong control key"}'), 'missing or wrong control key');
+    camtest_assert_equal(CamLogic::relayErrorText('{"error":"locked out \u001b[0m"}'), 'locked out ?[0m');
+    camtest_assert_equal(CamLogic::relayErrorText('{"error":"' . str_repeat('e', 300) . '"}'), str_repeat('e', 200) . '…');
+});
+
+camtest_test('relayErrorText: anything that is not a text error gets a fixed sentence', function () {
+    foreach (['', 'not json', '<html>502</html>', '[]', '{}', '{"error":""}', '{"error":7}', '{"error":["x"]}', '{"error":null}', '"error"', 'null'] as $body) {
+        camtest_assert_equal(CamLogic::relayErrorText($body), 'The relay answered with an error', $body);
+    }
+});
 
 exit(camtest_summarize());

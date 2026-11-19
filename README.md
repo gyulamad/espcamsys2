@@ -37,7 +37,7 @@ The old single `INSTALL.md` was split into documents you can actually maintain (
 |---|---|---|
 | [ASSEMBLY.md](ASSEMBLY.md) | developer | Building the system from sketch: hardware you need, flashing the ESP32-CAM boards (recorder and person detector), the serial settings, the on-device detection gate and the detector's live view. |
 | [SETUP.md](SETUP.md) | user | Setting the system up on an installed Pi with already-flashed boards: the relay, the dashboard, Apache (protect/HTTPS), the Tor hidden service, the keys, end-to-end verification, and the cable-free setup Wi-Fi of the boards. |
-| [MANUAL.md](MANUAL.md) | user | Daily use: the dashboard and its pages, recording ON/OFF, recordings and the person check, the detector's live view and calibration, settings pages, resets, notifications, the relay log and troubleshooting. |
+| [MANUAL.md](MANUAL.md) | user | Daily use: the dashboard and its pages, recording ON/OFF, recordings and the person check, the detector's live view and calibration, settings pages, resets, notifications, the relay log, the OTA & LOGS page and troubleshooting. |
 | [DEPLOY.md](DEPLOY.md) | developer | Shipping a new version: updating the relay and the dashboard, staging settings, over-the-air firmware updates, one-command deploys (deploy_all.sh), and upgrading older installations. |
 | [DEVELOP.md](DEVELOP.md) | developer | Development: the test suite, coverage, compiling the sketches, the code-extraction markers, the device-settings schema, the security-patch check, environment snapshots. |
 | [MISC.md](MISC.md) | everyone | Everything else: how the documentation set is organised, environment snapshots, the security review of the setup mode, licences, a glossary. |

@@ -35,6 +35,7 @@ const storagenotice = require('./storagenotice');
 const discovery = require('./discovery');
 const detectorview = require('./detectorview');
 const lockout = require('./lockout');
+const logtail = require('./logtail');
 
 const MIB = 1024 * 1024;
 const TIERS = ['basic', 'advanced', 'expert'];
@@ -87,6 +88,8 @@ const FIELDS = [
   { key: 'logKeepFiles', tier: 'advanced', type: 'int', min: 1, max: 20, default: 2, env: 'LOG_KEEP_FILES', group: 'Log', restart: true,
     label: 'Rotated log files kept', help: 'Disk use is at most (this + 1) x the rotation size.' },
 
+  { key: 'apacheErrorLog', tier: 'expert', type: 'string', path: 'file', ext: '.log', min: 0, max: 300, default: logtail.DEFAULT_APACHE_LOG, env: 'APACHE_ERROR_LOG', group: 'Log', restart: true,
+    label: 'Apache error log (shown on the OTA & LOGS page)', help: 'The Apache error log whose last lines the dashboard\'s OTA & LOGS page shows next to this relay\'s own log. The relay reads it, so the user it runs as must be allowed to read it (on Raspberry Pi OS the default user is in the adm group, which is). To leave it out of the page, set the environment variable APACHE_ERROR_LOG to nothing (an empty value in config.js means "not set"). A value set on this page must be a path inside the relay\'s own folder ending in .log; a file elsewhere (the default is the system\'s Apache log) can only be named in config.js or the environment, on the machine itself.' },
   { key: 'deviceSettingsDir', tier: 'expert', type: 'string', path: 'dir', min: 1, max: 300, default: 'device-settings', env: 'DEVICE_SETTINGS_DIR', group: 'Folders', restart: true,
     label: 'Staged device settings folder', help: 'Where settings staged for boards missing some are kept. A folder inside the relay\'s own folder; for one elsewhere, set deviceSettingsDir in config.js.' },
   { key: 'firmwareDir', tier: 'expert', type: 'string', path: 'dir', min: 1, max: 300, default: 'firmware', env: 'FIRMWARE_DIR', group: 'Folders', restart: true,

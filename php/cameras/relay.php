@@ -113,6 +113,7 @@ function camdash_read_json_input(int $maxBytes = 16384): array
 function json_fail(int $status, string $message): void
 {
     http_response_code($status);
+    header('Content-Type: application/json');
     echo json_encode(['error' => $message]);
     exit;
 }
@@ -174,7 +175,7 @@ function relay_fetch(string $url, string $method = 'GET', int $timeout = 5, stri
 // Passes the relay's JSON answer straight through to the browser: 502 if the
 // relay is unreachable, otherwise its body — and, when $forwardStatus is set,
 // its status code too (so a 400 or 409 reaches the dashboard as such). $shape, when given, turns the body
-// into what the browser gets (string => string).
+// (and the relay's status, null when it is not passed on) into what the browser gets: (string, ?int) => string.
 function relay_proxy_json(
     string $url,
     string $method = 'GET',
@@ -195,7 +196,37 @@ function relay_proxy_json(
         }
         http_response_code($status);
     }
-    echo $shape !== null ? $shape($body) : $body;
+    echo $shape !== null ? $shape($body, $status) : $body;
+}
+
+// A page that only SHOWS what a relay route says (the OTA & LOGS page): the route is read with the control key, which is
+// added here and never reaches the browser, and what the relay sends is cut down by $sanitize (relay body => the array
+// the browser gets, or null when it is not what the route sends). The relay's own refusal — a wrong control key, a relay
+// without one — is passed on with its status and its words, so the page can say what to fix. A relay that is out of
+// reach, or an answer that is not what the route sends, is a 502.
+function relay_proxy_sanitized(array $config, string $path, int $timeout, callable $sanitize): void
+{
+    header('Content-Type: application/json');
+    header('Cache-Control: no-store');
+    relay_proxy_json(
+        rtrim((string) ($config['relay_url'] ?? ''), '/') . $path,
+        'GET',
+        $timeout,
+        relay_read_headers($config),
+        'Could not reach relay',
+        true,
+        function (string $body, ?int $status) use ($sanitize): string {
+            if ($status !== 200) {
+                return json_encode(['error' => CamLogic::relayErrorText($body)]);
+            }
+            $answer = $sanitize($body);
+            if ($answer === null) {
+                http_response_code(502);
+                return json_encode(['error' => 'The relay sent an answer the dashboard does not understand']);
+            }
+            return json_encode($answer, JSON_INVALID_UTF8_SUBSTITUTE);
+        }
+    );
 }
 
 // Writes to the web server's error log, but not more than once per $everySec seconds for the same $key:

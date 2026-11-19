@@ -74,6 +74,7 @@ A **locked** row is shown but cannot be changed through the API: it decides whic
 | `logFile` | advanced | string | `logs/camera.log` | restart | `LOG_FILE` | `logFile` |  |
 | `logMaxBytes` | advanced | int | `5242880` | restart | `LOG_MAX_BYTES` | `logMaxBytes` |  |
 | `logKeepFiles` | advanced | int | `2` | restart | `LOG_KEEP_FILES` | `logKeepFiles` |  |
+| `apacheErrorLog` | expert | string | `/var/log/apache2/error.log` | restart | `APACHE_ERROR_LOG` | `apacheErrorLog` |  |
 
 ## Folders
 

@@ -142,9 +142,9 @@ async function main() {
     const navLink = (href, label) => `<a class="nav-link[^"]*" href="${href}"[^>]*>[^<]*${label}</a>`;
     const NAV_LINKS = new RegExp('<nav class="site-nav" aria-label="Pages">' + [
       navLink('\\./\\?layout=grid', 'DASHBOARD GRID'), navLink('\\./\\?layout=list', 'DASHBOARD LIST'), navLink('simple-view\\.php', 'SIMPLE VIEW'),
-      navLink('simple-list\\.php', 'SIMPLE LIST'), navLink('all-recordings\\.php', 'ALL FILES'),
+      navLink('simple-list\\.php', 'SIMPLE LIST'), navLink('all-recordings\\.php', 'ALL FILES'), navLink('ota-logs\\.php', 'OTA &amp; LOGS'),
     ].join('') + '<form class="logout-form" method="post" action="logout\\.php" data-page-load="Logging out…"><button class="nav-link nav-logout" type="submit"[^>]*>[^<]*LOG OUT</button></form></nav>');
-    check('the dashboard has the navigation bar (dashboard grid / list, simple view, simple list, all files, LOG OUT at its right end) as the first thing in its body, the grid marked, and no copy of those buttons in its header',
+    check('the dashboard has the navigation bar (dashboard grid / list, simple view, simple list, all files, OTA & LOGS, LOG OUT at its right end) as the first thing in its body, the grid marked, and no copy of those buttons in its header',
       r.status === 200 && /<body>\s*<nav class="site-nav"/.test(r.text) && NAV_LINKS.test(r.text) && r.text.includes('class="nav-link current" href="./?layout=grid" data-nav="dashboard-grid" data-page-load aria-current="page"')
       && (r.text.match(/aria-current/g) || []).length === 1 && r.text.includes('.site-nav { position: sticky; top: 0;')
       && !r.text.includes('id="btn-simple-list"') && !r.text.includes('id="btn-simple-view"') && !r.text.includes('id="btn-grid"') && !r.text.includes('id="btn-list"')

@@ -279,7 +279,7 @@ test('parseOverrides: a saved path is still honoured as before (only changes mad
 
 test('every path setting is marked with what kind it is (so none is missed by the check)', () => {
   const paths = sc.FIELDS.filter((f) => f.path).map((f) => f.key).sort();
-  assertEqual(paths, ['deviceSettingsDir', 'firmwareDir', 'logFile', 'personScanModel', 'soundsDir', 'switchFile']);
+  assertEqual(paths, ['apacheErrorLog', 'deviceSettingsDir', 'firmwareDir', 'logFile', 'personScanModel', 'soundsDir', 'switchFile']);
   // free text is either a confined path or locked (never set from here: config.js only); the other kinds of text have their own check
   for (const f of sc.FIELDS.filter((x) => x.type === 'string')) assertTrue(f.path || f.locked, `${f.key} is a text setting that is not confined`);
 });

@@ -22,6 +22,8 @@ const preroll = require('./lib/preroll');
 const auth = require('./lib/auth');
 const logentry = require('./lib/logentry');
 const logfile = require('./lib/logfile');
+const logtail = require('./lib/logtail');
+const { createGuardFactory } = require('./lib/controlkey');
 const devicesettings = require('./lib/devicesettings');
 const firmware = require('./lib/firmware');
 const detectorstate = require('./lib/detectorstate');
@@ -148,6 +150,9 @@ const logCfg = logfile.resolveLogConfig({
   keep: fromEnv('LOG_KEEP_FILES', config.logKeepFiles),
 }, __dirname);
 for (const w of logCfg.warnings) console.warn(`[config] ${w}`);
+// The files the dashboard's OTA & LOGS page may tail (GET /logs/tail): this log, and Apache's error log (the setting
+// apacheErrorLog; APACHE_ERROR_LOG= leaves it out). Never a path from a request.
+const logTailSources = logtail.resolveSources({ relayLog: logCfg.file, apacheErrorLog: relaySetting('apacheErrorLog') }, __dirname);
 
 let logWriter = null;
 try {
@@ -502,6 +507,54 @@ function extendRecording(cam, seconds) {
 // refused (not left open). Reading the state needs nothing.
 const SWITCH_FILE = process.env.SWITCH_FILE || path.resolve(__dirname, config.switchFile || 'recording-switch.json');
 const CONTROL_KEY = fromEnv('CONTROL_KEY', config.controlKey || '');
+
+// ── The control-key guards ──
+// Defined here, ahead of the routes: a const (unlike the function declarations they replace) cannot be used before
+// the line that defines it, and the routes of the whole file use these.
+// The control-key check in front of every route the dashboard and the tools use (lib/controlkey.js): each guard below
+// names only what is its own — the 503 message, the throttle, and what the log line says.
+const controlKeyGuard = createGuardFactory({
+  hasKey: () => Boolean(CONTROL_KEY),
+  checkKey: (req, res, presented) => checkKey('control', req, res, presented, CONTROL_KEY),
+  normalizeIp: logfile.normalizeIp,
+  log: relayLog,
+  suppressedNote,
+});
+// Guards what only the dashboard does — changing settings, starting/stopping/extending a recording by hand, deleting
+// or marking recordings (review R-03). The dashboard's PHP already sends X-Control-Key on exactly these calls; the
+// camera boards use none of them (their alarm goes in-band on the authenticated push connection, with POST /alarm
+// as an unauthenticated fallback that stays open because the firmware cannot send a key there). Fails CLOSED:
+// without a controlKey in the relay config these routes answer 503, the same as the recording switch does.
+const requireDashboardKey = controlKeyGuard({
+  disabled: 'this action is disabled: controlKey is not set in the relay config',
+  throttle: dashboardAuthThrottle,
+  subject: (req, from) => `${req.method} ${req.path} from ${from}`,
+});
+
+// Guards what the cameras SEE: live video, snapshots, recordings, and the lists of who is connected and what
+// state it is in. Only the dashboard's PHP asks for these (it sends X-Control-Key on every one; the browser never
+// talks to the relay), and the camera boards use none of them. Anyone who could reach this port used to be able to
+// watch and download everything.
+//
+// (review NODE-H2): requireReadKey used to fail OPEN when no controlKey was set, on the theory that a fresh
+// install should keep working until the operator configures one. That meant an unconfigured relay exposed every
+// camera's live stream and every recording to anyone on the LAN. It now fails CLOSED (503): the dashboard
+// shows "set controlKey" instead of live video, which is the safer default. The relay already logs a warning
+// at startup when controlKey is empty. Operators who genuinely want keyless reads (e.g. a trusted LAN with no
+// Tor exposure) can opt in with READ_KEY_REQUIRED=0 in the relay's environment.
+const READ_KEY_REQUIRED = relaySetting('readKeyRequired');
+const requireReadKey = controlKeyGuard({
+  disabled: 'this relay is not configured: set controlKey in config.js (and relay_control_key in the dashboard\'s config.php) — reads are refused until then',
+  failOpen: !READ_KEY_REQUIRED,
+  throttle: readAuthThrottle,
+  subject: (req, from) => `${req.method} ${req.path} from ${from}`,
+});
+
+const requireControlKey = controlKeyGuard({
+  disabled: 'switching is disabled: controlKey is not set in the relay config',
+  throttle: switchAuthThrottle,
+  subject: (req, from) => `a recording on/off request from ${from} (${req.method} ${req.path})`,
+});
 
 // How long a push connection may stay completely silent before the relay
 // decides it is dead and drops it: before the camera has said who it is, and
@@ -1187,8 +1240,7 @@ app.post('/settings', requireDashboardKey, (req, res) => {
 //   POST /system-settings   body { "key": value, ... } -> { ok, changed, restartRequired }
 //                              all-or-nothing; alarmRecordSeconds applies at once, the rest after a restart
 //   POST /restart           -> 202, then the relay exits and its supervisor (systemd / pm2) starts it again
-// All three need the CONTROL key (X-Control-Key). They are declared before the recording
-// switch's requireControlKey helper is used below, which hoisting makes fine (function declaration).
+// All three need the CONTROL key (X-Control-Key): requireControlKey, defined with the other guards above.
 function systemSettingsState() {
   return { base: baseConfig, overrides: systemOverrides, alarmRecordSeconds: settings.alarmRecordSeconds, env: process.env };
 }
@@ -1396,68 +1448,6 @@ app.use('/sounds', (err, req, res, next) => {
 //   POST /recording/all/on
 //   GET  /recording/state                      who is OFF (needs the control key once one is set)
 // The four POSTs need `X-Control-Key: <controlKey>`; see the notes at the switch above.
-// Guards what only the dashboard does — changing settings, starting/stopping/extending a recording by hand, deleting
-// or marking recordings (review R-03). The dashboard's PHP already sends X-Control-Key on exactly these calls; the
-// camera boards use none of them (their alarm goes in-band on the authenticated push connection, with POST /alarm
-// as an unauthenticated fallback that stays open because the firmware cannot send a key there). Fails CLOSED:
-// without a controlKey in the relay config these routes answer 503, the same as the recording switch does.
-function requireDashboardKey(req, res, next) {
-  if (!CONTROL_KEY) {
-    return res.status(503).json({ error: 'this action is disabled: controlKey is not set in the relay config' });
-  }
-  const provided = req.headers['x-control-key'];
-  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
-  if (keyState === 'ok') return next();
-  if (keyState === 'locked') return undefined;
-  const ip = logfile.normalizeIp(req.socket.remoteAddress);
-  const t = dashboardAuthThrottle.check(ip || 'unknown', Date.now());
-  if (t.allow) relayLog('WARN', `REJECTED ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
-  return res.status(401).json({ error: 'missing or wrong control key' });
-}
-
-// Guards what the cameras SEE: live video, snapshots, recordings, and the lists of who is connected and what
-// state it is in. Only the dashboard's PHP asks for these (it sends X-Control-Key on every one; the browser never
-// talks to the relay), and the camera boards use none of them. Anyone who could reach this port used to be able to
-// watch and download everything.
-//
-// (review NODE-H2): requireReadKey used to fail OPEN when no controlKey was set, on the theory that a fresh
-// install should keep working until the operator configures one. That meant an unconfigured relay exposed every
-// camera's live stream and every recording to anyone on the LAN. It now fails CLOSED (503): the dashboard
-// shows "set controlKey" instead of live video, which is the safer default. The relay already logs a warning
-// at startup when controlKey is empty. Operators who genuinely want keyless reads (e.g. a trusted LAN with no
-// Tor exposure) can opt in with READ_KEY_REQUIRED=0 in the relay's environment.
-const READ_KEY_REQUIRED = relaySetting('readKeyRequired');
-function requireReadKey(req, res, next) {
-  if (!CONTROL_KEY) {
-    if (READ_KEY_REQUIRED) {
-      return res.status(503).json({ error: 'this relay is not configured: set controlKey in config.js (and relay_control_key in the dashboard\'s config.php) — reads are refused until then' });
-    }
-    return next();
-  }
-  const provided = req.headers['x-control-key'];
-  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
-  if (keyState === 'ok') return next();
-  if (keyState === 'locked') return undefined;
-  const ip = logfile.normalizeIp(req.socket.remoteAddress);
-  const t = readAuthThrottle.check(ip || 'unknown', Date.now());
-  if (t.allow) relayLog('WARN', `REJECTED ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
-  return res.status(401).json({ error: 'missing or wrong control key' });
-}
-
-function requireControlKey(req, res, next) {
-  if (!CONTROL_KEY) {
-    return res.status(503).json({ error: 'switching is disabled: controlKey is not set in the relay config' });
-  }
-  const provided = req.headers['x-control-key'];
-  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
-  if (keyState === 'ok') return next();
-  if (keyState === 'locked') return undefined;
-  const ip = logfile.normalizeIp(req.socket.remoteAddress);
-  const t = switchAuthThrottle.check(ip || 'unknown', Date.now());
-  if (t.allow) relayLog('WARN', `REJECTED a recording on/off request from ${ip || 'unknown address'} (${req.method} ${req.path}): missing or wrong control key${suppressedNote(t.suppressed)}`);
-  return res.status(401).json({ error: 'missing or wrong control key' });
-}
-
 // Who is doing this, for the log: the dashboard passes the logged-in user's
 // name in X-Actor (the relay only sees the web server's own address).
 // X-Actor is honoured ONLY when the request comes from loopback
@@ -1701,18 +1691,13 @@ app.get('/device-settings/:type/:id',
     return res.type('text/plain').send(staged.line);
   });
 
+const requireControlKeyToStage = controlKeyGuard({
+  disabled: 'staging settings is disabled: controlKey is not set in the relay config',
+  throttle: deviceSettingsAuthThrottle,
+  throttleKey: (ip) => `put:${ip}`,
+});
 app.put(['/device-settings/:type', '/device-settings/:type/:id'],
-  (req, res, next) => {
-    if (!CONTROL_KEY) return res.status(503).json({ error: 'staging settings is disabled: controlKey is not set in the relay config' });
-    const provided = req.headers['x-control-key'];
-    const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
-    if (keyState === 'ok') return next();
-    if (keyState === 'locked') return undefined;
-    const ip = logfile.normalizeIp(req.socket.remoteAddress);
-    const t = deviceSettingsAuthThrottle.check(`put:${ip}`, Date.now());
-    if (t.allow) relayLog('WARN', `REJECTED a PUT ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
-    return res.status(401).json({ error: 'missing or wrong control key' });
-  },
+  requireControlKeyToStage,
   express.text({ type: '*/*', limit: '4kb' }),
   (req, res) => {
     const { type } = req.params;
@@ -1761,17 +1746,11 @@ function requireCameraKeyForDevice(req, res, next) {
   if (t.allow) relayLog('WARN', `rejected a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong key${suppressedNote(t.suppressed)}`);
   return res.status(401).json({ error: 'missing or wrong key' });
 }
-function requireControlKeyForDevice(req, res, next) {
-  if (!CONTROL_KEY) return res.status(503).json({ error: 'changing device settings is disabled: controlKey is not set in the relay config' });
-  const provided = req.headers['x-control-key'];
-  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
-  if (keyState === 'ok') return next();
-  if (keyState === 'locked') return undefined;
-  const ip = logfile.normalizeIp(req.socket.remoteAddress);
-  const t = deviceSettingsAuthThrottle.check(`put:${ip}`, Date.now());
-  if (t.allow) relayLog('WARN', `REJECTED a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
-  return res.status(401).json({ error: 'missing or wrong control key' });
-}
+const requireControlKeyForDevice = controlKeyGuard({
+  disabled: 'changing device settings is disabled: controlKey is not set in the relay config',
+  throttle: deviceSettingsAuthThrottle,
+  throttleKey: (ip) => `put:${ip}`,
+});
 function checkDeviceParams(req, res, next) {
   if (!devicesettings.isType(req.params.type)) return res.status(400).json({ error: 'the type must be recorder or detector' });
   if (!devicesettings.isId(req.params.id)) return res.status(400).json({ error: 'not a valid device id' });
@@ -1996,17 +1975,32 @@ function requireCameraKeyForOta(req, res, next) {
   return res.status(401).json({ error: 'missing or wrong key' });
 }
 
-function requireControlKeyForOta(req, res, next) {
-  if (!CONTROL_KEY) return res.status(503).json({ error: 'firmware publishing is disabled: controlKey is not set in the relay config' });
-  const provided = req.headers['x-control-key'];
-  const keyState = checkKey('control', req, res, provided, CONTROL_KEY);
-  if (keyState === 'ok') return next();
-  if (keyState === 'locked') return undefined;
-  const ip = logfile.normalizeIp(req.socket.remoteAddress);
-  const t = firmwareAuthThrottle.check(`ctl:${ip}`, Date.now());
-  if (t.allow) relayLog('WARN', `REJECTED a ${req.method} ${req.path} from ${ip || 'unknown address'}: missing or wrong control key${suppressedNote(t.suppressed)}`);
-  return res.status(401).json({ error: 'missing or wrong control key' });
-}
+const requireControlKeyForOta = controlKeyGuard({
+  disabled: 'firmware publishing is disabled: controlKey is not set in the relay config',
+  throttle: firmwareAuthThrottle,
+  throttleKey: (ip) => `ctl:${ip}`,
+});
+
+const logsAuthThrottle = new Throttle(60 * 1000);
+const requireControlKeyForLogs = controlKeyGuard({
+  disabled: 'reading the logs is disabled: controlKey is not set in the relay config',
+  throttle: logsAuthThrottle,
+  throttleKey: (ip) => `ctl:${ip}`,
+});
+
+// GET /logs/tail?lines=1000&levels=WARN,ERROR — the last lines of the relay's log and of Apache's error log,
+// for the dashboard's OTA & LOGS page (lib/logtail.js). A successful read is NOT logged: the page polls, and
+// each poll would add a line to the very log it shows.
+app.get('/logs/tail', requireControlKeyForLogs, async (req, res) => {
+  try {
+    const reply = await logtail.answer(req.query, logTailSources);
+    res.set('Cache-Control', 'no-store');
+    return res.status(reply.status).json(reply.body);
+  } catch (err) {
+    relayLog('ERROR', `could not read the logs for the dashboard: ${errorMessage(err)}`);
+    return res.status(500).json({ error: 'could not read the logs' });
+  }
+});
 
 // /ota/status must be declared before the /ota/:type routes below it.
 app.get('/ota/status', requireControlKeyForOta, (req, res) => {

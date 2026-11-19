@@ -124,10 +124,11 @@ CSS;
         ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen'],
         ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large'],
         ['all-files', 'all-recordings.php', '📼 ALL FILES', 'Every saved recording of every camera in one list, newest first; delete all footage from there'],
+        ['ota-logs', 'ota-logs.php', '🛰 OTA & LOGS', 'Whether the boards have taken the latest firmware, and the end of the relay\'s and Apache\'s logs (warnings and errors), refreshed as they change'],
     ];
 
     // The navigation bar at the top of every page after the login: one place to go to the dashboard (grid or
-    // list), the simple view, the simple list and the file list (and the only place that has these links), and
+    // list), the simple view, the simple list, the file list and the OTA & LOGS page (and the only place that has these links), and
     // LOG OUT at its right end. $active: the key of the page that shows it, or null on a page that is none of
     // them (the settings): no link is marked then.
     public static function navBar(?string $active): string
