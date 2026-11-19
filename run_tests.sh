@@ -629,6 +629,11 @@ fi
 #     the detector, the MOTION_EMA pairing the page enforces like the server, the DETECT/CLEAR_THRESH
 #     cross-check, the tray, tags and reset over PERSON_META. Needs php and jsdom. Override the port with
 #     E2E_CAMDETATLASDOM_PORT (and the next one up).
+#   - tests/dom/test_camera_settings_mobile_dom.js: the camera settings page in jsdom against a real PHP server
+#     and a fake relay, about the MOBILE layout (F-29 T7e, designs/Mobile-v2.png): the desktop tray folds into
+#     a sticky "N changes → APPLY" bar whose count and APPLY mirror the tray's, the per-row list and DISCARD
+#     live in a collapsible detail, and every interactive control is at least 44 px tall (touch targets).
+#     Needs php and jsdom. Override the port with E2E_CAMMOBILEDOM_PORT (and the next one up).
 #   - tests/dom/test_settings_dom.js: the relay settings page in jsdom, against a real PHP server and a scripted
 #     relay (F-29 T6b): grouped by category in the promised order, the LEVEL switch hiding the tiers, defaults
 #     shown and highlighted while they differ, the per-row reset-to-default going through the same change
@@ -1166,6 +1171,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_detector_settings_atlas_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the camera settings page: the mobile layout, sticky bar and 44 px touch targets) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_camera_settings_mobile_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

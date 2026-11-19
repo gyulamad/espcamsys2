@@ -21,6 +21,11 @@
 //   * a LINKED SETTINGS panel (F-29 T8, designs/Main-v2.png): the rules that watch values which must
 //     agree across devices (this board's against the relay's), each with its verdict. It watches only —
 //     a rule that does not hold names the two values and where to change them; nothing is written.
+//   * on a phone (designs/Mobile-v2.png, F-29 T7e): the tray's count and APPLY fold into a sticky
+//     "N changes → APPLY" bar at the bottom, with 44 px touch targets on every control; the per-row list,
+//     the reboot note and DISCARD live in a collapsible detail that opens with the bar's count button.
+//     The page tags <html> with .is-mobile from matchMedia('(max-width: 800px)'); the @media block of the
+//     same width is kept as a no-JS fallback for the basic stacking.
 //
 // The form is drawn from what camera-settings.php sends (the firmware's own settings table), so a setting
 // added to the firmware shows up here by itself. Changes are queued on the relay; the board picks them up,
@@ -41,6 +46,7 @@ require_once __DIR__ . '/lib/Layout.php';
     --accent: #00e5ff; --accent2: #ff4f5e; --warn: #ffb020; --ok: #2dd67b;
     --text: #cdd8f0; --muted: #4a5780;
     --mono: 'Share Tech Mono', monospace; --sans: 'Barlow', sans-serif; --radius: 6px;
+    --touch: 44px;   /* the minimum size of a tappable control on a phone (designs/Mobile-v2.png, F-29 T7e) */
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: var(--sans); font-weight: 300; min-height: 100vh; }
@@ -112,7 +118,7 @@ require_once __DIR__ . '/lib/Layout.php';
   .inline input.icon { flex: 0 0 90px; min-width: 70px; text-align: center; }
   /* The hidden attribute must win over this page's own display rules — .row, .rail, .catwrap and .btn set
      one, and an author display would otherwise beat the browser's [hidden] (the same note as Layout.php's .btn). */
-  .btn[hidden], .row[hidden], .rail[hidden], .catwrap[hidden], .pending-pill[hidden], .tag[hidden], #tray-note[hidden], #pending-list[hidden], #linked[hidden] { display: none; }
+  .btn[hidden], .row[hidden], .rail[hidden], .catwrap[hidden], .pending-pill[hidden], .tag[hidden], #tray-note[hidden], #pending-list[hidden], #linked[hidden], #mobile-bar[hidden] { display: none; }
   /* ── the Linked settings panel (F-29 T8, designs/Main-v2.png): values that must agree across
         devices, watched — each with its verdict, the reason in words under the formula ── */
   .linked-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 14px 18px 10px; margin-top: 22px; }
@@ -139,7 +145,47 @@ require_once __DIR__ . '/lib/Layout.php';
   .traybar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
   #status { font-family: var(--mono); font-size: .75rem; flex: 1; min-width: 200px; }
   #status.err { color: var(--accent2); } #status.ok { color: var(--ok); } #status.busy { color: var(--warn); }
+  /* ── the mobile bar: a sticky "N changes → APPLY" strip (designs/Mobile-v2.png, F-29 T7e) ──
+     Hidden on desktop; the page tags <html> with .is-mobile (matchMedia) when the viewport is narrow, and
+     the rules below take over: the desktop tray's pending list, note and action bar fold into a collapsible
+     detail panel; the only thing always visible at the bottom is the count + APPLY. The bar's APPLY mirrors
+     #save (same handler), so the save path is unchanged. The count button expands the detail (#tray-detail)
+     so the user can see the per-row old → new values, the reboot note and DISCARD. */
+  #mobile-bar { display: none; }
+  .is-mobile #mobile-bar { display: flex; align-items: stretch; gap: 8px; padding: 6px 0 2px; }
+  #mobile-bar .m-count { flex: 1; min-width: 0; font-family: var(--mono); font-size: .85rem; letter-spacing: .04em;
+    text-align: left; color: var(--text); background: transparent; border: 1px solid var(--border-light); border-radius: var(--radius);
+    padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  #mobile-bar .m-count::after { content: '▾'; font-size: .7rem; color: var(--muted); transition: transform .15s; }
+  #mobile-bar .m-count[aria-expanded="true"]::after { transform: rotate(180deg); }
+  #mobile-bar .m-count:disabled { opacity: .55; cursor: default; }
+  #mobile-bar .m-apply { flex: 0 0 auto; white-space: nowrap; }
+  /* The detail panel: the same #pending-list, #tray-note and .traybar the desktop tray shows, but on mobile
+     they sit under the bar and are hidden until the count button is pressed. The detail is the desktop
+     tray's content repurposed, not a second copy (DRY). */
+  .is-mobile .tray-detail { display: none; }
+  .is-mobile .tray.m-expanded .tray-detail { display: block; }
+  .is-mobile .tray { padding-top: 6px; padding-bottom: 8px; }
+  .is-mobile .traybar #save, .is-mobile .traybar #status { display: none; }   /* the bar's APPLY and count cover them */
+  .is-mobile .traybar { justify-content: flex-start; gap: 10px; padding-top: 6px; }
+  /* The header's "N PENDING" pill (and the new JUMP TO SETTING link's row) is redundant with the mobile
+     bar's count; hide the pill so the header stays compact. The link stays — search is reachable on a phone. */
+  .is-mobile .pending-pill { display: none; }
+  /* 44 px touch targets (designs/Mobile-v2.png). Every interactive control on a phone is at least 44 px
+     tall, so a finger lands on one and not its neighbour. The value is hardcoded (the same convention as
+     Layout.php's --nav-h and .files-video-close) rather than via var(--touch): the :root --touch above is
+     only the documented constant, and hardcoding lets a jsdom test read the resolved min-height directly. */
+  .is-mobile .btn, .is-mobile .rail-item, .is-mobile #tierbar .btn.tier,
+  .is-mobile .ctl input, .is-mobile .ctl select, .is-mobile #mobile-bar .m-count, .is-mobile #mobile-bar .m-apply,
+  .is-mobile .inline input, .is-mobile #e-icon, .is-mobile #e-name, .is-mobile #e-detector {
+    min-height: 44px;
+  }
+  .is-mobile .btn.reset { padding-top: 8px; padding-bottom: 8px; }
   @media (max-width: 800px) {
+    /* No-JS fallback: the .is-mobile class is what the page toggles from matchMedia when JS is on, but the
+       basic stacking (rail wraps, rows go one column) must also work with scripts off, so the same shape
+       is repeated here. The touch-target and mobile-bar rules are NOT duplicated: they need JS to add the
+       class, and without JS the desktop tray stays as it is (still usable on a phone, just denser). */
     header, main, .tray { padding-left: 16px; padding-right: 16px; }
     .page { grid-template-columns: 1fr; }
     .rail { position: static; flex-direction: row; flex-wrap: wrap; padding-bottom: 6px; }
@@ -224,13 +270,24 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 </main>
 
 <div class="tray" id="tray">
-  <div id="pending-list"></div>
-  <div id="tray-note" hidden></div>
-  <div class="traybar">
-    <button class="btn" id="revert" disabled>↺ DISCARD</button>
-    <button class="btn primary" id="save" disabled>⬆ APPLY TO CAMERA</button>
-    <button class="btn" id="cancel" hidden>✖ WITHDRAW QUEUED CHANGE</button>
-    <span id="status">Loading…</span>
+  <div class="tray-detail" id="tray-detail">
+    <div id="pending-list"></div>
+    <div id="tray-note" hidden></div>
+    <div class="traybar">
+      <button class="btn" id="revert" disabled>↺ DISCARD</button>
+      <button class="btn primary" id="save" disabled>⬆ APPLY TO CAMERA</button>
+      <button class="btn" id="cancel" hidden>✖ WITHDRAW QUEUED CHANGE</button>
+      <span id="status">Loading…</span>
+    </div>
+  </div>
+  <!-- The mobile bar: the page toggles <html>.is-mobile from matchMedia, and this sticky strip takes over
+       from the desktop tray. The count button expands #tray-detail (above) so the per-row list, the reboot
+       note and DISCARD are still reachable; the APPLY button mirrors #save. designs/Mobile-v2.png (F-29 T7e).
+       The count button is always enabled (it just opens the detail — empty or not); the APPLY button is
+       disabled while there is nothing to apply, mirroring #save. -->
+  <div class="mobile-bar" id="mobile-bar" role="region" aria-label="Pending changes">
+    <button class="btn m-count" id="m-count" type="button" aria-expanded="false" aria-controls="tray-detail">No changes</button>
+    <button class="btn primary m-apply" id="m-apply" type="button" disabled>APPLY</button>
   </div>
 </div>
 
@@ -257,6 +314,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert'), cancelBtn = $('cancel');
+  const mApply = $('m-apply'), mCount = $('m-count');   // the mobile bar's APPLY and count buttons (F-29 T7e)
   function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = cls || ''; }
   // The result of pressing a button (APPLY, SAVE NAME, WITHDRAW...): a toast popup (F-12) instead of
   // a message in the tray, where a longer answer wrapped the buttons into several lines. The tray's
@@ -269,6 +327,34 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   // use the same wording, so every sentence on the page names the same device.
   function subject() { return TYPE === 'detector' ? 'the detector of ' + camera.name : camera.name; }
   function ago(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago'; }
+
+  // ── mobile layout (designs/Mobile-v2.png, F-29 T7e) ──
+  // The page tags <html> with .is-mobile when the viewport is narrow (matchMedia). The CSS then swaps the
+  // desktop tray for a sticky "N changes → APPLY" bar (#mobile-bar) whose APPLY mirrors #save and whose
+  // count button expands the same #tray-detail the desktop tray shows (the per-row list, the reboot note
+  // and DISCARD) — see the rules above. matchMedia is the source of truth (not a resize handler: it fires
+  // only on a real change, and it respects the user's zoom and accessibility prefs a resize handler
+  // misses). When JS is off (or matchMedia is missing, as in old tests) the .is-mobile class never lands,
+  // and the @media (max-width: 800px) block above keeps the basic stacking working.
+  function applyMobile() {
+    document.documentElement.classList.toggle('is-mobile', !!(window.matchMedia && window.matchMedia('(max-width: 800px)').matches));
+  }
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(max-width: 800px)');
+    if (mq.addEventListener) mq.addEventListener('change', applyMobile);
+    else if (mq.addListener) mq.addListener(applyMobile);   // Safari < 14
+  }
+  applyMobile();
+  // The mobile APPLY button mirrors #save: clicking it goes through #save's own handler (CamBusy disabled
+  // state and all), so the save path is the same one the desktop tray uses — no second copy of the rules.
+  mApply.addEventListener('click', () => { if (!mApply.disabled) saveBtn.click(); });
+  // The count button expands #tray-detail (the per-row list, the note and DISCARD) on mobile; on desktop
+  // it is hidden, so the click is a no-op there.
+  mCount.addEventListener('click', () => {
+    const tray = $('tray'), open = tray.classList.contains('m-expanded');
+    tray.classList.toggle('m-expanded', !open);
+    mCount.setAttribute('aria-expanded', String(!open));
+  });
 
   // Is this setting needed, given the values? (same rule as the firmware and camera-settings.php)
   function required(def, vals) {
@@ -545,6 +631,14 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       setStatus(n + ' pending change' + (n === 1 ? '' : 's'), '');
     }
     saveBtn.disabled = revertBtn.disabled = n === 0;
+    // Mobile bar (F-29 T7e): its count mirrors the pill, its APPLY mirrors #save, and when the tray
+    // empties (applied or discarded) the detail collapses again so the bar does not show a stale list.
+    mApply.disabled = n === 0;
+    mCount.textContent = n === 0 ? 'No changes' : (n + (n === 1 ? ' change' : ' changes'));
+    if (n === 0 && $('tray').classList.contains('m-expanded')) {
+      $('tray').classList.remove('m-expanded');
+      mCount.setAttribute('aria-expanded', 'false');
+    }
   }
 
   function refresh() {
@@ -624,7 +718,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       banner('This ' + WHO + ' has not reported its settings yet. It reports once it runs the firmware that supports remote settings (' + (TYPE === 'detector' ? 'flash the detector with the current ESP32_CAM_TFLite_Person sketch, or publish it with ota-deploy.sh detector' : 'publish it with ota-deploy.sh') + ') and has reached the relay — then this page fills in.' + (TYPE === 'detector' ? '' : ' You can still rename it or remove it from the dashboard above.'), 'warn');
       $('rail').hidden = true; $('catwrap').hidden = true;
       $('pending-count').hidden = true;
-      saveBtn.disabled = revertBtn.disabled = true;
+      saveBtn.disabled = revertBtn.disabled = mApply.disabled = true;
       return;
     }
     // The categories come with the keys; the first one that has a name is shown (for a detector that is
@@ -687,7 +781,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       if (!isNaN(lo) && !isNaN(hi) && lo > hi) { notify('JPEG_Q_MIN (' + v.JPEG_Q_MIN + ') must not be higher than JPEG_Q_MAX (' + v.JPEG_Q_MAX + ')', 'error'); return; }
     }
     if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + subject() + '?\n\n' + (TYPE === 'detector' ? 'The detector restarts to apply it (its picture and alarm pin pause for about 10 seconds).' : 'The camera restarts to apply it (its stream and any recording stop for a few seconds).'))) return;
-    saveBtn.disabled = revertBtn.disabled = true; setStatus('Queuing…', 'busy');
+    saveBtn.disabled = revertBtn.disabled = mApply.disabled = true; setStatus('Queuing…', 'busy');
     try {
       const { res, data } = await post(API, { values: c.values });
       if (!res.ok || !data.ok) { notify(data.error || ('Error ' + res.status), 'error'); refresh(); return; }
