@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Category page</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;500;600;700&family=Share+Tech+Mono&display=swap">
+<style>
+body{margin:0;background:#0b0e14}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #00e5ff;outline-offset:2px}
+.chip{font-family:'Share Tech Mono',ui-monospace,monospace;font-size:11px;color:#7c8ab0;border:1px solid #1e2840;border-radius:3px;padding:2px 6px;white-space:nowrap}
+.lbl{font-family:'Share Tech Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#7c8ab0}
+.mono{font-family:'Share Tech Mono',ui-monospace,monospace}
+.inp{height:36px;box-sizing:border-box;background:#0b0e14;border:1px solid #3c4d80;border-radius:4px;color:#cdd8f0;font-family:'Share Tech Mono',ui-monospace,monospace;font-size:14px;padding:0 10px}
+</style>
+</helmet>
+
+<div style="min-height: 1500px; background: #0b0e14; color: #cdd8f0; font-family: 'Barlow', system-ui, sans-serif; display: flex; flex-direction: column">
+
+  <header style="display: flex; align-items: center; gap: 16px; padding: 0 24px; min-height: 56px; background: #111520; border-bottom: 1px solid #1e2840">
+    <a href="Main.dc.html" class="mono" style="font-size: 13px; color: #7c8ab0">← SETTINGS</a>
+    <span style="color: #3c4d80">/</span>
+    <span class="mono" style="font-size: 13px">CAMERAS</span>
+    <span style="color: #3c4d80">/</span>
+    <span class="mono" style="font-size: 13px; color: #00e5ff">PICTURE &amp; LINK</span>
+    <span class="mono" style="margin-left: auto; font-size: 12px; color: #ffb454">{{pendingCount}} PENDING</span>
+  </header>
+
+  <div style="flex: 1; display: flex; flex-wrap: wrap; max-width: 1360px; width: 100%; box-sizing: border-box; margin: 0 auto">
+
+    <nav aria-label="Categories" style="flex: 0 0 240px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #1e2840; display: flex; flex-direction: column; gap: 4px">
+      <span class="lbl" style="padding: 0 10px 8px">Cameras</span>
+      <sc-for list="{{rail}}" as="r" hint-placeholder-count="8">
+        <a href="Main.dc.html" style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-radius: 4px; background: {{r.bg}}; color: {{r.fg}}; border-left: 2px solid {{r.bar}}">
+          <span style="font-size: 15px; font-weight: 500">{{r.name}}</span>
+          <span class="mono" style="font-size: 12px; color: #7c8ab0">{{r.n}}</span>
+        </a>
+      </sc-for>
+    </nav>
+
+    <main style="flex: 1 1 640px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 20px">
+
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; justify-content: space-between">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <h1 style="margin: 0; font-size: 30px; font-weight: 600">Picture &amp; link</h1>
+          <span style="font-size: 14px; color: #9aa7c8; max-width: 560px; line-height: 1.45">How the camera paces its frames and trades picture quality for link speed. Editing cam2.</span>
+        </div>
+        <div role="tablist" aria-label="Tier" style="display: flex; border: 1px solid #1e2840; border-radius: 4px; overflow: hidden">
+          <sc-for list="{{tiers}}" as="t" hint-placeholder-count="3">
+            <button type="button" role="tab" aria-selected="{{t.on}}" onClick="{{ t.pick }}" style="cursor: pointer; border: 0; padding: 8px 16px; font-size: 14px; font-weight: 600; background: {{t.bg}}; color: {{t.fg}}">{{t.label}}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; background: #111520; border: 1px solid #1e2840; border-radius: 6px; align-items: center">
+        <div style="flex: 1 1 280px; display: flex; flex-direction: column; gap: 10px">
+          <span class="lbl">JPEG quality window (lower number = better picture)</span>
+          <div style="position: relative; height: 28px">
+            <div style="position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 2px; background: #1e2840"></div>
+            <div style="position: absolute; left: {{qLeft}}%; width: {{qWidth}}%; top: 10px; height: 8px; border-radius: 4px; background: #00e5ff"></div>
+            <div style="position: absolute; left: {{qLeft}}%; top: 4px; width: 4px; height: 20px; background: #cdd8f0; border-radius: 2px"></div>
+            <div style="position: absolute; left: {{qRight}}%; top: 4px; width: 4px; height: 20px; background: #cdd8f0; border-radius: 2px"></div>
+          </div>
+          <div class="mono" style="display: flex; justify-content: space-between; font-size: 12px; color: #7c8ab0"><span>1 best</span><span>{{qText}}</span><span>63 smallest</span></div>
+        </div>
+        <div style="flex: 1 1 240px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #9aa7c8; line-height: 1.45">
+          <span>The camera starts at the best value and moves toward the smallest while the link is slow.</span>
+          <span class="mono" style="font-size: 12px; color: #3ddc97">JPEG_Q_MIN ≤ JPEG_Q_MAX · rule holds</span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 0; background: #111520; border: 1px solid #1e2840; border-radius: 6px">
+        <sc-for list="{{rows}}" as="row" hint-placeholder-count="6">
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; border-bottom: 1px solid #1e2840; align-items: center">
+            <div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+              <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+                <span class="mono" style="font-size: 14px">{{row.key}}</span>
+                <sc-if value="{{row.fresh}}" hint-placeholder-val="{{ true }}"><span class="chip" style="color: #00e5ff; border-color: #0e4a56">was hard-coded</span></sc-if>
+                <sc-if value="{{row.changed}}" hint-placeholder-val="{{ false }}"><span class="chip" style="color: #ffb454; border-color: #5a4320">changed</span></sc-if>
+              </div>
+              <span style="font-size: 14px; color: #cdd8f0; line-height: 1.4">{{row.label}}</span>
+              <span style="font-size: 13px; color: #9aa7c8; line-height: 1.4">{{row.help}}</span>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                <span class="chip">{{row.src}}</span>
+                <span class="chip">{{row.restart}}</span>
+                <span class="chip">default {{row.def}}</span>
+              </div>
+            </div>
+            <div style="flex: 0 0 150px; display: flex; flex-direction: column; gap: 6px">
+              <label class="lbl" for="{{row.id}}">{{row.unit}}</label>
+              <input id="{{row.id}}" class="inp" value="{{row.val}}" aria-label="{{row.key}}">
+              <button type="button" class="mono" style="cursor: pointer; background: transparent; border: 0; color: #7c8ab0; font-size: 11px; text-align: left; padding: 0">↺ RESET TO {{row.def}}</button>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 16px; background: #1a1608; border: 1px solid #5a4320; border-radius: 6px">
+        <span style="flex: 1 1 300px; font-size: 13px; color: #e6d3a3; line-height: 1.4">2 changes on this page. cam2 picks them up at its next settings sync. Nothing is written until you apply.</span>
+        <button type="button" style="height: 40px; padding: 0 16px; cursor: pointer; background: transparent; color: #cdd8f0; border: 1px solid #3c4d80; border-radius: 4px; font-weight: 600">Discard</button>
+        <button type="button" style="height: 40px; padding: 0 20px; cursor: pointer; background: #00e5ff; color: #04222a; border: 0; border-radius: 4px; font-weight: 700">APPLY TO cam2</button>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1360,"height":1500}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tier: 0 };
+  }
+  renderVals() {
+    // The rail counts are the real ones from the recorder's settings table (F-29 T10): the number
+    // of settings per category, in the order the table names them; the keys the table gives no
+    // category (identity values, serial-only locks, setup mode) share the last entry, "Other".
+    // The rows are the category's real settings: key, label, help, range, default and restart
+    // flag exactly as the schema carries them (PUSH_WR_TMO_MS default 8000 — v2's correction —
+    // and it applies only after a reboot).
+    const all = [
+      { id: 'f1', key: 'PUSH_GAP_MUL', label: 'Pause after each frame (x last push)', help: 'pause after each frame = last push time x this (1.5 is a good start)', src: 'preferences', restart: 'live', def: '1.5', val: '2.0', unit: '0.1 to 10', fresh: true, changed: true, tier: 0 },
+      { id: 'f2', key: 'JPEG_Q_MIN', label: 'Best JPEG quality', help: 'the best quality (lowest number): what the camera sends on a good link. Lower = finer picture, bigger file. 12 is a good start', src: 'preferences', restart: 'live', def: '12', val: '12', unit: '1 to 63', fresh: true, changed: false, tier: 0 },
+      { id: 'f3', key: 'JPEG_Q_MAX', label: 'Coarsest JPEG quality', help: 'the coarsest quality (highest number) the adapter drops to on a slow link; 63 is the OV2640’s ceiling. Not lower than JPEG_Q_MIN', src: 'preferences', restart: 'live', def: '63', val: '50', unit: '1 to 63', fresh: true, changed: true, tier: 0 },
+      { id: 'f4', key: 'SIZE_DROP', label: 'Also shrink the frame size', help: '1: when even the coarsest quality cannot get a frame through, also drop the resolution a step (down to QQVGA 160x120) and climb back when the link recovers; 0: never change the resolution', src: 'preferences', restart: 'live', def: 'on', val: 'on', unit: 'on / off', fresh: true, changed: false, tier: 0 },
+      { id: 'f5', key: 'PUSH_WR_TMO_MS', label: 'Push write timeout (ms)', help: 'give up on a push that makes no progress for this long (ms). Keep it LONGER than the relay’s live window (LIVE_WINDOW_MS)', src: 'preferences', restart: 'reboot', def: '8000', val: '8000', unit: '1000 to 60000', fresh: true, changed: false, tier: 1 },
+      { id: 'f6', key: 'Q_DEGRADE_STEP', label: 'Quality steps coarser per slow frame', help: 'how many quality numbers coarser per slow frame (twice as many when very slow)', src: 'preferences', restart: 'reboot', def: '6', val: '6', unit: '1 to 62', fresh: true, changed: false, tier: 2 }
+    ];
+    const tn = ['Basic', 'Advanced', 'Expert'];
+    const sel = this.state.tier;
+    const rows = all.filter((r) => r.tier <= sel);
+    const qMin = 12, qMax = 50;
+    const pos = (v) => ((v - 1) / 62) * 100;
+    return {
+      pendingCount: 2,
+      rail: [['Picture & link', 16], ['Connection', 13], ['Alarm input', 4], ['Logging', 9], ['Updates & sync', 11], ['Setup & security', 6], ['Hardware & internals', 22], ['Other', 10]].map(([name, n]) => {
+        const on = name === 'Picture & link';
+        return { name, n, bg: on ? '#0e2430' : 'transparent', fg: on ? '#00e5ff' : '#cdd8f0', bar: on ? '#00e5ff' : 'transparent' };
+      }),
+      tiers: tn.map((label, i) => ({
+        label,
+        on: i === sel,
+        bg: i === sel ? '#00e5ff' : 'transparent',
+        fg: i === sel ? '#04222a' : '#9aa7c8',
+        pick: () => this.setState({ tier: i })
+      })),
+      qLeft: pos(qMin),
+      qRight: pos(qMax),
+      qWidth: pos(qMax) - pos(qMin),
+      qText: qMin + ' to ' + qMax,
+      rows
+    };
+  }
+}
+</script>
+</body>
+</html>

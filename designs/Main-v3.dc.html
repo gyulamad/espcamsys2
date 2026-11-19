@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings Atlas</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;500;600;700&family=Share+Tech+Mono&display=swap">
+<style>
+body{margin:0;background:#0b0e14}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #00e5ff;outline-offset:2px}
+.tile{display:flex;flex-direction:column;gap:12px;padding:16px;background:#111520;border:1px solid #1e2840;border-radius:6px;min-width:0}
+.tile:hover{border-color:#3c4d80;background:#141a28}
+.chip{font-family:'Share Tech Mono',ui-monospace,monospace;font-size:11px;color:#7c8ab0;border:1px solid #1e2840;border-radius:3px;padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.card{background:#111520;border:1px solid #1e2840;border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.lbl{font-family:'Share Tech Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#7c8ab0}
+</style>
+</helmet>
+
+<div style="min-height: 1060px; box-sizing: border-box; background: #0b0e14; color: #cdd8f0; font-family: 'Barlow', system-ui, sans-serif; display: flex; flex-direction: column">
+
+  <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 0 24px; min-height: 56px; background: #111520; border-bottom: 1px solid #1e2840">
+    <div style="display: flex; align-items: center; gap: 10px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 14px; letter-spacing: .12em; color: #00e5ff">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      SETTINGS
+    </div>
+    <label style="flex: 1 1 320px; max-width: 560px; display: flex; align-items: center; gap: 10px; background: #0b0e14; border: 1px solid #1e2840; border-radius: 4px; padding: 0 12px; height: 36px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c8ab0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+      <input type="search" aria-label="Jump to any setting" placeholder="Jump to any setting: try jpeg, port, alarm" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #cdd8f0; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 13px; outline-offset: 6px">
+      <span class="chip">/</span>
+    </label>
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 8px">
+      <span style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px; color: #ffb454">{{pendingCount}} PENDING</span>
+    </div>
+  </header>
+
+  <main style="flex: 1; width: 100%; max-width: 1360px; box-sizing: border-box; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px">
+
+    <div role="tablist" aria-label="Scope" style="display: flex; flex-wrap: wrap; gap: 12px">
+      <sc-for list="{{scopeTabs}}" as="tab" hint-placeholder-count="3">
+        <button type="button" role="tab" aria-selected="{{tab.selected}}" onClick="{{ tab.pick }}" style="flex: 1 1 200px; text-align: left; cursor: pointer; padding: 14px 16px; border-radius: 6px; border: 1px solid {{tab.bd}}; background: {{tab.bg}}; color: {{tab.fg}}; display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 20px; font-weight: 600; letter-spacing: .04em">{{tab.label}}</span>
+          <span style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px; color: #7c8ab0">{{tab.sub}}</span>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+      <span class="lbl" style="margin-right: 4px">{{deviceLabel}}</span>
+      <sc-for list="{{devices}}" as="dev" hint-placeholder-count="3">
+        <button type="button" style="cursor: pointer; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid {{dev.bd}}; background: {{dev.bg}}; color: {{dev.fg}}">{{dev.label}}</button>
+      </sc-for>
+      <span style="margin-left: auto; font-size: 13px; color: #7c8ab0">{{summary}}</span>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+
+      <section aria-label="Categories" style="flex: 999 1 620px; min-width: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px">
+        <sc-for list="{{tiles}}" as="tile" hint-placeholder-count="11">
+          <a class="tile" href="Category.dc.html">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+              <span style="width: 36px; height: 36px; border-radius: 6px; background: #0b0e14; border: 1px solid #1e2840; display: flex; align-items: center; justify-content: center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{tile.icon}}"></path></svg>
+              </span>
+              <sc-if value="{{tile.hasPending}}" hint-placeholder-val="{{ false }}">
+                <span style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; color: #ffb454; border: 1px solid #5a4320; border-radius: 3px; padding: 2px 6px">{{tile.pendingText}}</span>
+              </sc-if>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px">
+              <span style="font-size: 18px; font-weight: 600">{{tile.name}}</span>
+              <span style="font-size: 13px; line-height: 1.4; color: #9aa7c8">{{tile.blurb}}</span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px">
+              <sc-for list="{{tile.keys}}" as="k" hint-placeholder-count="3">
+                <span class="chip">{{k.t}}</span>
+              </sc-for>
+            </div>
+            <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #1e2840; display: flex; gap: 12px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px">
+              <span style="color: #cdd8f0">{{tile.now}} in use</span>
+              <span style="color: #00e5ff">{{tile.fresh}} new</span>
+            </div>
+          </a>
+        </sc-for>
+      </section>
+
+      <aside style="flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+
+        <div class="card" style="border-color: #5a4320">
+          <div style="display: flex; align-items: baseline; justify-content: space-between">
+            <span class="lbl" style="color: #ffb454">Pending changes</span>
+            <span style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px; color: #7c8ab0">{{pendingCount}}</span>
+          </div>
+          <sc-for list="{{pending}}" as="p" hint-placeholder-count="3">
+            <div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid #1e2840">
+              <span style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 13px">{{p.key}}</span>
+              <span style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 13px"><span style="color: #7c8ab0">{{p.from}}</span> <span style="color: #7c8ab0">→</span> <span style="color: #ffb454">{{p.to}}</span></span>
+              <span style="font-size: 12px; color: #9aa7c8">{{p.note}}</span>
+            </div>
+          </sc-for>
+          <span style="font-size: 12px; color: #9aa7c8; line-height: 1.4">{{trayNote}}</span>
+          <div style="display: flex; gap: 8px">
+            <button type="button" style="flex: 1; height: 40px; cursor: pointer; background: transparent; color: #cdd8f0; border: 1px solid #3c4d80; border-radius: 4px; font-size: 14px; font-weight: 600">Discard</button>
+            <button type="button" style="flex: 2; height: 40px; cursor: pointer; background: #00e5ff; color: #04222a; border: 0; border-radius: 4px; font-size: 14px; font-weight: 700; letter-spacing: .03em">{{applyLabel}}</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <span class="lbl">Linked settings</span>
+          <span style="font-size: 12px; color: #9aa7c8; line-height: 1.4">Values that must agree across devices are watched for you. Change one side and the other is offered in the same tray.</span>
+          <div style="display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 8px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"></path></svg><span>PUSH_PORT</span><span style="color: #7c8ab0">=</span><span>relay pushPort</span></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"></path></svg><span>API_KEY</span><span style="color: #7c8ab0">=</span><span>relay camKey</span></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"></path></svg><span>RF_PORT</span><span style="color: #7c8ab0">=</span><span>relay discoveryPort</span></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"></path></svg><span>PUSH_WR_TMO_MS</span><span style="color: #7c8ab0">&gt;</span><span>relay LIVE_WINDOW_MS</span></div>
+          </div>
+          <a href="Category.dc.html" style="font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12px; color: #00e5ff">SHOW ALL 5 RULES →</a>
+        </div>
+
+      </aside>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1360,"height":1060}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { scope: 'camera' };
+  }
+  renderVals() {
+    const P = {
+      conn: 'M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01',
+      pic: 'M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+      alarm: 'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 0 1-3.46 0',
+      log: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
+      upd: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3',
+      sec: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+      hw: 'M4 4h16v16H4z M9 9h6v6H9z M9 1v3 M15 1v3 M9 20v3 M15 20v3 M20 9h3 M20 14h3 M1 9h3 M1 14h3',
+      eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+      globe: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M2 12h20 M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z',
+      key: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4',
+      rec: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+      disk: 'M22 12H2 M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z M6 16h.01 M10 16h.01',
+      user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+      send: 'M22 2L11 13 M22 2l-7 20-4-9-9-4 20-7z',
+      clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2',
+      lock: 'M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2z M7 11V7a5 5 0 0 1 10 0v4',
+      folder: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+      act: 'M22 12h-4l-3 9L9 6l-3 9H2'
+    };
+    // Counts are the real ones, read off the schemas (F-29 T10): "in use" = a setting the board
+    // already kept before F-29 (docs/settings_keys.tsv origin "stored"; the relay: a row of the
+    // relay's settings page before T6a), "new" = a former hard-coded value that became a setting.
+    // Every tile is one category the schema names; the keys the schemas give no category (the
+    // identity values, the serial-only locks, setup mode) share the last tile, "Other".
+    const T = (name, icon, blurb, now, fresh, keys, pend) => ({
+      name, icon, blurb, now, fresh,
+      keys: keys.map((t) => ({ t })),
+      hasPending: pend > 0,
+      pendingText: pend + ' pending'
+    });
+    const scopes = {
+      camera: {
+        label: 'CAMERAS',
+        sub: '25 in use · 66 new',
+        deviceLabel: 'Device',
+        devices: ['All cameras', 'cam1', 'cam2'],
+        sel: 2,
+        summary: 'Shared values (updates, setup, logging) are offered to every camera.',
+        tiles: [
+          T('Connection', P.conn, 'Which Wi-Fi and which relay this board talks to, and how it finds it again.', 0, 13, ['WIFI_REPORT_MS', 'RF_PORT', 'BOOT_WIFI_MS'], 0),
+          T('Picture & link', P.pic, 'Frame pacing, JPEG quality and the resolution fallback on a slow link.', 5, 11, ['PUSH_GAP_MUL', 'JPEG_Q_MIN', 'SIZE_DROP'], 2),
+          T('Alarm input', P.alarm, 'Which pin listens, which level means alarm, and how it is debounced.', 2, 2, ['ALARM_ACTIVE', 'ALARM_DEBOUNCE', 'ALARM_HOLD_MS'], 0),
+          T('Logging', P.log, 'What the board reports to the relay log, how often, and how it retries.', 8, 1, ['LOG_MIN_LEVEL', 'LOG_RETRY_SEC', 'LOG_LOW_HEAP'], 1),
+          T('Updates & sync', P.upd, 'Over-the-air firmware, relay discovery and settings sync timing.', 0, 11, ['OTA_ENABLED', 'OTA_CHECK_S', 'SYNC_CHECK_S'], 0),
+          T('Setup & security', P.sec, 'The board’s own setup Wi-Fi, its master password and request limits.', 0, 6, ['SETUP_AP_CHAN', 'SETUP_MAX_STA', 'BOOT_SER_WIN_MS'], 0),
+          T('Hardware & internals', P.hw, 'Pin map, task stacks, serial. Expert tier only.', 0, 22, ['PIN_PWDN', 'STK_OTA_B', 'SER_BAUD'], 0),
+          T('Other', P.lock, 'Identity values for the relay connection, the serial-only locks and setup mode — the firmware’s table gives them no category.', 10, 0, ['WIFI', 'SERVER_HOST', 'API_KEY'], 0)
+        ],
+        pending: [
+          { key: 'LOG_MIN_LEVEL', from: '1 INFO', to: '2 WARN', note: 'cam2 · Logging' },
+          { key: 'PUSH_GAP_MUL', from: '1.5', to: '2.0', note: 'cam2 · Picture & link' },
+          { key: 'JPEG_Q_MAX', from: '63', to: '50', note: 'cam2 · Picture & link' }
+        ],
+        applyLabel: 'APPLY TO cam2',
+        trayNote: 'cam2 picks these up at its next settings sync (every 30 s). Nothing is written until you apply.'
+      },
+      detector: {
+        label: 'DETECTORS',
+        sub: '25 in use · 71 new',
+        deviceLabel: 'Device',
+        devices: ['All detectors', 'det1'],
+        sel: 1,
+        summary: 'Shared values (updates, setup) are offered to every detector.',
+        tiles: [
+          T('Connection', P.conn, 'Wi-Fi, relay address, its own detector name and the retry back-off.', 0, 12, ['RF_PORT', 'BOOT_RELAY_MS', 'WIFI_DOWN_MS'], 0),
+          T('Detection', P.eye, 'Person thresholds, darkness check and the motion gate with its watched area.', 12, 5, ['DETECT_THRESH', 'CLEAR_THRESH', 'MOTION_THRESH'], 1),
+          T('Picture & live view', P.pic, 'Frame rate, JPEG quality and write timeout of the live picture.', 5, 7, ['STREAM_MAX_FPS', 'STREAM_JPEG_Q', 'STREAM_WR_TMO_S'], 0),
+          T('Logging', P.log, 'What the board reports to the relay log, how often, and how it retries.', 0, 6, ['LOG_MIN_LEVEL', 'LOG_RETRY_MAX', 'LOG_REPEAT_SEC'], 0),
+          T('Updates & sync', P.upd, 'Over-the-air firmware, relay discovery and settings sync timing.', 0, 11, ['OTA_ENABLED', 'OTA_CHECK_S', 'SYNC_ENABLED'], 0),
+          T('Setup & security', P.sec, 'The board’s own setup Wi-Fi, its master password and request limits.', 0, 6, ['SETUP_AP_CHAN', 'SETUP_MAX_STA', 'BOOT_SER_WIN_MS'], 0),
+          T('Hardware & internals', P.hw, 'Pin map, task stacks, serial, restart waits. Expert tier only.', 0, 24, ['STK_NET_B', 'BOOT_FAIL_MS', 'SER_BAUD'], 0),
+          T('Other', P.lock, 'Identity values for the relay connection, the serial-only locks and setup mode — the firmware’s table gives them no category.', 8, 0, ['PERSON_GPIO', 'WIFI', 'DETECTOR_ID'], 0)
+        ],
+        pending: [
+          { key: 'DETECT_THRESH', from: '0.60', to: '0.55', note: 'det1 · Detection' }
+        ],
+        applyLabel: 'APPLY TO det1',
+        trayNote: 'det1 picks this up at its next settings sync (every 30 s). Nothing is written until you apply.'
+      },
+      relay: {
+        label: 'RELAY',
+        sub: '23 in use · 31 new',
+        deviceLabel: 'Source',
+        devices: ['Settings page', 'config.js', 'Environment'],
+        sel: 0,
+        summary: 'Every relay value is editable here; a value the environment sets shows read-only (the environment wins).',
+        tiles: [
+          T('Recording', P.rec, 'How long alarm recordings run, the pre-roll, and when the recording disk counts as full.', 4, 0, ['alarmRecordSeconds', 'preRollSeconds', 'minFreeStorageMB'], 2),
+          T('Person check', P.user, 'Sorting out recordings without a person in them, and how sure the detector must be.', 2, 7, ['personScanEnabled', 'personScanConfidence', 'personScanAuto'], 0),
+          T('Alarm sounds', P.alarm, 'Which sound plays where when an alarm starts or a person is found — the sound files it chooses from are listed with them.', 6, 2, ['alarmSoundRecordStart', 'alarmSoundPersonDetected', 'alarmSoundPlayer'], 0),
+          T('Network', P.globe, 'The relay’s ports: where the dashboard reaches it and where the cameras push their frames.', 2, 4, ['port', 'pushPort', 'discoveryPort'], 0),
+          T('Keys', P.key, 'The shared secrets: what the cameras must match, and what protects the relay’s controls.', 2, 0, ['camKey', 'controlKey'], 0),
+          T('Log', P.log, 'How large the relay’s own log grows, and how many rotated files are kept.', 3, 0, ['logFile', 'logMaxBytes', 'logKeepFiles'], 0),
+          T('Folders', P.folder, 'The folders for firmware, staged device settings and alarm sounds, and the recording switch file.', 4, 0, ['firmwareDir', 'soundsDir', 'deviceSettingsDir'], 0),
+          T('Detectors', P.eye, 'The person detector’s live view on the dashboard, and its no-picture warning.', 0, 2, ['detectorViewMinutes', 'detectorNoPictureWarnMs'], 0),
+          T('Notifications', P.send, 'The Telegram messages and the links they carry, and how often they may repeat.', 0, 6, ['telegramEnabled', 'telegramChatId', 'notifyCooldownSeconds'], 0),
+          T('Security', P.sec, 'Who may read, how failed logins are locked out, and the strict response headers.', 0, 9, ['authMaxFailures', 'allowKeylessAlarm', 'restartCooldownMs'], 0),
+          T('Diagnostics', P.act, 'Watchdogs that report when the relay itself stalls.', 0, 1, ['loopWatch'], 0)
+        ],
+        pending: [
+          { key: 'alarmRecordSeconds', from: '60', to: '90', note: 'Applies at once' },
+          { key: 'preRollSeconds', from: '5', to: '8', note: 'Needs a relay restart' }
+        ],
+        applyLabel: 'APPLY TO RELAY',
+        trayNote: 'One change needs a relay restart. The page will offer it after applying; nothing restarts on its own.'
+      }
+    };
+    const cur = scopes[this.state.scope];
+    const order = ['camera', 'detector', 'relay'];
+    return {
+      scopeTabs: order.map((id) => {
+        const on = id === this.state.scope;
+        return {
+          label: scopes[id].label,
+          sub: scopes[id].sub,
+          selected: on,
+          bd: on ? '#00e5ff' : '#1e2840',
+          bg: on ? '#0e2430' : '#111520',
+          fg: on ? '#00e5ff' : '#cdd8f0',
+          pick: () => this.setState({ scope: id })
+        };
+      }),
+      deviceLabel: cur.deviceLabel,
+      devices: cur.devices.map((label, i) => {
+        const on = i === cur.sel;
+        return { label, bd: on ? '#00e5ff' : '#1e2840', bg: on ? '#0e2430' : 'transparent', fg: on ? '#00e5ff' : '#9aa7c8' };
+      }),
+      summary: cur.summary,
+      tiles: cur.tiles,
+      pending: cur.pending,
+      pendingCount: cur.pending.length,
+      applyLabel: cur.applyLabel,
+      trayNote: cur.trayNote
+    };
+  }
+}
+</script>
+</body>
+</html>
