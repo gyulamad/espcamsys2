@@ -59,6 +59,8 @@ require_once __DIR__ . '/lib/Layout.php';
   legend { font-family: var(--mono); font-size: .8rem; letter-spacing: .1em; color: var(--accent); padding: 0 8px; text-transform: uppercase; }
   .row { display: grid; grid-template-columns: 260px 1fr; gap: 6px 18px; padding: 10px 0; border-top: 1px solid var(--border); align-items: start; }
   .row:first-of-type { border-top: 0; }
+  /* the row the settings search jumped to (?find=key, F-29 T7b) */
+  .row.found { background: rgba(0, 229, 255, .07); box-shadow: inset 2px 0 0 var(--accent); }
   .row label { font-weight: 500; font-size: .9rem; }
   .row .tags { display: block; margin-top: 3px; }
   .tag { font-family: var(--mono); font-size: .6rem; border: 1px solid var(--border-light); border-radius: 20px; padding: 1px 7px; margin-right: 4px; color: var(--muted); }
@@ -107,6 +109,7 @@ require_once __DIR__ . '/lib/Layout.php';
     <h1>⚙ SETTINGS</h1>
     <p>Main system · relay and dashboard</p>
   </div>
+  <a class="btn" href="settings-search.php" data-page-load="" title="Find any setting by its name, its label or its help text">🔍 JUMP TO SETTING</a>
 </header>
 
 <main>
@@ -149,6 +152,9 @@ require_once __DIR__ . '/lib/Layout.php';
   const NUMERIC = ['int', 'float'];   // drawn as a number input (a float's step comes from the relay)
   const AJAX = { 'X-Requested-With': 'camdash' };
   const LEVELS = ['basic', 'advanced', 'expert'];   // who a row is for (the relay's `tier`); the level picks how many are shown
+  // A jump from the settings search (?find=key, F-29 T7b): the row is framed, at its level when it
+  // sits above the chosen one. A key the page does not hold is ignored — the page opens as always.
+  const FIND = new URLSearchParams(location.search).get('find') || '';
   let fields = [];
   let original = {};   // key -> the value loaded from the server (secrets: '')
   let tierLevel = 'basic';   // the level shown: rows above it stay in the form but hidden
@@ -189,6 +195,7 @@ require_once __DIR__ . '/lib/Layout.php';
     renderCameras(data.cameras || []);
     applyTier();
     updateButtons();
+    highlightFound();
   }
 
   // ── cameras: list, add, remove (each acts at once — they are not part of the SAVE bar) ──
@@ -299,10 +306,32 @@ require_once __DIR__ . '/lib/Layout.php';
       row.hidden = hide;
       if (hide) hidden += 1;
     }
+    clearFound();
     for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === tierLevel);
     $('tierinfo').textContent = hidden === 0
       ? 'every setting shown at ' + tierLevel
       : hidden + ' hidden at ' + tierLevel + ' — a higher level shows them';
+  }
+
+  // ── the search's jump (?find=key, F-29 T7b) ──
+  // The jumped-to row is framed and its input focused (a locked or read-only one cannot be). The mark
+  // goes when the level changes — it points where the search landed, it is not an edit state — and it
+  // is applied once: a reload after a save must not scroll the page away again.
+  let foundShown = false;
+  function clearFound() { for (const row of form.querySelectorAll('.row.found')) row.classList.remove('found'); }
+  function highlightFound() {
+    if (!FIND || foundShown) return;
+    const f = fields.find((x) => x.key === FIND);
+    if (!f) return;
+    foundShown = true;
+    if (f.tier && LEVELS.indexOf(f.tier) > LEVELS.indexOf(tierLevel)) tierLevel = f.tier;
+    applyTier();
+    const row = $('r-' + FIND);
+    if (!row || row.hidden) return;
+    row.classList.add('found');
+    if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+    const i = $('f-' + FIND);
+    if (i && !i.disabled) i.focus({ preventScroll: true });
   }
 
   function renderField(f) {

@@ -50,6 +50,7 @@ require_once __DIR__ . '/lib/Layout.php';
   .crumbs .sep { margin: 0 6px; }
   .crumbs .here { color: var(--accent); }
   .pending-pill { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; color: var(--warn); border: 1px solid var(--warn); border-radius: 20px; padding: 4px 12px; white-space: nowrap; }
+  .hdr-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .btn { font-family: var(--mono); font-size: .75rem; padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--border-light); background: transparent; color: var(--text); cursor: pointer; letter-spacing: .06em; text-decoration: none; display: inline-block; transition: all .2s; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn:disabled { opacity: .5; cursor: default; }
@@ -81,6 +82,7 @@ require_once __DIR__ . '/lib/Layout.php';
   /* ── one setting row: what (key, label, tags, help) left, the value (range, input, reset) right ── */
   .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 2px 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 10px; align-items: start; }
   .row.unused { opacity: .55; }
+  .row.found { border-color: var(--accent); background: rgba(0, 229, 255, .07); }
   .keyline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .keyline label { font-weight: 500; font-size: .92rem; font-family: var(--mono); letter-spacing: .02em; }
   .tags { display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: baseline; }
@@ -145,7 +147,10 @@ require_once __DIR__ . '/lib/Layout.php';
     <h1>⚙ <span id="title">CAMERA</span></h1>
     <p id="subtitle">Camera settings</p>
   </div>
-  <span class="pending-pill" id="pending-count" hidden>0 PENDING</span>
+  <div class="hdr-actions">
+    <a class="btn" href="settings-search.php" data-page-load="" title="Find any setting by its name, its label or its help text">🔍 JUMP TO SETTING</a>
+    <span class="pending-pill" id="pending-count" hidden>0 PENDING</span>
+  </div>
 </header>
 
 <main>
@@ -215,6 +220,10 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   const CAM = new URLSearchParams(location.search).get('cam') || '';
   const AJAX = { 'X-Requested-With': 'camdash' };
   const TYPE = new URLSearchParams(location.search).get('type') === 'detector' ? 'detector' : 'recorder';
+  // A jump from the settings search (?find=KEY, F-29 T7b): the key's category opens with the row
+  // framed, at the level that shows it. A key the firmware does not have is ignored — the page then
+  // opens as always.
+  const FIND = (new URLSearchParams(location.search).get('find') || '').toUpperCase();
   const WHO = TYPE === 'detector' ? 'detector' : 'camera';
   const API = 'camera-settings.php?cam=' + encodeURIComponent(CAM) + (TYPE === 'detector' ? '&type=detector' : '');
   let keys = [], gpios = [], reported = null, camera = null, original = {}, pollTimer = null;
@@ -407,6 +416,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     activeCat = c;
     renderCatHead();
     for (const b of document.querySelectorAll('#rail .rail-item')) b.classList.toggle('on', b.dataset.cat === c);
+    clearFound();
     refresh();
   }
   // The chosen level hides every row above it (basic < advanced < expert). Rows without a tier — the
@@ -416,7 +426,22 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   function applyTier(level) {
     tierLevel = level;
     for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === tierLevel);
+    clearFound();
     refresh();
+  }
+  // ── the search's jump (?find=KEY, F-29 T7b) ──
+  // The jumped-to row is framed and its input focused (a locked input cannot be). The mark stays
+  // while the user works in this category and goes away when the category or the level changes —
+  // it points where the search landed, it is not an edit state.
+  function clearFound() { for (const r of form.querySelectorAll('.row.found')) r.classList.remove('found'); }
+  function highlightFound() {
+    if (!FIND) return;
+    const row = $('r-' + FIND);
+    if (!row || row.hidden) return;
+    row.classList.add('found');
+    if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+    const i = $('f-' + FIND);
+    if (i && !i.disabled) i.focus({ preventScroll: true });
   }
   for (const b of document.querySelectorAll('#tierbar .btn.tier')) {
     b.addEventListener('click', () => { applyTier(b.dataset.tier); });
@@ -562,11 +587,21 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     // its Detection category, for a camera Picture & link). "Other" is only picked by hand.
     const cats = catList();
     activeCat = cats.find((c) => c !== '') || cats[0] || '';
+    // The search's jump (?find=): the key's own category, and the level that shows the row — a row
+    // above the chosen level would stay hidden, and a highlight on an invisible row is no highlight.
+    // Only tierLevel is set here: applyTier refreshes what is on screen, so it waits for the rows.
+    const foundDef = FIND ? keys.find((d) => d.name === FIND) : null;
+    if (foundDef) {
+      activeCat = catOf(foundDef);
+      if (foundDef.tier) tierLevel = foundDef.tier;
+    }
     renderRail();
     renderCatHead();
     $('catwrap').hidden = false;
     for (const d of keys) form.append(buildRow(d));
+    if (foundDef && foundDef.tier) applyTier(foundDef.tier);   // the level buttons catch up; refreshes too
     refresh();
+    highlightFound();
   }
 
   async function load(keepStatus) {

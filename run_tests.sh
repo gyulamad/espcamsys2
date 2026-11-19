@@ -634,6 +634,17 @@ fi
 #     shown and highlighted while they differ, the per-row reset-to-default going through the same change
 #     tracking and save, locked rows read-only and never sent, the environment rows read-only. Needs php and
 #     jsdom. Override the port with E2E_SETDOM_PORT (and the next one up).
+#   - tests/dom/test_camera_settings_atlas_dom.js: the camera settings page in jsdom, about the Settings Atlas
+#     layout (F-29 T7a): the category rail with its counts and "Other", the LEVEL switch keeping hidden rows'
+#     edits, the pending tray's one apply across categories, discard, the per-row reset and tags. Needs php
+#     and jsdom. Override the port with E2E_CAMATLASDOM_PORT (and the next one up).
+#   - tests/dom/test_settings_search_dom.js: the "Jump to any setting" search in jsdom, against a real PHP
+#     server and a scripted relay (F-29 T7b): the index with one concrete entry per setting (camera keys,
+#     detector keys through the paired camera, relay and dashboard fields) and values that follow the board,
+#     a secret only as the mask, name / label / help matching with every word typed, the scope pills, Enter
+#     opening the selected hit, the ?find= highlight on the camera and the relay page (category and level
+#     raised, row framed), and an unreachable relay degrading instead of blanking. Needs php and jsdom.
+#     Override the port with E2E_SETSEARCHDOM_PORT (and the next ones up).
 #   - tests/e2e/test_camera_device_e2e.js: what the dashboard may know about a camera's board through a real relay —
 #     its address and connection time in GET /status, the firmware, uptime and free memory taken from the camera's
 #     POST /log batches, hostile values dropped, no camera added by a log request, nothing invented for a camera that
@@ -1157,6 +1168,26 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_settings_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the camera settings page: Atlas categories, tiers, pending tray) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_camera_settings_atlas_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the settings search: jump to any setting, scope pills, ?find= highlight) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_settings_search_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
