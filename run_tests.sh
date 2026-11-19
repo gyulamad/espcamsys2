@@ -620,6 +620,15 @@ fi
 #     (the version-skew regression), while a board that has the keys must still give the range when it switches
 #     the drop on; what the page posts is what the relay is handed. Needs php and jsdom. Override the port with
 #     E2E_CAMSETDOM_PORT (and the next one up).
+#   - tests/dom/test_camera_settings_atlas_dom.js: the camera settings page in jsdom about the Settings Atlas
+#     layout (F-29 T7a) — the category rail with counts, the LEVEL switch keeping edits, the pending tray with
+#     ONE apply across categories, the per-row tags and reset. Needs php and jsdom. Override the port with
+#     E2E_CAMATLASDOM_PORT (and the next one up).
+#   - tests/dom/test_detector_settings_atlas_dom.js: the detector settings page (&type=detector) in jsdom about
+#     the same Atlas layout (F-29 T7c) — the detector's own categories and their descriptions, the page naming
+#     the detector, the MOTION_EMA pairing the page enforces like the server, the DETECT/CLEAR_THRESH
+#     cross-check, the tray, tags and reset over PERSON_META. Needs php and jsdom. Override the port with
+#     E2E_CAMDETATLASDOM_PORT (and the next one up).
 #   - tests/dom/test_settings_dom.js: the relay settings page in jsdom, against a real PHP server and a scripted
 #     relay (F-29 T6b): grouped by category in the promised order, the LEVEL switch hiding the tiers, defaults
 #     shown and highlighted while they differ, the per-row reset-to-default going through the same change
@@ -1118,6 +1127,26 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_camera_settings_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the camera settings page's Atlas layout) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_camera_settings_atlas_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the detector settings page's Atlas layout) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_detector_settings_atlas_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

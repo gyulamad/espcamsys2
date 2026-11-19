@@ -1,6 +1,7 @@
 <?php
 // camera-settings-page.php?cam=ID[&type=detector] — one camera's SETTINGS page (with &type=detector: the
-// CALIBRATE page of the person detector paired with that camera, same form, the detector's own settings).
+// SETTINGS page of the person detector paired with that camera, same Atlas form, the detector's own
+// settings — its detection tuning, picture and the rest; the calibration help below).
 //
 // The page follows the Settings Atlas design (designs/Main-v2.png, designs/Category-v2.png):
 //   * a CATEGORY RAIL on the left — one entry per category the firmware's settings table names, with the
@@ -231,6 +232,10 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   function notify(t, kind) { CamToast.show(t, kind || 'info'); }
   function el(tag, props, ...kids) { const e = document.createElement(tag); Object.assign(e, props || {}); for (const k of kids) e.append(k); return e; }
   function banner(t, cls) { $('banners').append(el('div', { className: 'banner ' + cls, textContent: t })); }
+  // What this page edits, spoken about in words: the camera itself — or, on the detector page
+  // (&type=detector), the person detector paired with it. The apply confirm and the tray note
+  // use the same wording, so every sentence on the page names the same device.
+  function subject() { return TYPE === 'detector' ? 'the detector of ' + camera.name : camera.name; }
   function ago(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago'; }
 
   // Is this setting needed, given the values? (same rule as the firmware and camera-settings.php)
@@ -250,8 +255,12 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   // The firmware's table gives most settings a category; they are shown in the order the table names
   // them (a camera starts with Picture & link, a detector with Detection). The relay-connection identity
   // values, the serial-only locks and setup mode have no category — they share the last entry, "Other".
-  // One line per category, from the Atlas design board (Main-v2); a category the board does not name gets none.
+  // One line per category, from the Atlas design board (Main-v2): the camera's categories, and the two
+  // the detector's own table names that a camera never has (Detection first, then Picture & live view).
+  // A category without a line here just shows its rows without a blurb.
   const CAT_DESC = {
+    'Detection': 'Person thresholds, darkness check and the motion gate with its watched area.',
+    'Picture & live view': 'Frame rate, JPEG quality and write timeout of the live picture.',
     'Connection': 'Which Wi-Fi and which relay this board talks to, and how it finds it again.',
     'Picture & link': 'Frame pacing, JPEG quality and the resolution fallback on a slow link.',
     'Alarm input': 'Which pin listens, which level means alarm, and how it is debounced.',
@@ -391,7 +400,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   function renderCatHead() {
     $('cat-title').textContent = catLabel(activeCat);
     const desc = activeCat === '' ? OTHER_CAT.desc : (CAT_DESC[activeCat] || '');
-    $('cat-desc').textContent = (desc ? desc + ' ' : '') + 'Editing ' + camera.name + '.';
+    $('cat-desc').textContent = (desc ? desc + ' ' : '') + 'Editing ' + subject() + '.';
     $('crumb-cat').textContent = catLabel(activeCat);
   }
   function selectCategory(c) {
@@ -481,7 +490,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     lastPending = n;
     if (n > 0) {
       const rb = names.filter((name) => { const d = keys.find((k) => k.name === name); return d && d.apply === 'reboot'; }).length;
-      let note = n + ' pending change' + (n === 1 ? '' : 's') + '. ' + camera.name + ' picks ' + (n === 1 ? 'it' : 'them')
+      let note = n + ' pending change' + (n === 1 ? '' : 's') + '. ' + subject() + ' picks ' + (n === 1 ? 'it' : 'them')
         + ' up at its next settings sync (within about half a minute). Nothing is written until you apply.';
       if (rb > 0) note += ' ' + rb + ' of ' + (n === 1 ? 'it takes' : 'them take') + ' effect only after the ' + WHO + ' restarts.';
       $('tray-note').textContent = note;
@@ -532,9 +541,9 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     lastStructure = structure;
 
     $('title').textContent = camera.icon + ' ' + camera.name + (TYPE === 'detector' ? ' — detector' : '');
-    document.title = camera.name + (TYPE === 'detector' ? ' detector calibration' : ' settings') + ' — ESP32-CAM Dashboard';
+    document.title = camera.name + (TYPE === 'detector' ? ' detector settings' : ' settings') + ' — ESP32-CAM Dashboard';
     if (TYPE === 'detector') {
-      $('subtitle').textContent = 'Person detector calibration (' + camera.deviceId + ')';
+      $('subtitle').textContent = 'Person detector settings (' + camera.deviceId + ')';
       $('calib-help').hidden = false; $('calib-help').style.whiteSpace = 'pre-line';
       $('crumb-scope').textContent = 'DETECTOR';
     }
@@ -598,7 +607,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       const v = currentValues(), lo = parseInt(v.JPEG_Q_MIN), hi = parseInt(v.JPEG_Q_MAX);
       if (!isNaN(lo) && !isNaN(hi) && lo > hi) { notify('JPEG_Q_MIN (' + v.JPEG_Q_MIN + ') must not be higher than JPEG_Q_MAX (' + v.JPEG_Q_MAX + ')', 'error'); return; }
     }
-    if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + (TYPE === 'detector' ? 'the detector of ' : '') + camera.name + '?\n\n' + (TYPE === 'detector' ? 'The detector restarts to apply it (its picture and alarm pin pause for about 10 seconds).' : 'The camera restarts to apply it (its stream and any recording stop for a few seconds).'))) return;
+    if (!confirm('Apply ' + Object.keys(c.values).join(', ') + ' to ' + subject() + '?\n\n' + (TYPE === 'detector' ? 'The detector restarts to apply it (its picture and alarm pin pause for about 10 seconds).' : 'The camera restarts to apply it (its stream and any recording stop for a few seconds).'))) return;
     saveBtn.disabled = revertBtn.disabled = true; setStatus('Queuing…', 'busy');
     try {
       const { res, data } = await post(API, { values: c.values });

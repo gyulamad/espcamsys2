@@ -76,9 +76,24 @@ const board = {
   report(rev, result, message, line, key) { return this.req('POST', 'report', `${rev}\n${result}\n${message}\n${line}`, key); },
   ask(key) { return this.req('GET', 'change', undefined, key); },
 };
+// The detector board of cam-a: the same protocol, on the relay's detector endpoints (F-29 T7c).
+const detBoard = {
+  id: 'det-1',
+  key: CAM_KEY,
+  req(method, suffix, body, key = this.key) { return http(RELAY_PORT, method, `/device-settings/detector/${this.id}/${suffix}`, { headers: key ? { 'X-Api-Key': key } : {}, body }); },
+  report(rev, result, message, line, key) { return this.req('POST', 'report', `${rev}\n${result}\n${message}\n${line}`, key); },
+  ask(key) { return this.req('GET', 'change', undefined, key); },
+};
 const REPORT = 'WIFI=extender-1\\:********;SERVER_HOST=192.168.4.9;PUSH_PORT=8081;HTTP_PORT=8080;CAMERA_ID=cam-a;API_KEY=********;'
   + 'PUSH_GAP_MUL=1.5;ALARM_GPIO_PIN=13;ALARM_ACTIVE=LOW;ALARM_ALL_CAMS=0;LOG_ENABLED=1;LOG_MIN_LEVEL=1;LOG_ECHO=1;'
   + 'LOG_RETRY_MAX=3;LOG_RETRY_SEC=300;LOG_FLUSH_SEC=10;LOG_REPEAT_SEC=30;LOG_HEARTBEAT=600;LOG_LOW_HEAP=30000';
+
+// The person detector paired with cam-a (its 'detector' in config.php, the dashboard's ⚙ CALIBRATE page):
+// the identity keys it holds in its flash plus its tuned detection values — the same shape the recorder's
+// report has, through the relay's detector endpoints.
+const DETECTOR_REPORT = 'WIFI=home-net\\:********;SERVER_HOST=192.168.4.9;HTTP_PORT=8080;DETECTOR_ID=det-1;API_KEY=********;'
+  + 'PERSON_GPIO=12;OTA_ENABLED=1;SYNC_ENABLED=1;DETECT_THRESH=0.75;CLEAR_THRESH=0.5;DARK_THRESH=40;MOTION_THRESH=300;'
+  + 'MOTION_EMA_LEN=0;LOG_MIN_LEVEL=1;LOG_ECHO=1';
 
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-camset-'));
@@ -100,7 +115,7 @@ async function main() {
     fs.mkdirSync(dashDir);
     spawnSync('cp', ['-r', DASH_SRC + '/.', dashDir]);
     fs.writeFileSync(path.join(dashDir, 'config.php'),
-      `<?php return ['auth_user' => 'dash-user', 'auth_pass' => 'dash-pass-0001', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'relay_control_key' => '${CONTROL}', 'cameras' => [['id' => 'cam-a', 'name' => 'Front door', 'icon' => '🚪'], ['id' => 'cam-b', 'name' => 'Yard', 'icon' => '🌿']]];\n`);
+      `<?php return ['auth_user' => 'dash-user', 'auth_pass' => 'dash-pass-0001', 'relay_url' => 'http://127.0.0.1:${RELAY_PORT}', 'relay_control_key' => '${CONTROL}', 'cameras' => [['id' => 'cam-a', 'name' => 'Front door', 'icon' => '🚪', 'detector' => 'det-1'], ['id' => 'cam-b', 'name' => 'Yard', 'icon' => '🌿']]];\n`);
     php = spawn('php', ['-S', `127.0.0.1:${PHP_PORT}`, '-t', dashDir], { stdio: 'ignore' });
     check('the dashboard starts', await waitUp(PHP_PORT, '/'));
     const cfg = () => fs.readFileSync(path.join(dashDir, 'config.php'), 'utf8');
@@ -211,6 +226,46 @@ async function main() {
     const cancel = await dash('POST', api, { body: { cancel: true } });
     check('a queued change can be withdrawn', cancel.status === 200 && (await board.ask()).status === 404 && (await dash('GET', api)).json.state.pending === null, cancel.text);
 
+    // ── the detector of cam-a (F-29 T7c): its page, its table, its change flow ──
+    // The person detector paired with cam-a is calibrated and configured from the same Atlas page with
+    // &type=detector, addressed by its DETECTOR_ID on the relay's detector endpoints. The backend is the
+    // same camera-settings.php; the page's tray flow is covered by the DOM tests.
+    const apiDet = '/camera-settings.php?cam=cam-a&type=detector';
+    check('the detector page needs the login', (await dash('GET', 'camera-settings-page.php?cam=cam-a&type=detector', { auth: false })).status === 401);
+    const detPage = (await dash('GET', 'camera-settings-page.php?cam=cam-a&type=detector')).text;
+    check('the detector page loads and is the Atlas layout, with the calibration help',
+      detPage.includes('id="rail"') && detPage.includes('id="tierbar"') && detPage.includes('id="pending-list"')
+        && (detPage.match(/id="save"/g) || []).length === 1 && detPage.includes('id="calib-help"'), detPage.length.toString());
+    check('the dashboard card links the detector page', /camera-settings-page\.php\?cam=cam-a&amp;type=detector/.test((await dash('GET', 'index.php')).text));
+    check('the detector API needs the login and the dashboard\'s own header',
+      (await dash('GET', apiDet, { auth: false })).status === 401 && (await dash('GET', apiDet, { ajax: false })).status === 403);
+    const d0 = await dash('GET', apiDet);
+    check('the detector\'s API serves the detector firmware\'s own table (PERSON_META and T5b/T5c)',
+      d0.status === 200 && d0.json.keys.length >= 90 && d0.json.camera.type === 'detector' && d0.json.camera.deviceId === 'det-1', d0.text.slice(0, 200));
+    check('…carrying the Atlas metadata the page builds its rail from',
+      d0.json.keys.some((k) => k.name === 'DETECT_THRESH' && k.category === 'Detection' && k.tier === 'basic' && k.apply === 'live' && k.default === '0.6')
+        && d0.json.keys.some((k) => k.name === 'STREAM_JPEG_Q' && k.category === 'Picture & live view' && k.apply === 'reboot' && k.default === '80'));
+    check('a camera without a paired detector has no detector page data',
+      (await dash('GET', 'camera-settings.php?cam=cam-b&type=detector')).status === 404, '');
+    check('a change before the detector has reported is refused', (await dash('POST', apiDet, { body: { values: { DETECT_THRESH: '0.5' } } })).status === 409);
+    check('the detector board reports: boot', (await detBoard.report('0', 'boot', '', DETECTOR_REPORT)).status === 200);
+    const d1 = await dash('GET', apiDet);
+    check('the detector page shows what the board holds, its secret masked',
+      d1.json.state.reported.settings.DETECT_THRESH === '0.75' && d1.json.state.reported.settings.API_KEY === '********');
+    const ema = await dash('POST', apiDet, { body: { values: { MOTION_EMA_LEN: '3000' } } });
+    check('the MOTION_EMA pairing is enforced end to end: the margin is demanded with it',
+      ema.status === 400 && /MOTION_EMA_PCT/.test(ema.json.error), ema.text);
+    const qd = await dash('POST', apiDet, { body: { values: { DETECT_THRESH: '0.5', LOG_MIN_LEVEL: '2' } } });
+    check('a detector change is queued', qd.status === 200 && qd.json.queued === true && qd.json.changed.join() === 'DETECT_THRESH,LOG_MIN_LEVEL', qd.text);
+    const gotDet = await detBoard.ask();
+    const [revDet, lineDet] = gotDet.text.split('\n');
+    check('the detector board asks and gets the change in one line', gotDet.status === 200 && /^\d+$/.test(revDet) && lineDet === 'DETECT_THRESH=0.5;LOG_MIN_LEVEL=2', JSON.stringify(gotDet.text));
+    check('the detector answers: applied, and the page shows the new values',
+      (await detBoard.report(revDet, 'applied', 'changed: DETECT_THRESH, LOG_MIN_LEVEL', DETECTOR_REPORT.replace('DETECT_THRESH=0.75', 'DETECT_THRESH=0.5').replace('LOG_MIN_LEVEL=1', 'LOG_MIN_LEVEL=2'))).status === 200
+        && (await dash('GET', apiDet)).json.state.reported.settings.DETECT_THRESH === '0.5');
+    check('the recorder\'s change flow was not disturbed by the detector\'s', (await dash('GET', api)).json.state.pending === null && (await board.ask()).status === 404);
+
+
     // ── requirements between settings ──
     // (review ARD-009) ALARM_GPIO_PIN, ALARM_ACTIVE, ALARM_ALL_CAMS and
     // LOG_ENABLED are now serial-only locks: a MITM could otherwise disable
@@ -235,7 +290,8 @@ async function main() {
     await sleep(200);
     const log = fs.readFileSync(path.join(relayDir, 'logs', 'camera.log'), 'utf8');
     check('the relay log names what was queued and the board\'s answers', /queued a settings change for recorder cam-a: LOG_HEARTBEAT, LOG_ECHO/.test(log) && /cam-a \(recorder\) applied the settings change/.test(log) && /rejected the settings change/.test(log));
-    check('…and holds no setting value', !/LOG_HEARTBEAT=900/.test(log) && !log.includes('extender-1'));
+    check('…and the detector\'s queueing and answer are named the same way', /queued a settings change for detector det-1: DETECT_THRESH, LOG_MIN_LEVEL/.test(log) && /det-1 \(detector\) applied the settings change/.test(log));
+    check('…and holds no setting value', !/LOG_HEARTBEAT=900/.test(log) && !log.includes('extender-1') && !log.includes('DETECT_THRESH=0.5'));
 
     // ── cameras: add / rename / remove ──
     const sys0 = await dash('GET', 'system-settings.php');
