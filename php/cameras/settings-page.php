@@ -13,6 +13,10 @@
 // in the input and goes through the same change tracking and SAVE as a hand-made change.
 // Rows the relay marks `locked` (the programs it runs) are shown read-only; the file and
 // folder paths are not on the page at all (F-09).
+//
+// The ◈ ATLAS VIEW link opens the same settings one category at a time, with a pending-changes
+// tray — the Settings Atlas layout of relay-settings-page.php (F-29 T7d). Both pages save
+// through the same system-settings.php; either can be used.
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/lib/Layout.php';
 ?><!DOCTYPE html>
@@ -109,7 +113,10 @@ require_once __DIR__ . '/lib/Layout.php';
     <h1>⚙ SETTINGS</h1>
     <p>Main system · relay and dashboard</p>
   </div>
-  <a class="btn" href="settings-search.php" data-page-load="" title="Find any setting by its name, its label or its help text">🔍 JUMP TO SETTING</a>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a class="btn" href="settings-search.php" data-page-load="" title="Find any setting by its name, its label or its help text">🔍 JUMP TO SETTING</a>
+    <a class="btn" href="relay-settings-page.php" data-page-load="" title="The same settings in the Settings Atlas layout — one category at a time, with a pending-changes tray">◈ ATLAS VIEW</a>
+  </div>
 </header>
 
 <main>

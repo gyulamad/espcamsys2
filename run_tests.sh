@@ -645,6 +645,14 @@ fi
 #     opening the selected hit, the ?find= highlight on the camera and the relay page (category and level
 #     raised, row framed), and an unreachable relay degrading instead of blanking. Needs php and jsdom.
 #     Override the port with E2E_SETSEARCHDOM_PORT (and the next ones up).
+#   - tests/dom/test_relay_settings_atlas_dom.js: the same relay settings in the ATLAS layout
+#     (relay-settings-page.php, F-29 T7d) in jsdom, against a real PHP server and a scripted relay: the
+#     category rail with its counts and the breadcrumb back to the hub, one category at a time, the LEVEL
+#     switch never losing an edit made above it, the pending-changes tray counting edits from every category
+#     and saving them with ONE apply (confirm:true for the camera-breaking keys, secrets masked), the
+#     restart and default tags, the per-row reset, locked and environment rows read-only and never sent,
+#     and a ?find= jump opening the key's category at the level that shows it. Needs php and jsdom.
+#     Override the port with E2E_RELATLASDOM_PORT (and the next one up).
 #   - tests/e2e/test_camera_device_e2e.js: what the dashboard may know about a camera's board through a real relay —
 #     its address and connection time in GET /status, the firmware, uptime and free memory taken from the camera's
 #     POST /log batches, hostile values dropped, no camera added by a log request, nothing invented for a camera that
@@ -1188,6 +1196,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
     run_node_e2e "$ROOT_DIR/tests/dom/test_settings_search_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "DOM (the relay settings page in the Atlas layout: rail, levels, pending tray) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_relay_settings_atlas_dom.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 
