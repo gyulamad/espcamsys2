@@ -7,12 +7,14 @@
 //     fields — with a value that follows the board (the stored value, else the default) and a url that
 //     opens the page the setting is edited on with ?find=KEY; a secret is never in it, only the mask
 //   * a relay that cannot be reached degrades: the devices stay searchable, relayError says what is missing
-//   * the PAGE (settings-search.php) matches names, labels and help text (every word typed), ranks a
-//     name match above a label above a help match, narrows by the scope pills, names the device on a
-//     scope that holds several, and shows the value; the selection and Enter open the hit's url
-//   * the CAMERA page opened with ?find=KEY shows the key's category and the level that makes the row
-//     visible, frames and focuses it, and ignores a key the firmware does not have; the RELAY page does
-//     the same for its rows (a locked row is framed, its input cannot be focused)
+//   * the PAGE (the settings page settings-page.php with the search box embedded in it, F-38) matches
+//     names, labels and help text (every word typed), ranks a name match above a label above a help
+//     match, narrows by the scope pills, names the device on a scope that holds several, and shows the
+//     value; the selection and Enter open the hit's url. Typing swaps the settings page for the result
+//     list, emptying it (or ESC) brings the settings back; the box never takes the focus by itself
+//   * the CAMERA page opened with ?find=KEY shows the key's category, frames and focuses it, and ignores
+//     a key the firmware does not have; the SETTINGS page does the same for its rows (a locked row is
+//     framed, its input cannot be focused)
 // Needs `php` and the jsdom package (cd tests/dom && npm install); skips if either is missing.
 //
 //   node tests/dom/test_settings_search_dom.js
@@ -233,23 +235,26 @@ async function main() {
     check('the index endpoint refuses a request that does not come from the dashboard\u2019s own page',
       (await nodeFetch(API, { headers: { Authorization: basic } })).status === 403);
 
-    // ── the search page ─────────────────────────────────────────────────────────────────────
-    let dom = await openPage(`${BASE}/settings-search.php`, ['busy.js', 'settings-search.js']);
+    // ── the search box on the settings page ────────────────────────────────────────────────
+    let dom = await openPage(`${BASE}/settings-page.php`, SETTINGS_SCRIPTS.concat(['settings-search.js', 'icon-catalog.js', 'icon-picker.js', 'sound-library.js']));
     let window = dom.window;
     const $ = (id) => window.document.getElementById(id);
     let search = await searchLoaded(window);
+    check('the result area starts hidden and the settings page is what shows',
+      window.document.getElementById('search-area').hidden === true
+        && window.document.getElementById('page').hidden === false
+        && window.document.getElementById('results').querySelectorAll('.hit').length === 0);
+    check('the embedded search never takes the focus by itself (a ?find= jump must keep it)',
+      window.document.activeElement !== $('q'));
     check('the scope pills are there, All scopes first and chosen', (() => {
       const pills = Array.from(window.document.querySelectorAll('#scopebar .scope-pill'));
       return pills.length === 4 && pills[0].textContent === 'All scopes' && pills[0].classList.contains('on')
         && pills.map((p) => p.textContent).join('|') === 'All scopes|Cameras|Detectors|Relay';
     })(), Array.from(window.document.querySelectorAll('#scopebar .scope-pill')).map((p) => p.textContent).join('|'));
-    check('an empty query shows the hint and no hits', (() => {
-      const rows = window.document.querySelectorAll('#results .hit');
-      const hint = window.document.querySelector('#results .search-hint');
-      return rows.length === 0 && hint !== null && /Type part of/.test(hint.textContent);
-    })());
-
     type(window, 'jpeg');
+    check('typing swaps the settings page for the result list',
+      window.document.getElementById('page').hidden === true
+        && window.document.getElementById('search-area').hidden === false);
     let hits = hitInfo(window);
     check('a query by NAME finds the keys on every device that has one',
       hits.length === 7 && hits.filter((h) => h.key === 'JPEG_Q_MIN').length === 2
@@ -314,8 +319,10 @@ async function main() {
     q.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     check('Enter opens the selected hit\u2019s url', opened.length === 1 && opened[0] === hits[1].href, JSON.stringify(opened));
     q.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    check('ESC clears the query and empties the list',
-      $('q').value === '' && window.document.querySelectorAll('#results .hit').length === 0);
+    check('ESC clears the query, empties the list and brings the settings page back',
+      $('q').value === '' && window.document.querySelectorAll('#results .hit').length === 0
+        && window.document.getElementById('page').hidden === false
+        && window.document.getElementById('search-area').hidden === true);
     closeWindow(dom);
 
     // ── the camera page as the jump target ──────────────────────────────────────────────────
@@ -353,16 +360,16 @@ async function main() {
         && window.document.querySelector('.row.found') === null);
     closeWindow(dom);
 
-    // ── the relay page as the jump target ───────────────────────────────────────────────────
+    // ── the settings page as the jump target ────────────────────────────────────────────────
     dom = await openPage(`${BASE}/settings-page.php?find=personScanStride`, SETTINGS_SCRIPTS);
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-personScanStride'));
-    check('a jump to an expert relay row raises the LEVEL and frames the row',
-      tierOn() === 'expert'
+    check('a jump to a relay row opens ITS category, frames and focuses the row',
+      window.document.getElementById('cat-title').textContent === 'Person check'
         && window.document.getElementById('r-personScanStride').hidden === false
         && window.document.getElementById('r-personScanStride').classList.contains('found')
         && window.document.activeElement === window.document.getElementById('f-personScanStride'),
-      JSON.stringify({ tier: tierOn(), active: window.document.activeElement && window.document.activeElement.id }));
+      JSON.stringify({ cat: window.document.getElementById('cat-title').textContent, active: window.document.activeElement && window.document.activeElement.id }));
     closeWindow(dom);
 
     dom = await openPage(`${BASE}/settings-page.php?find=personScanPython`, SETTINGS_SCRIPTS);
@@ -377,12 +384,13 @@ async function main() {
     dom = await openPage(`${BASE}/settings-page.php?find=notAField`, SETTINGS_SCRIPTS);
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-alarmRecordSeconds'));
-    check('a key the relay page does not hold is ignored: nothing framed, page as always',
-      window.document.querySelector('.row.found') === null && tierOn() === 'basic');
+    check('a key the settings page does not hold is ignored: nothing framed, page as always',
+      window.document.querySelector('.row.found') === null
+        && window.document.getElementById('cat-title').textContent === 'Recording');
     closeWindow(dom);
 
-    // ── an unreachable relay degrades; the pages carry the jump button ──────────────────────
-    dom = await openPage(`${BASE2}/settings-search.php`, ['busy.js', 'settings-search.js']);
+    // ── an unreachable relay degrades; the settings page still searches what it has ─────────
+    dom = await openPage(`${BASE2}/settings-page.php`, SETTINGS_SCRIPTS.concat(['settings-search.js', 'icon-catalog.js', 'icon-picker.js', 'sound-library.js']));
     window = dom.window;
     search = await searchLoaded(window);
     check('a relay that cannot be reached degrades: the devices stay searchable, the note says what is missing', (() => {
@@ -395,9 +403,9 @@ async function main() {
       window.CamSearch.scope = 'relay';
       return window.document.querySelectorAll('#results .hit').length === 0;
     })());
-    check('the settings pages carry the jump button to the search',
-      (await (await nodeFetch(`${BASE}/settings-page.php`, { headers: { Authorization: basic } })).text()).includes('settings-search.php')
-        && (await (await nodeFetch(`${BASE}/camera-settings-page.php?cam=cam-a`, { headers: { Authorization: basic } })).text()).includes('settings-search.php'));
+    check('the settings page carries the search box, the camera page no jump button of any kind',
+      (await (await nodeFetch(`${BASE}/settings-page.php`, { headers: { Authorization: basic } })).text()).includes('id="q"')
+        && !(await (await nodeFetch(`${BASE}/camera-settings-page.php?cam=cam-a`, { headers: { Authorization: basic } })).text()).includes('JUMP TO SETTING'));
     closeWindow(dom);
   } finally {
     if (php) await stopProc(php);

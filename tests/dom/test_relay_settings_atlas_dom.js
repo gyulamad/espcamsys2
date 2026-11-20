@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 'use strict';
-// test_relay_settings_atlas_dom.js — the relay settings page in the ATLAS layout (relay-settings-page.php,
-// F-29 T7d, designs/Category-v2.png) in jsdom, with its inline script running against a real PHP server and
-// a fake relay answering /system-settings the way lib/sysconfig.js's buildView does (the same fake as
-// test_settings_dom.js, plus the two camera-breaking rows camKey and pushPort):
+// test_relay_settings_atlas_dom.js — the settings page in the ATLAS layout (settings-page.php,
+// F-29 T7d, designs/Category-v2.png; since F-38 the only settings page) in jsdom, with its inline script
+// running against a real PHP server and a fake relay answering /system-settings the way
+// lib/sysconfig.js's buildView does (a representative slice of the relay's rows, plus the two
+// camera-breaking rows camKey and pushPort):
 //   * the CATEGORY RAIL lists the categories in the order the page promises (the relay's groups, the
 //     dashboard's own "Dashboard" last), each with how many settings it holds; picking one shows its rows,
-//     hides the others, and names it in the breadcrumb — which links back to the settings hub
+//     hides the others, and names it in the heading; a final CAMERAS entry holds the camera list (added and
+//     removed at once, not through APPLY — the old hub's list, F-38)
 //   * every setting is shown, whatever tier the relay names it for (F-37: the LEVEL switch is gone);
 //     a row is hidden only because another category is the one on view, and an edit made in one
 //     category survives moving to another and is still counted
 //   * the PENDING-CHANGES TRAY lists every unsaved edit — from every category — with its old → new value
 //     (a secret as a mask, never its text), counts them in the header pill, warns about restart and
-//     camera-breaking edits, and offers ONE apply button that saves through the same POST as the hub's
-//     form (confirm:true for the camera-breaking keys); DISCARD puts everything back and sends nothing
+//     camera-breaking edits, and offers ONE apply button that saves through system-settings.php
+//     (confirm:true for the camera-breaking keys); DISCARD puts everything back and sends nothing
 //   * each row shows its tags (affects cameras / locked / changed; restarts relay, set by the environment,
 //     from config.js, and the default value, highlighted while the shown value differs) and its
 //     ↺ DEFAULT button, which goes through the same change tracking as a hand edit
@@ -40,7 +42,7 @@ const PHP_PORT = Number(process.env.E2E_RELATLASDOM_PORT || 19800);
 const RELAY_PORT = PHP_PORT + 1;
 const AUTH = { user: 'owner', pass: 'a-good-long-password' };
 const BASE = `http://127.0.0.1:${PHP_PORT}`;
-const PAGE = `${BASE}/relay-settings-page.php`;
+const PAGE = `${BASE}/settings-page.php`;
 const basic = 'Basic ' + Buffer.from(`${AUTH.user}:${AUTH.pass}`).toString('base64');
 
 let passCount = 0;
@@ -215,7 +217,7 @@ const confirms = [];    // every confirm() text the page asked about
 async function openPage(toasts) {
   const html = await (await nodeFetch(PAGE, { headers: { Authorization: basic } })).text();
   const dom = new JSDOM(html, {
-    url: PAGE, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js', 'sound-library.js']), pretendToBeVisual: true,
+    url: PAGE, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js', 'settings-search.js', 'icon-catalog.js', 'icon-picker.js', 'sound-library.js']), pretendToBeVisual: true,
     beforeParse(window) {
       window.confirm = (text) => { confirms.push(String(text)); return true; };
       window.alert = () => {};
@@ -248,7 +250,9 @@ async function main() {
 
     // what the server sends (the same data the page builds the rail and the rows from): the relay's
     // fields as this fake serves them, plus the dashboard's own (system-settings.php appends them)
-    const served = (await (await nodeFetch(`${BASE}/system-settings.php`, { headers: { Authorization: basic, 'X-Requested-With': 'camdash' } })).json()).fields;
+    const servedAnswer = await (await nodeFetch(`${BASE}/system-settings.php`, { headers: { Authorization: basic, 'X-Requested-With': 'camdash' } })).json();
+    const served = servedAnswer.fields;
+    const servedCameras = servedAnswer.cameras || [];
     const GROUP_ORDER = ['Recording', 'Person check', 'Alarm sounds', 'Network', 'Keys', 'Log', 'Folders', 'Detectors', 'Notifications', 'Security', 'Diagnostics', 'Dashboard'];
     const seen = [];
     for (const f of served) { const g = f.group || ''; if (!seen.includes(g)) seen.push(g); }
@@ -268,24 +272,29 @@ async function main() {
     check('the rail is shown with RELAY as its heading',
       $('rail').hidden === false && $('rail').querySelector('.rail-head').textContent === 'RELAY');
     const railCats = Array.from(window.document.querySelectorAll('#rail .rail-item')).map((b) => b.dataset.cat);
-    check('the rail lists the categories in the promised order, the dashboard\u2019s own last',
-      JSON.stringify(railCats) === JSON.stringify(expectedCats), JSON.stringify(railCats));
-    check('each rail entry counts its settings',
-      Array.from(window.document.querySelectorAll('#rail .rail-item')).every((b) => Number(b.querySelector('.rail-count').textContent) === catCount(b.dataset.cat)));
-    check('the first category is shown, named in the breadcrumb and the heading, with a description',
-      railCats[0] === 'Recording' && $('crumb-cat').textContent === 'Recording' && $('cat-title').textContent === 'Recording'
+    check('the rail lists the categories in the promised order, the dashboard\u2019s own last, CAMERAS after them',
+      JSON.stringify(railCats) === JSON.stringify(expectedCats.concat(['Cameras'])), JSON.stringify(railCats));
+    check('each rail entry counts its settings, CAMERAS counts the cameras',
+      Array.from(window.document.querySelectorAll('#rail .rail-item')).every((b) =>
+        b.dataset.cat === 'Cameras'
+          ? Number(b.querySelector('.rail-count').textContent) === servedCameras.length
+          : Number(b.querySelector('.rail-count').textContent) === catCount(b.dataset.cat)));
+    check('the first category is shown, named in the heading, with a description',
+      railCats[0] === 'Recording' && $('cat-title').textContent === 'Recording'
         && $('cat-desc').textContent.includes('pre-roll'));
-    check('the breadcrumb links back to the settings hub',
-      window.document.querySelector('.crumbs a[href="settings-page.php"]') !== null);
+    check('the page is the settings page itself: the crumb says SETTINGS and links nowhere back',
+      window.document.querySelector('.crumbs .here') !== null
+        && window.document.querySelector('.crumbs .here').textContent === 'SETTINGS'
+        && window.document.querySelector('.crumbs a') === null);
     check('a row of the shown category is visible, one of another category is hidden',
       row('alarmRecordSeconds').hidden === false && row('personScanEnabled').hidden === true);
     check('a file or folder path never reaches the page, a locked row does',
       $('f-logFile') === null && $('f-personScanModel') === null && row('personScanPython') !== null);
 
     railItem('Person check').click();
-    check('picking a category shows its rows, hides the others, and names it in the breadcrumb',
+    check('picking a category shows its rows, hides the others, and names it in the heading',
       row('personScanEnabled').hidden === false && row('alarmRecordSeconds').hidden === true
-        && $('crumb-cat').textContent === 'Person check');
+        && $('cat-title').textContent === 'Person check');
 
     // ── the row tags: defaults, sources, secrets ─────────────────────────────────────────────
     check('a row shows its default', defTag('alarmRecordSeconds') !== null && defTag('alarmRecordSeconds').textContent === 'default 60');
@@ -370,6 +379,47 @@ async function main() {
         && posts.length === 0);
     check('the discard said so in a toast', toasts.some((t) => /Discarded/.test(t)), JSON.stringify(toasts));
 
+    // ── the CAMERAS category: the old hub's camera list, acting at once (F-38) ───────────────
+    railItem('Cameras').click();
+    check('the CAMERAS entry shows the camera list, the settings rows all hidden',
+      $('cameras').hidden === false && row('alarmRecordSeconds').hidden === true
+        && $('cat-title').textContent === 'Cameras'
+        && window.document.querySelector('#cam-list .cam-row') !== null);
+    $('c-id').value = 'cam-b';
+    $('c-name').value = 'Back gate';
+    window.document.getElementById('c-add').click();
+    check('ADD CAMERA adds the row at once (no APPLY involved)',
+      await waitFor(() => window.document.querySelectorAll('#cam-list .cam-row').length === 2) !== null);
+    check('the rail counts the new camera', railItem('Cameras').querySelector('.rail-count').textContent === '2');
+    Array.from(window.document.querySelectorAll('#cam-list .cam-row'))
+      .find((r) => r.textContent.includes('cam-b'))
+      .querySelector('button').click();   // the row's first button is its 🗑 REMOVE
+    check('REMOVE takes the row away again',
+      await waitFor(() => window.document.querySelectorAll('#cam-list .cam-row').length === 1) !== null);
+    check('the tray stayed empty through it all: the cameras are not part of APPLY',
+      $('pending-count').hidden === true && $('save').disabled === true);
+
+    // ── the search box: always there; typing swaps the page for the result list (F-38) ───────
+    railItem('Recording').click();   // back to a settings category after the cameras
+    check('the search box is on the page from the start, the result area hidden',
+      $('q') !== null && $('search-area').hidden === true && $('page').hidden === false);
+    check('the search does not pull the focus to itself on load (a ?find= jump must keep it)',
+      window.document.activeElement !== $('q'));
+    const q = $('q');
+    q.value = 'preRoll';
+    q.dispatchEvent(new window.Event('input', { bubbles: true }));
+    check('typing swaps the settings page for the result list',
+      $('page').hidden === true && $('search-area').hidden === false
+        && (await waitFor(() => window.document.querySelectorAll('#results .hit').length > 0)) !== null);
+    check('a hit of a relay setting opens this very page with ?find=',
+      Array.from(window.document.querySelectorAll('#results .hit'))
+        .some((a) => a.getAttribute('href') === 'settings-page.php?find=preRollSeconds'));
+    q.value = '';
+    q.dispatchEvent(new window.Event('input', { bubbles: true }));
+    check('emptying the search box brings the settings page back (what ESC did on the old search page)',
+      $('page').hidden === false && $('search-area').hidden === true
+        && row('alarmRecordSeconds').hidden === false);
+
     // ── the row's reset-to-default button ────────────────────────────────────────────────────
     railItem('Recording').click();
     const prReset = $('f-preRollSeconds').closest('.ctl').querySelector('.btn.reset');
@@ -435,6 +485,7 @@ async function main() {
     setField(window, 'camKey', 'a-new-key-1');
     const nPosts3 = posts.length;
     const nRelayPosts3 = relayPosts.length;
+    confirms.length = 0;   // the cameras block's confirmations are not this check's subject
     window.document.getElementById('save').click();
     check('APPLY of a camera-breaking key asks before saving',
       confirms.length === 1 && confirms[0].includes('camKey') && confirms[0].includes('EVERY camera'),
@@ -459,10 +510,10 @@ async function main() {
     // category, nothing framed).
     toasts = [];
     const openFind = async (find) => {
-      const url = `${BASE}/relay-settings-page.php${find ? '?find=' + encodeURIComponent(find) : ''}`;
+      const url = `${BASE}/settings-page.php${find ? '?find=' + encodeURIComponent(find) : ''}`;
       const html = await (await nodeFetch(url, { headers: { Authorization: basic } })).text();
       const d = new JSDOM(html, {
-        url, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js', 'sound-library.js']), pretendToBeVisual: true,
+        url, runScripts: 'dangerously', resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js', 'settings-search.js', 'icon-catalog.js', 'icon-picker.js', 'sound-library.js']), pretendToBeVisual: true,
         beforeParse(window) {
           window.confirm = () => true;
           window.alert = () => {};
@@ -474,8 +525,8 @@ async function main() {
     };
     const domFind = await openFind('discoveryPort');
     let w = domFind.window;
-    check('the search\u2019s jump opens the key\u2019s category in the breadcrumb and the rail',
-      w.document.getElementById('crumb-cat').textContent === 'Network'
+    check('the search\u2019s jump opens the key\u2019s category in the heading and the rail',
+      w.document.getElementById('cat-title').textContent === 'Network'
         && w.document.querySelector('#rail .rail-item.on').dataset.cat === 'Network');
     check('the jumped-to row is shown and framed', w.document.getElementById('r-discoveryPort').hidden === false
       && w.document.getElementById('r-discoveryPort').classList.contains('found') === true);
@@ -483,7 +534,7 @@ async function main() {
     const domMiss = await openFind('noSuchKey');
     w = domMiss.window;
     check('an unknown key leaves the page as always',
-      w.document.getElementById('crumb-cat').textContent === 'Recording'
+      w.document.getElementById('cat-title').textContent === 'Recording'
         && w.document.querySelectorAll('.row.found').length === 0);
     closeWindow(domMiss);
   } finally {

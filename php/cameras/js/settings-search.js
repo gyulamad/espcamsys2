@@ -1,11 +1,12 @@
 'use strict';
-// settings-search.js — the "Jump to any setting" search (F-29 T7b, designs/Search-v2.png), the page
-// settings-search.php. One index of EVERY setting — each camera's keys, each detector's keys (via the
-// camera it is paired with) and the relay's and dashboard's own fields — loaded once from
-// settings-search-index.php. A query matches a hit's NAME, its plain-language LABEL and its HELP text
-// (every word typed must appear somewhere in them); the scope pills narrow it to Cameras, Detectors or
-// Relay. A hit opens the page the setting is edited on with ?find=KEY, which shows the category (or, on
-// the relay page, just the row) with the setting framed and focused.
+// settings-search.js — the "Jump to any setting" search (F-29 T7b, designs/Search-v2.png), embedded in
+// the settings page (settings-page.php, F-38: the old search page settings-search.php is gone). One
+// index of EVERY setting — each camera's keys, each detector's keys (via the camera it is paired with)
+// and the relay's and dashboard's own fields — loaded once from settings-search-index.php. A query
+// matches a hit's NAME, its plain-language LABEL and its HELP text (every word typed must appear
+// somewhere in them); the scope pills narrow it to Cameras, Detectors or Relay. A hit opens the page
+// the setting is edited on with ?find=KEY, which shows the category (or, on the settings page, just
+// the row) with the setting framed and focused.
 //
 // Loaded by the page as a plain script (window.CamSettingsSearch) and by tests with require(); the
 // matching and ranking are pure (search(), below) so they are checked without a page.
@@ -174,8 +175,12 @@
         const h = hits[selected];
         if (h) open(h.url);
       } else if (ev.key === 'Escape') {
-        if (input.value !== '') { input.value = ''; selected = 0; render(); }
-        else window.history.back();
+        if (input.value !== '') {
+          input.value = ''; selected = 0; render();
+          // the same event a hand-clearing carries, so an embedding page can follow the emptying
+          // (the settings page swaps its result list back for the settings, F-38)
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        } else window.history.back();
       }
     });
 
@@ -190,7 +195,10 @@
         relayError = typeof data.relayError === 'string' ? data.relayError : '';
         renderScopes();
         render();
-        input.focus();
+        // autoFocus: false leaves the focus alone — a search box embedded in a page that is
+        // something first (the settings page, F-38) must not pull the caret (and the scroll) to
+        // itself on every page load, a ?find= jump included.
+        if (parts.autoFocus !== false) input.focus();
       })
       .catch((e) => {
         results.textContent = '';

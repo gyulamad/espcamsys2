@@ -265,7 +265,7 @@ async function settingsPage() {
   const { JSDOM } = jsdomModule;
   const dom = new JSDOM(html, {
     url: `${BASE}/settings-page.php`, runScripts: 'dangerously', pretendToBeVisual: true,
-    resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js', 'icon-catalog.js', 'icon-picker.js', 'sound-library.js']),
+    resources: pageScriptLoader(jsdomModule, ['toast.js', 'busy.js', 'settings-search.js', 'icon-catalog.js', 'icon-picker.js', 'sound-library.js']),
     beforeParse(window) {
       window.confirm = () => true;
       window.fetch = async (u, opts = {}) => {
@@ -286,11 +286,17 @@ async function settingsPage() {
   const toasts = () => [...d.querySelectorAll('#cam-toasts .cam-toast')].map((t) => t.textContent);
   try {
     await waitFor(() => d.querySelectorAll('.sound-row').length > 0, 6000);
-    const legends = [...d.querySelectorAll('fieldset > legend')].map((l) => l.textContent);
-    check('the page has an "Alarm sounds" group, between "Person check" and "Network"', legends.includes('Alarm sounds') && legends.indexOf('Alarm sounds') > legends.indexOf('Person check') && legends.indexOf('Alarm sounds') < legends.indexOf('Network'), legends.join(' | '));
-    const group = [...d.querySelectorAll('fieldset')].find((f) => f.querySelector('legend').textContent === 'Alarm sounds');
-    check('the sound files are listed first in that group, then the eight settings (F-29 T6a added the player lock and the time limit)',
-      group.firstElementChild.tagName === 'LEGEND' && group.children[1].classList.contains('sound-library') && group.querySelectorAll('.row').length === 8);
+    // the settings page is the Atlas layout since F-38: the sound library is the slot at the top of the
+    // form, the "Alarm sounds" category is a rail entry, and its rows exist whatever category is shown.
+    check('the page has an "Alarm sounds" category, between "Person check" and "Network"', (() => {
+      const cats = [...d.querySelectorAll('#rail .rail-item')].map((b) => b.dataset.cat);
+      return cats.includes('Alarm sounds') && cats.indexOf('Alarm sounds') > cats.indexOf('Person check') && cats.indexOf('Alarm sounds') < cats.indexOf('Network');
+    })(), [...d.querySelectorAll('#rail .rail-item')].map((b) => b.dataset.cat).join(' | '));
+    const slot = d.getElementById('sound-slot');
+    check('the sound files are listed first, then the eight settings (F-29 T6a added the player lock and the time limit)',
+      slot && slot.classList.contains('sound-slot') && slot.querySelector('.sound-library') !== null
+        && d.getElementById('form').firstElementChild === slot
+        && [...d.querySelectorAll('#form > .row')].filter((r) => r.dataset.cat === 'Alarm sounds').length === 8);
     check('the list shows the sounds on the relay', [...d.querySelectorAll('.sound-row .nm')].map((n) => n.firstChild.textContent).join() === 'beep.mp3,chime.ogg,siren.wav');
     const select = selectOf('alarmSoundRecordStart');
     check('a sound choice is a select: "(no sound)" first, then the files', select.tagName === 'SELECT' && [...select.options].map((o) => o.textContent).join(' | ') === '(no sound) | beep.mp3 | chime.ogg | siren.wav' && select.value === 'siren.wav');

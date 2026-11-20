@@ -1,7 +1,7 @@
 <?php
 // settings-search-index.php — the "Jump to any setting" search index as JSON (F-29 T7b,
-// designs/Search-v2.png). The search page (settings-search.php) loads it once and matches the
-// query against names, labels and help text in the browser.
+// designs/Search-v2.png). The settings page's search box (settings-page.php, F-38) loads it once
+// and matches the query against names, labels and help text in the browser.
 //
 //   GET settings-search-index.php
 //     -> { scopes: ['cameras', 'detectors', 'relay'],

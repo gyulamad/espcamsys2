@@ -164,8 +164,8 @@ require_once __DIR__ . '/lib/Layout.php';
   .is-mobile .tray { padding-top: 6px; padding-bottom: 8px; }
   .is-mobile .traybar #save, .is-mobile .traybar #status { display: none; }   /* the bar's APPLY and count cover them */
   .is-mobile .traybar { justify-content: flex-start; gap: 10px; padding-top: 6px; }
-  /* The header's "N PENDING" pill (and the new JUMP TO SETTING link's row) is redundant with the mobile
-     bar's count; hide the pill so the header stays compact. The link stays — search is reachable on a phone. */
+  /* The header's "N PENDING" pill is redundant with the mobile bar's count; hide the pill so the
+     header stays compact. */
   .is-mobile .pending-pill { display: none; }
   /* 44 px touch targets (designs/Mobile-v2.png). Every interactive control on a phone is at least 44 px
      tall, so a finger lands on one and not its neighbour. The value is hardcoded (the same convention as
@@ -207,7 +207,6 @@ require_once __DIR__ . '/lib/Layout.php';
     <p id="subtitle">Camera settings</p>
   </div>
   <div class="hdr-actions">
-    <a class="btn" href="settings-search.php" data-page-load="" title="Find any setting by its name, its label or its help text">🔍 JUMP TO SETTING</a>
     <span class="pending-pill" id="pending-count" hidden>0 PENDING</span>
   </div>
 </header>

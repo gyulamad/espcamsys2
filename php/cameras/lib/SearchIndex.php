@@ -1,8 +1,8 @@
 <?php
 // SearchIndex.php — the "Jump to any setting" search index (F-29 T7b, designs/Search-v2.png): every
 // setting of every camera, of every detector and of the relay/dashboard as one flat list of entries,
-// so the search page (settings-search.php) can match a query against names, labels and help text and
-// open the right page with the setting highlighted (the pages' ?find=KEY).
+// so the settings page's search box (settings-page.php, F-38) can match a query against names,
+// labels and help text and open the right page with the setting highlighted (the pages' ?find=KEY).
 //
 // One entry per CONCRETE place a setting is edited: a camera's key (its own settings page), a
 // detector's key (the CALIBRATE page of the camera it is paired with), a relay or dashboard field
