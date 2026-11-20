@@ -5,10 +5,8 @@ require_once __DIR__ . '/lib/Logic.php';
 require_once __DIR__ . '/lib/Layout.php';
 require_once __DIR__ . '/relay.php';
 $count = count($cameras);
-$dashboardLayout = CamLogic::dashboardLayout($_GET['layout'] ?? null);
-
 // The site's address itself (https://host/) opens SIMPLE LIST; the dashboard is one click away in the navigation bar.
-$landing = CamLogic::defaultPageRedirect($dashboardLayout, parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH));
+$landing = CamLogic::defaultPageRedirect(parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH));
 if ($landing !== null) {
     header('Location: ' . $landing, true, 302);
     exit;
@@ -207,7 +205,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
        must not stretch the cards beside it in the same row. */
     align-items: start;
   }
-  .grid.layout-list { grid-template-columns: 1fr; }
 
   /* ── Camera card ── */
   .cam-card {
@@ -291,7 +288,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     display: flex; align-items: center; justify-content: center;
   }
 
-  .layout-list .cam-stream-wrap { aspect-ratio: 16/6; }
 
   <?= CamLayout::recordingFrameStyle() ?>
 
@@ -452,7 +448,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </style>
 </head>
 <body>
-<?= CamLayout::navBar('dashboard-' . ($dashboardLayout ?? 'grid')) ?>
+<?= CamLayout::navBar('dashboard') ?>
 <header>
   <div class="logo">
     <div class="logo-icon">📷</div>
@@ -629,7 +625,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 
 <script src="js/busy.js"></script>
 <?= CamLayout::recordingsListScript() ?>
-<script src="js/dashboard-layout.js"></script>
 <script src="js/toast.js"></script>
 <script src="js/screen-keeper.js"></script>
 <script>if (window.CamScreenKeeper) CamScreenKeeper.create().keepAwake();   // live pictures: the device screen must not go dark</script>
@@ -1938,10 +1933,6 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   // F-31: read every camera-with-detector's reported alarm input once, for the ALARM CHAIN line (fetchAlarmChain).
   document.querySelectorAll('.det-row').forEach((row) => fetchAlarmChain(row.dataset.cam));
 
-  // ── Layout: DASHBOARD GRID / DASHBOARD LIST of the navigation bar (js/dashboard-layout.js) ──
-  if (window.CamDashboardLayout) {
-    CamDashboardLayout.wire({ document, location, history, storage: localStorage });
-  }
 </script>
 <?= CamLayout::storageWarningScript() ?>
 <?= CamLayout::setupModeAlertScript() ?>

@@ -116,11 +116,10 @@ CSS;
     }
 
     // The pages the navigation bar leads to: key (what a page passes as its own), address, label, hint.
-    // The dashboard has two entries: its grid and its list layout (the page honours ?layout=, see
-    // CamLogic::dashboardLayout()). The bar's links are the only ones to these pages.
+    // The dashboard is one entry (F-43a: the list layout is gone entirely, the grid IS the dashboard).
+    // The bar's links are the only ones to these pages.
     private const NAV_PAGES = [
-        ['dashboard-grid', './?layout=grid', '⊞ DASHBOARD GRID', 'All cameras as a grid, with their controls'],
-        ['dashboard-list', './?layout=list', '☰ DASHBOARD LIST', 'All cameras as a list, with their controls'],
+        ['dashboard', './?layout=grid', '⊞ DASHBOARD', 'All cameras as a grid, with their controls'],
         ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen'],
         ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large'],
         ['all-files', 'all-recordings.php', '📼 ALL FILES', 'Every saved recording of every camera in one list, newest first; delete all footage from there'],

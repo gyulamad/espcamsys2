@@ -141,7 +141,7 @@ async function main() {
     let r = await get('index.php');
     const navLink = (href, label) => `<a class="nav-link[^"]*" href="${href}"[^>]*>[^<]*${label}</a>`;
     const NAV_LINKS = new RegExp('<nav class="site-nav" id="site-nav" aria-label="Pages">' + [
-      navLink('\\./\\?layout=grid', 'DASHBOARD GRID'), navLink('\\./\\?layout=list', 'DASHBOARD LIST'), navLink('simple-view\\.php', 'SIMPLE VIEW'),
+      navLink('\\./\\?layout=grid', 'DASHBOARD'), navLink('simple-view\\.php', 'SIMPLE VIEW'),
       navLink('simple-list\\.php', 'SIMPLE LIST'), navLink('all-recordings\\.php', 'ALL FILES'), navLink('ota-logs\\.php', 'OTA &amp; LOGS'),
     ].join('') + '<form class="logout-form" method="post" action="logout\\.php" data-page-load="Logging out…"><button class="nav-link nav-logout" type="submit"[^>]*>[^<]*LOG OUT</button></form></nav>');
     check('the dashboard has the navigation bar (dashboard grid / list, simple view, simple list, all files, OTA & LOGS, LOG OUT at its right end) as the first thing in its body, the grid marked, and no copy of those buttons in its header',
@@ -150,7 +150,8 @@ async function main() {
       && !r.text.includes('id="btn-simple-list"') && !r.text.includes('id="btn-simple-view"') && !r.text.includes('id="btn-grid"') && !r.text.includes('id="btn-list"')
       && !r.text.includes('id="btn-all-files"') && !r.text.includes('id="btn-delete-all"') && !r.text.includes('DELETE ALL FOOTAGE') && (r.text.match(/action="logout\.php"/g) || []).length === 1
       && r.text.includes('src="js/dashboard-layout.js"') && r.text.includes('CamDashboardLayout.wire('), detail(r));
-    for (const [query, key] of [['?layout=list', 'dashboard-list'], ['?layout=grid', 'dashboard-grid'], ['?layout=evil%22%3E', 'dashboard-grid'], ['?layout[]=list', 'dashboard-grid']]) {
+    // F-43a: the list layout is gone — whatever ?layout= says, the bar marks DASHBOARD
+    for (const [query, key] of [['?layout=list', 'dashboard'], ['?layout=grid', 'dashboard'], ['?layout=evil%22%3E', 'dashboard'], ['?layout[]=list', 'dashboard']]) {
       const n = await get('index.php' + query);
       check(`index.php${query}: the bar marks ${key} (an unknown value falls back to the grid)`, n.status === 200 && (n.text.match(/aria-current/g) || []).length === 1 && n.text.includes(`data-nav="${key}" data-page-load aria-current="page"`) && !n.text.includes('evil"'), detail(n));
     }

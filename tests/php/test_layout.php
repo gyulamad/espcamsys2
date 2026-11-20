@@ -302,7 +302,7 @@ camtest_test('simpleListPage: a hostile camera name or id never becomes markup, 
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false, 'escaped');
     camtest_assert_true(strpos($html, '&quot;&gt;&lt;script&gt;') !== false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 11, 'only our nine script files (the list page\'s seven, toast.js and alarm-sounds.js for the alarm sounds), the storage warning and the setup-mode alert');
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 12, 'the page scripts (the list page\'s seven, toast.js and alarm-sounds.js for the alarm sounds), nav-toggle.js of the bar, the storage warning and the setup-mode alert');
 });
 
 camtest_test('simpleListPage: an id is URL-encoded in the links', function () {
@@ -342,7 +342,7 @@ camtest_test('simpleViewPage: a hostile camera name or id stays text, in the pag
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[0], 10);
     camtest_assert_true(strpos($html, '<script>window.__pwned') === false);
     camtest_assert_equal(layout_handler_attributes($html), [], 'no handler attribute on any element');
-    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 14);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, toast.js, alarm-sounds.js, fullscreen.js, screen-keeper.js, stable-text.js, simple-view.js, the storage warning and the setup-mode alert
+    camtest_assert_equal(preg_match_all('/<script\b/i', $html), 15);   // busy.js, camera-offline.js, simple-logic.js, mux-codec.js, mux-client.js, mux-pictures.js, toast.js, alarm-sounds.js, fullscreen.js, screen-keeper.js, stable-text.js, simple-view.js, nav-toggle.js of the bar, the storage warning and the setup-mode alert
     preg_match('/data-cameras="([^"]*)"/', $html, $m);
     camtest_assert_equal(json_decode(html_entity_decode($m[1], ENT_QUOTES), true)[0]['name'], $HOSTILE[0]['name'], 'the data survives the round trip exactly');
     $html = CamLayout::simpleViewPage($HOSTILE, $HOSTILE[1], 10);
@@ -531,11 +531,11 @@ camtest_test('navBar: the pages in a fixed order, as plain links with a hint', f
     $html = CamLayout::navBar(null);
     camtest_assert_true(strpos($html, '<nav class="site-nav" id="site-nav" aria-label="Pages">') === 0);
     camtest_assert_true(strpos($html, '<script src="js/nav-toggle.js"></script>') !== false, 'the hamburger script travels with the bar (F-42)');
-    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 7);
-    camtest_assert_equal($m[1], ['./?layout=grid', './?layout=list', 'simple-view.php', 'simple-list.php', 'all-recordings.php', 'settings-page.php', 'ota-logs.php']);
-    camtest_assert_equal($m[2], ['dashboard-grid', 'dashboard-list', 'simple-view', 'simple-list', 'all-files', 'settings', 'ota-logs']);
-    camtest_assert_equal(preg_match_all('/<a [^>]* title="[^"]+"/', $html), 7, 'every link says where it goes');
-    foreach (['DASHBOARD GRID', 'DASHBOARD LIST', 'SIMPLE VIEW', 'SIMPLE LIST', 'ALL FILES', 'SETTINGS', 'OTA &amp; LOGS'] as $label) {
+    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 6);
+    camtest_assert_equal($m[1], ['./?layout=grid', 'simple-view.php', 'simple-list.php', 'all-recordings.php', 'settings-page.php', 'ota-logs.php']);
+    camtest_assert_equal($m[2], ['dashboard', 'simple-view', 'simple-list', 'all-files', 'settings', 'ota-logs']);
+    camtest_assert_equal(preg_match_all('/<a [^>]* title="[^"]+"/', $html), 6, 'every link says where it goes');
+    foreach (['⊞ DASHBOARD', 'SIMPLE VIEW', 'SIMPLE LIST', 'ALL FILES', 'SETTINGS', 'OTA &amp; LOGS'] as $label) {
         camtest_assert_true(strpos($html, $label . '</a>') !== false, $label);
     }
     camtest_assert_true(strpos($html, 'aria-current') === false && strpos($html, ' current') === false, 'a page that is none of them marks nothing');
@@ -549,7 +549,7 @@ camtest_test('navBar: LOG OUT is the last thing in the bar, a POST form (not a l
 });
 
 camtest_test('navBar: the page that shows it is marked (class and aria-current), and only that one', function () {
-    $pages = ['dashboard-grid' => './?layout=grid', 'dashboard-list' => './?layout=list', 'simple-view' => 'simple-view.php',
+    $pages = ['dashboard' => './?layout=grid', 'simple-view' => 'simple-view.php',
               'simple-list' => 'simple-list.php', 'all-files' => 'all-recordings.php', 'settings' => 'settings-page.php',
               'ota-logs' => 'ota-logs.php'];
     foreach ($pages as $key => $href) {
@@ -585,7 +585,7 @@ camtest_test('simple pages: no second set of links to the dashboard / list / vie
     foreach ([CamLayout::simpleListPage($SIMPLE_CAMS), CamLayout::simpleViewPage($SIMPLE_CAMS, $SIMPLE_CAMS[0], 10), CamLayout::simpleViewPage([], null, 10)] as $html) {
         camtest_assert_true(strpos($html, 'class="btn" href=') === false, 'no .btn link left');
         camtest_assert_equal(substr_count($html, 'href="./?layout=grid"'), 1);
-        camtest_assert_equal(substr_count($html, 'href="./?layout=list"'), 1);
+        camtest_assert_equal(substr_count($html, 'href="./?layout=list"'), 0, 'the list layout is gone (F-43a)');
         camtest_assert_equal(substr_count($html, 'href="all-recordings.php"'), 1);
         camtest_assert_equal(substr_count($html, 'logout.php'), 1, 'LOG OUT only once, in the bar');
     }

@@ -61,36 +61,26 @@ camtest_test('findCameraById returns null when there is no match', function () {
     camtest_assert_equal(CamLogic::findCameraById([['id' => 'cam1']], 'camX'), null);
 });
 
-// ── dashboardLayout ──────────────────────────────────────────────────
-
-camtest_test('dashboardLayout: only grid and list are accepted', function () {
-    camtest_assert_equal(CamLogic::dashboardLayout('grid'), 'grid');
-    camtest_assert_equal(CamLogic::dashboardLayout('list'), 'list');
-    foreach ([null, '', 'GRID', 'table', 'grid ', ['list'], 1, false] as $bad) {
-        camtest_assert_equal(CamLogic::dashboardLayout($bad), null, var_export($bad, true));
-    }
-});
-
 // ── defaultPageRedirect ──────────────────────────────────────────────
 
 camtest_test('defaultPageRedirect: the site\'s address opens SIMPLE LIST', function () {
     foreach (['/', '', '/cams/', '/a/b/'] as $path) {
-        camtest_assert_equal(CamLogic::defaultPageRedirect(null, $path), 'simple-list.php', var_export($path, true));
+        camtest_assert_equal(CamLogic::defaultPageRedirect($path), 'simple-list.php', var_export($path, true));
     }
 });
 
-camtest_test('defaultPageRedirect: a picked layout or index.php in the address keeps the dashboard', function () {
-    camtest_assert_equal(CamLogic::defaultPageRedirect('grid', '/'), null);
-    camtest_assert_equal(CamLogic::defaultPageRedirect('list', '/cams/'), null);
+camtest_test('defaultPageRedirect: index.php in the address keeps the dashboard (?layout= is gone, F-43a)', function () {
     foreach (['/index.php', '/cams/index.php', 'index.php', '/INDEX.PHP'] as $path) {
-        camtest_assert_equal(CamLogic::defaultPageRedirect(null, $path), null, $path);
+        camtest_assert_equal(CamLogic::defaultPageRedirect($path), null, $path);
     }
+    // a query is not part of the path: /?layout=list is the site's address and still opens SIMPLE LIST
+    camtest_assert_equal(CamLogic::defaultPageRedirect('/'), 'simple-list.php');
 });
 
 camtest_test('defaultPageRedirect: a path that only ends like index.php, or is not a path, is treated plainly', function () {
-    camtest_assert_equal(CamLogic::defaultPageRedirect(null, '/myindex.php'), 'simple-list.php');
-    camtest_assert_equal(CamLogic::defaultPageRedirect(null, false), null, 'an address that cannot be read changes nothing');
-    camtest_assert_equal(CamLogic::defaultPageRedirect(null, null), null);
+    camtest_assert_equal(CamLogic::defaultPageRedirect('/myindex.php'), 'simple-list.php');
+    camtest_assert_equal(CamLogic::defaultPageRedirect(false), null, 'an address that cannot be read changes nothing');
+    camtest_assert_equal(CamLogic::defaultPageRedirect(null), null);
 });
 
 // ── computeGridColumns ───────────────────────────────────────────────

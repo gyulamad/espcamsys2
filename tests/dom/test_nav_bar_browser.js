@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 'use strict';
-// test_nav_bar_browser.js — the navigation bar (CamLayout::navBar / navBarStyle) and the dashboard's grid / list
-// switch (js/dashboard-layout.js) in a REAL browser: it needs a layout engine (LOG OUT at the right end, the
-// list layout really stacks the cameras) and real clicks.
+// test_nav_bar_browser.js — the navigation bar (CamLayout::navBar / navBarStyle) in a REAL browser:
+// it needs a layout engine (LOG OUT at the right end, the open hamburger menu really stacks the links)
+// and real clicks. (The grid / list switch it used to drive is gone with the list layout, F-43a.)
 //
 //   - the bar has DASHBOARD GRID, DASHBOARD LIST, SIMPLE VIEW, SIMPLE LIST, ALL FILES, SETTINGS, OTA & LOGS on the left and LOG OUT at the right end
-//   - a click on DASHBOARD LIST stacks the cameras in one column without leaving the page; GRID brings the columns back;
-//     the marked link follows, the choice is remembered over a reload, and ?layout= in the address wins
 //   - a click on another link (ALL FILES) is a normal navigation (not swallowed)
 //   - on a phone-wide window the page does not scroll sideways and LOG OUT stays reachable (the bar scrolls)
 //
@@ -50,10 +48,9 @@ function pageHtml(key) {
   ].join(' ');
   const r = spawnSync('php', ['-r', php], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error('php failed: ' + r.stderr);
-  const js = fs.readFileSync(path.join(DASH_SRC, 'js/dashboard-layout.js'), 'utf8');
   return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>'
     + r.stdout + '<div class="grid" id="grid"><div class="cam"></div><div class="cam"></div><div class="cam"></div><div class="cam"></div></div>'
-    + '<script>' + js + '</script><script>CamDashboardLayout.wire({ document, location, history, storage: localStorage });</script></body></html>';
+    + '</body></html>';
 }
 
 async function main() {
@@ -65,35 +62,21 @@ async function main() {
     // Served from a real address (localStorage and history need one); every path gets the page, ALL FILES gets a marker.
     await context.route('http://nav.test/**', (route) => {
       const url = new URL(route.request().url());
-      const body = url.pathname === '/all-recordings.php' ? '<!DOCTYPE html><title>files</title>' : pageHtml('dashboard-grid');
+      const body = url.pathname === '/all-recordings.php' ? '<!DOCTYPE html><title>files</title>' : pageHtml('dashboard');
       return route.fulfill({ status: 200, contentType: 'text/html', body });
     });
     const page = await context.newPage();
     await page.goto('http://nav.test/');
 
     const labels = await page.$$eval('.site-nav > a', (as) => as.map((a) => a.textContent));
-    check('the bar has the seven links in order', JSON.stringify(labels) === JSON.stringify(['⊞ DASHBOARD GRID', '☰ DASHBOARD LIST', '▣ SIMPLE VIEW', '▦ SIMPLE LIST', '📼 ALL FILES', '⚙ SETTINGS', '🛰 OTA & LOGS']), JSON.stringify(labels));
+    check('the bar has the six links in order, DASHBOARD first', JSON.stringify(labels) === JSON.stringify(['⊞ DASHBOARD', '▣ SIMPLE VIEW', '▦ SIMPLE LIST', '📼 ALL FILES', '⚙ SETTINGS', '🛰 OTA & LOGS']), JSON.stringify(labels));
     const box = async (sel) => page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; });
     const logout = await box('.nav-logout');
     const lastLink = await box('.site-nav > a:last-of-type');
     check('LOG OUT is at the right end of the bar, after every link, on the same row', logout.r > 1200 - 40 && logout.l > lastLink.r && Math.abs(logout.t - lastLink.t) < 4, JSON.stringify({ logout, lastLink }));
 
-    const columns = () => page.$eval('#grid', (g) => getComputedStyle(g).gridTemplateColumns.split(' ').length);
     const current = () => page.$$eval('.site-nav a.current', (as) => as.map((a) => a.dataset.nav));
-    check('starts as a grid with the grid link marked', (await columns()) === 2 && JSON.stringify(await current()) === '["dashboard-grid"]');
-
-    await page.evaluate(() => { window.__sameDocument = true; });
-    await page.click('[data-nav="dashboard-list"]');
-    check('DASHBOARD LIST: one column, the list link marked, the address says so, and the page was not reloaded', (await columns()) === 1
-      && JSON.stringify(await current()) === '["dashboard-list"]' && page.url() === 'http://nav.test/?layout=list' && (await page.evaluate(() => window.__sameDocument === true)));
-    await page.reload();
-    check('…the address wins on a reload', (await columns()) === 1);
-    await page.goto('http://nav.test/');
-    check('…and the browser remembers it for the plain address', (await columns()) === 1 && JSON.stringify(await current()) === '["dashboard-list"]');
-    await page.goto('http://nav.test/?layout=grid');
-    check('?layout=grid beats the remembered list', (await columns()) === 2 && JSON.stringify(await current()) === '["dashboard-grid"]');
-    await page.click('[data-nav="dashboard-grid"]');
-    check('DASHBOARD GRID brings the columns back', (await columns()) === 2);
+    check('starts with the DASHBOARD link marked', JSON.stringify(await current()) === '["dashboard"]');
 
     await page.click('[data-nav="all-files"]');
     check('ALL FILES is a normal navigation', page.url() === 'http://nav.test/all-recordings.php');

@@ -396,21 +396,12 @@ class CamLogic
         }, array_values($cameras));
     }
 
-    // The dashboard's layout asked for with ?layout=: 'grid' or 'list'; anything else (missing, another word,
-    // an array) is null, and the page then keeps the layout the browser remembered.
-    public static function dashboardLayout($raw): ?string
+    // The page a visit to the site's address (https://host/) opens: SIMPLE LIST, unless the visitor asked for the
+    // dashboard by naming index.php in the address (a bookmark, a typed address), so every address that showed the
+    // dashboard before still shows it. $path is the path of the request (REQUEST_URI without its query).
+    // (F-43a: the list layout is gone, so there is no ?layout= to pick a layout with any more.)
+    public static function defaultPageRedirect($path): ?string
     {
-        return $raw === 'grid' || $raw === 'list' ? $raw : null;
-    }
-
-    // The page a visit to the site's address (https://host/) opens: SIMPLE LIST, unless the visitor picked something. Gives
-    // the address to send the browser to, or null when index.php is to show the dashboard itself. Picked is: a layout in
-    // the address (?layout=grid / ?layout=list, what the navigation bar's DASHBOARD links have), or index.php named in
-    // the address (a bookmark, a typed address), so every address that showed the dashboard before still shows it.
-    // $layout is dashboardLayout()'s answer, $path the path of the request (REQUEST_URI without its query).
-    public static function defaultPageRedirect(?string $layout, $path): ?string
-    {
-        if ($layout !== null) return null;
         if (!is_string($path)) return null;
         if (preg_match('~(^|/)index\.php$~i', $path) === 1) return null;
         return 'simple-list.php';
