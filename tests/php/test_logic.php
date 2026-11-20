@@ -1485,11 +1485,11 @@ camtest_test('onlyValidCameras drops ids that are not plain ids and reports them
 camtest_test('storageWarningMessage names the free megabytes and asks for old files to be deleted', function () {
     camtest_assert_equal(
         CamLogic::storageWarningMessage(312),
-        'The recording storage is almost empty (only 312 MB is free). Please delete old files.'
+        'The recording storage is almost full (only 312 MB is free). Please delete old files.'
     );
     camtest_assert_equal(
         CamLogic::storageWarningMessage(0),
-        'The recording storage is almost empty (only 0 MB is free). Please delete old files.'
+        'The recording storage is almost full (only 0 MB is free). Please delete old files.'
     );
 });
 
@@ -1498,7 +1498,7 @@ camtest_test('sanitizeStorageStatus passes a low answer on with OUR message and 
     camtest_assert_equal($r, [
         'low' => true,
         'freeMB' => 97,
-        'message' => 'The recording storage is almost empty (only 97 MB is free). Please delete old files.',
+        'message' => 'The recording storage is almost full (only 97 MB is free). Please delete old files.',
     ]);
 });
 

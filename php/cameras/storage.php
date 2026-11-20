@@ -3,7 +3,7 @@
 // so it knows the free space; this asks it and passes on only what the browser needs.
 //
 // GET storage.php -> { "low": false }
-//                 or { "low": true, "freeMB": 312, "message": "The recording storage is almost empty (only 312 MB is free). Please delete old files." }
+//                 or { "low": true, "freeMB": 312, "message": "The recording storage is almost full (only 312 MB is free). Please delete old files." }
 //
 // Every dashboard page calls this once on load (CamLayout::storageWarningScript) and shows the message in
 // an alert box. The minimum free space is the "Minimum free recording storage (MB)" setting on the

@@ -247,7 +247,7 @@ class CamLogic
     // it is ever read as HTML). $freeMB is a whole number the caller has already checked.
     public static function storageWarningMessage(int $freeMB): string
     {
-        return sprintf('The recording storage is almost empty (only %d MB is free). Please delete old files.', $freeMB);
+        return sprintf('The recording storage is almost full (only %d MB is free). Please delete old files.', $freeMB);
     }
 
     // What the relay says about its recording storage (GET /storage), cut down to what the browser needs:

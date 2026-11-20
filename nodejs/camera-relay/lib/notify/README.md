@@ -124,7 +124,7 @@ days. There is nothing more to switch on: the minimum is the one the dashboard u
 page applies at once.
 
 ```
-The recording storage is almost empty.
+The recording storage is almost full.
 Free: 312 MB (the minimum is 1024 MB). Please delete old files.
 Time: 2026-11-07 17:52:00 UTC
 Recordings: http://raspberrypi.local/camdash/all-recordings.php

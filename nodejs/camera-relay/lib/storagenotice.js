@@ -85,7 +85,7 @@ function afterAttempt(state, delivered, nowMs) {
 //   baseUrl: the dashboard as the phone reaches it (notifications.footageBaseUrl, already checked), or null
 function buildStorageText(view, { kind, nowMs, baseUrl }) {
   return [
-    kind === 'reminder' ? 'Reminder: the recording storage is still almost empty.' : 'The recording storage is almost empty.',
+    kind === 'reminder' ? 'Reminder: the recording storage is still almost full.' : 'The recording storage is almost full.',
     `Free: ${view.freeMB} MB (the minimum is ${view.minFreeMB} MB). Please delete old files.`,
     `Time: ${formatTime(nowMs)}`,
     baseUrl ? `Recordings: ${baseUrl}/all-recordings.php` : null,

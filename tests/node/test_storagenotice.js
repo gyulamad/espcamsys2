@@ -114,7 +114,7 @@ test('afterAttempt: delivered remembers when, failed remembers the failure and k
 // ── the text ──
 test('buildStorageText: the facts, in the wording of the dashboard alert, one per line', () => {
   assertEqual(s.buildStorageText(view(312, 1024), { kind: 'first', nowMs: T0, baseUrl: 'http://pi/camdash' }).split('\n'), [
-    'The recording storage is almost empty.',
+    'The recording storage is almost full.',
     'Free: 312 MB (the minimum is 1024 MB). Please delete old files.',
     'Time: 2026-11-07 17:52:00 UTC',
     'Recordings: http://pi/camdash/all-recordings.php',
@@ -124,7 +124,7 @@ test('buildStorageText: the facts, in the wording of the dashboard alert, one pe
 test('buildStorageText: a reminder says so; without a dashboard address there is no link line', () => {
   const lines = s.buildStorageText(view(0, 1024), { kind: 'reminder', nowMs: T0, baseUrl: null }).split('\n');
   assertEqual(lines, [
-    'Reminder: the recording storage is still almost empty.',
+    'Reminder: the recording storage is still almost full.',
     'Free: 0 MB (the minimum is 1024 MB). Please delete old files.',
     'Time: 2026-11-07 17:52:00 UTC',
   ]);
@@ -168,7 +168,7 @@ const advance = (env, ms) => { env.t += ms; };
     assertEqual(a.channels[0].sent.length, 1);
     const m = a.channels[0].sent[0];
     assertTrue(!('image' in m));
-    assertEqual(m.text.split('\n')[0], 'The recording storage is almost empty.');
+    assertEqual(m.text.split('\n')[0], 'The recording storage is almost full.');
     assertTrue(m.text.includes('Free: 312 MB (the minimum is 1000 MB)'));
     assertEqual(a.env.logs, [['INFO', 'storage notification (first) sent: 312 MB free, minimum 1000 MB']]);
   });
@@ -178,7 +178,7 @@ const advance = (env, ms) => { env.t += ms; };
   await a.n.check();
   test('after the reminder interval it is mentioned once more, as a reminder', () => {
     assertEqual(a.channels[0].sent.length, 2);
-    assertTrue(a.channels[0].sent[1].text.startsWith('Reminder: the recording storage is still almost empty.'));
+    assertTrue(a.channels[0].sent[1].text.startsWith('Reminder: the recording storage is still almost full.'));
   });
   a.env.free = 4000;
   advance(a.env, MIN);
@@ -188,7 +188,7 @@ const advance = (env, ms) => { env.t += ms; };
   await a.n.check();
   test('space is freed, then the disk fills again: a new episode starts with a new first message', () => {
     assertEqual(a.channels[0].sent.length, 3);
-    assertTrue(a.channels[0].sent[2].text.startsWith('The recording storage is almost empty.'));
+    assertTrue(a.channels[0].sent[2].text.startsWith('The recording storage is almost full.'));
   });
 
   // hovering around the limit
@@ -266,7 +266,7 @@ const advance = (env, ms) => { env.t += ms; };
   await dead.n.check();
   test('and once a channel works again the message that was waiting is delivered as a first message', () => {
     assertEqual(dead.channels[0].sent.length, 1);
-    assertTrue(dead.channels[0].sent[0].text.startsWith('The recording storage is almost empty.'));
+    assertTrue(dead.channels[0].sent[0].text.startsWith('The recording storage is almost full.'));
   });
 
   // things that go wrong in the check itself never escape
