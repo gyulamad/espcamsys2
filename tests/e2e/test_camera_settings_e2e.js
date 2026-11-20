@@ -124,11 +124,12 @@ async function main() {
     // ── access ──
     check('the page needs the login', (await dash('GET', 'camera-settings-page.php?cam=cam-a', { auth: false })).status === 401);
     check('the page loads', (await dash('GET', 'camera-settings-page.php?cam=cam-a')).status === 200);
-    // (F-29 T7a) the page follows the Settings Atlas design: category rail, LEVEL switch, pending-changes
-    // tray with ONE apply button, the pending counter in the header, and the link back to the settings hub.
+    // (F-29 T7a) the page follows the Settings Atlas design: category rail, pending-changes tray with
+    // ONE apply button, the pending counter in the header, and the link back to the settings hub.
+    // (F-37: the LEVEL switch is gone; the Atlas page now always shows every setting.)
     const atlas = (await dash('GET', 'camera-settings-page.php?cam=cam-a')).text;
-    check('the page is the Atlas layout: rail, tier switch, pending tray, one apply, pending counter',
-      atlas.includes('id="rail"') && atlas.includes('id="tierbar"') && atlas.includes('data-tier="expert"')
+    check('the page is the Atlas layout: rail, pending tray, one apply, pending counter',
+      atlas.includes('id="rail"') && atlas.includes('data-tier="expert"') === false
         && atlas.includes('id="pending-list"') && atlas.includes('id="pending-count"')
         && atlas.includes('id="tray-note"') && (atlas.match(/id="save"/g) || []).length === 1, atlas.length.toString());
     check('the Atlas page carries the Linked settings panel (F-29 T8)', atlas.includes('id="linked"') && atlas.includes('id="linked-list"'));
@@ -251,7 +252,7 @@ async function main() {
     check('the detector page needs the login', (await dash('GET', 'camera-settings-page.php?cam=cam-a&type=detector', { auth: false })).status === 401);
     const detPage = (await dash('GET', 'camera-settings-page.php?cam=cam-a&type=detector')).text;
     check('the detector page loads and is the Atlas layout, with the calibration help',
-      detPage.includes('id="rail"') && detPage.includes('id="tierbar"') && detPage.includes('id="pending-list"')
+      detPage.includes('id="rail"') && detPage.includes('id="tierbar"') === false && detPage.includes('id="pending-list"')
         && (detPage.match(/id="save"/g) || []).length === 1 && detPage.includes('id="calib-help"'), detPage.length.toString());
     check('the dashboard card links the detector page', /camera-settings-page\.php\?cam=cam-a&amp;type=detector/.test((await dash('GET', 'index.php')).text));
     check('the detector API needs the login and the dashboard\'s own header',

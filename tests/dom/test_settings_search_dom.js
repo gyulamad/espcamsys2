@@ -322,17 +322,12 @@ async function main() {
     dom = await openPage(`${BASE}/camera-settings-page.php?cam=cam-a&find=SER_BAUD`, SETTINGS_SCRIPTS);
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-SER_BAUD') && window.document.getElementById('rail').hidden === false);
-    const tierOn = () => {
-      const b = window.document.querySelector('#tierbar .btn.tier.on');
-      return b ? b.dataset.tier : '';
-    };
-    check('a jump to an expert row opens ITS category, at ITS level, and frames and focuses the row',
+    check('a jump to a row opens ITS category and frames and focuses the row',
       window.document.getElementById('crumb-cat').textContent === 'Hardware & internals'
-        && tierOn() === 'expert'
         && window.document.getElementById('r-SER_BAUD').hidden === false
         && window.document.getElementById('r-SER_BAUD').classList.contains('found')
         && window.document.activeElement === window.document.getElementById('f-SER_BAUD'),
-      JSON.stringify({ cat: window.document.getElementById('crumb-cat').textContent, tier: tierOn(), active: window.document.activeElement && window.document.activeElement.id }));
+      JSON.stringify({ cat: window.document.getElementById('crumb-cat').textContent, active: window.document.activeElement && window.document.activeElement.id }));
     check('switching the category takes the frame away again (it points where the search landed)', (() => {
       const rail = Array.from(window.document.querySelectorAll('#rail .rail-item')).find((b) => b.dataset.cat === 'Logging');
       rail.click();
@@ -344,17 +339,17 @@ async function main() {
     dom = await openPage(`${BASE}/camera-settings-page.php?cam=cam-a&find=LOG_MIN_LEVEL`, SETTINGS_SCRIPTS);
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-LOG_MIN_LEVEL'));
-    check('a jump to a basic row stays at BASIC, opens the key\u2019s category and frames the row',
-      window.document.getElementById('crumb-cat').textContent === 'Logging' && tierOn() === 'basic'
+    check('another jump opens that key\u2019s category and frames the row',
+      window.document.getElementById('crumb-cat').textContent === 'Logging'
         && window.document.getElementById('r-LOG_MIN_LEVEL').classList.contains('found'),
-      JSON.stringify({ cat: window.document.getElementById('crumb-cat').textContent, tier: tierOn() }));
+      JSON.stringify({ cat: window.document.getElementById('crumb-cat').textContent }));
     closeWindow(dom);
 
     dom = await openPage(`${BASE}/camera-settings-page.php?cam=cam-a&find=NO_SUCH_KEY`, SETTINGS_SCRIPTS);
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-JPEG_Q_DROP'));
     check('a key the firmware does not have is ignored: the page opens as always, nothing framed',
-      window.document.getElementById('crumb-cat').textContent === 'Picture & link' && tierOn() === 'basic'
+      window.document.getElementById('crumb-cat').textContent === 'Picture & link'
         && window.document.querySelector('.row.found') === null);
     closeWindow(dom);
 

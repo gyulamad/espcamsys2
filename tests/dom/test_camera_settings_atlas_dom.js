@@ -220,7 +220,6 @@ async function main() {
     const $ = (id) => window.document.getElementById(id);
     const row = (name) => window.document.getElementById('r-' + name);
     const railItem = (c) => window.document.querySelector(`#rail .rail-item[data-cat="${c}"]`);
-    const tierBtn = (t) => window.document.querySelector(`#tierbar [data-tier="${t}"]`);
 
     // ── the Linked settings panel (F-29 T8): the cross-device rules, watched, with their verdicts ──
     check('the Linked settings panel is shown with the five rules a camera is offered',
@@ -256,22 +255,18 @@ async function main() {
     check('the "Other" entry shows the identity and serial-only rows',
       row('WIFI').hidden === false && row('SETUP_MODE') !== null && row('WIFI').querySelector('.tag.lock') !== null);
 
-    // ── the LEVEL switch ─────────────────────────────────────────────────────────────────────
+    // ── no tier filter: every setting of every level is on the page at once (F-37) ───────────
+    check('the LEVEL switch is gone', $('tierbar') === null);
     railItem('Logging').click();
-    check('the page starts at BASIC: an advanced row is hidden, a basic one is not',
-      tierBtn('basic').classList.contains('on') && row('LOG_ECHO').hidden === true && row('LOG_MIN_LEVEL').hidden === false);
-    tierBtn('advanced').click();
-    check('ADVANCED shows the advanced rows', row('LOG_ECHO').hidden === false);
-    setField(window, 'LOG_HEARTBEAT', '700');   // an edit on an advanced row, visible at this level
+    check('the advanced rows of the shown category are visible', row('LOG_ECHO').hidden === false);
+    setField(window, 'LOG_HEARTBEAT', '700');
     check('the edit is counted', $('pending-count').textContent === '1 PENDING');
-    tierBtn('basic').click();
-    check('switching back to BASIC hides the edited row but keeps its edit pending',
+    railItem('Picture & link').click();
+    check('moving to another category hides the edited row but keeps its edit pending',
       row('LOG_HEARTBEAT').hidden === true && $('pending-count').textContent === '1 PENDING'
         && $('f-LOG_HEARTBEAT').value === '700');
-    check('the level line says how many rows the level hides here',
-      /hidden at basic/.test($('tierinfo').textContent), $('tierinfo').textContent);
-    tierBtn('advanced').click();
-    check('back at ADVANCED the row and its edit are there again',
+    railItem('Logging').click();
+    check('back in its category the row and its edit are there again',
       row('LOG_HEARTBEAT').hidden === false && $('f-LOG_HEARTBEAT').value === '700' && $('pending-count').textContent === '1 PENDING');
 
     // ── the pending-changes tray: one apply for everything, from every category ──────────────

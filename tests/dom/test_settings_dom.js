@@ -244,19 +244,11 @@ async function main() {
     check('a path setting never reaches the page (personScanModel), a locked one does',
       $('f-personScanModel') === null && $('f-personScanPython') !== null);
 
-    // ── tiers: the LEVEL switch hides and shows, and the dashboard\'s own rows stay ──────
-    check('the page starts at BASIC', $('tierbar').querySelector('.btn.tier.on').dataset.tier === 'basic');
-    check('at BASIC an advanced row is hidden, a basic one is not',
-      row('discoveryPort').hidden === true && row('alarmRecordSeconds').hidden === false);
-    check('at BASIC an expert row is hidden too', row('relayBind').hidden === true && row('loopWatch').hidden === true);
-    window.document.querySelector('#tierbar [data-tier="advanced"]').click();
-    check('ADVANCED shows the advanced row and still hides the expert ones',
-      row('discoveryPort').hidden === false && row('relayBind').hidden === true && row('loopWatch').hidden === true);
-    window.document.querySelector('#tierbar [data-tier="expert"]').click();
-    check('EXPERT shows every row', row('relayBind').hidden === false && row('loopWatch').hidden === false && row('personScanPython').hidden === false);
-    window.document.querySelector('#tierbar [data-tier="basic"]').click();
-    check('switching back to BASIC hides them again', row('discoveryPort').hidden === true);
-    check('the dashboard\'s own rows carry no tier and stay at every level', row('auth_user').hidden === false);
+    // ── no tier filter: every setting of every level is on the page at once (F-37) ───────
+    check('the LEVEL switch is gone', $('tierbar') === null);
+    check('an advanced row is shown', row('discoveryPort').hidden === false);
+    check('an expert row is shown too', row('relayBind').hidden === false && row('loopWatch').hidden === false && row('personScanPython').hidden === false);
+    check('the dashboard\'s own rows are shown as well', row('auth_user').hidden === false);
 
     // ── defaults: shown, highlighted while the saved value differs ──────────────────────
     const defTag = (name) => row(name).querySelector('.tag.default');

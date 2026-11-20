@@ -5,9 +5,7 @@
 // added there shows up here without touching this file. Saving, and restarting the relay
 // when a change needs it, is done by system-settings.php.
 //
-// The rows come grouped by category (the relay's `group`), and carry their tier (basic /
-// advanced / expert): the LEVEL switch at the top hides the rows above the chosen level, so
-// the everyday settings come first and the expert ones are one click away. Every row shows
+// The rows come grouped by category (the relay's `group`). Every row shows
 // the default it would fall back to (highlighted while the saved value differs), and one
 // that has a default can be reset to it with the row's ↺ DEFAULT button — the default lands
 // in the input and goes through the same change tracking and SAVE as a hand-made change.
@@ -55,10 +53,6 @@ require_once __DIR__ . '/lib/Layout.php';
   .banner.warn { border-color: var(--warn); color: var(--warn); }
   .banner.err  { border-color: var(--accent2); color: var(--accent2); }
   .banner.ok   { border-color: var(--ok); color: var(--ok); }
-  .tierbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 2px 0 16px; }
-  .tierbar .lbl { font-family: var(--mono); font-size: .65rem; letter-spacing: .14em; color: var(--muted); }
-  .btn.tier.on { border-color: var(--accent); color: var(--accent); }
-  #tierinfo { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
   fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px 6px; margin-bottom: 20px; background: var(--surface); }
   legend { font-family: var(--mono); font-size: .8rem; letter-spacing: .1em; color: var(--accent); padding: 0 8px; text-transform: uppercase; }
   .row { display: grid; grid-template-columns: 260px 1fr; gap: 6px 18px; padding: 10px 0; border-top: 1px solid var(--border); align-items: start; }
@@ -121,13 +115,6 @@ require_once __DIR__ . '/lib/Layout.php';
 
 <main>
   <div id="banners"></div>
-  <div class="tierbar" id="tierbar">
-    <span class="lbl">LEVEL</span>
-    <button class="btn tier on" type="button" data-tier="basic">BASIC</button>
-    <button class="btn tier" type="button" data-tier="advanced">ADVANCED</button>
-    <button class="btn tier" type="button" data-tier="expert">EXPERT</button>
-    <span id="tierinfo"></span>
-  </div>
   <form id="form" onsubmit="return false;"></form>
   <fieldset class="cams" id="cameras" hidden>
     <legend>Cameras on the dashboard</legend>
@@ -158,13 +145,11 @@ require_once __DIR__ . '/lib/Layout.php';
   const BREAKING = ['camKey', 'pushPort'];
   const NUMERIC = ['int', 'float'];   // drawn as a number input (a float's step comes from the relay)
   const AJAX = { 'X-Requested-With': 'camdash' };
-  const LEVELS = ['basic', 'advanced', 'expert'];   // who a row is for (the relay's `tier`); the level picks how many are shown
-  // A jump from the settings search (?find=key, F-29 T7b): the row is framed, at its level when it
-  // sits above the chosen one. A key the page does not hold is ignored — the page opens as always.
+  // A jump from the settings search (?find=key, F-29 T7b): the row is framed. A key the page does not
+  // hold is ignored — the page opens as always.
   const FIND = new URLSearchParams(location.search).get('find') || '';
   let fields = [];
   let original = {};   // key -> the value loaded from the server (secrets: '')
-  let tierLevel = 'basic';   // the level shown: rows above it stay in the form but hidden
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert');
@@ -200,7 +185,6 @@ require_once __DIR__ . '/lib/Layout.php';
       form.append(fs);
     }
     renderCameras(data.cameras || []);
-    applyTier();
     updateButtons();
     highlightFound();
   }
@@ -277,7 +261,7 @@ require_once __DIR__ . '/lib/Layout.php';
     return box;
   }
 
-  // ── levels, defaults and locks (F-29 T6b) ──
+  // ── defaults and locks (F-29 T6b) ──
   // What one value looks like in the page's inputs: a switch as the text the relay takes
   // ("true" / "false"), a command as one line, everything else as plain text.
   const asText = (v) => (Array.isArray(v) ? v.join(' ') : typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v));
@@ -302,27 +286,8 @@ require_once __DIR__ . '/lib/Layout.php';
     return select;
   }
 
-  // The chosen level hides every row above it (the relay's tiers: basic < advanced < expert). Rows
-  // without a tier — the dashboard's own settings — are shown at every level. Hidden rows keep their
-  // values, so a change made at a higher level is not lost by switching back: it is still tracked, and
-  // the save bar counts it. Nothing is dropped: the form stays complete and the level is only a view.
-  function applyTier() {
-    let hidden = 0;
-    for (const row of form.querySelectorAll('.row[data-tier]')) {
-      const hide = LEVELS.indexOf(row.dataset.tier) > LEVELS.indexOf(tierLevel);
-      row.hidden = hide;
-      if (hide) hidden += 1;
-    }
-    clearFound();
-    for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === tierLevel);
-    $('tierinfo').textContent = hidden === 0
-      ? 'every setting shown at ' + tierLevel
-      : hidden + ' hidden at ' + tierLevel + ' — a higher level shows them';
-  }
-
   // ── the search's jump (?find=key, F-29 T7b) ──
   // The jumped-to row is framed and its input focused (a locked or read-only one cannot be). The mark
-  // goes when the level changes — it points where the search landed, it is not an edit state — and it
   // is applied once: a reload after a save must not scroll the page away again.
   let foundShown = false;
   function clearFound() { for (const row of form.querySelectorAll('.row.found')) row.classList.remove('found'); }
@@ -331,8 +296,6 @@ require_once __DIR__ . '/lib/Layout.php';
     const f = fields.find((x) => x.key === FIND);
     if (!f) return;
     foundShown = true;
-    if (f.tier && LEVELS.indexOf(f.tier) > LEVELS.indexOf(tierLevel)) tierLevel = f.tier;
-    applyTier();
     const row = $('r-' + FIND);
     if (!row || row.hidden) return;
     row.classList.add('found');
@@ -397,7 +360,6 @@ require_once __DIR__ . '/lib/Layout.php';
     const ctl = el('div', { className: 'ctl' }, input);
     if (reset) ctl.append(reset);
     const row = el('div', { className: 'row', id: 'r-' + f.key }, el('div', {}, el('label', { htmlFor: id, textContent: f.label }), tags), ctl);
-    if (f.tier) row.dataset.tier = f.tier;
     row.append(el('div', { className: 'help', textContent: f.help }));
     return row;
   }
@@ -466,9 +428,6 @@ require_once __DIR__ . '/lib/Layout.php';
     }
     notify('Reverted.', 'ok');
   });
-  for (const b of document.querySelectorAll('#tierbar .btn.tier')) {
-    b.addEventListener('click', () => { tierLevel = b.dataset.tier; applyTier(); });
-  }
   // The new camera's icon input gets a chooser bubble with a search bar (js/icon-picker.js); without the scripts it stays a plain input.
   if (window.CamIconPicker && window.CamIconCatalog) window.CamIconPicker.attach($('c-icon'), window.CamIconCatalog.GROUPS);
 

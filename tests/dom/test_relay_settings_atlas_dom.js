@@ -7,9 +7,9 @@
 //   * the CATEGORY RAIL lists the categories in the order the page promises (the relay's groups, the
 //     dashboard's own "Dashboard" last), each with how many settings it holds; picking one shows its rows,
 //     hides the others, and names it in the breadcrumb — which links back to the settings hub
-//   * the LEVEL switch (BASIC / ADVANCED / EXPERT) hides the rows above the chosen level; the dashboard's
-//     own rows carry no tier and stay at every level; a hidden row keeps its value, so an edit made at a
-//     higher level survives switching down and is still counted
+//   * every setting is shown, whatever tier the relay names it for (F-37: the LEVEL switch is gone);
+//     a row is hidden only because another category is the one on view, and an edit made in one
+//     category survives moving to another and is still counted
 //   * the PENDING-CHANGES TRAY lists every unsaved edit — from every category — with its old → new value
 //     (a secret as a mask, never its text), counts them in the header pill, warns about restart and
 //     camera-breaking edits, and offers ONE apply button that saves through the same POST as the hub's
@@ -19,8 +19,8 @@
 //     ↺ DEFAULT button, which goes through the same change tracking as a hand edit
 //   * the LOCKED rows (the programs the relay runs) are shown read-only and are never sent; a row the
 //     environment overrides is read-only, like before; the file and folder paths never reach the page
-//   * a jump from the settings search (?find=KEY, F-29 T7b) opens the key's category at the level that
-//     shows the row and frames it; a key the relay does not have leaves the page as it always opens
+//   * a jump from the settings search (?find=KEY, F-29 T7b) opens the key's category and frames the
+//     row; a key the relay does not have leaves the page as it always opens
 // Needs `php` and the jsdom package (cd tests/dom && npm install); skips if either is missing.
 //
 //   node tests/dom/test_relay_settings_atlas_dom.js
@@ -262,7 +262,6 @@ async function main() {
     const $ = (id) => window.document.getElementById(id);
     const row = (name) => window.document.getElementById('r-' + name);
     const railItem = (c) => window.document.querySelector(`#rail .rail-item[data-cat="${c}"]`);
-    const tierBtn = (t) => window.document.querySelector(`#tierbar [data-tier="${t}"]`);
     const defTag = (name) => row(name).querySelector('.tag.defval');
 
     // ── the category rail ────────────────────────────────────────────────────────────────────
@@ -315,36 +314,26 @@ async function main() {
         && row('personScanEnabled').querySelector('.range').textContent === 'ON / OFF',
         row('preRollSeconds').querySelector('.range').textContent);
 
-    // ── the LEVEL switch ─────────────────────────────────────────────────────────────────────
+    // ── no tier filter: every setting of every level is on the page at once (F-37) ───────────
+    check('the LEVEL switch is gone', $('tierbar') === null);
     railItem('Network').click();
-    check('the page starts at BASIC: an advanced row is hidden, a basic one is not',
-      tierBtn('basic').classList.contains('on') && row('discoveryPort').hidden === true && row('pushPort').hidden === true);
-    tierBtn('advanced').click();
-    check('ADVANCED shows the advanced rows and still hides the expert ones',
-      row('discoveryPort').hidden === false && row('relayBind').hidden === true);
-    tierBtn('expert').click();
-    check('EXPERT shows the expert row of the shown category', row('relayBind').hidden === false);
+    check('the advanced and expert rows of the shown category are visible',
+      row('discoveryPort').hidden === false && row('relayBind').hidden === false);
     railItem('Person check').click();
-    check('EXPERT shows the expert rows of every category', row('personScanPython').hidden === false);
-    railItem('Network').click();
-    tierBtn('basic').click();
-    check('switching back to BASIC hides them again', row('discoveryPort').hidden === true && row('relayBind').hidden === true);
+    check('the expert rows of every category are visible', row('personScanPython').hidden === false);
     railItem('Dashboard').click();
-    check('the dashboard\u2019s own rows carry no tier and stay at every level', row('auth_user').hidden === false);
+    check('the dashboard\u2019s own rows are visible as well', row('auth_user').hidden === false);
 
-    // ── an edit made at a higher level survives switching down, and stays counted ────────────
+    // ── an edit in one category survives moving to another, and stays counted ────────────────
     railItem('Recording').click();
-    tierBtn('advanced').click();
     setField(window, 'preRollMaxBytes', '1000');
     check('the edit is counted', $('pending-count').textContent === '1 PENDING');
-    tierBtn('basic').click();
-    check('switching back to BASIC hides the edited row but keeps its edit pending',
+    railItem('Network').click();
+    check('moving to another category hides the edited row but keeps its edit pending',
       row('preRollMaxBytes').hidden === true && $('pending-count').textContent === '1 PENDING'
         && $('f-preRollMaxBytes').value === '1000');
-    check('the level line says how many rows the level hides here',
-      /hidden at basic/.test($('tierinfo').textContent), $('tierinfo').textContent);
-    tierBtn('advanced').click();
-    check('back at ADVANCED the row and its edit are there again',
+    railItem('Recording').click();
+    check('back in its category the row and its edit are there again',
       row('preRollMaxBytes').hidden === false && $('f-preRollMaxBytes').value === '1000' && $('pending-count').textContent === '1 PENDING');
 
     // ── the pending-changes tray: one apply for everything, from every category ──────────────
@@ -404,7 +393,6 @@ async function main() {
     check('after the save the tray is empty and the default tag is no longer highlighted', $('tray-note').hidden === true);
 
     // ── locked rows: shown read-only, never sent ─────────────────────────────────────────────
-    tierBtn('expert').click();
     railItem('Person check').click();
     check('a locked row is read-only with the lock tag and no reset button',
       $('f-personScanPython').disabled === true && row('personScanPython').querySelector('.tag.lock') !== null
@@ -466,9 +454,9 @@ async function main() {
     closeWindow(dom);
 
     // ── the search's jump (?find=KEY, F-29 T7b) ──────────────────────────────────────────────
-    // A fresh page opened with ?find=discoveryPort (Network, advanced): the key's category opens, the
-    // level rises to show the row, and the row is framed. A key the relay does not have is ignored and
-    // the page opens as always (the first category, the basic level, nothing framed).
+    // A fresh page opened with ?find=discoveryPort (Network): the key's category opens and the row is
+    // framed. A key the relay does not have is ignored and the page opens as always (the first
+    // category, nothing framed).
     toasts = [];
     const openFind = async (find) => {
       const url = `${BASE}/relay-settings-page.php${find ? '?find=' + encodeURIComponent(find) : ''}`;
@@ -489,16 +477,13 @@ async function main() {
     check('the search\u2019s jump opens the key\u2019s category in the breadcrumb and the rail',
       w.document.getElementById('crumb-cat').textContent === 'Network'
         && w.document.querySelector('#rail .rail-item.on').dataset.cat === 'Network');
-    check('the jump raises the level that shows the row, with the button caught up',
-      w.document.querySelector('#tierbar .btn.tier.on').dataset.tier === 'advanced'
-        && w.document.getElementById('r-discoveryPort').hidden === false);
-    check('the jumped-to row is framed', w.document.getElementById('r-discoveryPort').classList.contains('found') === true);
+    check('the jumped-to row is shown and framed', w.document.getElementById('r-discoveryPort').hidden === false
+      && w.document.getElementById('r-discoveryPort').classList.contains('found') === true);
     closeWindow(domFind);
     const domMiss = await openFind('noSuchKey');
     w = domMiss.window;
     check('an unknown key leaves the page as always',
       w.document.getElementById('crumb-cat').textContent === 'Recording'
-        && w.document.querySelector('#tierbar .btn.tier.on').dataset.tier === 'basic'
         && w.document.querySelectorAll('.row.found').length === 0);
     closeWindow(domMiss);
   } finally {

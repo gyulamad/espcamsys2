@@ -84,10 +84,6 @@ require_once __DIR__ . '/lib/Layout.php';
   .catwrap { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 24px; flex-wrap: wrap; margin-bottom: 10px; }
   .cat-head h2 { font-size: 1.35rem; font-weight: 500; letter-spacing: .01em; }
   .cat-head p { font-size: .82rem; color: var(--muted); margin-top: 4px; max-width: 560px; line-height: 1.45; }
-  .tierbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 2px; }
-  .tierbar .lbl { font-family: var(--mono); font-size: .65rem; letter-spacing: .14em; color: var(--muted); }
-  .btn.tier.on { border-color: var(--accent); color: var(--accent); }
-  #tierinfo { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
   /* ── one setting row: what (key, label, tags, help) left, the value (range, input, reset) right ── */
   .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 2px 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 10px; align-items: start; }
   .row.unused { opacity: .55; }
@@ -175,7 +171,7 @@ require_once __DIR__ . '/lib/Layout.php';
      tall, so a finger lands on one and not its neighbour. The value is hardcoded (the same convention as
      Layout.php's --nav-h and .files-video-close) rather than via var(--touch): the :root --touch above is
      only the documented constant, and hardcoding lets a jsdom test read the resolved min-height directly. */
-  .is-mobile .btn, .is-mobile .rail-item, .is-mobile #tierbar .btn.tier,
+  .is-mobile .btn, .is-mobile .rail-item,
   .is-mobile .ctl input, .is-mobile .ctl select, .is-mobile #mobile-bar .m-count, .is-mobile #mobile-bar .m-apply,
   .is-mobile .inline input, .is-mobile #e-icon, .is-mobile #e-name, .is-mobile #e-detector {
     min-height: 44px;
@@ -250,13 +246,6 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
           <h2 id="cat-title"></h2>
           <p id="cat-desc"></p>
         </div>
-        <div class="tierbar" id="tierbar">
-          <span class="lbl">LEVEL</span>
-          <button class="btn tier on" type="button" data-tier="basic">BASIC</button>
-          <button class="btn tier" type="button" data-tier="advanced">ADVANCED</button>
-          <button class="btn tier" type="button" data-tier="expert">EXPERT</button>
-          <span id="tierinfo"></span>
-        </div>
       </div>
       <form id="form" onsubmit="return false;"></form>
     </div>
@@ -308,9 +297,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
   const API = 'camera-settings.php?cam=' + encodeURIComponent(CAM) + (TYPE === 'detector' ? '&type=detector' : '');
   let keys = [], gpios = [], reported = null, camera = null, original = {}, pollTimer = null;
   let lastStructure = null;   // what the form (and the banners) were last built from; only a change rebuilds them
-  let tierLevel = 'basic';    // the level shown: rows above it stay in the form but hidden (their edits survive)
   let activeCat = null;       // the category shown; null until the first render picks the first one
-  const LEVELS = ['basic', 'advanced', 'expert'];   // who a row is for (the schema's tier); the level picks how many are shown
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), statusEl = $('status'), saveBtn = $('save'), revertBtn = $('revert'), cancelBtn = $('cancel');
@@ -385,7 +372,7 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     'Logging': 'What the board reports to the relay log, how often, and how it retries.',
     'Updates & sync': 'Over-the-air firmware, relay discovery and settings sync timing.',
     'Setup & security': 'The board\u2019s own setup Wi-Fi, its master password and request limits.',
-    'Hardware & internals': 'Pin map, task stacks, serial. Expert tier only.',
+    'Hardware & internals': 'Pin map, task stacks, serial.',
   };
   const OTHER_CAT = { label: 'Other', desc: 'Identity values for the relay connection, the serial-only locks and setup mode \u2014 the firmware\u2019s table gives them no category.' };
   const catOf = (d) => d.category || '';
@@ -495,12 +482,11 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       + (fixed ? (TYPE === 'detector' ? ' — connects the detector to the relay or drives its alarm pin, so it can only be changed over the USB serial port.' : ' — connects the camera to the relay, so it can only be changed over the USB serial port.') : '');
 
     const row = el('div', { className: 'row', id: 'r-' + d.name }, what, side, el('div', { className: 'tagrow' }, tags), el('div', { className: 'help', textContent: helpText }));
-    if (d.tier) row.dataset.tier = d.tier;
     row.dataset.cat = catOf(d);
     return row;
   }
 
-  // ── the rail, the category heading and the LEVEL switch ──
+  // ── the rail and the category heading ──
   function renderRail() {
     const rail = $('rail');
     rail.textContent = '';
@@ -528,19 +514,12 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     clearFound();
     refresh();
   }
-  // The chosen level hides every row above it (basic < advanced < expert). Rows without a tier — the
-  // serial-only ones and setup mode — are shown at every level. Hidden rows keep their values, so a change
-  // made at a higher level is not lost by switching back: it is still tracked, and the tray counts it.
-  // Nothing is dropped: the form stays complete and the level is only a view.
-  function applyTier(level) {
-    tierLevel = level;
-    for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === tierLevel);
-    clearFound();
-    refresh();
-  }
+  // Every setting is shown, whatever tier the firmware's table names it for (the LEVEL switch is gone):
+  // a row is hidden only because another category is the one on view. Hidden rows keep their values,
+  // so moving between categories never loses an edit: it is still tracked, and the tray counts it.
   // ── the search's jump (?find=KEY, F-29 T7b) ──
   // The jumped-to row is framed and its input focused (a locked input cannot be). The mark stays
-  // while the user works in this category and goes away when the category or the level changes —
+  // while the user works in this category and goes away when the category changes —
   // it points where the search landed, it is not an edit state.
   function clearFound() { for (const r of form.querySelectorAll('.row.found')) r.classList.remove('found'); }
   function highlightFound() {
@@ -552,9 +531,6 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     const i = $('f-' + FIND);
     if (i && !i.disabled) i.focus({ preventScroll: true });
   }
-  for (const b of document.querySelectorAll('#tierbar .btn.tier')) {
-    b.addEventListener('click', () => { applyTier(b.dataset.tier); });
-  }
 
   function currentValues() {
     const v = {};
@@ -565,25 +541,18 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     return v;
   }
 
-  // ── visibility: needed by the current values, in the shown category, at the chosen level ──
+  // ── visibility: needed by the current values, in the shown category ──
   // Shows what the current values make necessary: unused settings are dimmed, and a setting that
   // is needed but has no value yet (a feature was just switched on) appears.
   function updateVisibility() {
     const vals = currentValues();
-    let tierHidden = 0;
     for (const d of keys) {
-      const row = $('r-' + d.name), i = $('f-' + d.name);
+      const row = $('r-' + d.name);
       if (!row) continue;
       const need = required(d, vals), has = reported[d.name] !== undefined;
-      const catVisible = catOf(d) === activeCat;
-      const aboveLevel = d.tier && LEVELS.indexOf(d.tier) > LEVELS.indexOf(tierLevel);
-      row.hidden = (!need && !has && !isOptional(d)) || !catVisible || aboveLevel;
+      row.hidden = (!need && !has && !isOptional(d)) || catOf(d) !== activeCat;
       row.classList.toggle('unused', !need && !isOptional(d));
-      if (catVisible && aboveLevel) tierHidden += 1;
     }
-    $('tierinfo').textContent = tierHidden === 0
-      ? 'every setting shown at ' + tierLevel
-      : tierHidden + ' hidden at ' + tierLevel + ' — a higher level shows them';
   }
 
   // Marks each row about its edit: the input's changed border, the row's "changed" tag, and whether the
@@ -725,19 +694,16 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
     // its Detection category, for a camera Picture & link). "Other" is only picked by hand.
     const cats = catList();
     activeCat = cats.find((c) => c !== '') || cats[0] || '';
-    // The search's jump (?find=): the key's own category, and the level that shows the row — a row
-    // above the chosen level would stay hidden, and a highlight on an invisible row is no highlight.
-    // Only tierLevel is set here: applyTier refreshes what is on screen, so it waits for the rows.
+    // The search's jump (?find=): the key's own category opens, so the row the search landed on is
+    // the one on view.
     const foundDef = FIND ? keys.find((d) => d.name === FIND) : null;
     if (foundDef) {
       activeCat = catOf(foundDef);
-      if (foundDef.tier) tierLevel = foundDef.tier;
     }
     renderRail();
     renderCatHead();
     $('catwrap').hidden = false;
     for (const d of keys) form.append(buildRow(d));
-    if (foundDef && foundDef.tier) applyTier(foundDef.tier);   // the level buttons catch up; refreshes too
     refresh();
     highlightFound();
   }

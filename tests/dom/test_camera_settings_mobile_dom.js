@@ -13,7 +13,7 @@
 //     empties the tray; the detail collapses again when the tray empties
 //
 // Needs `php` and the jsdom package (cd tests/dom && npm install); skips if either is missing. The T7a
-// atlas test (test_camera_settings_atlas_dom.js) covers the desktop layout and the rail / tier / tray
+// atlas test (test_camera_settings_atlas_dom.js) covers the desktop layout and the rail / tray
 // contracts; this one only adds the mobile-specific behaviour, and reuses the same fake relay + PHP
 // server harness.
 //
@@ -75,8 +75,7 @@ function nodeFetch(url, opts = {}) {
   });
 }
 
-// What the board reports. LOG_HEARTBEAT starts at 900 (default 600) so a change has somewhere to go; the
-// row is advanced-tier, so the test switches to ADVANCED to reach it (the same pattern as the atlas test).
+// What the board reports. LOG_HEARTBEAT starts at 900 (default 600) so a change has somewhere to go.
 const BOARD = {
   WIFI: 'net:********', SERVER_HOST: '192.168.4.9', PUSH_PORT: '8081', HTTP_PORT: '8080', CAMERA_ID: 'cam-a',
   API_KEY: '********', PUSH_GAP_MUL: '1.5', PUSH_WR_TMO_MS: '8000', ALARM_GPIO_PIN: '13', ALARM_ACTIVE: 'LOW', ALARM_ALL_CAMS: '0',
@@ -212,7 +211,6 @@ async function main() {
     let window = dom.window;
     const $ = (id) => window.document.getElementById(id);
     const cs = (el) => window.getComputedStyle(el);
-    const tierBtn = (t) => window.document.querySelector(`#tierbar [data-tier="${t}"]`);
 
     // ── the page is in its mobile layout ────────────────────────────────────────────────────
     check('the page tags <html> with .is-mobile when matchMedia says narrow',
@@ -234,8 +232,7 @@ async function main() {
     check('with no edits the count says "No changes" and APPLY is disabled',
       $('m-count').textContent === 'No changes' && $('m-apply').disabled === true,
       'count=' + JSON.stringify($('m-count').textContent) + ' disabled=' + $('m-apply').disabled);
-    // LOG_HEARTBEAT is advanced-tier: switch to ADVANCED so its row is shown and editable.
-    tierBtn('advanced').click();
+    // LOG_HEARTBEAT's row is always on the page now (F-37: no tier filter).
     setField(window, 'LOG_HEARTBEAT', '700');
     await waitFor(() => $('m-count').textContent === '1 change');
     check('an edit is reflected in the count ("1 change") and enables APPLY',
@@ -294,7 +291,6 @@ async function main() {
     expectTouch('#m-count', $('m-count'));
     expectTouch('#save (still in the DOM, just hidden)', $('save'));
     expectTouch('#revert', $('revert'));
-    expectTouch('a tier button', tierBtn('basic'));
     expectTouch('a category rail item', window.document.querySelector('#rail .rail-item'));
     const ctlEl = window.document.querySelector('.ctl input, .ctl select');
     expectTouch('a row input or select', ctlEl);
@@ -309,8 +305,6 @@ async function main() {
       cs($('mobile-bar')).display === 'none', 'display=' + cs($('mobile-bar')).display);
     check('the desktop #save is shown again (display: inline-block or block, not none)',
       cs($('save')).display !== 'none', 'display=' + cs($('save')).display);
-    check('the desktop tier button no longer has the 44 px floor',
-      cs(tierBtn('basic')).minHeight !== '44px', 'minHeight=' + JSON.stringify(cs(tierBtn('basic')).minHeight));
     // The existing T7a atlas contracts still hold on the desktop side: the tray's APPLY is the one APPLY.
     check('on desktop there is still exactly one #save and one #m-apply (now hidden)',
       window.document.querySelectorAll('#save').length === 1 && window.document.querySelectorAll('#m-apply').length === 1);

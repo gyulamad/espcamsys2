@@ -213,7 +213,6 @@ async function main() {
     const $ = (id) => window.document.getElementById(id);
     const row = (name) => window.document.getElementById('r-' + name);
     const railItem = (c) => window.document.querySelector(`#rail .rail-item[data-cat="${c}"]`);
-    const tierBtn = (t) => window.document.querySelector(`#tierbar [data-tier="${t}"]`);
 
     // ── the category rail: the detector's own table, in its order ───────────────────────────
     check('the rail is shown with the DETECTOR scope as its heading',
@@ -247,24 +246,18 @@ async function main() {
       row('STREAM_JPEG_Q').querySelector('.tag.apply').textContent === 'reboot');
     railItem('Detection').click();
 
-    // ── the LEVEL switch over the detector's tiers ──────────────────────────────────────────
-    check('the page starts at BASIC: the advanced detection rows are hidden, the basic ones are not',
-      tierBtn('basic').classList.contains('on') && row('LOOP_DELAY_MS').hidden === true && row('MOTION_THRESH').hidden === false);
-    tierBtn('advanced').click();
-    check('ADVANCED shows the advanced rows', row('LOOP_DELAY_MS').hidden === false && row('DARK_HYST').hidden === false);
+    // ── no tier filter: every setting of every level is on the page at once (F-37) ──────────
+    check('the LEVEL switch is gone', $('tierbar') === null);
+    check('the advanced and expert detection rows are visible',
+      row('LOOP_DELAY_MS').hidden === false && row('DARK_HYST').hidden === false);
     setField(window, 'LOOP_DELAY_MS', '20');
     check('the edit is counted', $('pending-count').textContent === '1 PENDING');
-    tierBtn('basic').click();
-    check('switching back to BASIC hides the edited row but keeps its edit pending',
-      row('LOOP_DELAY_MS').hidden === true && $('pending-count').textContent === '1 PENDING'
-        && $('f-LOOP_DELAY_MS').value === '20');
-    tierBtn('advanced').click();
 
     // ── the MOTION_EMA pairing, the detector's own rule between two settings ────────────────
     // With MOTION_EMA_LEN 0 the margin is not needed: its row is hidden (and dimmed). Turning the
     // auto-calibration on (a pending edit, not yet applied) makes it needed — the row appears, and
     // APPLY refuses until it has a value, then queues BOTH in one change — the page's copy of the
-    // server-side rule in buildDeviceChange (test_logic.php). The tier edit above is discarded first,
+    // server-side rule in buildDeviceChange (test_logic.php). The edit above is discarded first,
     // so the pairing below is the only pending edit and its one change can be told apart.
     window.document.getElementById('revert').click();
     check('with the auto-calibration off its margin row is not needed: hidden, and dimmed as unused',

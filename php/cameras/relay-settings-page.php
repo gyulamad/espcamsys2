@@ -8,9 +8,6 @@
 //   * a CATEGORY RAIL on the left — one entry per category (the relay's `group`, the dashboard's own values
 //     are the "Dashboard" category), with the number of settings in it, in the order the page promises.
 //     One category is shown at a time; edits made in another stay pending (see the tray).
-//   * a LEVEL switch — BASIC / ADVANCED / EXPERT. Rows above the chosen level stay in the form (hidden,
-//     with their values), so switching levels never loses an edit. The dashboard's own rows carry no tier
-//     and stay at every level.
 //   * one row per setting: the short key with its tags ("affects cameras" for the keys flashed into every
 //     board, "locked — config.js only" for the rows that decide which program the relay runs, "changed"
 //     while the row holds an unsaved edit), the readable label, the help text, and the value tags ("restarts
@@ -25,8 +22,8 @@
 //     dashboard writes its own, and a save that needs it restarts the relay.
 //
 // Like the camera page, the page answers a jump from the settings search (?find=KEY, F-29 T7b): the key's
-// own category opens with the row framed, at the level that shows it. (The search's relay hits still land
-// on the hub's one-page form; if they move here, the page is ready.)
+// own category opens with the row framed. (The search's relay hits still land on the hub's one-page form;
+// if they move here, the page is ready.)
 //
 // The alarm sound library (js/sound-library.js) is listed in the "Alarm sounds" category: the sound rows
 // are choices among its files, so it is shown with them; it acts at once and is not part of APPLY.
@@ -78,10 +75,6 @@ require_once __DIR__ . '/lib/Layout.php';
   .catwrap { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 24px; flex-wrap: wrap; margin-bottom: 10px; }
   .cat-head h2 { font-size: 1.35rem; font-weight: 500; letter-spacing: .01em; }
   .cat-head p { font-size: .82rem; color: var(--muted); margin-top: 4px; max-width: 560px; line-height: 1.45; }
-  .tierbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 2px; }
-  .tierbar .lbl { font-family: var(--mono); font-size: .65rem; letter-spacing: .14em; color: var(--muted); }
-  .btn.tier.on { border-color: var(--accent); color: var(--accent); }
-  #tierinfo { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
   /* ── one setting row: what (key, label, tags, help) left, the value (range, input, reset) right ── */
   .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 2px 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 10px; align-items: start; }
   /* the row the settings search jumped to (?find=key, F-29 T7b) */
@@ -167,13 +160,6 @@ require_once __DIR__ . '/lib/Layout.php';
           <h2 id="cat-title"></h2>
           <p id="cat-desc"></p>
         </div>
-        <div class="tierbar" id="tierbar">
-          <span class="lbl">LEVEL</span>
-          <button class="btn tier on" type="button" data-tier="basic">BASIC</button>
-          <button class="btn tier" type="button" data-tier="advanced">ADVANCED</button>
-          <button class="btn tier" type="button" data-tier="expert">EXPERT</button>
-          <span id="tierinfo"></span>
-        </div>
       </div>
       <form id="form" onsubmit="return false;"></form>
     </div>
@@ -198,15 +184,13 @@ require_once __DIR__ . '/lib/Layout.php';
   const GROUP_ORDER = ['Recording', 'Person check', 'Alarm sounds', 'Network', 'Keys', 'Log', 'Folders', 'Detectors', 'Notifications', 'Security', 'Diagnostics', 'Dashboard'];
   const BREAKING = ['camKey', 'pushPort'];   // flashed into every camera: changing them stops the connections
   const NUMERIC = ['int', 'float'];          // drawn as a number input (a float's step comes from the relay)
-  const LEVELS = ['basic', 'advanced', 'expert'];   // who a row is for (the relay's `tier`); the level picks how many are shown
   const SECRET_MASK = '********';
   let fields = [];
   let original = {};   // key -> the value loaded from the server (secrets: '')
-  let tierLevel = 'basic';   // the level shown: rows above it stay in the form but hidden
   let activeCat = null;      // the category shown; null until the first render picks the first one
   // A jump from the settings search (?find=KEY, F-29 T7b): the key's category opens with the row
-  // framed, at the level that shows it. A key the relay does not have is ignored — the page then
-  // opens as always. Relay keys are camelCase and case-sensitive, so the word is taken as it comes.
+  // framed. A key the relay does not have is ignored — the page then opens as always. Relay keys are
+  // camelCase and case-sensitive, so the word is taken as it comes.
   const FIND = new URLSearchParams(location.search).get('find') || '';
   let foundShown = false;    // the jump is applied once: a reload after a save must not scroll away again
 
@@ -404,7 +388,6 @@ require_once __DIR__ . '/lib/Layout.php';
     side.append(ctl);
 
     const row = el('div', { className: 'row', id: 'r-' + f.key }, what, side, el('div', { className: 'tagrow' }, tags), el('div', { className: 'help', textContent: f.help }));
-    if (f.tier) row.dataset.tier = f.tier;
     row.dataset.cat = catOf(f);
     return row;
   }
@@ -436,31 +419,17 @@ require_once __DIR__ . '/lib/Layout.php';
     for (const b of document.querySelectorAll('#rail .rail-item')) b.classList.toggle('on', b.dataset.cat === c);
     refresh();
   }
-  // The LEVEL switch: one place sets the level and keeps the buttons in step, so a hand click and the
-  // search's jump (?find=) cannot drift apart.
-  function setTier(level) {
-    tierLevel = level;
-    for (const b of document.querySelectorAll('#tierbar .btn.tier')) b.classList.toggle('on', b.dataset.tier === level);
-  }
-  // The chosen level hides every row above it (basic < advanced < expert). Rows without a tier — the
-  // dashboard's own settings — are shown at every level. Hidden rows keep their values, so a change
-  // made at a higher level is not lost by switching back: it is still tracked, and the tray counts it.
-  // Nothing is dropped: the form stays complete and the level is only a view.
+  // Every setting is shown, whatever tier the relay names it for (the LEVEL switch is gone): a row is
+  // hidden only because another category is the one on view. Hidden rows keep their values, so moving
+  // between categories never loses an edit: it is still tracked, and the tray counts it.
   function updateVisibility() {
-    let tierHidden = 0;
     for (const f of fields) {
       const row = $('r-' + f.key);
       if (!row) continue;
-      const catVisible = catOf(f) === activeCat;
-      const aboveLevel = f.tier && LEVELS.indexOf(f.tier) > LEVELS.indexOf(tierLevel);
-      row.hidden = !catVisible || aboveLevel;
-      if (catVisible && aboveLevel) tierHidden += 1;
+      row.hidden = catOf(f) !== activeCat;
     }
     const slot = $('sound-slot');
     if (slot) slot.hidden = activeCat !== 'Alarm sounds';
-    $('tierinfo').textContent = tierHidden === 0
-      ? 'every setting shown at ' + tierLevel
-      : tierHidden + ' hidden at ' + tierLevel + ' — a higher level shows them';
   }
 
   // Marks each row about its edit: the input's changed border, the row's "changed" tag, and whether the
@@ -553,15 +522,13 @@ require_once __DIR__ . '/lib/Layout.php';
 
     // the first category is shown (normally Recording); "Other" is only picked by hand
     activeCat = catList()[0] || '';
-    // The search's jump (?find=): the key's own category, and the level that shows the row — a row
-    // above the chosen level would stay hidden, and a highlight on an invisible row is no highlight.
-    // Only tierLevel is set here: refresh() below redraws with it, and the buttons catch up with it.
+    // The search's jump (?find=): the key's own category opens, so the row the search landed on is
+    // the one on view. Only activeCat is set here: refresh() below redraws with it.
     if (FIND && !foundShown) {
       const found = fields.find((x) => x.key === FIND);
       if (found) {
         foundShown = true;
         activeCat = catOf(found);
-        if (found.tier) setTier(found.tier);
       }
     }
     renderRail();
@@ -623,13 +590,6 @@ require_once __DIR__ . '/lib/Layout.php';
     }
     notify('Discarded — nothing was sent.', 'ok');
   });
-  for (const b of document.querySelectorAll('#tierbar .btn.tier')) {
-    b.addEventListener('click', () => {
-      clearFound();   // the mark points where the search landed; switching the level clears it
-      setTier(b.dataset.tier);
-      refresh();
-    });
-  }
 
   load();
 </script>
