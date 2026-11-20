@@ -63,7 +63,7 @@ $cameraLabelsJson = json_encode(
 </style>
 </head>
 <body>
-<?= CamLayout::navBar('all-files') ?>
+<?= CamLayout::navBar('all-files', $config) ?>
 <header>
   <div>
     <h1>📼 ALL FILES</h1>

@@ -84,7 +84,9 @@ if ($method === 'GET') {
         } else {
             $f['value'] = $f['type'] === 'int'
                 ? (string) CamLogic::intSetting($config, $f['key'])
-                : (string) ($config[$f['key']] ?? '');
+                : ($f['type'] === 'bool'
+                    ? (CamLogic::devMode($config) ? 'true' : 'false')   // the text the ON/OFF switch sends back
+                    : (string) ($config[$f['key']] ?? ''));
         }
         $f['source'] = 'config.php';
         $fields[] = $f;

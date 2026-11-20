@@ -70,7 +70,7 @@ require_once __DIR__ . '/lib/Layout.php';
 </style>
 </head>
 <body>
-<?= CamLayout::navBar('ota-logs') ?>
+<?= CamLayout::navBar('ota-logs', $config) ?>
 <header>
   <h1>🛰 OTA &amp; LOGS</h1>
   <p>Firmware status of the boards · the end of the relay and Apache logs</p>

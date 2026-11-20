@@ -115,26 +115,41 @@ class CamLayout
 CSS;
     }
 
-    // The pages the navigation bar leads to: key (what a page passes as its own), address, label, hint.
-    // The dashboard is one entry (F-43a: the list layout is gone entirely, the grid IS the dashboard).
-    // The bar's links are the only ones to these pages.
+    // The pages the navigation bar leads to: key (what a page passes as its own), address, label, hint,
+    // and whether the entry is a developer-mode one (F-43b: DASHBOARD and OTA & LOGS are shown only
+    // while developer mode is ON — the last field). The dashboard is one entry (F-43a: the list layout
+    // is gone entirely, the grid IS the dashboard). The bar's links are the only ones to these pages.
     private const NAV_PAGES = [
-        ['dashboard', './?layout=grid', '⊞ DASHBOARD', 'All cameras as a grid, with their controls'],
-        ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen'],
-        ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large'],
-        ['all-files', 'all-recordings.php', '📼 ALL FILES', 'Every saved recording of every camera in one list, newest first; delete all footage from there'],
-        ['settings', 'settings-page.php', '⚙ SETTINGS', 'The main system\'s settings — relay, dashboard and cameras — one category at a time, with a search box'],
-        ['ota-logs', 'ota-logs.php', '🛰 OTA & LOGS', 'Whether the boards have taken the latest firmware, and the end of the relay\'s and Apache\'s logs (warnings and errors), refreshed as they change'],
+        ['dashboard', './?layout=grid', '⊞ DASHBOARD', 'All cameras as a grid, with their controls', true],
+        ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen', false],
+        ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large', false],
+        ['all-files', 'all-recordings.php', '📼 ALL FILES', 'Every saved recording of every camera in one list, newest first; delete all footage from there', false],
+        ['settings', 'settings-page.php', '⚙ SETTINGS', 'The main system\'s settings — relay, dashboard and cameras — one category at a time, with a search box', false],
+        ['ota-logs', 'ota-logs.php', '🛰 OTA & LOGS', 'Whether the boards have taken the latest firmware, and the end of the relay\'s and Apache\'s logs (warnings and errors), refreshed as they change', true],
     ];
+
+    // The developer-mode notice (F-43b): while developer mode is ON, every page carries this reminder at
+    // the very top. A plain div with fixed text, nothing fetched: the mode is this dashboard's own
+    // setting, known when the page is built, and the notice is not dismissible — that is the price of
+    // the mode. Turn OFF in the settings page's Dashboard category and it stops appearing.
+    public static function devModeNotice(bool $devMode): string
+    {
+        if (!$devMode) return '';
+        return '<div class="dev-mode-alert" role="status">Developer mode is active, turn off in settings.</div>' . "\n";
+    }
 
     // The navigation bar at the top of every page after the login: one place to go to the dashboard (grid or
     // list), the simple view, the simple list, the file list, the settings and the OTA & LOGS page (and the only
     // place that has these links), and LOG OUT at its right end. $active: the key of the page that shows it, or
     // null on a page that is none of them: no link is marked then.
-    public static function navBar(?string $active): string
+    public static function navBar(?string $active, ?array $config = null): string
     {
+        // No config given: behave as before, everything shown (a page that has not got its config handy,
+        // and the tests). With it, the developer-mode entries appear only while the mode is ON (F-43b).
+        $devMode = $config === null || CamLogic::devMode($config);
         $links = '';
-        foreach (self::NAV_PAGES as [$key, $href, $label, $hint]) {
+        foreach (self::NAV_PAGES as [$key, $href, $label, $hint, $devOnly]) {
+            if ($devOnly && !$devMode) continue;
             $current = $key === $active;
             $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '" data-nav="' . self::esc($key) . '"' . self::pageLoadAttr()
                 . ($current ? ' aria-current="page"' : '') . ' title="' . self::esc($hint) . '">' . self::esc($label) . '</a>';
@@ -142,7 +157,8 @@ CSS;
         // The script that turns the bar into a hamburger on a phone (F-42) travels with the bar: every
         // page that has the bar has the behaviour, and no page wires it by hand. Without JavaScript the
         // bar stays what it always was — the script is the only thing that adds the burger.
-        return '<nav class="site-nav" id="site-nav" aria-label="Pages">' . $links . self::logoutForm('nav-link nav-logout') . "</nav>\n"
+        return self::devModeNotice($devMode)
+            . '<nav class="site-nav" id="site-nav" aria-label="Pages">' . $links . self::logoutForm('nav-link nav-logout') . "</nav>\n"
             . '<script src="js/nav-toggle.js"></script>' . "\n";
     }
 
@@ -160,6 +176,8 @@ CSS;
               border: 1px solid var(--border-light); border-radius: 6px; white-space: nowrap; }
   .nav-link:hover, .nav-link:focus-visible { border-color: var(--accent); color: var(--accent); }
   .nav-link.current { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,.08); }
+  .dev-mode-alert { padding: 8px 16px; background: #16130b; color: #ffb020; border-bottom: 1px solid #6b4a14;
+                    font-family: var(--mono, ui-monospace, monospace); font-size: .75rem; letter-spacing: .06em; text-align: center; }
   .site-nav .logout-form { margin-left: auto; flex: 0 0 auto; }
   .nav-logout { font-family: var(--mono); background: transparent; cursor: pointer; }
   /* The hamburger (F-42): on a narrow screen the bar shows the ☰ button only, and opening it stacks the

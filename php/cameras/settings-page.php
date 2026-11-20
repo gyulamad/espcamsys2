@@ -185,7 +185,7 @@ require_once __DIR__ . '/lib/Layout.php';
 </style>
 </head>
 <body>
-<?= CamLayout::navBar('settings') ?>
+<?= CamLayout::navBar('settings', $config) ?>
 <header>
   <div>
     <nav class="crumbs" aria-label="Where you are"><span class="here">SETTINGS</span></nav>

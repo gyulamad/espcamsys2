@@ -83,6 +83,29 @@ camtest_test('defaultPageRedirect: a path that only ends like index.php, or is n
     camtest_assert_equal(CamLogic::defaultPageRedirect(null), null);
 });
 
+// ── developer mode (F-43b) ───────────────────────────────────────────
+
+camtest_test('devMode: ON by default; a stored bool or the strings true/false are honoured; anything damaged falls back to ON', function () {
+    camtest_assert_true(CamLogic::devMode([]), 'no setting: the default');
+    camtest_assert_true(CamLogic::devMode(['dev_mode' => true]));
+    camtest_assert_true(CamLogic::devMode(['dev_mode' => false]) === false);
+    camtest_assert_true(CamLogic::devMode(['dev_mode' => 'true']));
+    camtest_assert_true(CamLogic::devMode(['dev_mode' => 'false']) === false);
+    camtest_assert_true(CamLogic::devMode(['dev_mode' => 'junk']), 'a damaged value must never hide the menu items');
+});
+
+camtest_test('validateDashboardUpdate: dev_mode takes only true/false, and true (the default) is no change', function () {
+    $off = CamLogic::validateDashboardUpdate(['dev_mode' => 'false'], []);
+    camtest_assert_true($off['ok'] && $off['changes'] === ['dev_mode' => false], json_encode($off));
+    $on = CamLogic::validateDashboardUpdate(['dev_mode' => 'true'], []);
+    camtest_assert_true($on['ok'] && $on['changes'] === [], json_encode($on));
+    $back = CamLogic::validateDashboardUpdate(['dev_mode' => 'true'], ['dev_mode' => false]);
+    camtest_assert_true($back['ok'] && $back['changes'] === ['dev_mode' => true], 'turning it back on is a change');
+    foreach (['1', 0, 'on', null, ['true']] as $bad) {
+        camtest_assert_true(CamLogic::validateDashboardUpdate(['dev_mode' => $bad], [])['ok'] === false, var_export($bad, true));
+    }
+});
+
 // ── computeGridColumns ───────────────────────────────────────────────
 
 camtest_test('computeGridColumns: a single camera gets one column', function () {

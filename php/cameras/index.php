@@ -448,7 +448,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
 </style>
 </head>
 <body>
-<?= CamLayout::navBar('dashboard') ?>
+<?= CamLayout::navBar('dashboard', $config) ?>
 <header>
   <div class="logo">
     <div class="logo-icon">📷</div>

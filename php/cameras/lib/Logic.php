@@ -894,6 +894,8 @@ class CamLogic
              'label' => 'Dashboard password', 'help' => 'At least ' . self::MIN_PASSWORD_LENGTH . ' characters. Leave empty to keep the current one.'],
             ['key' => 'relay_url', 'type' => 'string', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard',
              'label' => 'Relay address', 'help' => 'Where this dashboard reaches the relay, e.g. http://127.0.0.1:8080. A new address is tested before it is saved.'],
+            ['key' => 'dev_mode', 'type' => 'bool', 'group' => 'Dashboard', 'restart' => false, 'scope' => 'dashboard', 'default' => true,
+             'label' => 'Developer mode', 'help' => 'ON (the default): the DASHBOARD and OTA & LOGS entries stay in the navigation bar and every page carries the developer-mode notice. OFF hides them, for an everyday operator — turn it back on here.'],
             self::intField('record_seconds', 'Recording',
              'Manual recording length (seconds)', 'How long the RECORD and RECORD ALL buttons on the dashboard record for. Pressing them again mid-recording extends it by this many seconds from that moment.'),
             self::intField('switch_off_minutes', 'Recording',
@@ -924,6 +926,19 @@ class CamLogic
         [$min, $max, $default] = self::INT_SETTINGS[$key];
         return ['key' => $key, 'type' => 'int', 'group' => $group, 'restart' => false, 'scope' => 'dashboard',
                 'min' => $min, 'max' => $max, 'default' => $default, 'label' => $label, 'help' => $help];
+    }
+
+    // Developer mode (F-43b): ON by default. A stored bool is honoured, so are the strings 'true' /
+    // 'false' (a hand-edited config.php), and anything damaged falls back to ON — a broken value must
+    // never hide the menu items, only an explicit OFF does.
+    const DEFAULT_DEV_MODE = true;
+
+    public static function devMode(array $config): bool
+    {
+        $v = $config['dev_mode'] ?? null;
+        if ($v === 'true') return true;
+        if ($v === 'false') return false;
+        return $v === null ? self::DEFAULT_DEV_MODE : (bool) $v;
     }
 
     // A whole-number setting as it is in effect: the configured value if it is a whole number inside its
@@ -1247,6 +1262,14 @@ class CamLogic
                     }
                     $changes[$key] = $v;
                 }
+            } elseif ($key === 'dev_mode') {
+                if ($value !== 'true' && $value !== 'false') {
+                    return ['ok' => false, 'error' => 'dev_mode must be true or false'];
+                }
+                $v = $value === 'true';
+                if ($v !== self::devMode($current)) {
+                    $changes[$key] = $v;
+                }
             } elseif (isset(self::INT_SETTINGS[$key])) {
                 [$lo, $hi] = self::INT_SETTINGS[$key];
                 if (!preg_match('/^\s*-?\d+\s*$/D', $value) || (int) $value < $lo || (int) $value > $hi) {
@@ -1275,7 +1298,7 @@ class CamLogic
     // edited). What the settings pages change is kept in a small JSON file the web server may write —
     // not code, so a bug can never turn it into code that runs — and laid over config.php when the
     // config is loaded. Only these keys can be overridden; anything else in the file is ignored.
-    const CONFIG_OVERRIDE_KEYS = ['auth_user', 'auth_pass', 'relay_url', 'relay_control_key', 'record_seconds', 'switch_off_minutes', 'slideshow_seconds', 'cameras'];
+    const CONFIG_OVERRIDE_KEYS = ['auth_user', 'auth_pass', 'relay_url', 'relay_control_key', 'record_seconds', 'switch_off_minutes', 'slideshow_seconds', 'dev_mode', 'cameras'];
 
     // What of a decoded settings.json may be used: only the known keys, each with the right type, and
     // cameras with a valid id. Anything else is dropped, so a damaged or tampered file can neither add
@@ -1295,6 +1318,9 @@ class CamLogic
             if (isset($decoded[$k]) && is_int($decoded[$k])) {
                 $out[$k] = $decoded[$k];
             }
+        }
+        if (isset($decoded['dev_mode']) && is_bool($decoded['dev_mode'])) {
+            $out['dev_mode'] = $decoded['dev_mode'];
         }
         if (isset($decoded['cameras']) && is_array($decoded['cameras'])) {
             $cams = [];

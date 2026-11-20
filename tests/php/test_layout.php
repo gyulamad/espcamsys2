@@ -529,7 +529,8 @@ camtest_test('simple view: the bar runs out smoothly, and holds still for reduce
 
 camtest_test('navBar: the pages in a fixed order, as plain links with a hint', function () {
     $html = CamLayout::navBar(null);
-    camtest_assert_true(strpos($html, '<nav class="site-nav" id="site-nav" aria-label="Pages">') === 0);
+    camtest_assert_true(strpos($html, CamLayout::devModeNotice(true) . '<nav class="site-nav" id="site-nav" aria-label="Pages">') === 0,
+        'the developer-mode notice sits above the bar while the mode is on (F-43b)');
     camtest_assert_true(strpos($html, '<script src="js/nav-toggle.js"></script>') !== false, 'the hamburger script travels with the bar (F-42)');
     camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 6);
     camtest_assert_equal($m[1], ['./?layout=grid', 'simple-view.php', 'simple-list.php', 'all-recordings.php', 'settings-page.php', 'ota-logs.php']);
@@ -539,6 +540,17 @@ camtest_test('navBar: the pages in a fixed order, as plain links with a hint', f
         camtest_assert_true(strpos($html, $label . '</a>') !== false, $label);
     }
     camtest_assert_true(strpos($html, 'aria-current') === false && strpos($html, ' current') === false, 'a page that is none of them marks nothing');
+});
+
+camtest_test('navBar: developer mode OFF (F-43b) hides DASHBOARD and OTA & LOGS and the notice, SETTINGS stays', function () {
+    $html = CamLayout::navBar(null, ['dev_mode' => false]);
+    camtest_assert_true(strpos($html, '<nav class="site-nav" id="site-nav"') === 0, 'no notice before the bar');
+    camtest_assert_true(strpos($html, 'dev-mode-alert') === false, 'no notice anywhere');
+    camtest_assert_equal(preg_match_all('/<a class="nav-link"/', $html), 4, 'six entries minus the two dev-only ones');
+    camtest_assert_true(strpos($html, 'data-nav="dashboard"') === false && strpos($html, 'data-nav="ota-logs"') === false, 'the dev-only links are gone');
+    camtest_assert_true(strpos($html, 'data-nav="settings"') !== false && strpos($html, 'data-nav="simple-view"') !== false, 'the everyday links stay');
+    $mixed = CamLayout::navBar(null, ['dev_mode' => 'true']);
+    camtest_assert_true(strpos($mixed, 'dev-mode-alert') !== false, 'the string true is honoured too');
 });
 
 camtest_test('navBar: LOG OUT is the last thing in the bar, a POST form (not a link) at its right end', function () {
