@@ -1616,6 +1616,10 @@ camtest_test('the three lists match the relay\'s real settings table: every rela
     // `locked` (the programs the relay runs: shown read-only) and `path` (a file or folder the relay
     // writes: not offered at all, F-09). If the relay gains a setting, this fails until someone decides
     // on purpose which of the three it is here — the same guard the list has always been.
+    // The one exception (F-30): apacheErrorLog is a path row, but a file the relay READS and shows on the
+    // OTA & LOGS page — set from the page the relay confines it to a .log inside its own folder (R-04),
+    // so the dashboard offers it like any editable setting instead of refusing it.
+    $pageSettablePaths = ['apacheErrorLog'];
     $src = @file_get_contents(__DIR__ . '/../../nodejs/camera-relay/lib/sysfields.js');
     if ($src === false) {
         camtest_assert_true(true, 'relay source not found (skipped)');
@@ -1634,7 +1638,7 @@ camtest_test('the three lists match the relay\'s real settings table: every rela
     foreach ($rows as $key => $flags) {
         if ($flags['locked']) {
             camtest_assert_true(in_array($key, CamLogic::RELAY_LOCKED_SETTING_KEYS, true) && !in_array($key, CamLogic::RELAY_PATH_SETTING_KEYS, true) && !in_array($key, CamLogic::RELAY_SETTING_KEYS, true), "$key: locked in the table must be locked here");
-        } elseif ($flags['path']) {
+        } elseif ($flags['path'] && !in_array($key, $pageSettablePaths, true)) {
             camtest_assert_true(in_array($key, CamLogic::RELAY_PATH_SETTING_KEYS, true) && !in_array($key, CamLogic::RELAY_SETTING_KEYS, true), "$key: a path in the table must be refused here");
         } else {
             camtest_assert_true(in_array($key, CamLogic::RELAY_SETTING_KEYS, true), "$key: an ordinary row must be editable here");

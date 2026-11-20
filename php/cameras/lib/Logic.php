@@ -981,7 +981,8 @@ class CamLogic
     // The relay settings the dashboard may CHANGE (review F-09). An ALLOW-list, so a setting the
     // relay gains later stays out of reach until it is added here on purpose — tests/php checks it
     // against the relay's own table (lib/sysfields.js) after every change. Numbers, ports, keys,
-    // switches, chat ids, URLs and host names only; the relay is the authority on each value's shape.
+    // switches, chat ids, URLs and host names only (apacheErrorLog below is the one path
+    // exception); the relay is the authority on each value's shape.
     // Every row of the relay's table that is neither a path nor locked ends up here (F-29 T6a put
     // the old config.js- and environment-only values into the settings store; T6b opened them).
     const RELAY_SETTING_KEYS = [
@@ -999,6 +1000,12 @@ class CamLogic
         'camKey', 'controlKey',
         // Log
         'logMaxBytes', 'logKeepFiles',
+        // F-30: a path row in the relay's table, but a file the relay READS and shows on the OTA & LOGS
+        // page, not one it writes — so it is offered like any other setting. The relay is the authority
+        // on the value: set from the page it must be a .log inside the relay's own folder (R-04); a file
+        // elsewhere (the default is the system's Apache log) can only be named in config.js or the
+        // environment, on the machine itself. The one exception to RELAY_PATH_SETTING_KEYS below.
+        'apacheErrorLog',
         // Detectors
         'detectorViewMinutes', 'detectorNoPictureWarnMs',
         // Notifications
@@ -1015,6 +1022,7 @@ class CamLogic
     // the relay (which runs with its own rights) at an arbitrary place — a log written into another
     // program's folder, firmware served from /etc, the on/off state file overwritten, a model file that
     // is not one. These are changed on the Pi itself: config.js or the relay's environment (MANUAL.md).
+    // The one exception is apacheErrorLog (F-30): a confined read-path, offered on the settings page.
     const RELAY_PATH_SETTING_KEYS = ['logFile', 'deviceSettingsDir', 'firmwareDir', 'soundsDir', 'switchFile', 'personScanModel'];
 
     // The relay's LOCKED settings (F-29 T6a): they decide which program the relay RUNS (the person
@@ -1024,8 +1032,8 @@ class CamLogic
     const RELAY_LOCKED_SETTING_KEYS = ['personScanPython', 'personScanScript', 'alarmSoundPlayer'];
 
     // The fields from the relay's GET /system-settings that the page may see: the ones it may change,
-    // plus the locked ones (shown read-only, never changed). The others — the file and folder paths,
-    // and anything unknown — are dropped, so the page never offers them.
+    // plus the locked ones (shown read-only, never changed). The others — the file and folder paths
+    // (all but apacheErrorLog, F-30), and anything unknown — are dropped, so the page never offers them.
     // The `locked` flag is set from THIS list, not from what the relay sent: a relay that marks an
     // editable row locked (or forgets the flag on a locked one) cannot change what the page offers.
     public static function visibleRelayFields($fields): array
