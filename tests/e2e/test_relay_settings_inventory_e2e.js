@@ -134,7 +134,9 @@ async function main() {
     // ── an empty store changes nothing ──
     const g0 = await asControl('GET', '/system-settings');
     const fields = g0.json && g0.json.fields || [];
-    check('every row is offered (54: the 23 that were settings, and the 31 that were not)', g0.status === 200 && fields.length === 54, `got ${fields.length}`);
+    // 55 = the 23 rows that were settings before F-29 T6a, the 31 that were moved into the store then,
+    // and apacheErrorLog, added in F-30 (the Apache log the OTA & LOGS page shows).
+    check('every row is offered (55: the 23 that were settings, the 31 that were not, and apacheErrorLog from F-30)', g0.status === 200 && fields.length === 55, `got ${fields.length}`);
     check('no row comes from the environment, and no store file was written by reading', fields.every((f) => !f.envOverride && f.source !== 'environment') && !fs.existsSync(store));
     check('a moved row shows the value it always had', [['maxAlarmRecordings', 16], ['authMaxFailures', 10], ['authLockSeconds', 60], ['authLockMaxSeconds', 900], ['restartCooldownMs', 30000],
       ['pushIdleTimeoutMs', 60000], ['detectorViewMinutes', 10], ['personScanStride', 1], ['notifyCooldownSeconds', 60], ['storageReminderHours', 24]]
