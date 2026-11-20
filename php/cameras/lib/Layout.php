@@ -118,9 +118,12 @@ CSS;
     // The pages the navigation bar leads to: key (what a page passes as its own), address, label, hint,
     // and whether the entry is a developer-mode one (F-43b: DASHBOARD and OTA & LOGS are shown only
     // while developer mode is ON — the last field). The dashboard is one entry (F-43a: the list layout
-    // is gone entirely, the grid IS the dashboard). The bar's links are the only ones to these pages.
+    // is gone entirely, the grid IS the dashboard), and its address is index.php itself (F-44: the old
+    // ./?layout=grid reads as just the site's address now that ?layout= means nothing, and the landing
+    // logic bounced it to SIMPLE LIST; index.php is the one address that logic knows is a dashboard
+    // request). The bar's links are the only ones to these pages.
     private const NAV_PAGES = [
-        ['dashboard', './?layout=grid', '⊞ DASHBOARD', 'All cameras as a grid, with their controls', true],
+        ['dashboard', 'index.php', '⊞ DASHBOARD', 'All cameras as a grid, with their controls', true],
         ['simple-view', 'simple-view.php', '▣ SIMPLE VIEW', 'One camera large, with PREV / NEXT and a slideshow — for a big screen', false],
         ['simple-list', 'simple-list.php', '▦ SIMPLE LIST', 'Every camera as a small picture on one plain page; click one to see it large', false],
         ['all-files', 'all-recordings.php', '📼 ALL FILES', 'Every saved recording of every camera in one list, newest first; delete all footage from there', false],
@@ -138,8 +141,8 @@ CSS;
         return '<div class="dev-mode-alert" role="status">Developer mode is active, turn off in settings.</div>' . "\n";
     }
 
-    // The navigation bar at the top of every page after the login: one place to go to the dashboard (grid or
-    // list), the simple view, the simple list, the file list, the settings and the OTA & LOGS page (and the only
+    // The navigation bar at the top of every page after the login: one place to go to the dashboard, the simple
+    // view, the simple list, the file list, the settings and the OTA & LOGS page (and the only
     // place that has these links), and LOG OUT at its right end. $active: the key of the page that shows it, or
     // null on a page that is none of them: no link is marked then.
     public static function navBar(?string $active, ?array $config = null): string

@@ -141,15 +141,16 @@ async function main() {
     let r = await get('index.php');
     const navLink = (href, label) => `<a class="nav-link[^"]*" href="${href}"[^>]*>[^<]*${label}</a>`;
     const NAV_LINKS = new RegExp('<nav class="site-nav" id="site-nav" aria-label="Pages">' + [
-      navLink('\\./\\?layout=grid', 'DASHBOARD'), navLink('simple-view\\.php', 'SIMPLE VIEW'),
-      navLink('simple-list\\.php', 'SIMPLE LIST'), navLink('all-recordings\\.php', 'ALL FILES'), navLink('ota-logs\\.php', 'OTA &amp; LOGS'),
+      navLink('index\\.php', 'DASHBOARD'), navLink('simple-view\\.php', 'SIMPLE VIEW'),
+      navLink('simple-list\\.php', 'SIMPLE LIST'), navLink('all-recordings\\.php', 'ALL FILES'),
+      navLink('settings-page\\.php', 'SETTINGS'), navLink('ota-logs\\.php', 'OTA &amp; LOGS'),
     ].join('') + '<form class="logout-form" method="post" action="logout\\.php" data-page-load="Logging out…"><button class="nav-link nav-logout" type="submit"[^>]*>[^<]*LOG OUT</button></form></nav>');
-    check('the dashboard has the navigation bar (dashboard grid / list, simple view, simple list, all files, OTA & LOGS, LOG OUT at its right end) as the first thing in its body, the grid marked, and no copy of those buttons in its header',
-      r.status === 200 && /<body>\s*(?:<div class="dev-mode-alert"[\s\S]*?<\/div>\n)?<nav class="site-nav" id="site-nav"/.test(r.text) && NAV_LINKS.test(r.text) && r.text.includes('class="nav-link current" href="./?layout=grid" data-nav="dashboard-grid" data-page-load aria-current="page"')
+    check('the dashboard has the navigation bar (dashboard, simple view, simple list, all files, settings, OTA & LOGS, LOG OUT at its right end) as the first thing in its body, the grid marked, and no copy of those buttons in its header',
+      r.status === 200 && /<body>\s*(?:<div class="dev-mode-alert"[\s\S]*?<\/div>\n)?<nav class="site-nav" id="site-nav"/.test(r.text) && NAV_LINKS.test(r.text) && r.text.includes('class="nav-link current" href="index.php" data-nav="dashboard" data-page-load aria-current="page"')
       && (r.text.match(/aria-current/g) || []).length === 1 && r.text.includes('.site-nav { position: sticky; top: 0;')
       && !r.text.includes('id="btn-simple-list"') && !r.text.includes('id="btn-simple-view"') && !r.text.includes('id="btn-grid"') && !r.text.includes('id="btn-list"')
       && !r.text.includes('id="btn-all-files"') && !r.text.includes('id="btn-delete-all"') && !r.text.includes('DELETE ALL FOOTAGE') && (r.text.match(/action="logout\.php"/g) || []).length === 1
-      && r.text.includes('src="js/dashboard-layout.js"') && r.text.includes('CamDashboardLayout.wire('), detail(r));
+      , detail(r));
     // F-43a: the list layout is gone — whatever ?layout= says, the bar marks DASHBOARD
     for (const [query, key] of [['?layout=list', 'dashboard'], ['?layout=grid', 'dashboard'], ['?layout=evil%22%3E', 'dashboard'], ['?layout[]=list', 'dashboard']]) {
       const n = await get('index.php' + query);
@@ -183,10 +184,10 @@ async function main() {
     }
     for (const page of ['all-recordings.php', 'settings-page.php', 'camera-settings-page.php?cam=cam-a']) {
       const n = await get(page);
-      const files = page === 'all-recordings.php';
-      check(`${page}: the navigation bar is on it${files ? ', with ALL FILES marked' : ', none of its links marked'}, LOG OUT only there, and the old "← DASHBOARD" button is gone`,
-        n.status === 200 && /<body>\s*<nav class="site-nav"/.test(n.text) && NAV_LINKS.test(n.text) && (n.text.match(/aria-current/g) || []).length === (files ? 1 : 0)
-        && (n.text.match(/action="logout\.php"/g) || []).length === 1 && (!files || n.text.includes('data-nav="all-files" data-page-load aria-current="page"')) && !n.text.includes('← DASHBOARD') && n.text.includes('.site-nav { position: sticky; top: 0;'), detail(n));
+      const marked = page === 'all-recordings.php' ? 'all-files' : 'settings';   // F-41: the settings pages mark SETTINGS in the bar
+      check(`${page}: the navigation bar is on it, with ${marked === 'all-files' ? 'ALL FILES' : 'SETTINGS'} marked, LOG OUT only there, and the old "← DASHBOARD" button is gone`,
+        n.status === 200 && /<body>\s*(?:<div class="dev-mode-alert"[\s\S]*?<\/div>\n)?<nav class="site-nav"/.test(n.text) && NAV_LINKS.test(n.text) && (n.text.match(/aria-current/g) || []).length === 1
+        && (n.text.match(/action="logout\.php"/g) || []).length === 1 && n.text.includes(`data-nav="${marked}" data-page-load aria-current="page"`) && !n.text.includes('← DASHBOARD') && n.text.includes('.site-nav { position: sticky; top: 0;'), detail(n));
     }
     const links = (id) => new RegExp(`<a class="stream-link" href="simple-view\\.php\\?cam=${id}"[^>]*>\\s*<img data-cam="${id}"[^>]*id="img-${id}"`);
     check('dashboard: every camera\'s picture is a link to that camera\'s large view, and a click there no longer goes full screen',
@@ -215,7 +216,7 @@ async function main() {
     check('list: each caption starts with that camera\'s own icon', r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚪</span>Cam A</span>')
       && r.text.includes('<span class="cap"><span class="cam-icon" aria-hidden="true">🚗</span>Cam B</span>'), r.text.slice(0, 200));
     check('list: the cameras\' names are the captions, and the navigation bar (list marked) is the way to the other pages — no second back button', /Cam A/.test(r.text) && /Cam C/.test(r.text)
-      && /<body class="simple-list">\s*<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-list.php" data-nav="simple-list" data-page-load aria-current="page"') && !r.text.includes('← DASHBOARD'));
+      && /<body class="simple-list">\s*(?:<div class="dev-mode-alert"[\s\S]*?<\/div>\n)?<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-list.php" data-nav="simple-list" data-page-load aria-current="page"') && !r.text.includes('← DASHBOARD'));
     check('list: every thumbnail has its hidden "camera offline" cover over its picture, and the page has its style',
       (r.text.match(/<img alt="[^"]*"><div class="cam-offline" role="status" hidden>/g) || []).length === 3
       && (r.text.match(/CAMERA OFFLINE/g) || []).length === 3 && r.text.includes('.cam-offline[hidden] { display: none; }'), detail(r));
@@ -227,7 +228,7 @@ async function main() {
       inOrder(r.text, ['mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'simple-list.js']) && !r.text.includes('relay-json.js'), detail(r));
 
     // ── the scripts ─────────────────────────────────────────────────
-    for (const f of ['camera-offline.js', 'alarm-chain.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'icon-catalog.js', 'icon-picker.js', 'dashboard-layout.js']) {
+    for (const f of ['camera-offline.js', 'alarm-chain.js', 'simple-logic.js', 'simple-list.js', 'simple-view.js', 'fullscreen.js', 'relay-json.js', 'mux-codec.js', 'mux-client.js', 'mux-pictures.js', 'icon-catalog.js', 'icon-picker.js']) {
       const js = await get(`js/${f}`);
       check(`js/${f}: served, and byte for byte the file the repo tests`, js.status === 200 && js.text === fs.readFileSync(path.join(DASH_SRC, 'js', f), 'utf8'), `status=${js.status}`);
     }
@@ -251,7 +252,7 @@ async function main() {
     check('view: the slideshow\'s time-left indicator (bar and seconds) is on the page, out of sight until the slideshow runs (the seconds stay IN the row: .off, never display:none — a display:none item would leave the wrapping row\'s flow, F-35)',
       r.text.includes('id="countdown-bar" aria-hidden="true" hidden>') && r.text.includes('<span class="countdown off" id="countdown"') && !/id="countdown"[^>]*\shidden>/.test(r.text) && /\.status \.countdown\.off\s*\{\s*visibility:\s*hidden/.test(r.text) && r.text.includes('id="countdown-fill"'), r.text.slice(0, 200));
     check('view: the navigation bar (view marked) is on the page and the status line has no dashboard / list buttons of its own',
-      /<body class="simple-view">\s*<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-view.php" data-nav="simple-view" data-page-load aria-current="page"') && !r.text.includes('▦ LIST') && !r.text.includes('>DASHBOARD<'), r.text.slice(0, 200));
+      /<body class="simple-view">\s*(?:<div class="dev-mode-alert"[\s\S]*?<\/div>\n)?<nav class="site-nav"/.test(r.text) && r.text.includes('class="nav-link current" href="simple-view.php" data-nav="simple-view" data-page-load aria-current="page"') && !r.text.includes('▦ LIST') && !r.text.includes('>DASHBOARD<'), r.text.slice(0, 200));
     check('view: the picture is in its own box (what goes full screen on a click)', r.text.includes('<div class="picture rec-frame" id="picture-box"><img id="picture"'));
     r = await get('simple-view.php?cam=cam-c');
     d = viewData(r.text);
