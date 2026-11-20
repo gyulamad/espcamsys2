@@ -9,10 +9,23 @@
 // "TypeError: Cannot read properties of null (reading '_location')" — an uncaught exception that fails
 // the whole run after every check has passed, on one run in a few. So frames are refused first: a window
 // that is being closed does not draw anything any more.
+//
+// A fetch() answer that lands after the close has a second way to kill the run that refusing frames does
+// not stop: the page's own .then or .catch runs, and on a closed window `document` and `window.location`
+// are undefined (close() empties window._document, which both getters read; every other global survives).
+// The settings search's "the index could not be loaded" handler, for one, then dies building its note —
+// "Cannot read properties of undefined (reading 'createElement')" — and the suite ends without its
+// summary. Which of the two happens is a race: it is one run in a few here, more on slower machines and
+// older Node, never on the fastest. So the document is captured before the close and handed back after
+// it: the object itself stays fully usable on a closed window (createElement works, writes to its
+// location are ignored), and whatever the page still wants to do to "the page" happens there — nothing
+// it does can throw.
 function closeWindow(dom) {
   if (!dom) return;
   dom.window.requestAnimationFrame = () => 0;
+  const document = dom.window.document;
   dom.window.close();
+  dom.window._document = document;
 }
 
 // pageScriptLoader(jsdom, names) — a resource loader for `new JSDOM(html, { resources })` that loads the named
