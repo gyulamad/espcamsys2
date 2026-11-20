@@ -272,7 +272,7 @@ async function main() {
       JSON.stringify(noDefault) === JSON.stringify(['auth_pass', 'auth_user', 'camKey', 'controlKey', 'relay_url', 'telegramBotToken']), noDefault.join(','));
     const noTier = d1.json.fields.filter((f) => f.tier === undefined).map((f) => f.key).sort();
     check('every relay row carries its tier; only the dashboard\'s own rows do not',
-      JSON.stringify(noTier) === JSON.stringify(['auth_pass', 'auth_user', 'record_seconds', 'relay_url', 'slideshow_seconds', 'switch_off_minutes']), noTier.join(','));
+      JSON.stringify(noTier) === JSON.stringify(['auth_pass', 'auth_user', 'dev_mode', 'record_seconds', 'relay_url', 'slideshow_seconds', 'switch_off_minutes']), noTier.join(','));
     check('the locked rows are on the page, marked read-only (the programs the relay runs)',
       ['personScanPython', 'personScanScript', 'alarmSoundPlayer'].every((k) => { const f = field(d1.json, k); return !!f && f.locked === true; }),
       d1.json.fields.filter((f) => f.locked).map((f) => f.key).join(','));
