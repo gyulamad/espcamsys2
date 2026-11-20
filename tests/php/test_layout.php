@@ -530,11 +530,11 @@ camtest_test('simple view: the bar runs out smoothly, and holds still for reduce
 camtest_test('navBar: the pages in a fixed order, as plain links with a hint', function () {
     $html = CamLayout::navBar(null);
     camtest_assert_true(strpos($html, '<nav class="site-nav" aria-label="Pages">') === 0);
-    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 6);
-    camtest_assert_equal($m[1], ['./?layout=grid', './?layout=list', 'simple-view.php', 'simple-list.php', 'all-recordings.php', 'ota-logs.php']);
-    camtest_assert_equal($m[2], ['dashboard-grid', 'dashboard-list', 'simple-view', 'simple-list', 'all-files', 'ota-logs']);
-    camtest_assert_equal(preg_match_all('/<a [^>]* title="[^"]+"/', $html), 6, 'every link says where it goes');
-    foreach (['DASHBOARD GRID', 'DASHBOARD LIST', 'SIMPLE VIEW', 'SIMPLE LIST', 'ALL FILES', 'OTA &amp; LOGS'] as $label) {
+    camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 7);
+    camtest_assert_equal($m[1], ['./?layout=grid', './?layout=list', 'simple-view.php', 'simple-list.php', 'all-recordings.php', 'settings-page.php', 'ota-logs.php']);
+    camtest_assert_equal($m[2], ['dashboard-grid', 'dashboard-list', 'simple-view', 'simple-list', 'all-files', 'settings', 'ota-logs']);
+    camtest_assert_equal(preg_match_all('/<a [^>]* title="[^"]+"/', $html), 7, 'every link says where it goes');
+    foreach (['DASHBOARD GRID', 'DASHBOARD LIST', 'SIMPLE VIEW', 'SIMPLE LIST', 'ALL FILES', 'SETTINGS', 'OTA &amp; LOGS'] as $label) {
         camtest_assert_true(strpos($html, $label . '</a>') !== false, $label);
     }
     camtest_assert_true(strpos($html, 'aria-current') === false && strpos($html, ' current') === false, 'a page that is none of them marks nothing');
@@ -549,7 +549,8 @@ camtest_test('navBar: LOG OUT is the last thing in the bar, a POST form (not a l
 
 camtest_test('navBar: the page that shows it is marked (class and aria-current), and only that one', function () {
     $pages = ['dashboard-grid' => './?layout=grid', 'dashboard-list' => './?layout=list', 'simple-view' => 'simple-view.php',
-              'simple-list' => 'simple-list.php', 'all-files' => 'all-recordings.php', 'ota-logs' => 'ota-logs.php'];
+              'simple-list' => 'simple-list.php', 'all-files' => 'all-recordings.php', 'settings' => 'settings-page.php',
+              'ota-logs' => 'ota-logs.php'];
     foreach ($pages as $key => $href) {
         $html = CamLayout::navBar($key);
         camtest_assert_equal(substr_count($html, 'aria-current="page"'), 1, $key);

@@ -4,7 +4,7 @@
 // switch (js/dashboard-layout.js) in a REAL browser: it needs a layout engine (LOG OUT at the right end, the
 // list layout really stacks the cameras) and real clicks.
 //
-//   - the bar has DASHBOARD GRID, DASHBOARD LIST, SIMPLE VIEW, SIMPLE LIST, ALL FILES, OTA & LOGS on the left and LOG OUT at the right end
+//   - the bar has DASHBOARD GRID, DASHBOARD LIST, SIMPLE VIEW, SIMPLE LIST, ALL FILES, SETTINGS, OTA & LOGS on the left and LOG OUT at the right end
 //   - a click on DASHBOARD LIST stacks the cameras in one column without leaving the page; GRID brings the columns back;
 //     the marked link follows, the choice is remembered over a reload, and ?layout= in the address wins
 //   - a click on another link (ALL FILES) is a normal navigation (not swallowed)
@@ -72,7 +72,7 @@ async function main() {
     await page.goto('http://nav.test/');
 
     const labels = await page.$$eval('.site-nav > a', (as) => as.map((a) => a.textContent));
-    check('the bar has the six links in order', JSON.stringify(labels) === JSON.stringify(['⊞ DASHBOARD GRID', '☰ DASHBOARD LIST', '▣ SIMPLE VIEW', '▦ SIMPLE LIST', '📼 ALL FILES', '🛰 OTA & LOGS']), JSON.stringify(labels));
+    check('the bar has the seven links in order', JSON.stringify(labels) === JSON.stringify(['⊞ DASHBOARD GRID', '☰ DASHBOARD LIST', '▣ SIMPLE VIEW', '▦ SIMPLE LIST', '📼 ALL FILES', '⚙ SETTINGS', '🛰 OTA & LOGS']), JSON.stringify(labels));
     const box = async (sel) => page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; });
     const logout = await box('.nav-logout');
     const lastLink = await box('.site-nav > a:last-of-type');
