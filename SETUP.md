@@ -72,6 +72,13 @@
    sudo systemctl status camrelay
    ```
 
+   If the relay's user should also be able to read Apache's error log for the dashboard's OTA & LOGS page (it is `0640 root:adm` on Raspberry Pi OS / Debian, so the relay gets `permission denied` without this), put that user in the `adm` group once — with the `User=pi` of the unit above:
+
+   ```
+   sudo usermod -aG adm pi
+   sudo systemctl restart camrelay   # a service only picks up group changes when it starts
+   ```
+
 6. **Important:** every route of the relay needs a key except `POST /alarm/...` (see the notes under ["Switching recording ON / OFF"](MANUAL.md#switching-recording-on--off) in MANUAL.md): the cameras' routes (`/upload`, `/log`, the push port, settings and firmware) need the camera key, and everything the dashboard does — watching (`/mux`, `/snapshot`, `/status`, `/recordings`, ...) as well as changing things — needs the control key, which is why **setting `controlKey` in the relay's `config.js` (and the same value as `relay_control_key` in the dashboard's `config.php`) is part of the installation, not an extra**. Without a `controlKey` the relay refuses reads with **503** by default (start the relay with `READ_KEY_REQUIRED=0` in the environment only on a trusted LAN with no Tor exposure to get the old read-everything behaviour). Still make sure nothing forwards ports 8080/8081 to the internet and your Pi's firewall (`ufw`/`iptables`) only allows them from `localhost` or your LAN, since only the PHP layer should ever talk to the relay directly.
 
 ## 2. Set up the PHP dashboard on the Pi

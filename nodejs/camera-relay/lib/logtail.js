@@ -87,7 +87,12 @@ function cleanLine(line) {
 
 function failure(err) {
   if (err && err.code === 'ENOENT') return { ok: false, error: 'the file does not exist' };
-  if (err && (err.code === 'EACCES' || err.code === 'EPERM')) return { ok: false, error: 'the relay is not allowed to read it (permission denied)' };
+  if (err && (err.code === 'EACCES' || err.code === 'EPERM')) {
+    // The usual case: Apache's error log on Raspberry Pi OS / Debian is 0640 root:adm in a 0750
+    // root:adm folder, so the relay's user cannot read it until it joins the adm group. Say the fix,
+    // not just the refusal (F-40) — the answer is all the person sees on the OTA & LOGS page.
+    return { ok: false, error: 'the relay is not allowed to read it (permission denied) — add its user to the log\'s group: sudo usermod -aG adm <relay user>, then restart the relay' };
+  }
   return { ok: false, error: 'the file could not be read' };
 }
 

@@ -206,14 +206,14 @@ test('renderLogs: a `==> path <==` heading per file, then its lines as one block
   Ota.renderLogs(doc, box, [
     { kind: 'relay', path: '/r/camera.log', ok: true, lines: ['one ERROR', 'two <b>WARN</b>'] },
     { kind: 'apache', path: '/var/log/apache2/error.log', ok: true, lines: [] },
-    { kind: 'apache', path: '/x/denied.log', ok: false, error: 'the relay is not allowed to read it (permission denied)' },
+    { kind: 'apache', path: '/x/denied.log', ok: false, error: 'the relay is not allowed to read it (permission denied) — add its user to the log\'s group: sudo usermod -aG adm <relay user>, then restart the relay' },
   ]);
   const titles = box.descendants().filter((e) => e.className === 'log-source-title').map((e) => e.textContent);
   assertEqual(titles, ['==> /r/camera.log <==', '==> /var/log/apache2/error.log <==', '==> /x/denied.log <==']);
   const pres = box.descendants().filter((e) => e.tagName === 'PRE');
   assertEqual(pres.map((e) => e.textContent), ['one ERROR\ntwo <b>WARN</b>', '(no matching lines)']);
   assertEqual(pres[0].children.length, 0, 'the markup in a line is text');
-  assertTrue(box.text().includes('(cannot be read: the relay is not allowed to read it (permission denied))'));
+  assertTrue(box.text().includes('(cannot be read: the relay is not allowed to read it (permission denied) — add its user to the log\'s group: sudo usermod -aG adm <relay user>, then restart the relay)'));
 });
 
 test('renderLogs: follows the tail when it was at the bottom, stays put when the person scrolled up', () => {

@@ -150,7 +150,7 @@ test('tailFile: a file the relay may not read says so (skipped when run as root,
   if (process.getuid && process.getuid() === 0) { console.log('       (running as root: skipped)'); return; }
   const f = makeFile('secret\n');
   fs.chmodSync(f, 0o000);
-  assertEqual(await logtail.tailFile(f, 5), { ok: false, error: 'the relay is not allowed to read it (permission denied)' });
+  assertEqual(await logtail.tailFile(f, 5), { ok: false, error: 'the relay is not allowed to read it (permission denied) — add its user to the log\'s group: sudo usermod -aG adm <relay user>, then restart the relay' });
 });
 
 test('capChars: the newest lines that fit', () => {

@@ -40,7 +40,7 @@ const OTA_TEXT = [
 ].join('\n') + '\n';
 const LOGS_GOOD = { at: 'ignored', lines: 1000, levels: null, sources: [
   { kind: 'relay', path: '/home/pi/espcamsys2/nodejs/camera-relay/logs/camera.log', ok: true, lines: ['2026-11-17T10:00:01.000Z ERROR cam2: Frame capture failed'] },
-  { kind: 'apache', path: '/var/log/apache2/error.log', ok: false, error: 'the relay is not allowed to read it (permission denied)' },
+  { kind: 'apache', path: '/var/log/apache2/error.log', ok: false, error: 'the relay is not allowed to read it (permission denied) — add its user to the log\'s group: sudo usermod -aG adm <relay user>, then restart the relay' },
 ] };
 const LOGS_HOSTILE = { sources: [
   { kind: 'relay', path: '/r/camera.log', ok: true, lines: ['ok line', 'esc \u001b[31mred', 'y'.repeat(2500), 7, null] },
