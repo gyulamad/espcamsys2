@@ -529,7 +529,8 @@ camtest_test('simple view: the bar runs out smoothly, and holds still for reduce
 
 camtest_test('navBar: the pages in a fixed order, as plain links with a hint', function () {
     $html = CamLayout::navBar(null);
-    camtest_assert_true(strpos($html, '<nav class="site-nav" aria-label="Pages">') === 0);
+    camtest_assert_true(strpos($html, '<nav class="site-nav" id="site-nav" aria-label="Pages">') === 0);
+    camtest_assert_true(strpos($html, '<script src="js/nav-toggle.js"></script>') !== false, 'the hamburger script travels with the bar (F-42)');
     camtest_assert_equal(preg_match_all('/<a class="nav-link" href="([^"]*)" data-nav="([^"]*)" data-page-load/', $html, $m), 7);
     camtest_assert_equal($m[1], ['./?layout=grid', './?layout=list', 'simple-view.php', 'simple-list.php', 'all-recordings.php', 'settings-page.php', 'ota-logs.php']);
     camtest_assert_equal($m[2], ['dashboard-grid', 'dashboard-list', 'simple-view', 'simple-list', 'all-files', 'settings', 'ota-logs']);

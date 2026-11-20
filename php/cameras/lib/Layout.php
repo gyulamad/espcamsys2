@@ -140,7 +140,11 @@ CSS;
             $links .= '<a class="nav-link' . ($current ? ' current' : '') . '" href="' . self::esc($href) . '" data-nav="' . self::esc($key) . '"' . self::pageLoadAttr()
                 . ($current ? ' aria-current="page"' : '') . ' title="' . self::esc($hint) . '">' . self::esc($label) . '</a>';
         }
-        return '<nav class="site-nav" aria-label="Pages">' . $links . self::logoutForm('nav-link nav-logout') . "</nav>\n";
+        // The script that turns the bar into a hamburger on a phone (F-42) travels with the bar: every
+        // page that has the bar has the behaviour, and no page wires it by hand. Without JavaScript the
+        // bar stays what it always was — the script is the only thing that adds the burger.
+        return '<nav class="site-nav" id="site-nav" aria-label="Pages">' . $links . self::logoutForm('nav-link nav-logout') . "</nav>\n"
+            . '<script src="js/nav-toggle.js"></script>' . "\n";
     }
 
     // Its style. It stays at the top of the window while the page scrolls (below a full-screen player, which
@@ -159,6 +163,21 @@ CSS;
   .nav-link.current { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,.08); }
   .site-nav .logout-form { margin-left: auto; flex: 0 0 auto; }
   .nav-logout { font-family: var(--mono); background: transparent; cursor: pointer; }
+  /* The hamburger (F-42): on a narrow screen the bar shows the ☰ button only, and opening it stacks the
+     links below (LOG OUT at the end). js/nav-toggle.js puts the button in the bar and toggles .nav-mobile
+     (the media query holds) and .nav-open (the button was clicked) — so these rules need no media query of
+     their own, and without JavaScript (or on a wide screen) none of them apply: the bar is what it always
+     was, every link visible, scrolling sideways when it must. */
+  .nav-burger { display: none; flex: 0 0 auto; width: 44px; height: 44px; padding: 0;
+                font-family: var(--mono); font-size: 1.1rem; line-height: 1; color: var(--text);
+                background: transparent; border: 1px solid var(--border-light); border-radius: 6px; cursor: pointer; }
+  .nav-burger:hover, .nav-burger:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+  .site-nav.nav-mobile { overflow-x: visible; }
+  .site-nav.nav-mobile .nav-burger { display: inline-block; }
+  .site-nav.nav-mobile.nav-open { display: flex; flex-direction: column; align-items: stretch; height: auto; gap: 6px; padding: 8px 12px 12px; }
+  .site-nav.nav-mobile.nav-open .nav-link { display: block; text-align: left; padding: 10px 14px; font-size: .95rem; }
+  .site-nav.nav-mobile.nav-open .logout-form { display: block; margin-left: 0; }
+  .site-nav.nav-mobile .nav-link, .site-nav.nav-mobile .logout-form { display: none; }
 CSS . "\n";
     }
 
