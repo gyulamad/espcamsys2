@@ -19,7 +19,7 @@
 //   * the PENDING-CHANGES TRAY counts edits across categories, offers ONE apply that queues them in one
 //     line on the relay's detector endpoint, DISCARD sends nothing, and a reboot-apply edit says the
 //     detector restarts
-//   * rows carry the Atlas tags (was hard-coded, serial only, preferences / default, live / reboot) and
+//   * rows carry the Atlas tags (serial only, preferences / default, live / reboot) and
 //     the ↺ RESET TO default button; a locked secret is disabled and masked
 // Needs `php` and the jsdom package (cd tests/dom && npm install); skips if either is missing.
 //
@@ -338,9 +338,7 @@ async function main() {
     check('the discard said so in a toast', toasts.some((t) => /Discarded/.test(t)), JSON.stringify(toasts));
 
     // ── the row tags over the detector's table ──────────────────────────────────────────────
-    const rowsWithDefault = schemaKeys.filter((d) => d.default !== null && d.default !== undefined).length;
-    check('every defaulted detector setting is marked "was hard-coded", and only those',
-      window.document.querySelectorAll('.tag.hardcoded').length === rowsWithDefault, String(rowsWithDefault));
+    check('no row wears a "was hard-coded" tag (F-39)', window.document.querySelectorAll('.tag.hardcoded').length === 0);
     check('a reported row carries the preferences tag and its default value, not the "default" tag',
       Array.from(row('LOG_ECHO').querySelectorAll('.tag')).some((t) => t.textContent === 'preferences')
         && Array.from(row('LOG_ECHO').querySelectorAll('.tag')).some((t) => t.textContent === 'default on')

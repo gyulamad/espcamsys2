@@ -7,15 +7,14 @@
 //   * a CATEGORY RAIL on the left — one entry per category the firmware's settings table names, with the
 //     number of settings in it; the settings that have no category (the relay-connection identity values,
 //     the serial-only locks, setup mode) sit under "Other". One category is shown at a time; edits made in
-//     another stay pending (see the tray).
-//   * a LEVEL switch — BASIC / ADVANCED / EXPERT. Rows above the chosen level stay in the form (hidden, with
-//     their values), so switching levels never loses an edit.
-//   * one row per setting: the short key with its tags ("was hard-coded" — its value used to be fixed in the
-//     firmware, and this default was that old value; "serial only" for the locked keys; "changed" while the
-//     row holds an unsaved edit), the readable label, the help text, and the value tags (where the value
-//     comes from — "preferences" once the board stores it, "default" while it does not —, "live" or "reboot",
-//     and the default itself). A number row shows its allowed range; one with a default can be reset to it
-//     with the row's ↺ RESET button, which goes through the same change tracking as a hand edit.
+//     another stay pending (see the tray). Every setting is shown, whatever tier the firmware's table
+//     names it for (F-37: there is no LEVEL switch).
+//   * one row per setting: the short key with its tags ("serial only" for the locked keys; "changed"
+//     while the row holds an unsaved edit), the readable label, the help text, and the value tags (where
+//     the value comes from — "preferences" once the board stores it, "default" while it does not —,
+//     "live" or "reboot", and the default itself). A number row shows its allowed range; one with a
+//     default can be reset to it with the row's ↺ RESET button, which goes through the same change
+//     tracking as a hand edit.
 //   * a PENDING-CHANGES tray at the bottom: every unsaved edit of every category with its old → new value,
 //     a DISCARD button, and ONE apply button — nothing is written to the board until it is pressed.
 //   * a LINKED SETTINGS panel (F-29 T8, designs/Main-v2.png): the rules that watch values which must
@@ -92,7 +91,7 @@ require_once __DIR__ . '/lib/Layout.php';
   .keyline label { font-weight: 500; font-size: .92rem; font-family: var(--mono); letter-spacing: .02em; }
   .tags { display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: baseline; }
   .tag { font-family: var(--mono); font-size: .6rem; border: 1px solid var(--border-light); border-radius: 20px; padding: 1px 7px; color: var(--muted); white-space: nowrap; }
-  .tag.lock, .tag.hardcoded { border-color: var(--warn); color: var(--warn); }
+  .tag.lock { border-color: var(--warn); color: var(--warn); }
   .tag.changed { border-color: var(--warn); color: var(--warn); background: rgba(255, 176, 32, .12); }
   .tag.apply { border-color: var(--border-light); }
   .tag.apply.reboot { border-color: var(--warn); color: var(--warn); }
@@ -452,9 +451,10 @@ Applying restarts the detector (about 10 seconds without a picture); then check 
       reset.addEventListener('click', () => { input.value = String(d.default); input.dispatchEvent(new Event('input', { bubbles: true })); });
     }
 
-    // Tags beside the key: what this setting used to be, what may change it, and that it is edited right now.
+    // Tags beside the key: what may change this setting, and that it is edited right now. (There was a
+    // "was hard-coded" tag here once, marking the settings whose default was the firmware's old fixed
+    // value — it said nothing the "default …" tag beside the value does not say better, so it is gone.)
     const keyTags = el('span', { className: 'tags' });
-    if (hasDefault(d)) keyTags.append(el('span', { className: 'tag hardcoded', textContent: 'was hard-coded', title: 'its value used to be fixed in the firmware — this default was that old value' }));
     if (fixed) keyTags.append(el('span', { className: 'tag lock', textContent: 'serial only' }));
     keyTags.append(el('span', { className: 'tag changed', id: 'c-' + d.name, hidden: true, textContent: 'changed' }));
 

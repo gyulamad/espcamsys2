@@ -11,7 +11,7 @@
 //   * the PENDING-CHANGES TRAY lists every unsaved edit — from every category — with its old → new value,
 //     counts them in the header pill, and offers ONE apply button that sends them all in one change;
 //     DISCARD puts everything back and sends nothing
-//   * each row shows its tags (was hard-coded / serial only / changed; preferences or default, live or
+//   * each row shows its tags (serial only / changed; preferences or default, live or
 //     reboot, and the default value) and its ↺ RESET TO default button, which goes through the same
 //     change tracking as a hand edit
 // Needs `php` and the jsdom package (cd tests/dom && npm install); skips if either is missing.
@@ -330,10 +330,7 @@ async function main() {
     check('the discard said so in a toast', toasts.some((t) => /Discarded/.test(t)), JSON.stringify(toasts));
 
     // ── the row tags ─────────────────────────────────────────────────────────────────────────
-    const rowsWithDefault = schemaKeys.filter((d) => d.default !== null && d.default !== undefined).length;
-    check('every defaulted setting is marked "was hard-coded", and only those',
-      window.document.querySelectorAll('.tag.hardcoded').length === rowsWithDefault
-        && row('SETUP_MODE').querySelector('.tag.hardcoded') === null, String(rowsWithDefault));
+    check('no row wears a "was hard-coded" tag (F-39)', window.document.querySelectorAll('.tag.hardcoded').length === 0);
     check('a reported row carries the preferences tag and its default value, not the "default" tag',
       Array.from(row('LOG_ECHO').querySelectorAll('.tag')).some((t) => t.textContent === 'preferences')
         && Array.from(row('LOG_ECHO').querySelectorAll('.tag')).some((t) => t.textContent === 'default on')
