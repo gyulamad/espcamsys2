@@ -361,7 +361,7 @@ async function main() {
     closeWindow(dom);
 
     // ── the settings page as the jump target ────────────────────────────────────────────────
-    dom = await openPage(`${BASE}/settings-page.php?find=personScanStride`, SETTINGS_SCRIPTS);
+    dom = await openPage(`${BASE}/settings-page.php?find=personScanStride`, SETTINGS_SCRIPTS.concat(['settings-search.js']));
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-personScanStride'));
     check('a jump to a relay row opens ITS category, frames and focuses the row',
@@ -372,7 +372,7 @@ async function main() {
       JSON.stringify({ cat: window.document.getElementById('cat-title').textContent, active: window.document.activeElement && window.document.activeElement.id }));
     closeWindow(dom);
 
-    dom = await openPage(`${BASE}/settings-page.php?find=personScanPython`, SETTINGS_SCRIPTS);
+    dom = await openPage(`${BASE}/settings-page.php?find=personScanPython`, SETTINGS_SCRIPTS.concat(['settings-search.js']));
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-personScanPython'));
     check('a jump to a locked relay row frames the row; its read-only input takes no focus',
@@ -381,7 +381,7 @@ async function main() {
         && window.document.activeElement !== window.document.getElementById('f-personScanPython'));
     closeWindow(dom);
 
-    dom = await openPage(`${BASE}/settings-page.php?find=notAField`, SETTINGS_SCRIPTS);
+    dom = await openPage(`${BASE}/settings-page.php?find=notAField`, SETTINGS_SCRIPTS.concat(['settings-search.js']));
     window = dom.window;
     await waitFor(() => window.document.getElementById('f-alarmRecordSeconds'));
     check('a key the settings page does not hold is ignored: nothing framed, page as always',

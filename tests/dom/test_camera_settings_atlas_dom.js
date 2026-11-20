@@ -323,10 +323,13 @@ async function main() {
     setField(window, 'LOG_HEARTBEAT', '1500');
     setField(window, 'JPEG_Q_MIN', '20');
     window.document.getElementById('revert').click();
+    // waited for, not asserted in the same tick: the APPLY before it re-renders through load(true),
+    // and on a slow machine the restore could still be settling when a same-tick assert reads it
+    const restored = await waitFor(() => $('pending-count').hidden === true && $('save').disabled === true
+      && $('f-LOG_HEARTBEAT').value === '600' && $('f-JPEG_Q_MIN').value === '10');
     check('DISCARD empties the tray and restores the stored values, without posting',
-      $('pending-count').hidden === true && $('save').disabled === true
-        && $('f-LOG_HEARTBEAT').value === '600' && $('f-JPEG_Q_MIN').value === '10'
-        && posts.length === nPosts2 + 1);
+      restored === true && posts.length === nPosts2 + 1,
+      JSON.stringify({ restored, hb: $('f-LOG_HEARTBEAT').value, qmin: $('f-JPEG_Q_MIN').value, posts: posts.length, want: nPosts2 + 1 }));
     check('the discard said so in a toast', toasts.some((t) => /Discarded/.test(t)), JSON.stringify(toasts));
 
     // ── the row tags ─────────────────────────────────────────────────────────────────────────

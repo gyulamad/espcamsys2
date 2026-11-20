@@ -331,10 +331,13 @@ async function main() {
     setField(window, 'DARK_THRESH', '60');
     setField(window, 'LOG_MIN_LEVEL', '3');
     window.document.getElementById('revert').click();
+    // waited for, not asserted in the same tick: the APPLY before it re-renders through load(true),
+    // and on a slow machine the restore could still be settling when a same-tick assert reads it
+    const restored = await waitFor(() => $('pending-count').hidden === true && $('save').disabled === true
+      && $('f-DARK_THRESH').value === String(BOARD.DARK_THRESH) && $('f-LOG_MIN_LEVEL').value === '2');
     check('DISCARD empties the tray and restores the stored values, without posting',
-      $('pending-count').hidden === true && $('save').disabled === true
-        && $('f-DARK_THRESH').value === String(BOARD.DARK_THRESH) && $('f-LOG_MIN_LEVEL').value === '2'
-        && posts.length === nPosts2 + 1);
+      restored === true && posts.length === nPosts2 + 1,
+      JSON.stringify({ restored, dark: $('f-DARK_THRESH').value, minlevel: $('f-LOG_MIN_LEVEL').value, posts: posts.length, want: nPosts2 + 1 }));
     check('the discard said so in a toast', toasts.some((t) => /Discarded/.test(t)), JSON.stringify(toasts));
 
     // ── the row tags over the detector's table ──────────────────────────────────────────────

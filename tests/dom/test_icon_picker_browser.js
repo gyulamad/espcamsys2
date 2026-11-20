@@ -89,7 +89,7 @@ function buildPage(dir) {
   return { hasRow, wired };
 }
 
-// The main settings page: its add-a-camera row (the real markup, copied) in the real style, with its fixed save bar.
+// The main settings page: its add-a-camera row (the real markup, copied) in the real style, with its fixed tray bar.
 function buildSettingsPage(dir) {
   const style = pageStyle('settings-page.php');
   const page = fs.readFileSync(path.join(DASH_SRC, 'settings-page.php'), 'utf8');
@@ -102,7 +102,7 @@ function buildSettingsPage(dir) {
 <div style="height:520px"></div>
 ${row ? row[0] : ''}
 </fieldset></main>
-<div class="savebar"><button class="btn primary" id="save">APPLY</button></div>
+<div class="tray"><button class="btn primary" id="save">APPLY</button></div>
 <script src="js/icon-catalog.js"></script>
 <script src="js/icon-picker.js"></script>
 <script>
@@ -265,7 +265,7 @@ async function main() {
     await page.locator('.icon-choice').first().click();
     check('a chosen icon goes into the new camera\'s icon input', (await page.locator('#c-icon').inputValue()) === '🚜' && !(await page.locator('.icon-bubble').isVisible()));
     await page.locator('#c-icon').click();
-    const sb = await box('.savebar');
+    const sb = await box('.tray');
     const bb = await box('.icon-bubble');
     const overlap = Math.max(0, Math.min(bb.y + bb.height, sb.y + sb.height) - Math.max(bb.y, sb.y));
     const probe = await page.evaluate(({ x, y }) => { const el = document.elementFromPoint(x, y); return el ? !!el.closest('.icon-bubble') : false; }, { x: bb.x + bb.width / 2, y: Math.min(bb.y + bb.height - 8, sb.y + 8) });
