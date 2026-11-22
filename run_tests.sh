@@ -1100,6 +1100,18 @@ else
     [ $? -ne 0 ] && overall_status=1
 fi
 
+heading "DOM (the navigation bar's hamburger, wired by its own plain-script load) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    # needs the jsdom package (tests/dom/package.json): installed here when missing or out of date; the
+    # test says SKIP if that was not possible
+    ensure_npm_deps "$ROOT_DIR/tests/dom" "the DOM test (jsdom)"
+    run_node_e2e "$ROOT_DIR/tests/dom/test_nav_toggle_dom.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
 heading "Browser (footage list layout on a phone and on a wide screen) test"
 if ! command -v node >/dev/null 2>&1; then
     echo "FAIL: node not found on PATH"

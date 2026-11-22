@@ -11,11 +11,16 @@
 //     .nav-mobile: without the behaviour the bar is what it always was
 //   * a media-query flip to wide closes an open menu and drops .nav-mobile
 //   * without matchMedia at all the DOM is left untouched (wire returns null)
+//   * loaded the way a page loads it — a plain script in a window, nobody calling wire() — the script
+//     wires the bar by itself: the burger appears, it opens and closes, a second load adds nothing
 //
 //   node tests/dom/test_nav_toggle_dom.js
 
 let JSDOM;
 try { ({ JSDOM } = require('jsdom')); } catch (e) { JSDOM = null; }
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
 const { wire, MQ } = require('../../php/cameras/js/nav-toggle.js');
 
 let passCount = 0;
@@ -37,12 +42,12 @@ function fakeMQ(matches) {
   return mq;
 }
 
-function page() {
+function page(options = {}) {
   const dom = new JSDOM(`<!DOCTYPE html><body><nav class="site-nav" id="site-nav" aria-label="Pages">
     <a class="nav-link" href="#" data-nav="dashboard">DASHBOARD</a>
     <a class="nav-link" href="#" data-nav="all-files">ALL FILES</a>
     <form class="logout-form"><button>LOG OUT</button></form>
-  </nav><main id="outside">page</main></body>`, { url: 'http://nav.test/' });
+  </nav><main id="outside">page</main></body>`, Object.assign({ url: 'http://nav.test/' }, options));
   return dom;
 }
 
@@ -126,6 +131,38 @@ async function main() {
     check('without matchMedia the wiring refuses and the bar is untouched',
       r === null && doc.querySelectorAll('.nav-burger').length === 0
         && doc.getElementById('site-nav').classList.contains('nav-mobile') === false);
+    dom.window.close();
+  }
+
+  // ── the way a page loads it: the plain script wires the bar by itself ────────────────────
+  // CamLayout::navBar() emits <script src="js/nav-toggle.js"> right after the <nav>, on every page
+  // that has the bar, and no page calls wire() by hand — so the plain-script load must do the wiring
+  // itself (that was the first F-42 round's gap: the script travelled with the bar, nothing called
+  // wire(), and no burger ever appeared). Here the file runs the way a browser runs it: as a plain
+  // script in a window (no module, so the module.exports branch is out of the picture).
+  {
+    const dom = page({ runScripts: 'outside-only' });
+    const doc = dom.window.document;
+    const nav = doc.getElementById('site-nav');
+    const mq = fakeMQ(true);
+    dom.window.matchMedia = () => mq;
+    const src = fs.readFileSync(path.join(__dirname, '../../php/cameras/js/nav-toggle.js'), 'utf8');
+    vm.runInContext(src, dom.getInternalVMContext(), { filename: 'nav-toggle.js' });
+    check('a plain-script load wires the bar by itself: one burger, first in the bar, the bar marked .nav-mobile',
+      doc.querySelectorAll('.nav-burger').length === 1
+        && nav.firstElementChild.classList.contains('nav-burger')
+        && nav.firstElementChild.getAttribute('aria-expanded') === 'false'
+        && nav.classList.contains('nav-mobile') === true
+        && typeof dom.window.CamNavToggle === 'object');
+    nav.firstElementChild.click();
+    check('the self-wired burger opens the menu (aria-expanded follows)',
+      nav.classList.contains('nav-open') === true
+        && nav.firstElementChild.getAttribute('aria-expanded') === 'true');
+    doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('the self-wired menu closes on Escape', nav.classList.contains('nav-open') === false);
+    vm.runInContext(src, dom.getInternalVMContext(), { filename: 'nav-toggle.js' });
+    check('loading the script twice on one page still leaves one burger (the second load refuses)',
+      doc.querySelectorAll('.nav-burger').length === 1);
     dom.window.close();
   }
 

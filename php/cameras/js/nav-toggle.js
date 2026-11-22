@@ -7,16 +7,25 @@
 // progressive pattern as the camera settings page's .is-mobile class.
 //
 // Loaded as a plain script (window.CamNavToggle) from CamLayout::navBar(), which emits it right after
-// the bar it belongs to, on every page that has the bar. wire() is pure enough to be driven from a
-// test with an injected matchMedia; on the page the default is the window's.
+// the bar it belongs to, on every page that has the bar — so the plain-script load wires the bar by
+// itself, and no page has to remember a call (that was the gap of the first F-42 round: the script
+// travelled with the bar but nothing ever called wire(), and the burger never appeared). wire() stays
+// exported for a test, which drives it with an injected matchMedia; on the page the default is the
+// window's.
 //
-//   CamNavToggle.wire({ document })                      — the page's one call
+//   loaded by a page            — wires the bar itself, nothing to call
 //   CamNavToggle.wire({ document, matchMedia })          — a test's call, with a fake matchMedia
 
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.CamNavToggle = api;
+  else {
+    root.CamNavToggle = api;
+    // The bar and this script arrive together: the <script> tag sits right after the <nav> in the
+    // page's HTML (CamLayout::navBar()), so the bar is in the document when this runs. A page without
+    // the bar, or without media queries, is a harmless no-op (wire() returns null).
+    if (root.document) api.wire({ document: root.document });
+  }
 })(typeof self !== 'undefined' ? self : this, function () {
 
   // What "narrow" means. The pages' own media queries fold at the same width, so the whole dashboard
