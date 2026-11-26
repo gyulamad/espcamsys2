@@ -569,6 +569,10 @@ fi
 #   - tests/dom/test_files_list_layout_browser.js: the footage list's rows in a real Chromium: on a phone the buttons
 #     (PLAY / GET / DEL, RESTORE in the archive) are on a line of their own, floated right, at the same place in
 #     every row, and nothing runs off the screen; on a wide screen they stay at the end of the name's line.
+#   - tests/dom/test_simple_view_swipe_browser.js: the simple view's swipe paging (#168) in a real Chromium:
+#     a drag left / right pages to the next / previous camera, the picture follows the finger, a committed
+#     swipe does not throw the page into full screen while a plain click still does, a short drag is no page
+#     change, and the page raises no script error
 #   - tests/dom/test_simple_view_fullscreen_browser.js: the simple view's two ways into full screen in a real Chromium:
 #     the FULL SCREEN button shows the whole page (status line in view, button pressed), a click on the picture shows
 #     the picture box alone (status line covered).
@@ -1129,6 +1133,16 @@ if ! command -v node >/dev/null 2>&1; then
 else
     # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
     run_node_e2e "$ROOT_DIR/tests/dom/test_simple_view_fullscreen_browser.js"
+    [ $? -ne 0 ] && overall_status=1
+fi
+
+heading "Browser (simple view: swipe left / right pages to the previous / next camera, #168) test"
+if ! command -v node >/dev/null 2>&1; then
+    echo "FAIL: node not found on PATH"
+    overall_status=1
+else
+    # needs the playwright package with a browser, and php; the test says SKIP (and passes) when one is missing
+    run_node_e2e "$ROOT_DIR/tests/dom/test_simple_view_swipe_browser.js"
     [ $? -ne 0 ] && overall_status=1
 fi
 

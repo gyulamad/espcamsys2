@@ -426,6 +426,18 @@ HTML;
   .picture .cam-offline-note { font-size: 1.1rem; }
   @keyframes cam-offline-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .cam-offline-spinner { animation-duration: 3s; } }
+  /* The swipe (#168): a horizontal drag on the picture pages to the previous / next camera, like a photo
+     gallery. `pan-y` leaves the page's own vertical scrolling to the browser — only a horizontal pan
+     arrives as pointer events — and the drag animation is transform-only, so nothing here can move the
+     page's layout. The ghost is the frame that slides out while the new camera's picture slides in
+     (js/simple-view.js clones the live <img> into it): it must never catch a click. Visitors who ask for
+     reduced motion still get the camera change, without the animation. */
+  .picture { touch-action: pan-y; }
+  .picture .tb-swipe-ghost { position: absolute; inset: 0; margin: 0; pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .picture img, .picture .tb-swipe-ghost { transition: none !important; }
+    .picture .tb-swipe-ghost { display: none; }
+  }
 CSS . "\n";
     }
 

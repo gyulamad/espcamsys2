@@ -545,4 +545,37 @@ test('formatClock: HH:MM:SS with leading zeros', () => {
   assertEqual(S.formatClock(new Date(2026, 0, 2, 23, 59, 59)), '23:59:59');
 });
 
+// ── swipeVerdict (#168) ──────────────────────────────────────────────
+
+test('swipeVerdict: a long horizontal drag left is NEXT, right is PREVIOUS', () => {
+  assertEqual(S.swipeVerdict(200, 200, 120, 200, 48), 1, 'left by 80px -> next');
+  assertEqual(S.swipeVerdict(200, 200, 280, 200, 48), -1, 'right by 80px -> previous');
+});
+
+test('swipeVerdict: a short drag is no swipe (a tap goes to the full screen toggle)', () => {
+  assertEqual(S.swipeVerdict(200, 200, 190, 200, 48), 0, '10px left: under the threshold');
+  assertEqual(S.swipeVerdict(200, 200, 200, 200, 48), 0, 'no movement at all');
+});
+
+test('swipeVerdict: exactly at the threshold counts, one below does not', () => {
+  assertEqual(S.swipeVerdict(200, 200, 200 - 48, 200, 48), 1, '48px left: a swipe');
+  assertEqual(S.swipeVerdict(200, 200, 200 - 47, 200, 48), 0, '47px left: not');
+});
+
+test('swipeVerdict: a vertical drag is the page scrolling, never a page gesture', () => {
+  assertEqual(S.swipeVerdict(200, 200, 200, 120, 48), 0, '80px up');
+  assertEqual(S.swipeVerdict(200, 200, 200, 280, 48), 0, '80px down');
+});
+
+test('swipeVerdict: a diagonal that leans vertical is not a swipe, one that leans horizontal is', () => {
+  assertEqual(S.swipeVerdict(200, 200, 260, 270, 48), 0, '60px right, 70px down: vertical wins');
+  assertEqual(S.swipeVerdict(200, 200, 260, 215, 48), -1, '60px right, 15px down: horizontal wins -> previous');
+  assertEqual(S.swipeVerdict(200, 200, 260, 260, 48), 0, '60/60: the tie goes to scrolling');
+});
+
+test('swipeVerdict: a pointer event without a position is no gesture', () => {
+  assertEqual(S.swipeVerdict(200, 200, undefined, 200, 48), 0);
+  assertEqual(S.swipeVerdict(200, 200, NaN, 200, 48), 0);
+});
+
 summarize();

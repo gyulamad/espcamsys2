@@ -206,6 +206,86 @@
   }
   reserveStatusLine();
 
+  // ── The swipe (#168): page to the previous / next camera with a horizontal drag, the way photo
+  // galleries do — on a phone or tablet by a finger, on a desktop by dragging with the mouse. The
+  // picture follows the finger while the drag is horizontal (`touch-action: pan-y` in the page's style
+  // keeps the page's own vertical scrolling native, so only a horizontal pan arrives here); a drag past
+  // the threshold commits — the frame on screen slides out and the new camera's picture slides in from
+  // the side the gallery logic says. A short drag snaps back and, being a tap, still toggles the full
+  // screen; a committed swipe swallows the click it ends with, or the page would throw itself full
+  // screen whenever somebody swiped.
+  const SWIPE_THRESHOLD = 48;   // px of horizontal travel that counts as a page gesture
+  const SWIPE_DRAG_SLOP = 8;    // px before the picture starts following the finger (a tap stays a tap)
+  const SWIPE_MS = 200;         // the slide's length
+  function wireSwipe() {
+    if (!pictureBox) return;
+    let drag = null;            // the pointer being tracked: { pointerId, x0, y0, following }
+    let suppressClick = false;  // a committed swipe ends with a click: swallow exactly that one
+    // Runs before the full screen toggle's own click listener (this wiring happens first): a committed
+    // swipe must not also toggle the full screen.
+    pictureBox.addEventListener('click', (e) => {
+      if (suppressClick) { e.stopPropagation(); e.preventDefault(); suppressClick = false; }
+    }, true);
+    pictureBox.addEventListener('pointerdown', (e) => {
+      if (drag || !e.isPrimary || ids.length < 2) return;   // one gesture at a time; one camera has no neighbour
+      drag = { pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, following: false };
+      try { pictureBox.setPointerCapture(e.pointerId); } catch (err) { /* gone: the drag just never starts */ }
+    });
+    pictureBox.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const dx = e.clientX - drag.x0;
+      const dy = e.clientY - drag.y0;
+      if (!drag.following && Math.abs(dx) > SWIPE_DRAG_SLOP && Math.abs(dx) > Math.abs(dy)) {
+        drag.following = true;
+        picture.style.transition = 'none';
+      }
+      if (drag.following) picture.style.transform = 'translateX(' + dx + 'px)';
+    });
+    const end = (e) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const d = drag;
+      drag = null;
+      const dir = d.following ? S.swipeVerdict(d.x0, d.y0, e.clientX, e.clientY, SWIPE_THRESHOLD) : 0;
+      if (dir !== 0) {
+        suppressClick = true;
+        slideTo(dir);
+      } else if (d.following) {
+        picture.style.transition = '';   // not a page gesture: snap the picture back where it belongs
+        picture.style.transform = '';
+      }
+    };
+    pictureBox.addEventListener('pointerup', end);
+    pictureBox.addEventListener('pointercancel', (e) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      picture.style.transition = '';
+      picture.style.transform = '';
+      drag = null;
+    });
+  }
+  // The gallery motion of a committed swipe: the frame on screen slides out while the new camera's
+  // picture slides in from the far side. The old frame rides a GHOST (a clone with the last frame — the
+  // live <img> is the one the mux paints the new camera into), both moves are transform-only
+  // transitions, and the ghost is removed once it is off-screen (a timeout, so a hidden tab cannot
+  // leave one behind). Reduced-motion visitors (the page's style turns the transitions off) still get
+  // the page change, without the animation.
+  function slideTo(dir) {
+    const ghost = picture.cloneNode();
+    ghost.removeAttribute('id');
+    ghost.className += ' tb-swipe-ghost';
+    pictureBox.appendChild(ghost);
+    ghost.style.transform = 'translateX(0)';
+    picture.style.transition = 'none';
+    picture.style.transform = 'translateX(' + (dir * 100) + '%)';
+    requestAnimationFrame(() => {
+      picture.style.transition = 'transform ' + SWIPE_MS + 'ms ease-out';
+      picture.style.transform = 'translateX(0)';
+    });
+    step(dir);   // the camera switches at once: the mux paints the new picture into the sliding-in <img>
+    setTimeout(() => ghost.remove(), SWIPE_MS * 2);
+  }
+
+  wireSwipe();
+
   // Two ways into full screen, both toggles (the page works without the helper: no listener, the button stays hidden):
   // a click on the picture shows the picture alone (its box: no status line), the FULL SCREEN button shows the whole
   // page, status line (camera name, clock, recording, countdown) included.

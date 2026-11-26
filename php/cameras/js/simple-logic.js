@@ -82,6 +82,23 @@
     return ids[(at + step + ids.length) % ids.length];
   }
 
+  // ── The swipe verdict (#168) ──
+  // A horizontal drag on the picture pages to the previous / next camera the way photo galleries do.
+  // `swipeVerdict` is the pure rule the pointer wiring asks at release: the drag counts only when it is
+  // at least `threshold` px long AND more horizontal than vertical — a vertical movement is the page
+  // scrolling, never a page gesture. Swiping left follows to the NEXT camera, right to the previous one.
+  // 0 = not a swipe: a short drag is a tap (it goes through to the full screen toggle), a vertical one
+  // snaps back. `threshold` is the page's choice (the simple view uses 48 px); a non-finite coordinate
+  // (a pointer event without a position) is no gesture either.
+  function swipeVerdict(startX, startY, x, y, threshold) {
+    const dx = Number(x) - Number(startX);
+    const dy = Number(y) - Number(startY);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return 0;
+    if (Math.abs(dx) < threshold) return 0;
+    if (Math.abs(dx) <= Math.abs(dy)) return 0;
+    return dx < 0 ? 1 : -1;
+  }
+
   // Is the camera `id` recording, going by status.php's answer (`status`: id -> { recording, ... }, or null
   // when the relay could not be asked)? Anything but a plain true — an unknown camera, no answer — is "not".
   function isRecording(status, id) {
@@ -255,5 +272,5 @@
     return two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
   }
 
-  return { PRIORITY, HUMAN_HOLD_MS, fitThumbnails, neighbor, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, tier, createHumanHold, nextByPriority, jumpTarget, createSlideshow, countdown, countdownText, countdownTexts, formatClock };
+  return { PRIORITY, HUMAN_HOLD_MS, fitThumbnails, neighbor, swipeVerdict, isRecording, isOffline, inMotion, personSeen, viewRequests, priorities, tier, createHumanHold, nextByPriority, jumpTarget, createSlideshow, countdown, countdownText, countdownTexts, formatClock };
 });
