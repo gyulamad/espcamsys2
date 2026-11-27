@@ -115,6 +115,7 @@ TEST(an_old_flash_with_only_the_identity_loads_with_the_template_values) {
     TEST_ASSERT(s.darkThreshold == 40 && s.motionThreshold == 300 && s.motionHoldSec == 10, "scene gate values");
     TEST_ASSERT(s.motionArea == person_scene::MotionArea(0, 0, 96, 96), "the whole picture watched");
     TEST_ASSERT(s.motionEmaLength == 0, "auto-calibration off");
+    TEST_ASSERT(!s.motionMap, "MOTION_MAP defaults to off: the messages stay as they were");
     TEST_ASSERT(s.streamMaxFps == 10 && s.streamJpegQuality == 80 && s.streamWriteTimeoutSec == 3, "stream tuning");
     TEST_ASSERT(s.announceHeartbeatSec == 600 && s.announceRetrySec == 30, "announce timing");
     TEST_ASSERT(flash.m.size() == 6, "loading stored nothing");
@@ -142,11 +143,13 @@ TEST(a_stored_value_wins_over_the_default_when_loading) {
     flash.set("DARK_THRESH", "20");
     flash.set("STREAM_MAX_FPS", "5");
     flash.set("MOTION_CLIP", "3.5");
+    flash.set("MOTION_MAP", "1");
     PersonSettings s;
     std::string err;
     TEST_ASSERT(loadPersonSettings(flash, s, err), ("loads: " + err).c_str());
     TEST_ASSERT(s.darkThreshold == 20 && s.streamMaxFps == 5, "stored values used");
     TEST_ASSERT(s.motionClipFactor == 3.5, "a stored float is used as typed");
+    TEST_ASSERT(s.motionMap, "a stored MOTION_MAP=1 is used as typed");
 }
 
 TEST(a_damaged_stored_value_is_still_reported_not_hidden_by_the_default) {

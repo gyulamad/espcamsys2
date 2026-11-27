@@ -101,6 +101,80 @@ TEST(a_degenerate_sampler_does_not_crash) {
     TEST_ASSERT(r.brightness == 0 && r.motion == 0, "a null frame reads as nothing");
     SceneSampler stepZero(20, 20, 0);   // a step below 1 is taken as 1: every pixel
     TEST_ASSERT_EQ((int)stepZero.sampleCount(), 400, "step 0 -> step 1");
+    std::vector<uint8_t> cells;
+    SceneReading mapped = none.analyze(nullptr, &cells);
+    TEST_ASSERT(cells.empty(), "a degenerate sampler collects no cells");
+    TEST_ASSERT(!mapped.hasPrevious, "and has no previous frame");
+}
+
+// ── the motion map (#169) ───────────────────────────────────────────────
+//
+// The same walk that sums the motion can collect ONE byte per raster cell: the
+// per-sample |difference| the sum is built from. The raster's shape follows the
+// sampler (cellStep/cellCols/cellRows), so a client can place the cells over
+// the picture without knowing the frame size.
+
+TEST(the_motion_map_raster_has_one_cell_per_sample_and_reports_its_own_shape) {
+    SceneSampler s(W, H);
+    TEST_ASSERT_EQ((int)s.cellStep(), 10, "the sampler's step is the cell's pixel size");
+    TEST_ASSERT_EQ((int)s.cellCols(), 10, "10 cells across a 96x96 picture");
+    TEST_ASSERT_EQ((int)s.cellRows(), 10, "and 10 down");
+    SceneSampler odd(25, 11);
+    TEST_ASSERT_EQ((int)odd.cellCols(), 3, "x = 0,10,20 on a 25-wide picture");
+    TEST_ASSERT_EQ((int)odd.cellRows(), 2, "y = 0,10 on an 11-high picture");
+}
+
+TEST(the_motion_map_collects_one_byte_per_cell_the_same_differences_the_sum_is_built_from) {
+    SceneSampler s(W, H);
+    s.analyze(frame(100).data());
+    std::vector<uint8_t> cells;
+    s.analyze(frame(105).data(), &cells);
+    TEST_ASSERT_EQ((int)cells.size(), (int)s.sampleCount(), "one byte per raster cell");
+    // Every sample moved by 5: every cell reads 5, and the sum is the cells' total.
+    uint32_t total = 0;
+    bool allFive = true;
+    for (size_t i = 0; i < cells.size(); ++i) { if (cells[i] != 5) allFive = false; total += cells[i]; }
+    TEST_ASSERT(allFive, "every cell carries its own difference");
+    TEST_ASSERT_EQ((int)total, 500, "the cells add up to the motion reading");
+}
+
+TEST(the_motion_map_is_zero_outside_the_motion_area_like_the_sum) {
+    SceneSampler s(W, H);
+    TEST_ASSERT(s.setMotionArea(MotionArea(10, 10, 90, 90)), "a usable area is accepted");
+    s.analyze(frame(0).data());
+    std::vector<uint8_t> cells;
+    s.analyze(frame(255).data(), &cells);
+    // Cells at x=0 or y=0 (the first row/column of the raster) lie outside the area: 0. So do the
+    // cells at x=90/y=90: x1/y1 are the first column/row OUTSIDE the area. Inside: the cells whose
+    // sample pixel (col*10, row*10) lies in 10,10-90,90, i.e. cols/rows 1..8.
+    for (int row = 0; row < 10; ++row) {
+        for (int col = 0; col < 10; ++col) {
+            const bool inside = col >= 1 && col <= 8 && row >= 1 && row <= 8;
+            TEST_ASSERT_EQ((int)cells[row * 10 + col], inside ? 255 : 0, "cell matches the area the gate watched");
+        }
+    }
+}
+
+TEST(the_motion_map_of_the_very_first_frame_is_all_zeros_and_the_caller_can_tell) {
+    SceneSampler s(W, H);
+    std::vector<uint8_t> cells;
+    SceneReading r = s.analyze(frame(100).data(), &cells);
+    TEST_ASSERT(!r.hasPrevious, "no previous frame: the caller skips the map (reportSceneFrame does)");
+    bool allZero = true;
+    for (size_t i = 0; i < cells.size(); ++i) if (cells[i] != 0) allZero = false;
+    TEST_ASSERT(allZero, "nothing is collected on the first frame");
+}
+
+TEST(a_motion_map_is_not_collected_without_a_buffer_and_the_buffer_is_reused_across_frames) {
+    SceneSampler s(W, H);
+    s.analyze(frame(10).data());
+    // No buffer passed: the reading is exactly as it always was.
+    TEST_ASSERT_EQ((int)s.analyze(frame(20).data()).motion, (int)s.sampleCount() * 10, "the sum does not care about the map");
+    std::vector<uint8_t> cells;
+    cells.assign(7, 99);   // a stale buffer of the wrong size is resized, not trusted
+    s.analyze(frame(30).data(), &cells);
+    TEST_ASSERT_EQ((int)cells.size(), (int)s.sampleCount(), "resized to the raster");
+    TEST_ASSERT_EQ((int)cells[0], 10, "and filled with this frame's differences (30 vs the 20 just before)");
 }
 
 // ── the motion area ─────────────────────────────────────────────────────
@@ -573,6 +647,11 @@ int main() {
     RUN_TEST(motion_ignores_changes_between_the_sample_pixels);
     RUN_TEST(motion_compares_with_the_frame_just_before_not_with_the_first_one);
     RUN_TEST(a_degenerate_sampler_does_not_crash);
+    RUN_TEST(the_motion_map_raster_has_one_cell_per_sample_and_reports_its_own_shape);
+    RUN_TEST(the_motion_map_collects_one_byte_per_cell_the_same_differences_the_sum_is_built_from);
+    RUN_TEST(the_motion_map_is_zero_outside_the_motion_area_like_the_sum);
+    RUN_TEST(the_motion_map_of_the_very_first_frame_is_all_zeros_and_the_caller_can_tell);
+    RUN_TEST(a_motion_map_is_not_collected_without_a_buffer_and_the_buffer_is_reused_across_frames);
 
     RUN_TEST(the_motion_area_is_the_whole_picture_until_one_is_set);
     RUN_TEST(a_motion_area_must_lie_inside_the_picture_and_be_at_least_one_sample_step_wide_and_high);

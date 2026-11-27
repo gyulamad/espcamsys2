@@ -107,6 +107,13 @@ public:
 
     size_t sampleCount() const { return count_; }
 
+    // The motion map's shape (#169): the samples are the raster cells. `cellStep()` is the
+    // pixels-per-cell (SAMPLE_STEP), cols/rows the raster across/down, so a client can place
+    // every cell over the picture without knowing the frame size.
+    int cellStep() const { return step_; }
+    int cellCols() const { return static_cast<int>((width_ + step_ - 1) / step_); }
+    int cellRows() const { return static_cast<int>((height_ + step_ - 1) / step_); }
+
     // Restricts the motion reading to `area`. An area that is not usable on this
     // picture (motionAreaUsable) is refused and the previous one stays - the
     // settings are checked long before, so this is only a second line of defence
@@ -122,9 +129,18 @@ public:
 
     // `gray` is width x height bytes, one per pixel. Remembers this frame's
     // samples (all of them, wherever the motion area is) for the next call.
-    SceneReading analyze(const uint8_t* gray) {
+    // `cellDiffs` (optional, #169) collects ONE byte per raster cell: the same
+    // |gray now - gray previous| the motion sum is built from, per sample, in
+    // the walk order (row-major, every SAMPLE_STEP-th pixel). A cell counts
+    // only inside the motion area, exactly like the sum: outside it (and on the
+    // very first frame, where there is no previous picture) the cell is 0, so
+    // the map lights up only what the gate really watched. It is the caller's
+    // buffer, reused across frames: sized here, never reallocated when the
+    // caller keeps passing the same vector.
+    SceneReading analyze(const uint8_t* gray, std::vector<uint8_t>* cellDiffs = nullptr) {
         SceneReading r;
         r.hasPrevious = havePrevious_;
+        if (cellDiffs) cellDiffs->assign(count_, 0);
         if (count_ == 0 || gray == nullptr) return r;
 
         uint32_t sum = 0;
@@ -136,7 +152,9 @@ public:
                 sum += p;
                 if (havePrevious_ && inMotionArea(x, y)) {
                     uint8_t q = previous_[i];
-                    diff += p > q ? static_cast<uint32_t>(p - q) : static_cast<uint32_t>(q - p);
+                    uint8_t d = p > q ? static_cast<uint8_t>(p - q) : static_cast<uint8_t>(q - p);
+                    diff += d;
+                    if (cellDiffs) (*cellDiffs)[i] = d;
                 }
                 previous_[i] = p;
                 ++i;

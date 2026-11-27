@@ -253,6 +253,28 @@ async function main() {
         && /e2e-badr@127\.0\.0\.1 \[relay\]: detector disconnected after \d+s, \d+ pictures received \(the relay dropped the connection: 25 unusable messages in a row\)/.test(readLog()), 2000)), readLog().slice(-900));
     check('the dropped socket is really closed', !!(await waitFor(() => bad.socket.destroyed, 2000)));
 
+    // ── 5c. the motion map (#169): scene.map rides through to the dashboard, a broken one refuses the message ──
+    // On its own connection: `det` carries a live heartbeat (section 4 left it running), whose map-less
+    // statuses would overwrite the report between the write and the read, and the refusal log line is
+    // throttled per id, so a fresh detector speaks with its own voice.
+    const mapdet = await uplink('e2e-map');
+    socks.push(mapdet.socket);
+    const mapCells = Buffer.from([0, 10, 20, 0, 0, 255]).toString('base64');   // a 2x3 raster, six bytes
+    mapdet.socket.write(wire(status({ scene: Object.assign({}, status().scene, { map: { step: 10, cols: 2, rows: 3, cells: mapCells } }) }), JPEG));
+    r = await request('GET', '/detectors');
+    d = r.json['e2e-map'];
+    check('the motion map rides through to the dashboard, byte for byte',
+      !!d && JSON.stringify(d.report.scene.map) === JSON.stringify({ step: 10, cols: 2, rows: 3, cells: mapCells }), JSON.stringify(d && d.report.scene));
+
+    mapdet.socket.write(wire(status({ scene: Object.assign({}, status().scene, { map: { step: 10, cols: 10, rows: 10, cells: 'AAAA' } }) }), JPEG));
+    check('a map whose byte count does not fill its raster refuses the whole message (and says so)',
+      !!(await waitFor(() => /WARN  e2e-map@127\.0\.0\.1 \[relay\]: ignored an unusable message from the detector: scene\.map must be \{step, cols, rows, cells\}/.test(readLog()), 2000)) && !mapdet.socket.destroyed, readLog().slice(-700));
+    r = await request('GET', '/detectors');
+    d = r.json['e2e-map'];
+    check('the refused map leaves the last good one (and the rest of the readings) standing',
+      !!d && d.report.scene.map.cells === mapCells && d.report.scene.brightness === 130, JSON.stringify(d && d.report.scene));
+    mapdet.socket.destroy();
+
     // ── 6. a picture that never comes ───────────────────────────────────────────────────
     const mute = await uplink('e2e-nopic');
     socks.push(mute.socket);
@@ -276,7 +298,7 @@ async function main() {
     v = await openPicture('detector-1');
     check('asking for an id that does not exist is answered at once too', v.status === 200 && v.headMs < 1500, `${v.status} after ${v.headMs} ms`);
     check('...and the relay log lists the detectors that DO exist',
-      !!(await waitFor(() => /the dashboard asked for the picture of detector 'detector-1' but there is none: no detector called 'detector-1' has connected to the relay since it started \(detectors seen: e2e-badr, e2e-detector-1, e2e-nopic\)/.test(readLog()), 2000)), readLog().slice(-600));
+      !!(await waitFor(() => /the dashboard asked for the picture of detector 'detector-1' but there is none: no detector called 'detector-1' has connected to the relay since it started \(detectors seen: e2e-badr, e2e-detector-1, e2e-map, e2e-nopic\)/.test(readLog()), 2000)), readLog().slice(-600));
     v.close();
     r = await request('GET', '/detectors');
     check('asking for a missing detector does not create it', r.json['detector-1'] === undefined);

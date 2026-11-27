@@ -116,6 +116,7 @@ new	det	STARTUP_FAILURE_RESTART_MS	BOOT_FAIL_MS	Restart after a failed start (ms
 new	det	DARK_HYSTERESIS	DARK_HYST	Darkness hysteresis	done
 new	det	SCORE_FRESH_MS	SCORE_FRESH_MS	Detection score stays fresh for (ms)	done
 new	det	CLIP_FACTOR	MOTION_CLIP	Motion spike clip factor	done
+new	det	-	MOTION_MAP	Motion map on the dashboard	#169
 new	det	UplinkConfig.connectTimeoutMs	STREAM_CONN_MS	Relay connect timeout (ms)	done
 new	det	UplinkConfig.answerTimeoutMs	STREAM_ANS_MS	Relay answer timeout (ms)	done
 new	det	UplinkConfig.heartbeatMs	STREAM_BEAT_MS	Live view keep-alive (ms)	done

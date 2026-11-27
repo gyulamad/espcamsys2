@@ -127,6 +127,22 @@ inline Gate gateFor(person_scene::SceneState state, int darkBelow, uint32_t moti
     }
 }
 
+// The motion map (#169): the scene sampler's raster as data. One byte per raster
+// cell, the same |gray now - gray previous| the motion sum is built from, per
+// sample, row-major - so the dashboard can paint WHICH raster cells moved and
+// HOW STRONG each one moved (a colour gradient over the bytes) over the
+// picture. `valid` is false while the map is switched off (MOTION_MAP=0, the
+// default: nothing about the message changes, which is what keeps older
+// dashboards and relays unbothered) and on the very first frame (no previous
+// picture, every cell would read 0 and mean nothing).
+struct MotionMap {
+    bool valid = false;
+    int step = 0;                // pixels per raster cell (the sampler's SAMPLE_STEP)
+    int cols = 0;                // raster cells across
+    int rows = 0;                // raster cells down
+    std::vector<uint8_t> cells;  // rows*cols bytes, row-major; 0 = not watched / no change
+};
+
 // What the detection loop last saw. Written by it (core 1), read by the uplink task (core 0).
 struct Snapshot {
     bool valid = false;        // at least one frame has been looked at
@@ -139,7 +155,36 @@ struct Snapshot {
     float score = 0.0f;        // the LAST person score, 0..1
     uint32_t scoreAtMs = 0;    // when it was produced
     bool detected = false;     // the detector currently flags a person = the alarm GPIO is driven HIGH
+    MotionMap map;             // the motion map (#169): invalid (and sent as nothing) while MOTION_MAP is off
 };
+
+// Appends the bytes as standard base64 (with padding), the wire shape both the
+// relay's parser (detectorstate.js parseMap) and every JSON decoder understand.
+inline void appendBase64(std::string& out, const std::vector<uint8_t>& bytes) {
+    static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t i = 0;
+    while (i + 2 < bytes.size()) {
+        uint32_t n = (static_cast<uint32_t>(bytes[i]) << 16) | (static_cast<uint32_t>(bytes[i + 1]) << 8) | bytes[i + 2];
+        out += alphabet[(n >> 18) & 63];
+        out += alphabet[(n >> 12) & 63];
+        out += alphabet[(n >> 6) & 63];
+        out += alphabet[n & 63];
+        i += 3;
+    }
+    const size_t left = bytes.size() - i;
+    if (left == 1) {
+        uint32_t n = static_cast<uint32_t>(bytes[i]) << 16;
+        out += alphabet[(n >> 18) & 63];
+        out += alphabet[(n >> 12) & 63];
+        out += "==";
+    } else if (left == 2) {
+        uint32_t n = (static_cast<uint32_t>(bytes[i]) << 16) | (static_cast<uint32_t>(bytes[i + 1]) << 8);
+        out += alphabet[(n >> 18) & 63];
+        out += alphabet[(n >> 12) & 63];
+        out += alphabet[(n >> 6) & 63];
+        out += '=';
+    }
+}
 
 // The detector's settings that the readings carry (the thresholds the numbers are compared with).
 struct Config {
@@ -168,7 +213,8 @@ struct LinkStats {
 // The JSON status of one message. One object, no line breaks. Numbers are printed
 // locale-independently (only snprintf of integers and a fixed "%d.%03d" for the scores).
 // `ssid` is the Wi-Fi network the board is on (with `rssi`, the signal strength, the dashboard's Wi-Fi line); it is
-// left out when it is not a reading (isWifiReading()).
+// left out when it is not a reading (isWifiReading()). With the motion map on (#169) the scene carries
+// the raster as base64: about 190 + 175 characters, still far under MAX_STATUS_BYTES.
 inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_t nowMs, const std::string& ip,
                                    int rssi, uint32_t uptimeMs, const LinkStats& link,
                                    const std::string& ssid = std::string()) {
@@ -207,9 +253,21 @@ inline std::string buildStatusJson(const Config& cfg, const Snapshot& s, uint32_
              (unsigned)(s.valid ? s.motionLimit : cfg.motionAtLeast), (unsigned)cfg.holdSec);
     out += buf;
     // The motion area, so the dashboard can draw it over the picture (left/top inside, right/bottom outside).
-    snprintf(buf, sizeof(buf), ",\"area\":{\"x0\":%d,\"y0\":%d,\"x1\":%d,\"y1\":%d}}",
+    snprintf(buf, sizeof(buf), ",\"area\":{\"x0\":%d,\"y0\":%d,\"x1\":%d,\"y1\":%d}",
              cfg.motionArea.x0, cfg.motionArea.y0, cfg.motionArea.x1, cfg.motionArea.y1);
     out += buf;
+    // The motion map (#169): the raster's per-cell change as base64, so the dashboard
+    // paints which cells moved and how strongly. Only while the board's MOTION_MAP
+    // setting is on (the default leaves this out entirely: the message stays exactly
+    // as it was, which is the backward compatibility the feature rides on).
+    if (s.map.valid && s.map.step > 0 && s.map.cols > 0 && s.map.rows > 0 &&
+        s.map.cells.size() == static_cast<size_t>(s.map.cols) * static_cast<size_t>(s.map.rows)) {
+        snprintf(buf, sizeof(buf), ",\"map\":{\"step\":%d,\"cols\":%d,\"rows\":%d,\"cells\":\"", s.map.step, s.map.cols, s.map.rows);
+        out += buf;
+        appendBase64(out, s.map.cells);
+        out += "\"}";
+    }
+    out += "}";
 
     // A score older than SCORE_FRESH_MS is not shown: the model is paused (dark / nothing moving), so
     // the old number would mislead someone aiming the detector.

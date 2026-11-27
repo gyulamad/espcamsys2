@@ -335,6 +335,13 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
   }
   .det-pic { position: relative; flex: 0 0 auto; width: 192px; height: 192px; background: #000; border: 1px solid var(--border); }
   .det-pic img { width: 100%; height: 100%; display: block; image-rendering: pixelated; object-fit: contain; }
+  /* The motion map (#169, MOTION_MAP): the detector's motion raster painted over its picture - every
+     cell that moved, coloured green → yellow → red by how strongly it moved. The canvas is the
+     picture's own 96x96 raster scaled up, so each cell lands exactly on the picture; clicks pass
+     through (the motion area stays draggable). */
+  .det-map { position: absolute; left: 0; top: 0; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none; }
+  .det-map[hidden] { display: none; }
+  .det-row.offline .det-map { display: none; }
   /* The motion area: the part of the picture watched for motion. Drag it to move it, its edges and corners
      to resize it; what lies outside is dimmed. The handles sit INSIDE the rectangle so the picture's own
      edge never clips them. */
@@ -577,6 +584,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       <div class="det-row offline" id="det-<?= $camId ?>" data-cam="<?= $camId ?>">
         <div class="det-pic">
           <img data-cam="<?= $camId ?>" id="detimg-<?= $camId ?>" alt="person detector view of <?= $camName ?>">
+          <canvas class="det-map" id="detmap-<?= $camId ?>" width="<?= (int) $areaRule['frame'] ?>" height="<?= (int) $areaRule['frame'] ?>" hidden title="Motion map (MOTION_MAP): every raster cell that moved is painted over the picture, green = a little, red = a lot."></canvas>
           <div class="det-area" id="detarea-<?= $camId ?>" data-cam="<?= $camId ?>" hidden title="Motion area: only motion inside this rectangle counts. Drag it to move it, drag an edge or corner to resize it, then APPLY.">
             <?php foreach (['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as $h): ?><span class="h h-<?= $h ?>" data-h="<?= $h ?>"></span><?php endforeach; ?>
           </div>
@@ -594,6 +602,7 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
             <div class="det-line"><span class="k">MOTION</span><span class="v" id="detmotion-<?= $camId ?>">–</span></div>
             <div class="det-bar"><div class="fill" id="detmotionbar-<?= $camId ?>"></div><div class="mark" id="detmotionmark-<?= $camId ?>" style="display:none"></div></div>
             <div class="det-sub" id="detmotionsub-<?= $camId ?>"></div>
+            <div class="det-sub" id="detmotionmap-<?= $camId ?>"></div>
           </div>
           <div>
             <div class="det-line"><span class="k">HUMAN</span><span class="v" id="detperson-<?= $camId ?>">–</span></div>
@@ -1446,6 +1455,44 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
     return detScale[id].scale;
   }
 
+  // <motion-map>
+  // The motion map (#169, MOTION_MAP): the detector's raster of per-cell change, painted over its picture.
+  // scene.map = { step, cols, rows, cells } - cells the row-major bytes as standard base64 (the relay has
+  // already checked the shape); no map (the setting is off, the default) hides the canvas again. Each cell
+  // with a change gets one opaque-ish square: the colour runs green → yellow → red as the change grows
+  // (v = byte/255) and the stronger a cell moved the more solid it is painted, so "where" is the patch of
+  // colour and "how strong" is how hot and solid it reads. The canvas is the picture's own raster scaled
+  // up (image-rendering: pixelated), so every cell lands exactly on the picture it came from.
+  function renderMotionMap(id, map) {
+    const cv = detEl('map', id);
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    if (!map || typeof map.cells !== 'string') {
+      cv.hidden = true;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      return;
+    }
+    let bytes;
+    try { bytes = atob(map.cells); } catch (e) { cv.hidden = true; return; }   // the relay validated it; belt and braces
+    if (bytes.length !== map.cols * map.rows) { cv.hidden = true; return; }
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const step = map.step || Math.floor(cv.width / map.cols);
+    for (let row = 0; row < map.rows; row++) {
+      for (let col = 0; col < map.cols; col++) {
+        const v = bytes.charCodeAt(row * map.cols + col) / 255;
+        if (v <= 0) continue;
+        // green (a little) → yellow → red (a lot)
+        const r = Math.round(80 + 175 * Math.min(1, v * 2));
+        const g = Math.round(220 - 200 * v);
+        const b = 0;
+        ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (0.35 + 0.55 * v).toFixed(2) + ')';
+        ctx.fillRect(col * step, row * step, step, step);
+      }
+    }
+    cv.hidden = false;
+  }
+  // </motion-map>
+
   // The detector's reported value of a setting, in the same unit as the pending one.
   function reportedThreshold(r, key) {
     const area = r.scene.area || {};
@@ -1770,6 +1817,11 @@ $areaRule = (require __DIR__ . '/lib/device_schema.php')['detector']['rules']['m
       box.style.height = (area.y1 - area.y0) / AREA_FRAME * 100 + '%';
       box.classList.toggle('pending', Object.keys(pd).some(isAreaKey));
     }
+
+    // The motion map (#169, MOTION_MAP): the raster cells that moved, painted over the picture
+    // (hidden again when the detector does not send one - the setting is off, the default).
+    renderMotionMap(id, sc.map);
+    setDetSub(id, 'motionmap', sc.map ? 'motion map on (each moved raster cell is painted on the picture, green = a little, red = a lot)' : '');
 
     // Human score (null while the model is paused: dark / still)
     const hasScore = pe.score !== null && pe.score !== undefined;

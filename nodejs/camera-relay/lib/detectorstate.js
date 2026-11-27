@@ -50,12 +50,35 @@ function parseArea(a) {
   return { ok: true, area: { x0, y0, x1, y1 } };
 }
 
+// The motion map (#169): the raster's per-cell change as the firmware sampled it, so the dashboard can
+// paint WHICH raster cells moved and HOW STRONG each moved over the picture. scene.map =
+// { step, cols, rows, cells }: step the pixels per cell (the sampler's SAMPLE_STEP), cols/rows the
+// raster across/down, cells the row-major bytes as standard base64 (cols*rows of them). Firmware with
+// MOTION_MAP off (the default) does not send it: that is `null`, and everything stays as it was - the
+// backward compatibility the feature rides on. A malformed map (bad base64, wrong byte count, sizes
+// outside the picture) refuses the whole message, like a malformed area does: the map is drawn as
+// given, so an attacker-crafted one must at least be forced through this gate.
+//   -> { ok: true, map: {step,cols,rows,cells} | null } | { ok: false }
+function parseMap(m) {
+  if (m === undefined || m === null) return { ok: true, map: null };
+  if (typeof m !== 'object' || Array.isArray(m)) return { ok: false };
+  const step = num(m.step, 1, FRAME_SIZE);
+  const cols = num(m.cols, 1, FRAME_SIZE);
+  const rows = num(m.rows, 1, FRAME_SIZE);
+  if (step === null || cols === null || rows === null) return { ok: false };
+  if (typeof m.cells !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(m.cells) || m.cells.length % 4 !== 0) return { ok: false };
+  const decoded = Buffer.from(m.cells, 'base64');
+  if (decoded.length !== cols * rows) return { ok: false };
+  return { ok: true, map: { step, cols, rows, cells: decoded.toString('base64') } };
+}
+
 // Checks the readings one message carries. Returns { ok: true, report } or { ok: false, error }.
 // Shape (all numbers; thresholds are the detector's own settings):
 //   { ip, fw, uptimeMs, rssi, ssid (optional: the Wi-Fi network it is on), viewLeftS (optional),
 //     gpio:   { pin, high },
 //     scene:  { state, brightness, motion, darkBelow, motionAtLeast, motionLimit (optional), holdS,
-//               area: { x0, y0, x1, y1 }                       <- optional: the part of the picture watched for motion },
+//               area: { x0, y0, x1, y1 }                       <- optional: the part of the picture watched for motion,
+//               map:  { step, cols, rows, cells }              <- optional (#169, MOTION_MAP): the motion map raster },
 //     person: { score|null, detectAt, clearAt, detected },
 //     link:   { frames, jpegFails, reconnects, heap }          <- optional, diagnostics only }
 function parseStatus(body) {
@@ -81,6 +104,8 @@ function parseStatus(body) {
   }
   const area = parseArea(s.area);
   if (!area.ok) return { ok: false, error: `scene.area must be whole numbers x0 < x1 and y0 < y1, all from 0 to ${FRAME_SIZE}` };
+  const map = parseMap(s.map);
+  if (!map.ok) return { ok: false, error: `scene.map must be {step, cols, rows, cells}: whole numbers from 1 to ${FRAME_SIZE} and cells as standard base64 of exactly cols*rows bytes` };
   if (typeof g.high !== 'boolean' || typeof p.detected !== 'boolean') return { ok: false, error: 'gpio.high and person.detected must be booleans' };
   if (!STATES.includes(s.state)) return { ok: false, error: `scene.state must be one of ${STATES.join(', ')}` };
   const score = p.score === null || p.score === undefined ? null : num(p.score, 0, 1);
@@ -99,7 +124,7 @@ function parseStatus(body) {
       ssid: wifiinfo.cleanSsid(body.ssid),            // optional: older firmware does not send it (null)
       viewLeftS: num(body.viewLeftS, 0, 86400),     // optional: seconds of live view left on the board's own timer
       gpio: { pin, high: g.high },
-      scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, motionLimit, holdS, area: area.area },
+      scene: { state: s.state, brightness, motion, darkBelow, motionAtLeast, motionLimit, holdS, area: area.area, map: map.map },
       person: { score, detectAt, clearAt, detected: p.detected },
       link: { frames: num(l.frames, 0, 4294967295), jpegFails: num(l.jpegFails, 0, 4294967295), reconnects: num(l.reconnects, 0, 4294967295), heap: num(l.heap, 0, 16777216) },
     },
@@ -221,4 +246,4 @@ function unheardAskWarning(det, now) {
   return `the detector has not checked in for ${describeAge(Math.max(0, now - heard))}, so it cannot hear the ask — ${kept}`;
 }
 
-module.exports = { parseStatus, parseArea, buildView, describeAge, missingPictureNotice, lastHeardAt, unheardAskWarning, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };
+module.exports = { parseStatus, parseArea, parseMap, buildView, describeAge, missingPictureNotice, lastHeardAt, unheardAskWarning, STATES, FRAME_SIZE, STALE_MS, PICTURE_STALE_MS };

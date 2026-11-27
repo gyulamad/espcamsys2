@@ -41,3 +41,6 @@ nodejs/camera-relay/system-settings.json
 nodejs/camera-relay/system-settings.json.tmp
 php/cameras/config.php.bak
 __pycache__/
+
+# local test build output (Task #169 session)
+build/

@@ -233,6 +233,7 @@ rows (the tests keep them valid) and must set the final default and tier in the 
 | `DARK_HYSTERESIS` | `DARK_HYST` | Darkness hysteresis | det | new | done |
 | `SCORE_FRESH_MS` | `SCORE_FRESH_MS` | Detection score stays fresh for (ms) | det | new | done |
 | `CLIP_FACTOR` | `MOTION_CLIP` | Motion spike clip factor | det | new | done |
+| `-` | `MOTION_MAP` | Motion map on the dashboard | det | new | #169 |
 | `UplinkConfig.connectTimeoutMs` | `STREAM_CONN_MS` | Relay connect timeout (ms) | det | new | done |
 | `UplinkConfig.answerTimeoutMs` | `STREAM_ANS_MS` | Relay answer timeout (ms) | det | new | done |
 | `UplinkConfig.heartbeatMs` | `STREAM_BEAT_MS` | Live view keep-alive (ms) | det | new | done |

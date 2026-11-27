@@ -105,6 +105,69 @@ TEST(status_json_carries_the_motion_area_in_the_scene_object_whatever_its_size) 
     TEST_ASSERT(j.size() < MAX_STATUS_BYTES, "and the status is far below the relay's limit");
 }
 
+// ── the motion map (#169) ───────────────────────────────────────────────
+//
+// The raster rides in the scene object as standard base64 while MOTION_MAP is
+// on; with the setting off (the default) the key is not in the message at all,
+// which is the whole backward-compatibility story.
+
+TEST(append_base64_encodes_the_standard_alphabet) {
+    std::string out;
+    appendBase64(out, std::vector<uint8_t>());
+    TEST_ASSERT_EQ(out, std::string(""), "no bytes, no characters");
+    const auto encode = [](std::vector<uint8_t> bytes) {
+        std::string o;
+        appendBase64(o, bytes);
+        return o;
+    };
+    TEST_ASSERT_EQ(encode({'f', 'o', 'o'}), std::string("Zm9v"), "three bytes, no padding");
+    TEST_ASSERT_EQ(encode({'f', 'o'}), std::string("Zm8="), "two bytes, one pad");
+    TEST_ASSERT_EQ(encode({'f'}), std::string("Zg=="), "one byte, two pads");
+    TEST_ASSERT_EQ(encode({'a', 'b'}), std::string("YWI="), "and the alphabet in between");
+    TEST_ASSERT_EQ(encode({0x00, 0xFF}), std::string("AP8="), "zero and all-ones");
+    TEST_ASSERT_EQ(encode({0xFF}), std::string("/w=="), "all-ones alone");
+}
+
+TEST(status_json_leaves_the_motion_map_out_while_it_is_off) {
+    // MOTION_MAP's default: no map in the snapshot, no map key in the message -
+    // the JSON is byte-for-byte what pre-#169 firmware sent.
+    std::string j = buildStatusJson(cfg(), snap(), 1500, "x", 0, 0, link());
+    TEST_ASSERT(has(j, "\"area\":{\"x0\":10,\"y0\":20,\"x1\":60,\"y1\":90}}"), "the scene object closes right after the area");
+    TEST_ASSERT(!has(j, "\"map\""), "no map key at all");
+}
+
+TEST(status_json_carries_the_motion_map_in_the_scene_object_while_it_is_valid) {
+    Snapshot s = snap();
+    s.map.valid = true;
+    s.map.step = 10; s.map.cols = 1; s.map.rows = 2;
+    s.map.cells = {0x00, 0xFF};
+    std::string j = buildStatusJson(cfg(), s, 1500, "x", 0, 0, link());
+    TEST_ASSERT(has(j, "\"map\":{\"step\":10,\"cols\":1,\"rows\":2,\"cells\":\"AP8=\"}"), "the raster after the area, inside the scene object");
+    TEST_ASSERT(has(j, "\"y1\":90},\"map\""), "the area no longer closes the scene: the map follows it");
+
+    // A full 10x10 raster (the 96x96 picture at the sampler's step): 100 bytes -> 136 base64
+    // characters ending in '==', and the message stays far under the relay's limit.
+    s.map.cols = 10; s.map.rows = 10;
+    s.map.cells.assign(100, 0);
+    j = buildStatusJson(cfg(), s, 1500, "x", 0, 0, link());
+    const size_t b64 = j.find("\"cells\":\"") + 9;
+    const size_t end = j.find('"', b64);
+    TEST_ASSERT_EQ((int)(end - b64), 136, "100 bytes encode to 136 base64 characters");
+    TEST_ASSERT_EQ(j.substr(end - 2, 2), std::string("=="), "100 % 3 = 1: two pad characters");
+    TEST_ASSERT(j.size() < MAX_STATUS_BYTES, "the mapped status is still far below the relay's limit");
+    TEST_ASSERT(buildFrameMessage(j, nullptr, 0).size() > 0, "and the message builder accepts it");
+}
+
+TEST(status_json_sends_no_map_that_does_not_match_its_declared_shape) {
+    Snapshot s = snap();
+    s.map.valid = true;
+    s.map.step = 10; s.map.cols = 10; s.map.rows = 10;
+    s.map.cells.assign(7, 200);   // 7 bytes for a 100-cell raster: refuse, not truncate
+    TEST_ASSERT(!has(buildStatusJson(cfg(), s, 1500, "x", 0, 0, link()), "\"map\""), "a short raster is left out whole");
+    s.map.cols = 0;   // a nonsense shape is left out too
+    TEST_ASSERT(!has(buildStatusJson(cfg(), s, 1500, "x", 0, 0, link()), "\"map\""), "a shapeless map is left out whole");
+}
+
 TEST(status_json_carries_both_the_set_motion_threshold_and_the_one_in_force) {
     // MOTION_THRESH is what the person set (the dashboard's stick edits it); the limit is what the frame was
     // judged against: higher with the auto-calibration on. The dashboard compares the reading with the limit.
@@ -1259,6 +1322,10 @@ int main() {
     RUN_TEST(gate_names_and_mapping);
     RUN_TEST(status_json_carries_everything_the_dashboard_shows);
     RUN_TEST(status_json_carries_the_motion_area_in_the_scene_object_whatever_its_size);
+    RUN_TEST(append_base64_encodes_the_standard_alphabet);
+    RUN_TEST(status_json_leaves_the_motion_map_out_while_it_is_off);
+    RUN_TEST(status_json_carries_the_motion_map_in_the_scene_object_while_it_is_valid);
+    RUN_TEST(status_json_sends_no_map_that_does_not_match_its_declared_shape);
     RUN_TEST(status_json_carries_both_the_set_motion_threshold_and_the_one_in_force);
     RUN_TEST(status_json_scores);
     RUN_TEST(status_json_other_states);

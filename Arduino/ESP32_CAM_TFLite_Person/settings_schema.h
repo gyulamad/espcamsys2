@@ -20,6 +20,8 @@
 // picture that is watched for motion (the whole 96x96 picture is 0, 0, 96, 96).
 // New with the motion auto-calibration (motion_baseline.h): MOTION_EMA_LEN (0 = off, the fixed
 // MOTION_THRESH as before) and, only while that is not 0, MOTION_EMA_PCT.
+// New with the motion map (#169): MOTION_MAP (0 = off, the default - the uplink messages stay
+// byte-for-byte what they were, which is the backward compatibility the feature rides on).
 //
 // Settings that used to be fixed in the code have a default (PERSON_META below): a board
 // that has none stored uses it. The defaults of the detection settings are the values the
@@ -181,6 +183,8 @@ static const KeyDef PERSON_KEYS[] = {
       "motion auto-calibration: how far above the moving average the threshold lies, in percent (30 is a good start)" },
     { "MOTION_CLIP",    Kind::Float,    1.1,  10,      Cond::Always,     nullptr,          nullptr,
       "motion auto-calibration: one motion reading is learnt as at most this many times the threshold in force, so a person walking through the picture barely raises the bar against the next one" },
+    { "MOTION_MAP",     Kind::Bool,     0,    0,       Cond::Always,     nullptr,          nullptr,
+      "1: every frame carries a motion map - the dashboard marks the raster cells that moved over the picture, coloured by how strongly each moved; 0: off, the messages stay exactly as they were" },
     { "DARK_HYST",      Kind::Int,      0,    255,     Cond::Always,     nullptr,          nullptr,
       "darkness is left again only when the brightness is this much above the DARK_THRESH it was entered at, so dusk or a flickering lamp does not flip the gate on every frame" },
     { "SCORE_FRESH_MS", Kind::Int,      100,  60000,   Cond::Always,     nullptr,          nullptr,
@@ -403,6 +407,7 @@ static const KeyMeta PERSON_META[] = {
     { "MOTION_EMA_LEN",  "0",     "Motion auto-calibration length (frames)", "Detection",   Tier::Advanced, Apply::Live },
     { "MOTION_EMA_PCT",  nullptr, "Auto-calibration margin (%)",          "Detection",      Tier::Advanced, Apply::Live },
     { "MOTION_CLIP",     "2.0",   "Motion spike clip factor",             "Detection",      Tier::Expert,   Apply::Live },
+    { "MOTION_MAP",      "0",     "Motion map on the dashboard",          "Detection",      Tier::Advanced, Apply::Live },
     { "SCORE_FRESH_MS",  "1500",  "Detection score stays fresh for (ms)", "Detection",      Tier::Advanced, Apply::Live },
     { "CAM_VFLIP",       "0",     "Flip the picture upside down",         "Detection",      Tier::Basic,    Apply::Reboot },
     { "CAM_HMIRROR",     "0",     "Mirror the picture",                   "Detection",      Tier::Basic,    Apply::Reboot },
@@ -516,6 +521,7 @@ struct PersonSettings {
     uint32_t motionEmaLength = 0;   // frames the motion average spans; 0 = auto-calibration off
     uint32_t motionEmaPercent = person_scene::DEFAULT_MOTION_EMA_PERCENT;   // only read while the above is not 0
     double motionClipFactor = person_scene::DEFAULT_CLIP_FACTOR;   // MOTION_CLIP: one reading counts for at most this many times the threshold in force
+    bool motionMap = false;         // MOTION_MAP: every frame carries the motion map for the dashboard
     uint32_t scoreFreshMs = 1500;   // SCORE_FRESH_MS: an older score is not shown (the model is paused)
     bool camVflip = false;          // CAM_VFLIP
     bool camHmirror = false;        // CAM_HMIRROR
@@ -663,6 +669,7 @@ inline bool loadPersonSettings(ISettingsStore& flash, PersonSettings& out, std::
     double clip = person_scene::DEFAULT_CLIP_FACTOR;
     parseFloat(store.get("MOTION_CLIP"), clip);
     s.motionClipFactor = clip;
+    s.motionMap = store.get("MOTION_MAP") == "1";
     s.scoreFreshMs = static_cast<uint32_t>(storedInt(store, "SCORE_FRESH_MS"));
     s.camVflip = store.get("CAM_VFLIP") == "1";
     s.camHmirror = store.get("CAM_HMIRROR") == "1";

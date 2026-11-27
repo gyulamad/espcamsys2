@@ -123,7 +123,8 @@ struct SceneCall { int brightness; uint32_t motion; uint32_t motionLimit; person
 static std::vector<SceneCall> g_sceneCalls;
 static std::vector<float> g_scoreCalls;
 static std::vector<bool> g_pinCalls;
-static void reportSceneFrame(const uint8_t* gray, int brightness, uint32_t motion, uint32_t motionLimit, person_scene::SceneState state) {
+static void reportSceneFrame(const uint8_t* gray, int brightness, uint32_t motion, uint32_t motionLimit, person_scene::SceneState state, const std::vector<uint8_t>* mapCells = nullptr) {
+    (void)mapCells;   // the glue build stubs the uplink's snapshot: the motion map (#169) is not exercised here
     g_sceneCalls.push_back({brightness, motion, motionLimit, state, std::vector<uint8_t>(gray, gray + 96 * 96)});
 }
 static void reportScore(float score) { g_scoreCalls.push_back(score); }

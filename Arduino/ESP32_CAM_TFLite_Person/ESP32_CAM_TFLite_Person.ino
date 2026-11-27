@@ -346,6 +346,11 @@ static_assert(IMAGE_WIDTH == person_scene::FRAME_SIZE && IMAGE_HEIGHT == person_
 person_scene::SceneSampler g_sampler(IMAGE_WIDTH, IMAGE_HEIGHT);
 person_scene::SceneGate g_gate;
 
+// The motion map's raster bytes (#169, MOTION_MAP): the per-cell change the sampler collects
+// while it walks the picture. One reusable buffer, written by the detection loop (core 1) and
+// copied under reportMutex into the snapshot the uplink task sends.
+std::vector<uint8_t> g_motionMapCells;
+
 // Hands the DARK_THRESH / MOTION_THRESH / MOTION_HOLD_S / MOTION_EMA_LEN / MOTION_EMA_PCT / MOTION_CLIP /
 // DARK_HYST settings to the gate and the motion area (MOTION_X0 / Y0 / X1 / Y1) to the sampler.
 void configureScene()
@@ -366,6 +371,11 @@ void configureScene()
         RLOG_WARN("motion area %d,%d - %d,%d is not usable: watching the whole picture for motion",
                   g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1);
     }
+
+    // The motion map's raster (#169): one byte per sample cell, sized once here so the
+    // detection loop never allocates. analyze() would size it on demand too; this keeps
+    // even the first mapped frame allocation-free.
+    g_motionMapCells.assign(g_sampler.sampleCount(), 0);
 }
 
 
@@ -985,8 +995,10 @@ person_report::Snapshot reportSnap;           // guarded by reportMutex
 uint8_t *reportFrame = nullptr;               // the frame that belongs to reportSnap
 SemaphoreHandle_t reportMutex = nullptr;
 
-// Called by the detection loop for every good frame.
-void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, uint32_t motionLimit, person_scene::SceneState state)
+// Called by the detection loop for every good frame. `mapCells` (optional, #169) carries the
+// motion map's raster bytes while the MOTION_MAP setting is on and the frame has a previous
+// picture to differ from; null leaves the snapshot's map invalid, so nothing extra goes on the wire.
+void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, uint32_t motionLimit, person_scene::SceneState state, const std::vector<uint8_t> *mapCells = nullptr)
 {
     if (!reportMutex || !reportFrame || xSemaphoreTake(reportMutex, pdMS_TO_TICKS(2)) != pdTRUE)
     {
@@ -1001,6 +1013,15 @@ void reportSceneFrame(const uint8_t *gray, int brightness, uint32_t motion, uint
     reportSnap.motionLimit = motionLimit;
     reportSnap.gate = person_report::gateFor(state, g_cfg.darkThreshold, g_cfg.motionThreshold);
     reportSnap.detected = personDetected;
+    reportSnap.map.valid = mapCells != nullptr &&
+                           static_cast<size_t>(g_sampler.cellCols()) * static_cast<size_t>(g_sampler.cellRows()) == mapCells->size();
+    if (reportSnap.map.valid)
+    {
+        reportSnap.map.step = g_sampler.cellStep();
+        reportSnap.map.cols = g_sampler.cellCols();
+        reportSnap.map.rows = g_sampler.cellRows();
+        reportSnap.map.cells = *mapCells;
+    }
     xSemaphoreGive(reportMutex);
 }
 
@@ -1712,8 +1733,11 @@ bool captureFrameIntoInput(bool &run)
 
     // Look at the picture first: too dark (the model sees noise as people) or
     // nothing moving (nothing to find) means the model is not run at all.
+    // With MOTION_MAP on (#169) the same walk collects the per-cell change for
+    // the dashboard's motion map.
+    const bool wantMap = g_cfg.motionMap;
     person_scene::SceneReading reading =
-        g_sampler.analyze((const uint8_t *)fb->buf);
+        g_sampler.analyze((const uint8_t *)fb->buf, wantMap ? &g_motionMapCells : nullptr);
 
     person_scene::SceneVerdict verdict =
         g_gate.update(millis(), reading, personDetected);
@@ -1756,8 +1780,11 @@ bool captureFrameIntoInput(bool &run)
 
     // Hand the frame to the uplink (the dashboard's picture) together with the numbers the gate just
     // worked out. It sees every frame, also while detection is paused, so the picture never freezes;
-    // never waits (see reportSceneFrame()).
-    reportSceneFrame((const uint8_t *)fb->buf, reading.brightness, reading.motion, verdict.motionLimit, verdict.state);
+    // never waits (see reportSceneFrame()). The motion map rides along only while MOTION_MAP is on
+    // and the frame has a previous picture to differ from (the very first frame's map is all zeros
+    // and would mean nothing).
+    reportSceneFrame((const uint8_t *)fb->buf, reading.brightness, reading.motion, verdict.motionLimit, verdict.state,
+                     (wantMap && reading.hasPrevious) ? &g_motionMapCells : nullptr);
 
     esp_camera_fb_return(fb);
 
@@ -1847,17 +1874,24 @@ void logBootInfo()
     );
 #endif
 
+    // Two lines, not one: the remote log's line buffer is 160 bytes and the suite guards every
+    // logged line at <150 characters - with the motion map's state appended the worst case crossed
+    // it (#169 round 1 catch), so the detection settings and the auto-calibration/map state part ways.
     RLOG_INFO(
-        "settings: alarm GPIO %d, detect at %.0f%%, clear below %.0f%%, dark below %d, motion at %u, hold %u s, motion area %d,%d - %d,%d, motion EMA %u frames +%u%%",
+        "settings: alarm GPIO %d, detect at %.0f%%, clear below %.0f%%, dark below %d, motion at %u, hold %u s, motion area %d,%d - %d,%d",
         g_cfg.personGpio,
         g_cfg.detectThreshold * 100.0f,
         g_cfg.clearThreshold * 100.0f,
         g_cfg.darkThreshold,
         (unsigned)g_cfg.motionThreshold,
         (unsigned)g_cfg.motionHoldSec,
-        g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1,
+        g_cfg.motionArea.x0, g_cfg.motionArea.y0, g_cfg.motionArea.x1, g_cfg.motionArea.y1
+    );
+    RLOG_INFO(
+        "settings: motion EMA %u frames +%u%%, motion map %s",
         (unsigned)g_cfg.motionEmaLength,
-        (unsigned)g_cfg.motionEmaPercent
+        (unsigned)g_cfg.motionEmaPercent,
+        g_cfg.motionMap ? "on" : "off"
     );
 
     RLOG_INFO(

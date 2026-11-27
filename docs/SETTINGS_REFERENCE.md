@@ -111,7 +111,7 @@ Source: `Arduino/ESP32_CAM_Recorder/settings_schema.h`. 91 settings: 79 with a d
 
 ## Detector (ESP32_CAM_TFLite_Person)
 
-Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 96 settings: 87 with a default, 9 without.
+Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 97 settings: 88 with a default, 9 without.
 
 | Key | Label | Default | Tier | Apply | Category |
 | --- | --- | --- | --- | --- | --- |
@@ -129,6 +129,7 @@ Source: `Arduino/ESP32_CAM_TFLite_Person/settings_schema.h`. 96 settings: 87 wit
 | `MOTION_EMA_LEN` | Motion auto-calibration length (frames) | `0` | advanced | live | Detection |
 | `MOTION_EMA_PCT` | Auto-calibration margin (%) | — | advanced | live | Detection |
 | `MOTION_CLIP` | Motion spike clip factor | `2.0` | expert | live | Detection |
+| `MOTION_MAP` | Motion map on the dashboard | `0` | advanced | live | Detection |
 | `DARK_HYST` | Darkness hysteresis | `5` | advanced | live | Detection |
 | `SCORE_FRESH_MS` | Detection score stays fresh for (ms) | `1500` | advanced | live | Detection |
 | `CAM_VFLIP` | Flip the picture upside down | `0` | basic | reboot | Detection |
